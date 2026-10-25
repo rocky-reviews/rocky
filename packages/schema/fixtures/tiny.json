@@ -61,6 +61,7 @@
         "path": "README.md",
         "score": 5,
         "level": "low",
+        "reviewMinutes": 1,
         "reason": "One-word documentation fix.",
         "whatChanged": "Corrects the spelling of 'receive'.",
         "whyThisLevel": "No code or configuration is affected.",

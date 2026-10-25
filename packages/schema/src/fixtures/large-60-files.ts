@@ -24,12 +24,15 @@ const seeded = (seed: number) => {
 };
 
 const AREAS = ["auth", "billing", "orgs", "api", "jobs", "web", "db", "shared"] as const;
-const LEVELS: { level: TriagedFileLevel; min: number; max: number }[] = [
-  { level: "critical", min: 80, max: 100 },
-  { level: "important", min: 50, max: 79 },
-  { level: "normal", min: 20, max: 49 },
-  { level: "low", min: 0, max: 19 },
+/** Score band and the range of review minutes a file of that level gets. */
+const LEVELS: { level: TriagedFileLevel; min: number; max: number; minutes: [number, number] }[] = [
+  { level: "critical", min: 80, max: 100, minutes: [2, 4] },
+  { level: "important", min: 50, max: 79, minutes: [1, 2] },
+  { level: "normal", min: 20, max: 49, minutes: [0, 1] },
+  { level: "low", min: 0, max: 19, minutes: [0, 0] },
 ];
+/** Minutes for the briefing and the noise summaries, on top of the per-file estimates. */
+const BRIEFING_MINUTES = 10;
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 
 export const FILE_COUNT = 60;
@@ -86,6 +89,7 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
       path: file.path,
       score: int(band.min, band.max),
       level: band.level,
+      reviewMinutes: int(band.minutes[0], band.minutes[1]),
       reason: `Touches the ${file.path.split("/")[1] ?? "shared"} area (${file.additions} lines).`,
       whatChanged: `Reworks module ${index} to use the new shared client.`,
       whyThisLevel: `Rated ${band.level} because of the area it sits in and the size of the change.`,
@@ -248,7 +252,8 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
         level: "critical",
         reason: "Sixty files across auth, billing and orgs; several modules drop error handling.",
       },
-      estimatedReviewMinutes: 95,
+      estimatedReviewMinutes:
+        triage.reduce((sum, file) => sum + file.reviewMinutes, 0) + BRIEFING_MINUTES,
       reviewPath: triage.slice(0, 20).map((file) => ({ path: file.path, why: file.reason })),
       checkedOk: ["Generated files match the OpenAPI spec", "No new dependencies"],
       memoryApplied: [

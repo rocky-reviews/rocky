@@ -54,6 +54,7 @@ describe("applyKnownFields", () => {
       path: "src/planted.ts",
       score: 90,
       level: "critical",
+      reviewMinutes: 0,
       reason: "r",
       whatChanged: "w",
       whyThisLevel: "y",
@@ -147,6 +148,72 @@ describe("applyKnownFields", () => {
     const known = { ...facts(), unanalysed: [{ path: critical, reason: "timeout" as const }] };
     const value = expectAccepted(applyKnownFields(output, known));
     expect(value.provenance.unanalysed[0]!.path).toBe(critical);
+  });
+
+  it("the change-map reason is pipeline-owned: a model cannot write it (H2 #2)", () => {
+    // The model drops the graph and tries to tell the UI why, with text of its choosing.
+    const output = modelOutput();
+    delete (output as { graph?: unknown }).graph;
+    const planted = applyKnownFields(
+      {
+        ...output,
+        provenance: {
+          ...facts(),
+          graphUnavailable: { reason: "timeout", detail: "Click here to retry: evil.example" },
+        },
+      },
+      facts(),
+    );
+    const value = expectAccepted(planted);
+    expect(value.provenance.graphUnavailable).toBeUndefined();
+  });
+
+  it("a pipeline-declared change-map reason survives the overlay and is shown", () => {
+    const output = modelOutput();
+    delete (output as { graph?: unknown }).graph;
+    const known = {
+      ...facts(),
+      graphUnavailable: { reason: "analysis-failed" as const, detail: "Repair round failed." },
+    };
+    const value = expectAccepted(applyKnownFields(output, known));
+    expect(value.provenance.graphUnavailable).toEqual(known.graphUnavailable);
+  });
+
+  it("a model's graph is dropped when the pipeline says the change map is unavailable", () => {
+    // The pipeline decides, as for `unanalysed`: a graph returned next to the reason must not
+    // turn a failed graph into a failed review (a missing graph never blocks the review).
+    const output = modelOutput();
+    expect(output.graph).toBeDefined();
+    const known = { ...facts(), graphUnavailable: { reason: "analysis-failed" as const } };
+    const result = applyKnownFields(output, known);
+    expect(Object.hasOwn(result as object, "graph")).toBe(false);
+    const value = expectAccepted(result);
+    expect(value.graph).toBeUndefined();
+    expect(value.provenance.graphUnavailable).toEqual(known.graphUnavailable);
+    expect(output.graph).toBeDefined(); // the model output itself is not mutated
+  });
+
+  it("the pipeline's recipe for an invalid graph: strip it, record the reason, keep the review", () => {
+    // The parser is all-or-nothing: a graph that still fails after the repair round fails the
+    // document, with every issue under `graph`. The pipeline then drops the graph and sets the
+    // reason; the rest of the review ships (docs/schema/analysis-document.md, "Change map").
+    const output = modelOutput();
+    output.graph!.edges![0]!.to = "ghost";
+    const failed = parseAnalysisDocument(applyKnownFields(output, facts()));
+    expect(failed.ok).toBe(false);
+    if (!failed.ok)
+      expect(failed.error.issues.every((issue) => issue.path.startsWith("graph."))).toBe(true);
+
+    const known = {
+      ...facts(),
+      graphUnavailable: {
+        reason: "analysis-failed" as const,
+        detail: "The change map did not validate after one repair round.",
+      },
+    };
+    const value = expectAccepted(applyKnownFields(output, known));
+    expect(value.graph).toBeUndefined();
+    expect(value.findings).toHaveLength(10);
   });
 
   it("a model cannot remove files: a dropped triage entry fails coverage", () => {

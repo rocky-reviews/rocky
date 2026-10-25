@@ -56,6 +56,8 @@ export const BEYOND_JSON_SCHEMA = [
   "paths: no segment that is only dots, dot look-alikes, %2e, or whitespace; no .git segment",
   "ids unique per collection (case-insensitive); paths unique per collection",
   "every reference (lane, node, edge, flow, message, view, file, memory entry) resolves",
-  "ranges inside one new-side hunk; triage covers every PR file once; score bands; verdict floor",
+  "ranges inside one new-side hunk; triage covers every PR file once; score bands; verdict floor (critical finding → critical verdict)",
+  "briefing.estimatedReviewMinutes is at least the sum of triage.files[].reviewMinutes",
+  "graph and provenance.graphUnavailable are never both present",
   `serialised document at most ${MAX_DOCUMENT_BYTES} bytes`,
 ] as const;

@@ -215,6 +215,7 @@ describe("prototype-key safety", () => {
       path: "constructor",
       score: 50,
       level: "important",
+      reviewMinutes: 0,
       reason: "r",
       whatChanged: "w",
       whyThisLevel: "y",

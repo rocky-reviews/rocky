@@ -35,7 +35,10 @@ describe("golden fixtures", () => {
     expect(doc.briefing.checkedOk).toHaveLength(4);
     expect(doc.briefing.reviewPath).toHaveLength(4);
     expect(doc.briefing.estimatedReviewMinutes).toBe(7);
-    expect(doc.briefing.verdict.level).toBe("high");
+    // H2 #9: the per-file estimates add up to the briefing's; the riskiest file gets the most.
+    expect(doc.triage.files.map((file) => file.reviewMinutes)).toEqual([3, 2, 1, 1, 0, 0, 0]);
+    // H2 #5: F1 is critical, so the verdict is critical.
+    expect(doc.briefing.verdict.level).toBe("critical");
   });
 
   it("tiny is a one-file PR with no findings and no graph", () => {
@@ -43,6 +46,14 @@ describe("golden fixtures", () => {
     expect(doc.provenance.files).toHaveLength(1);
     expect(doc.findings).toEqual([]);
     expect(doc.graph).toBeUndefined();
+    expect(doc.provenance.graphUnavailable).toBeUndefined();
+    expect(doc.triage.files[0]!.reviewMinutes).toBe(doc.briefing.estimatedReviewMinutes);
+  });
+
+  it.each(FIXTURES)("%s: the PR estimate is at least the sum of its files", (name) => {
+    const doc = expectAccepted(loadFixture(name));
+    const sum = doc.triage.files.reduce((total, file) => total + file.reviewMinutes, 0);
+    expect(doc.briefing.estimatedReviewMinutes).toBeGreaterThanOrEqual(sum);
   });
 
   it("large-60-files is what the deterministic builder produces", () => {
