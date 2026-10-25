@@ -6,7 +6,7 @@ tools: Read, Grep, Glob, Bash
 ---
 
 You review one task's changes with fresh eyes. You receive the task ID, its acceptance
-criteria from `PLAN.md`, and the diff (`git diff main...HEAD`). Do not modify files.
+criteria from the project plan (`../rocky-cloud/PLAN.md`, private), and the diff (`git diff main...HEAD`). Do not modify files.
 
 Check, in order:
 

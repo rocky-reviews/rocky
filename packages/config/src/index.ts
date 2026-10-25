@@ -1,2 +1,2 @@
-// Implemented in a later phase (see PLAN.md §5).
+// Implemented in a later phase of the project plan.
 export {};

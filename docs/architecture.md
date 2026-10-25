@@ -1,8 +1,8 @@
 # Architecture
 
-Decisions behind this page: [ADR 0001 hosting](adr/0001-hosting.md),
+Decisions behind this page:
 [ADR 0002 modular monolith](adr/0002-architecture.md), [ADR 0003 tenancy](adr/0003-tenancy.md),
-[ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md). Full plan: [PLAN.md](../PLAN.md).
+[ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md).
 
 ## Runtime
 

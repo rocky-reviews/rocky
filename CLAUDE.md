@@ -1,11 +1,14 @@
 # Rocky Reviews — agent instructions
 
-Code review where AI does the reading and a human makes the call. Read `PLAN.md` before any
-task; it is the source of truth for scope, task IDs, risk labels and acceptance criteria.
+Code review where AI does the reading and a human makes the call. The project plan is
+private: `../rocky-cloud/PLAN.md` (repo `rocky-reviews/rocky-cloud`, checked out next to this one).
+Read it before any task; it is the source of truth for scope, task IDs, risk labels and
+acceptance criteria. **Never copy plan content into this public repo** (pricing, margins, business
+decisions, hosting costs): reference task IDs only.
 
 ## How to work on a task
 
-1. Find the task in `PLAN.md` §5. Note its label: 🔴 RISKY or 🟢 NORMAL.
+1. Find the task in the plan (§5). Note its label: 🔴 RISKY or 🟢 NORMAL.
    - 🔴 tasks are implemented by the `risky-implementer` agent (Fable 5.1) and must get an
      independent `reviewer` pass plus `/security-review` before merge.
    - 🟢 tasks are implemented by the `implementer` agent (Opus 5.5) and get a `reviewer` pass.

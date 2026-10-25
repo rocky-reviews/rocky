@@ -1,12 +1,12 @@
 ## Task
 
-<!-- PLAN.md task ID and title, e.g. "P2-2 RLS policies + tenant-scoped client" -->
+<!-- Task ID and title from the project plan, e.g. "P2-2 RLS policies + tenant-scoped client" -->
 
 **Risk:** 🟢 NORMAL / 🔴 RISKY
 
 ## Acceptance criteria
 
-<!-- Copy each criterion from PLAN.md and show the evidence (test name, screenshot, output). -->
+<!-- Copy each criterion from the task and show the evidence (test name, screenshot, output). -->
 
 - [ ] Criterion 1 — evidence:
 - [ ] Criterion 2 — evidence:

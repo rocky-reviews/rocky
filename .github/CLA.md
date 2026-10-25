@@ -1,6 +1,6 @@
 # Rocky Reviews Individual Contributor License Agreement
 
-> **DRAFT — pending legal review (PLAN.md gate H6).** This text has been drafted by the
+> **DRAFT — pending legal review (gate H6).** This text has been drafted by the
 > project and has not yet been reviewed by a lawyer. It may change before it is final.
 > Version 0.1-draft, October 2026.
 

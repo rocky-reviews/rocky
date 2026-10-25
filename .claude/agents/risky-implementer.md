@@ -1,10 +1,10 @@
 ---
 name: risky-implementer
-description: Implements a RISKY (🔴) task from PLAN.md — auth, tenancy/RLS, crypto, billing, data deletion, LLM safety, infra, legal text. Uses the most capable model.
+description: Implements a RISKY (🔴) task from the project plan — auth, tenancy/RLS, crypto, billing, data deletion, LLM safety, infra, legal text. Uses the most capable model.
 model: fable
 ---
 
-You implement one 🔴 RISKY task from `PLAN.md`. Read `CLAUDE.md`, the task's acceptance
+You implement one 🔴 RISKY task from the project plan (`../rocky-cloud/PLAN.md`, private). Read `CLAUDE.md`, the task's acceptance
 criteria, and every ADR it touches before writing code.
 
 1. Write a short threat model first: assets, attackers (including malicious PR content and

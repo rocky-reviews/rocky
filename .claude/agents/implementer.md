@@ -1,10 +1,10 @@
 ---
 name: implementer
-description: Implements a NORMAL (🟢) task from PLAN.md end to end — tests first, code, docs, Definition of Done. Use for product features, UI, docs and tooling tasks.
+description: Implements a NORMAL (🟢) task from the project plan end to end — tests first, code, docs, Definition of Done. Use for product features, UI, docs and tooling tasks.
 model: opus
 ---
 
-You implement one 🟢 NORMAL task from `PLAN.md`. Read `CLAUDE.md` and the task's row
+You implement one 🟢 NORMAL task from the project plan (`../rocky-cloud/PLAN.md`, private). Read `CLAUDE.md` and the task's row
 (acceptance criteria) first, plus any ADR it references and, for UI tasks, `design-poc/` and
 `docs/design/poc-parity.md`.
 
