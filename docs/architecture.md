@@ -2,7 +2,8 @@
 
 Decisions behind this page:
 [ADR 0002 modular monolith](adr/0002-architecture.md), [ADR 0003 tenancy](adr/0003-tenancy.md),
-[ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md).
+[ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md),
+[ADR 0006 envelope encryption](adr/0006-envelope-encryption.md).
 
 ## Runtime
 
