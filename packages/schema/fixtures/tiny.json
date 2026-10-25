@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "1.0.0",
+  "provenance": {
+    "repo": { "owner": "acme", "name": "rocky-app" },
+    "pullRequest": { "number": 12 },
+    "base": { "sha": "0000000000000000000000000000000000000001", "ref": "main" },
+    "head": { "sha": "0000000000000000000000000000000000000002", "ref": "fix/typo" },
+    "files": [
+      {
+        "path": "README.md",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "hunks": [{ "oldStart": 10, "oldLines": 3, "newStart": 10, "newLines": 3 }]
+      }
+    ],
+    "generatedAt": "2026-10-25T12:00:00.000Z",
+    "generator": { "name": "rocky", "roles": [] }
+  },
+  "briefing": {
+    "summary": "Fixes a typo in the README.",
+    "verdict": { "level": "low", "reason": "Documentation only; no code changes." },
+    "estimatedReviewMinutes": 1,
+    "reviewPath": [{ "path": "README.md", "why": "The only file." }],
+    "checkedOk": [],
+    "memoryApplied": []
+  },
+  "triage": {
+    "files": [
+      {
+        "path": "README.md",
+        "score": 5,
+        "level": "low",
+        "reason": "One-word documentation fix.",
+        "whatChanged": "Corrects the spelling of 'receive'.",
+        "whyThisLevel": "No code or configuration is affected.",
+        "flags": []
+      }
+    ],
+    "noise": []
+  },
+  "findings": []
+}

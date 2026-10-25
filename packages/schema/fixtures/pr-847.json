@@ -1,0 +1,699 @@
+{
+  "schemaVersion": "1.0.0",
+  "provenance": {
+    "repo": { "owner": "acme", "name": "rocky-app" },
+    "pullRequest": { "number": 847 },
+    "base": { "sha": "3f2c9a7d1e5b8c4f0a6d2e9b7c1f5a3d8e4b6c2a", "ref": "main" },
+    "head": { "sha": "9b4e1d7a3c5f2e8b6d0a4c7e1f3b5d9a2c6e8f4b", "ref": "feat/team-invites" },
+    "files": [
+      {
+        "path": "src/auth/invitations.ts",
+        "status": "added",
+        "additions": 33,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 33 }]
+      },
+      {
+        "path": "src/api/routes/invitations.ts",
+        "status": "added",
+        "additions": 22,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 22 }]
+      },
+      {
+        "path": "db/migrations/20261020_add_invitations.sql",
+        "status": "added",
+        "additions": 17,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 17 }]
+      },
+      {
+        "path": "src/jobs/sendInviteEmail.ts",
+        "status": "added",
+        "additions": 16,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 16 }]
+      },
+      {
+        "path": "web/src/pages/InvitePage.tsx",
+        "status": "added",
+        "additions": 23,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 23 }]
+      },
+      {
+        "path": "src/auth/invitations.test.ts",
+        "status": "added",
+        "additions": 20,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": 20 }]
+      },
+      {
+        "path": "src/api/index.ts",
+        "status": "modified",
+        "additions": 2,
+        "deletions": 0,
+        "hunks": [
+          { "oldStart": 3, "oldLines": 3, "newStart": 3, "newLines": 4 },
+          { "oldStart": 18, "oldLines": 4, "newStart": 19, "newLines": 5 }
+        ]
+      },
+      {
+        "path": "pnpm-lock.yaml",
+        "status": "modified",
+        "additions": 34,
+        "deletions": 3,
+        "hunks": [{ "oldStart": 1180, "oldLines": 9, "newStart": 1180, "newLines": 40 }]
+      },
+      {
+        "path": "src/generated/api-types.ts",
+        "status": "modified",
+        "additions": 48,
+        "deletions": 0,
+        "hunks": [{ "oldStart": 210, "oldLines": 3, "newStart": 210, "newLines": 51 }]
+      }
+    ],
+    "generatedAt": "2026-10-25T12:00:00.000Z",
+    "generator": {
+      "name": "rocky",
+      "version": "0.0.0",
+      "roles": [
+        { "role": "triage", "provider": "anthropic", "model": "claude-haiku-5-5" },
+        { "role": "review", "provider": "anthropic", "model": "claude-opus-5-5" },
+        { "role": "graph", "provider": "anthropic", "model": "claude-sonnet-5-5" }
+      ]
+    }
+  },
+  "briefing": {
+    "summary": "Adds **email invitations to orgs**. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.",
+    "verdict": {
+      "level": "high",
+      "reason": "This PR adds a **new way to gain membership in an org**. Rocky drafted 1 critical and 3 high findings, all on the auth path. The UI and wiring look routine."
+    },
+    "estimatedReviewMinutes": 7,
+    "reviewPath": [
+      {
+        "path": "src/auth/invitations.ts",
+        "why": "New path that grants org membership and sets the member's role."
+      },
+      {
+        "path": "src/api/routes/invitations.ts",
+        "why": "Public API surface that touches org permissions."
+      },
+      {
+        "path": "db/migrations/20261020_add_invitations.sql",
+        "why": "Schema migration that stores a credential (the invite token)."
+      },
+      {
+        "path": "src/jobs/sendInviteEmail.ts",
+        "why": "Handles personal data (email) and a credential (token)."
+      }
+    ],
+    "checkedOk": [
+      "Tenant RLS policy on the new table",
+      "Input validated with zod and the role enum restricted",
+      "Tokens are 256-bit and come from a CSPRNG",
+      "No new dependencies (lockfile has only a patch bump)"
+    ],
+    "memoryApplied": [
+      { "entryId": "mem-612", "text": "Secrets and tokens are stored hashed", "source": "PR #612" },
+      {
+        "entryId": "mem-598",
+        "text": "Org-scoped routes use requireOrgRole()",
+        "source": "PR #598"
+      },
+      { "entryId": "mem-640", "text": "Org deletion must cascade", "source": "PR #640" },
+      { "entryId": "mem-655", "text": "Never log emails, tokens or code", "source": "PR #655" }
+    ]
+  },
+  "triage": {
+    "files": [
+      {
+        "path": "src/auth/invitations.ts",
+        "score": 97,
+        "level": "critical",
+        "reason": "New path that grants org membership and sets the member's role.",
+        "whatChanged": "New createInvitation() and acceptInvitation(). Accepting one adds the user to an org.",
+        "whyThisLevel": "New path that grants org membership and sets the member's role.",
+        "flags": [
+          {
+            "range": { "start": 10, "end": 10 },
+            "kind": "ok",
+            "text": "Token uses 32 bytes from `crypto.randomBytes`. That's enough entropy."
+          },
+          {
+            "range": { "start": 20, "end": 20 },
+            "kind": "look",
+            "text": "Lookup by raw token. That only works because the token is stored in plaintext (see migration finding)."
+          },
+          {
+            "range": { "start": 27, "end": 27 },
+            "kind": "question",
+            "text": "The invite's email is never compared with `user.email`, so anyone holding the link can join. That's fine for shareable links but not for invites meant for one person. Which is it?"
+          }
+        ]
+      },
+      {
+        "path": "src/api/routes/invitations.ts",
+        "score": 91,
+        "level": "critical",
+        "reason": "Public API surface that touches org permissions.",
+        "whatChanged": "Two endpoints: create an invitation for an org, and accept one by token.",
+        "whyThisLevel": "Public API surface that touches org permissions.",
+        "flags": [
+          {
+            "range": { "start": 8, "end": 8 },
+            "kind": "ok",
+            "text": "Request body is validated with zod, and the role is limited to `member | admin`."
+          },
+          {
+            "range": { "start": 20, "end": 20 },
+            "kind": "look",
+            "text": "This is where `req.body.role` enters. It's the source of the critical finding in `auth/invitations.ts:28`."
+          }
+        ]
+      },
+      {
+        "path": "db/migrations/20261020_add_invitations.sql",
+        "score": 85,
+        "level": "critical",
+        "reason": "Schema migration that stores a credential (the invite token).",
+        "whatChanged": "Creates the invitations table, an org index, and the tenant RLS policy.",
+        "whyThisLevel": "Schema migration that stores a credential (the invite token).",
+        "flags": [
+          {
+            "range": { "start": 15, "end": 15 },
+            "kind": "ok",
+            "text": "RLS is enabled and the policy matches the team's tenant-isolation convention."
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/sendInviteEmail.ts",
+        "score": 61,
+        "level": "important",
+        "reason": "Handles personal data (email) and a credential (token).",
+        "whatChanged": "Background job that renders and sends the invite email.",
+        "whyThisLevel": "Handles personal data (email) and a credential (token).",
+        "flags": [
+          {
+            "range": { "start": 5, "end": 5 },
+            "kind": "look",
+            "text": "The raw token sits in the job payload, which stays in the `jobs` table until it's processed."
+          }
+        ]
+      },
+      {
+        "path": "web/src/pages/InvitePage.tsx",
+        "score": 38,
+        "level": "normal",
+        "reason": "UI only. It calls the new accept endpoint.",
+        "whatChanged": "Landing page for the invite link with an Accept button.",
+        "whyThisLevel": "UI only. It calls the new accept endpoint.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/invitations.test.ts",
+        "score": 30,
+        "level": "normal",
+        "reason": "Covers 2 of the 4 behaviours the AI found in acceptInvitation().",
+        "whatChanged": "Tests for the happy path and for expired invitations.",
+        "whyThisLevel": "Covers 2 of the 4 behaviours the AI found in acceptInvitation().",
+        "flags": []
+      },
+      {
+        "path": "src/api/index.ts",
+        "score": 12,
+        "level": "low",
+        "reason": "Two-line wiring change.",
+        "whatChanged": "Registers the new router.",
+        "whyThisLevel": "Two-line wiring change.",
+        "flags": []
+      }
+    ],
+    "noise": [
+      {
+        "path": "pnpm-lock.yaml",
+        "summary": "One patch bump, `zod 4.6.5 → 4.6.6`. No new packages, and no install scripts changed."
+      },
+      {
+        "path": "src/generated/api-types.ts",
+        "summary": "Types regenerated from `openapi.yaml` for the two new endpoints. No hand edits found."
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "critical",
+      "confidence": 94,
+      "path": "src/auth/invitations.ts",
+      "range": { "start": 28, "end": 28 },
+      "title": "Invitee can choose their own role, e.g. admin",
+      "body": "`requestedRole` comes straight from `req.body.role` and overrides the role the admin invited them with. Anyone with a member invite can send `{\"role\":\"admin\"}` and join as an admin.",
+      "suggestion": {
+        "lines": ["    role: invite.role,"],
+        "context": "    userId: user.id,"
+      },
+      "memory": [],
+      "agentPrompt": "In src/auth/invitations.ts, remove the requestedRole parameter from acceptInvitation and always use invite.role. Update the caller in src/api/routes/invitations.ts and add a test that a member invite cannot be accepted as admin."
+    },
+    {
+      "id": "F2",
+      "severity": "high",
+      "confidence": 90,
+      "path": "src/api/routes/invitations.ts",
+      "range": { "start": 13, "end": 13 },
+      "title": "No permission check: any logged-in user can invite to any org",
+      "body": "`requireSession` only checks that the user is logged in. A user from org A can create invitations, including admin invites, for org B by changing `:orgId`.",
+      "suggestion": {
+        "lines": [
+          "invitations.post(\"/orgs/:orgId/invitations\", requireSession, requireOrgRole(\"admin\"), async (req, res) => {"
+        ]
+      },
+      "memory": [
+        {
+          "entryId": "mem-598",
+          "text": "Org-scoped routes use requireOrgRole()",
+          "source": "convention · PR #598"
+        }
+      ],
+      "agentPrompt": "Add requireOrgRole(\"admin\") to POST /orgs/:orgId/invitations in src/api/routes/invitations.ts and add a test that a non-admin gets 403."
+    },
+    {
+      "id": "F3",
+      "severity": "high",
+      "confidence": 86,
+      "path": "src/auth/invitations.ts",
+      "range": { "start": 23, "end": 23 },
+      "title": "Invitations can be reused after they're accepted",
+      "body": "`acceptedAt` gets set but is never checked, so one link can add any number of accounts until it expires.",
+      "suggestion": {
+        "lines": [
+          "  if (invite.expiresAt < new Date()) throw new Gone(\"invitation expired\");",
+          "  if (invite.acceptedAt) throw new Gone(\"invitation already used\");"
+        ]
+      },
+      "memory": [],
+      "agentPrompt": "In acceptInvitation (src/auth/invitations.ts), reject invitations whose acceptedAt is set, and add a test for reusing an invite."
+    },
+    {
+      "id": "F4",
+      "severity": "high",
+      "confidence": 88,
+      "path": "db/migrations/20261020_add_invitations.sql",
+      "range": { "start": 6, "end": 6 },
+      "title": "Invite token stored in plaintext",
+      "body": "Anyone who can read this table, or a backup of it, can accept any pending invite. Store a SHA-256 hash and look up by the hash.",
+      "suggestion": {
+        "lines": ["  token_hash  bytea NOT NULL UNIQUE,"],
+        "context": "  role        text NOT NULL DEFAULT 'member',"
+      },
+      "memory": [
+        {
+          "entryId": "mem-612",
+          "text": "Secrets and tokens are stored hashed, never raw",
+          "source": "decision · PR #612"
+        }
+      ],
+      "agentPrompt": "Store invitation tokens hashed: change the column to token_hash bytea UNIQUE, hash with SHA-256 in createInvitation, and look up by hash in acceptInvitation."
+    },
+    {
+      "id": "F5",
+      "severity": "medium",
+      "confidence": 82,
+      "path": "db/migrations/20261020_add_invitations.sql",
+      "range": { "start": 3, "end": 3 },
+      "title": "Deleting an org won't remove its invitations",
+      "body": "Without `ON DELETE CASCADE`, deleting an org either fails or leaves invitee emails behind. That breaks the org-deletion guarantee in the GDPR erasure path.",
+      "suggestion": {
+        "lines": ["  org_id      uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,"],
+        "context": "  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
+      },
+      "memory": [
+        {
+          "entryId": "mem-640",
+          "text": "Org deletion must cascade to all tenant data",
+          "source": "decision · PR #640"
+        }
+      ],
+      "agentPrompt": "Add ON DELETE CASCADE to invitations.org_id in the migration."
+    },
+    {
+      "id": "F6",
+      "severity": "medium",
+      "confidence": 91,
+      "path": "src/jobs/sendInviteEmail.ts",
+      "range": { "start": 9, "end": 9 },
+      "title": "Logs the invitee's email address",
+      "body": "This puts personal data in the logs, which the logging policy doesn't allow. Log IDs instead.",
+      "suggestion": {
+        "lines": ["  log.info(\"sending invite\", { inviteId, orgId: invite.orgId });"]
+      },
+      "memory": [
+        {
+          "entryId": "mem-655",
+          "text": "Never log emails, tokens or source code",
+          "source": "policy · PR #655"
+        }
+      ],
+      "agentPrompt": "In src/jobs/sendInviteEmail.ts, replace the log line so it logs inviteId and orgId instead of the email."
+    },
+    {
+      "id": "F7",
+      "severity": "medium",
+      "confidence": 68,
+      "path": "src/api/routes/invitations.ts",
+      "range": { "start": 19, "end": 19 },
+      "title": "Token in the URL path ends up in access logs",
+      "body": "Path parameters get recorded by proxies and access logs. Send the token in the POST body instead: `POST /invitations/accept { token }`.",
+      "memory": [],
+      "agentPrompt": "Move the invitation token from the URL path to the JSON body of the accept endpoint, and update InvitePage.tsx."
+    },
+    {
+      "id": "F8",
+      "severity": "low",
+      "confidence": 57,
+      "path": "src/auth/invitations.ts",
+      "range": { "start": 31, "end": 31 },
+      "title": "Membership and acceptedAt aren't written atomically",
+      "body": "If the second write fails, the user is a member but the invite still looks open. Wrap both writes in `db.transaction()`.",
+      "memory": [],
+      "agentPrompt": "Wrap addMembership and the invitations update in acceptInvitation in a single db.transaction()."
+    },
+    {
+      "id": "F9",
+      "severity": "low",
+      "confidence": 79,
+      "path": "web/src/pages/InvitePage.tsx",
+      "range": { "start": 13, "end": 13 },
+      "title": "Expired invite leaves the button spinning",
+      "body": "The API returns 410 for expired invites, but there's no catch, so `busy` stays true and the user sees nothing.",
+      "memory": [],
+      "agentPrompt": "Handle errors in InvitePage accept(): reset busy and show a message for 410 (expired) and 404."
+    },
+    {
+      "id": "F10",
+      "severity": "low",
+      "confidence": 84,
+      "path": "src/auth/invitations.test.ts",
+      "range": { "start": 18, "end": 18 },
+      "title": "Missing tests for the two riskiest behaviours",
+      "body": "There are no tests for reusing an invite (F3) or overriding the role (F1). Both should fail today.",
+      "memory": [],
+      "agentPrompt": "Add tests to src/auth/invitations.test.ts: reusing an accepted invite is rejected, and a member invite cannot be accepted as admin."
+    }
+  ],
+  "graph": {
+    "lanes": [
+      { "id": "web", "label": "WEB", "order": 0 },
+      { "id": "api", "label": "API", "order": 1 },
+      { "id": "data", "label": "DATA", "order": 2 },
+      { "id": "workers", "label": "WORKERS", "order": 3 }
+    ],
+    "nodes": [
+      {
+        "id": "page",
+        "label": "InvitePage",
+        "kind": "ui",
+        "delta": "added",
+        "lane": "web",
+        "subtitle": "web/src/pages",
+        "files": [{ "path": "web/src/pages/InvitePage.tsx" }],
+        "badges": []
+      },
+      {
+        "id": "route",
+        "label": "Invitation routes",
+        "kind": "route",
+        "delta": "added",
+        "lane": "api",
+        "subtitle": "POST create · accept",
+        "files": [{ "path": "src/api/routes/invitations.ts" }],
+        "badges": []
+      },
+      {
+        "id": "auth",
+        "label": "acceptInvitation()",
+        "kind": "function",
+        "delta": "added",
+        "lane": "api",
+        "subtitle": "src/auth",
+        "files": [{ "path": "src/auth/invitations.ts", "range": { "start": 19, "end": 33 } }],
+        "badges": []
+      },
+      {
+        "id": "inv",
+        "label": "invitations",
+        "kind": "datastore",
+        "delta": "added",
+        "lane": "data",
+        "subtitle": "new table · RLS",
+        "files": [{ "path": "db/migrations/20261020_add_invitations.sql" }],
+        "badges": []
+      },
+      {
+        "id": "mem",
+        "label": "memberships",
+        "kind": "datastore",
+        "delta": "unchanged",
+        "lane": "data",
+        "subtitle": "existing table",
+        "files": [{ "path": "src/orgs/memberships.ts" }],
+        "badges": []
+      },
+      {
+        "id": "job",
+        "label": "send-invite-email",
+        "kind": "job",
+        "delta": "added",
+        "lane": "workers",
+        "subtitle": "src/jobs",
+        "files": [{ "path": "src/jobs/sendInviteEmail.ts" }],
+        "badges": []
+      },
+      {
+        "id": "mail",
+        "label": "Mailer",
+        "kind": "external",
+        "delta": "unchanged",
+        "lane": "workers",
+        "subtitle": "Postmark · external",
+        "files": [],
+        "badges": []
+      }
+    ],
+    "edges": [
+      {
+        "id": "page-route",
+        "from": "page",
+        "to": "route",
+        "kind": "http",
+        "delta": "added",
+        "label": "POST /accept",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "route-auth",
+        "from": "route",
+        "to": "auth",
+        "kind": "call",
+        "delta": "added",
+        "emphasis": "hero",
+        "animated": true,
+        "files": []
+      },
+      {
+        "id": "auth-inv",
+        "from": "auth",
+        "to": "inv",
+        "kind": "data",
+        "delta": "added",
+        "label": "read token",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "auth-mem",
+        "from": "auth",
+        "to": "mem",
+        "kind": "data",
+        "delta": "added",
+        "label": "grant role",
+        "emphasis": "hero",
+        "animated": true,
+        "files": []
+      },
+      {
+        "id": "auth-job",
+        "from": "auth",
+        "to": "job",
+        "kind": "queue",
+        "delta": "added",
+        "label": "enqueue",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "job-inv",
+        "from": "job",
+        "to": "inv",
+        "kind": "data",
+        "delta": "added",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "job-mail",
+        "from": "job",
+        "to": "mail",
+        "kind": "http",
+        "delta": "added",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      }
+    ],
+    "flows": [
+      {
+        "id": "accept-invite",
+        "title": "Accepting an invitation",
+        "summary": "From the landing page to a new membership row.",
+        "delta": "added",
+        "participants": [
+          { "node": "page" },
+          { "node": "route", "label": "routes" },
+          { "node": "auth" },
+          { "node": "inv" },
+          { "node": "mem" }
+        ],
+        "messages": [
+          {
+            "id": "m1",
+            "from": "page",
+            "to": "route",
+            "label": "POST /invitations/:token/accept",
+            "kind": "sync",
+            "delta": "added",
+            "animated": true,
+            "files": [
+              { "path": "web/src/pages/InvitePage.tsx", "range": { "start": 13, "end": 13 } }
+            ],
+            "payload": {
+              "request": {
+                "type": "AcceptBody",
+                "shape": "{ role?: \"member\" | \"admin\" }",
+                "sample": { "role": "admin" }
+              },
+              "response": {
+                "type": "AcceptResponse",
+                "sample": { "orgId": "org_7f3a" }
+              }
+            }
+          },
+          {
+            "id": "m2",
+            "from": "route",
+            "to": "auth",
+            "label": "acceptInvitation(token, user, req.body.role)",
+            "kind": "sync",
+            "delta": "added",
+            "animated": true,
+            "files": []
+          },
+          {
+            "id": "m3",
+            "from": "auth",
+            "to": "inv",
+            "label": "findOne({ token })",
+            "kind": "sync",
+            "delta": "added",
+            "animated": true,
+            "files": []
+          },
+          {
+            "id": "m4",
+            "from": "auth",
+            "to": "mem",
+            "label": "addMembership({ role: requestedRole ?? invite.role })",
+            "kind": "async",
+            "delta": "added",
+            "animated": true,
+            "note": "The role comes from the request body here; see finding F1.",
+            "files": []
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "id": "overview",
+        "title": "Everything the PR touches",
+        "scope": { "kind": "all" },
+        "defaultOpen": true,
+        "children": [
+          {
+            "id": "auth-path",
+            "title": "The auth path",
+            "summary": "Route, acceptInvitation() and the two tables it writes.",
+            "scope": {
+              "kind": "selection",
+              "lanes": [],
+              "nodes": ["route", "auth", "inv", "mem"],
+              "edges": ["route-auth", "auth-inv", "auth-mem"],
+              "flows": ["accept-invite"]
+            },
+            "defaultOpen": false,
+            "children": []
+          }
+        ]
+      }
+    ],
+    "walkthrough": {
+      "steps": [
+        {
+          "id": "s1",
+          "heading": "A new way in",
+          "body": "An invite link lands on InvitePage, which calls the new accept route.",
+          "focus": {
+            "kind": "selection",
+            "lanes": [],
+            "nodes": ["page", "route"],
+            "edges": ["page-route"],
+            "messages": []
+          }
+        },
+        {
+          "id": "s2",
+          "heading": "Where the role is decided",
+          "body": "acceptInvitation() writes a membership with the role from the request body.",
+          "stage": { "kind": "flow", "flow": "accept-invite" },
+          "focus": {
+            "kind": "selection",
+            "lanes": [],
+            "nodes": ["auth", "mem"],
+            "edges": [],
+            "messages": ["m4"]
+          }
+        },
+        {
+          "id": "s3",
+          "heading": "The email side",
+          "body": "A job reads the invite and emails the raw token.",
+          "focus": {
+            "kind": "selection",
+            "lanes": ["workers"],
+            "nodes": [],
+            "edges": [],
+            "messages": []
+          }
+        }
+      ]
+    }
+  }
+}

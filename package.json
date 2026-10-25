@@ -22,7 +22,9 @@
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
     "design:poc-screenshots": "tsx scripts/screenshot-poc.ts",
     "prepare": "simple-git-hooks",
-    "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh"
+    "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh",
+    "schema:emit": "tsx packages/schema/scripts/emit.ts",
+    "schema:fixtures": "tsx packages/schema/scripts/generate-large-fixture.ts"
   },
   "simple-git-hooks": {
     "pre-commit": "sh scripts/precommit.sh"

@@ -58,8 +58,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.{ts,mjs}"],
+    files: ["scripts/**/*.{ts,mjs}", "packages/*/scripts/**/*.ts"],
     rules: { "no-console": "off" },
+  },
+  {
+    // Tests index into fixtures under noUncheckedIndexedAccess; a `!` there is an assertion
+    // about the fixture, and a wrong one fails the test loudly. Production code keeps the rule.
+    files: ["**/*.test.ts"],
+    rules: { "@typescript-eslint/no-non-null-assertion": "off" },
   },
   prettier,
 );
