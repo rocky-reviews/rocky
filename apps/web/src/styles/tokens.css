@@ -1,1 +1,111 @@
-/* Design tokens: filled in by P0-10 */
+/*
+ * Rocky Reviews design tokens: the Slate palette from design-poc/index.html (task P0-10).
+ * Colours are only defined here; the rest of apps/web references them with var(--token)
+ * (enforced by scripts/check-no-raw-colors.mjs). A test keeps these equal to the POC.
+ *
+ * Meaning: indigo = you (the human), cyan = AI, red/orange/amber/slate = severity,
+ * green = ok / added. Light/dark is set on <html data-mode="light|dark">.
+ */
+
+:root,
+:root[data-mode="light"] {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  /* Surfaces */
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --panel-2: #eef1f6;
+  --border: #dde3ec;
+  /* Text */
+  --text: #0f172a;
+  --muted: #5b6578;
+  --faint: #94a0b4;
+  /* You (the human reviewer) — indigo */
+  --you: #4f46e5;
+  --you-bg: #eef0ff;
+  --on-you: #ffffff;
+  /* AI — cyan. Anything the AI wrote or suggests uses these, never the 'you' colours. */
+  --ai: #0891b2;
+  --ai-bg: #e4f5f9;
+  /* Severity / risk scale: critical > high > medium > low, plus ok for 'checked, looks fine' */
+  --crit: #dc2626;
+  --crit-bg: #fdecec;
+  --high: #ea580c;
+  --high-bg: #fff1e8;
+  --med: #b7791f;
+  --med-bg: #fdf6e3;
+  --low: #64748b;
+  --low-bg: #eef1f5;
+  --ok: #15803d;
+  --ok-bg: #e9f7ee;
+  /* Diff */
+  --add-bg: #e7f6ec;
+  --add-sign: #1a7f37;
+  --del-bg: #fdecec;
+  --del-sign: #cf222e;
+  /* Code syntax */
+  --code: #1e293b;
+  --tk-kw: #4f46e5;
+  --tk-str: #0e7490;
+  --tk-com: #7c8799;
+  --tk-num: #b45309;
+  /* Elevation */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+:root[data-mode="dark"] {
+  /* Surfaces */
+  --bg: #0b1120;
+  --panel: #111827;
+  --panel-2: #1a2234;
+  --border: #263045;
+  /* Text */
+  --text: #e5e9f2;
+  --muted: #94a0b8;
+  --faint: #64708a;
+  /* You (the human reviewer) — indigo */
+  --you: #818cf8;
+  --you-bg: #1e2148;
+  --on-you: #0b1020;
+  /* AI — cyan. Anything the AI wrote or suggests uses these, never the 'you' colours. */
+  --ai: #22d3ee;
+  --ai-bg: #0c2a33;
+  /* Severity / risk scale: critical > high > medium > low, plus ok for 'checked, looks fine' */
+  --crit: #f87171;
+  --crit-bg: #3a1717;
+  --high: #fb923c;
+  --high-bg: #3a2214;
+  --med: #fbbf24;
+  --med-bg: #362a10;
+  --low: #94a3b8;
+  --low-bg: #1f2633;
+  --ok: #4ade80;
+  --ok-bg: #12301d;
+  /* Diff */
+  --add-bg: #0f2a1c;
+  --add-sign: #4ade80;
+  --del-bg: #2d1518;
+  --del-sign: #f87171;
+  /* Code syntax */
+  --code: #e2e8f0;
+  --tk-kw: #a5b4fc;
+  --tk-str: #67e8f9;
+  --tk-com: #6b7a93;
+  --tk-num: #fdba74;
+  /* Elevation */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.35);
+}

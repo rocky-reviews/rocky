@@ -19,10 +19,12 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage"
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
+    "design:poc-screenshots": "tsx scripts/screenshot-poc.ts"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.0.5",
