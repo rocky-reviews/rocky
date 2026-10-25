@@ -1,0 +1,3761 @@
+{
+  "briefing": {
+    "summary": "Moves every module onto the shared client and regenerates the API types.",
+    "verdict": {
+      "level": "critical",
+      "reason": "Sixty files across auth, billing and orgs; several modules drop error handling."
+    },
+    "estimatedReviewMinutes": 95,
+    "reviewPath": [
+      {
+        "path": "src/auth/module-00.ts",
+        "why": "Touches the auth area (30 lines)."
+      },
+      {
+        "path": "src/billing/module-01.ts",
+        "why": "Touches the billing area (68 lines)."
+      },
+      {
+        "path": "src/orgs/module-02.ts",
+        "why": "Touches the orgs area (88 lines)."
+      },
+      {
+        "path": "src/api/module-03.ts",
+        "why": "Touches the api area (54 lines)."
+      },
+      {
+        "path": "src/jobs/module-04.ts",
+        "why": "Touches the jobs area (20 lines)."
+      },
+      {
+        "path": "src/web/module-05.ts",
+        "why": "Touches the web area (39 lines)."
+      },
+      {
+        "path": "src/db/module-06.ts",
+        "why": "Touches the db area (31 lines)."
+      },
+      {
+        "path": "src/shared/module-07.ts",
+        "why": "Touches the shared area (10 lines)."
+      },
+      {
+        "path": "src/auth/module-08.ts",
+        "why": "Touches the auth area (92 lines)."
+      },
+      {
+        "path": "src/billing/module-09.ts",
+        "why": "Touches the billing area (47 lines)."
+      },
+      {
+        "path": "src/orgs/module-10.ts",
+        "why": "Touches the orgs area (29 lines)."
+      },
+      {
+        "path": "src/api/module-11.ts",
+        "why": "Touches the api area (85 lines)."
+      },
+      {
+        "path": "src/jobs/module-12.ts",
+        "why": "Touches the jobs area (81 lines)."
+      },
+      {
+        "path": "src/web/module-13.ts",
+        "why": "Touches the web area (73 lines)."
+      },
+      {
+        "path": "src/db/module-14.ts",
+        "why": "Touches the db area (47 lines)."
+      },
+      {
+        "path": "src/shared/module-15.ts",
+        "why": "Touches the shared area (73 lines)."
+      },
+      {
+        "path": "src/auth/module-16.ts",
+        "why": "Touches the auth area (46 lines)."
+      },
+      {
+        "path": "src/billing/module-17.ts",
+        "why": "Touches the billing area (45 lines)."
+      },
+      {
+        "path": "src/orgs/module-18.ts",
+        "why": "Touches the orgs area (29 lines)."
+      },
+      {
+        "path": "src/api/module-19.ts",
+        "why": "Touches the api area (117 lines)."
+      }
+    ],
+    "checkedOk": [
+      "Generated files match the OpenAPI spec",
+      "No new dependencies"
+    ],
+    "memoryApplied": [
+      {
+        "entryId": "mem-1",
+        "text": "Shared client errors must be handled",
+        "source": "decision · PR #700"
+      }
+    ]
+  },
+  "triage": {
+    "files": [
+      {
+        "path": "src/auth/module-00.ts",
+        "score": 96,
+        "level": "critical",
+        "reason": "Touches the auth area (30 lines).",
+        "whatChanged": "Reworks module 0 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 16,
+              "end": 16
+            },
+            "kind": "look",
+            "text": "Line 16 is where module 0 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-01.ts",
+        "score": 100,
+        "level": "critical",
+        "reason": "Touches the billing area (68 lines).",
+        "whatChanged": "Reworks module 1 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-02.ts",
+        "score": 93,
+        "level": "critical",
+        "reason": "Touches the orgs area (88 lines).",
+        "whatChanged": "Reworks module 2 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-03.ts",
+        "score": 81,
+        "level": "critical",
+        "reason": "Touches the api area (54 lines).",
+        "whatChanged": "Reworks module 3 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-04.ts",
+        "score": 81,
+        "level": "critical",
+        "reason": "Touches the jobs area (20 lines).",
+        "whatChanged": "Reworks module 4 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 48,
+              "end": 48
+            },
+            "kind": "look",
+            "text": "Line 48 is where module 4 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-05.ts",
+        "score": 86,
+        "level": "critical",
+        "reason": "Touches the web area (39 lines).",
+        "whatChanged": "Reworks module 5 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-06.ts",
+        "score": 81,
+        "level": "critical",
+        "reason": "Touches the db area (31 lines).",
+        "whatChanged": "Reworks module 6 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-07.ts",
+        "score": 87,
+        "level": "critical",
+        "reason": "Touches the shared area (10 lines).",
+        "whatChanged": "Reworks module 7 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-08.ts",
+        "score": 93,
+        "level": "critical",
+        "reason": "Touches the auth area (92 lines).",
+        "whatChanged": "Reworks module 8 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 28,
+              "end": 28
+            },
+            "kind": "look",
+            "text": "Line 28 is where module 8 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-09.ts",
+        "score": 90,
+        "level": "critical",
+        "reason": "Touches the billing area (47 lines).",
+        "whatChanged": "Reworks module 9 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-10.ts",
+        "score": 82,
+        "level": "critical",
+        "reason": "Touches the orgs area (29 lines).",
+        "whatChanged": "Reworks module 10 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-11.ts",
+        "score": 89,
+        "level": "critical",
+        "reason": "Touches the api area (85 lines).",
+        "whatChanged": "Reworks module 11 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-12.ts",
+        "score": 98,
+        "level": "critical",
+        "reason": "Touches the jobs area (81 lines).",
+        "whatChanged": "Reworks module 12 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 57,
+              "end": 57
+            },
+            "kind": "question",
+            "text": "Line 57 is where module 12 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-13.ts",
+        "score": 96,
+        "level": "critical",
+        "reason": "Touches the web area (73 lines).",
+        "whatChanged": "Reworks module 13 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-14.ts",
+        "score": 88,
+        "level": "critical",
+        "reason": "Touches the db area (47 lines).",
+        "whatChanged": "Reworks module 14 to use the new shared client.",
+        "whyThisLevel": "Rated critical because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-15.ts",
+        "score": 77,
+        "level": "important",
+        "reason": "Touches the shared area (73 lines).",
+        "whatChanged": "Reworks module 15 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-16.ts",
+        "score": 61,
+        "level": "important",
+        "reason": "Touches the auth area (46 lines).",
+        "whatChanged": "Reworks module 16 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 32,
+              "end": 32
+            },
+            "kind": "ok",
+            "text": "Line 32 is where module 16 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-17.ts",
+        "score": 64,
+        "level": "important",
+        "reason": "Touches the billing area (45 lines).",
+        "whatChanged": "Reworks module 17 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-18.ts",
+        "score": 57,
+        "level": "important",
+        "reason": "Touches the orgs area (29 lines).",
+        "whatChanged": "Reworks module 18 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-19.ts",
+        "score": 57,
+        "level": "important",
+        "reason": "Touches the api area (117 lines).",
+        "whatChanged": "Reworks module 19 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-20.ts",
+        "score": 56,
+        "level": "important",
+        "reason": "Touches the jobs area (89 lines).",
+        "whatChanged": "Reworks module 20 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 45,
+              "end": 45
+            },
+            "kind": "ok",
+            "text": "Line 45 is where module 20 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-21.ts",
+        "score": 64,
+        "level": "important",
+        "reason": "Touches the web area (21 lines).",
+        "whatChanged": "Reworks module 21 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-22.ts",
+        "score": 55,
+        "level": "important",
+        "reason": "Touches the db area (98 lines).",
+        "whatChanged": "Reworks module 22 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-23.ts",
+        "score": 62,
+        "level": "important",
+        "reason": "Touches the shared area (121 lines).",
+        "whatChanged": "Reworks module 23 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-24.ts",
+        "score": 50,
+        "level": "important",
+        "reason": "Touches the auth area (112 lines).",
+        "whatChanged": "Reworks module 24 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 20,
+              "end": 20
+            },
+            "kind": "ok",
+            "text": "Line 20 is where module 24 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-25.ts",
+        "score": 75,
+        "level": "important",
+        "reason": "Touches the billing area (43 lines).",
+        "whatChanged": "Reworks module 25 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-26.ts",
+        "score": 66,
+        "level": "important",
+        "reason": "Touches the orgs area (45 lines).",
+        "whatChanged": "Reworks module 26 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-27.ts",
+        "score": 53,
+        "level": "important",
+        "reason": "Touches the api area (94 lines).",
+        "whatChanged": "Reworks module 27 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-28.ts",
+        "score": 64,
+        "level": "important",
+        "reason": "Touches the jobs area (46 lines).",
+        "whatChanged": "Reworks module 28 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 27,
+              "end": 27
+            },
+            "kind": "look",
+            "text": "Line 27 is where module 28 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-29.ts",
+        "score": 54,
+        "level": "important",
+        "reason": "Touches the web area (92 lines).",
+        "whatChanged": "Reworks module 29 to use the new shared client.",
+        "whyThisLevel": "Rated important because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-30.ts",
+        "score": 24,
+        "level": "normal",
+        "reason": "Touches the db area (14 lines).",
+        "whatChanged": "Reworks module 30 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-31.ts",
+        "score": 44,
+        "level": "normal",
+        "reason": "Touches the shared area (97 lines).",
+        "whatChanged": "Reworks module 31 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-32.ts",
+        "score": 34,
+        "level": "normal",
+        "reason": "Touches the auth area (35 lines).",
+        "whatChanged": "Reworks module 32 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 40,
+              "end": 40
+            },
+            "kind": "ok",
+            "text": "Line 40 is where module 32 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-33.ts",
+        "score": 41,
+        "level": "normal",
+        "reason": "Touches the billing area (107 lines).",
+        "whatChanged": "Reworks module 33 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-34.ts",
+        "score": 22,
+        "level": "normal",
+        "reason": "Touches the orgs area (42 lines).",
+        "whatChanged": "Reworks module 34 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-35.ts",
+        "score": 45,
+        "level": "normal",
+        "reason": "Touches the api area (55 lines).",
+        "whatChanged": "Reworks module 35 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-36.ts",
+        "score": 42,
+        "level": "normal",
+        "reason": "Touches the jobs area (95 lines).",
+        "whatChanged": "Reworks module 36 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 39,
+              "end": 39
+            },
+            "kind": "question",
+            "text": "Line 39 is where module 36 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-37.ts",
+        "score": 37,
+        "level": "normal",
+        "reason": "Touches the web area (111 lines).",
+        "whatChanged": "Reworks module 37 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-38.ts",
+        "score": 29,
+        "level": "normal",
+        "reason": "Touches the db area (109 lines).",
+        "whatChanged": "Reworks module 38 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-39.ts",
+        "score": 25,
+        "level": "normal",
+        "reason": "Touches the shared area (99 lines).",
+        "whatChanged": "Reworks module 39 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-40.ts",
+        "score": 36,
+        "level": "normal",
+        "reason": "Touches the auth area (47 lines).",
+        "whatChanged": "Reworks module 40 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 64,
+              "end": 64
+            },
+            "kind": "look",
+            "text": "Line 64 is where module 40 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-41.ts",
+        "score": 40,
+        "level": "normal",
+        "reason": "Touches the billing area (34 lines).",
+        "whatChanged": "Reworks module 41 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-42.ts",
+        "score": 39,
+        "level": "normal",
+        "reason": "Touches the orgs area (43 lines).",
+        "whatChanged": "Reworks module 42 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-43.ts",
+        "score": 45,
+        "level": "normal",
+        "reason": "Touches the api area (80 lines).",
+        "whatChanged": "Reworks module 43 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/jobs/module-44.ts",
+        "score": 40,
+        "level": "normal",
+        "reason": "Touches the jobs area (28 lines).",
+        "whatChanged": "Reworks module 44 to use the new shared client.",
+        "whyThisLevel": "Rated normal because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 29,
+              "end": 29
+            },
+            "kind": "question",
+            "text": "Line 29 is where module 44 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-45.ts",
+        "score": 7,
+        "level": "low",
+        "reason": "Touches the web area (99 lines).",
+        "whatChanged": "Reworks module 45 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/db/module-46.ts",
+        "score": 13,
+        "level": "low",
+        "reason": "Touches the db area (57 lines).",
+        "whatChanged": "Reworks module 46 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/shared/module-47.ts",
+        "score": 8,
+        "level": "low",
+        "reason": "Touches the shared area (129 lines).",
+        "whatChanged": "Reworks module 47 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/auth/module-48.ts",
+        "score": 5,
+        "level": "low",
+        "reason": "Touches the auth area (91 lines).",
+        "whatChanged": "Reworks module 48 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": [
+          {
+            "range": {
+              "start": 36,
+              "end": 36
+            },
+            "kind": "look",
+            "text": "Line 36 is where module 48 changes behaviour."
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-49.ts",
+        "score": 4,
+        "level": "low",
+        "reason": "Touches the billing area (41 lines).",
+        "whatChanged": "Reworks module 49 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/orgs/module-50.ts",
+        "score": 0,
+        "level": "low",
+        "reason": "Touches the orgs area (50 lines).",
+        "whatChanged": "Reworks module 50 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      },
+      {
+        "path": "src/api/module-51.ts",
+        "score": 16,
+        "level": "low",
+        "reason": "Touches the api area (81 lines).",
+        "whatChanged": "Reworks module 51 to use the new shared client.",
+        "whyThisLevel": "Rated low because of the area it sits in and the size of the change.",
+        "flags": []
+      }
+    ],
+    "noise": [
+      {
+        "path": "generated/db/types-54.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      },
+      {
+        "path": "generated/shared/types-55.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      },
+      {
+        "path": "generated/auth/types-56.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      },
+      {
+        "path": "generated/billing/types-57.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      },
+      {
+        "path": "generated/orgs/types-58.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      },
+      {
+        "path": "generated/api/types-59.ts",
+        "summary": "Regenerated from the OpenAPI spec; no hand edits."
+      }
+    ]
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "high",
+      "confidence": 68,
+      "path": "src/auth/module-00.ts",
+      "range": {
+        "start": 11,
+        "end": 12
+      },
+      "title": "Module 0: high issue in the new client call",
+      "body": "The call at lines 11–12 of `src/auth/module-00.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 0"
+        ],
+        "context": "  // module 0: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/auth/module-00.ts, handle the error branch of client.call at lines 11–12 and add a test for it."
+    },
+    {
+      "id": "F2",
+      "severity": "medium",
+      "confidence": 99,
+      "path": "src/api/module-03.ts",
+      "range": {
+        "start": 35,
+        "end": 35
+      },
+      "title": "Module 3: medium issue in the new client call",
+      "body": "The call at lines 35–35 of `src/api/module-03.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/api/module-03.ts, handle the error branch of client.call at lines 35–35 and add a test for it."
+    },
+    {
+      "id": "F3",
+      "severity": "medium",
+      "confidence": 92,
+      "path": "src/db/module-06.ts",
+      "range": {
+        "start": 54,
+        "end": 55
+      },
+      "title": "Module 6: medium issue in the new client call",
+      "body": "The call at lines 54–55 of `src/db/module-06.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 6"
+        ],
+        "context": "  // module 6: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/db/module-06.ts, handle the error branch of client.call at lines 54–55 and add a test for it."
+    },
+    {
+      "id": "F4",
+      "severity": "high",
+      "confidence": 63,
+      "path": "src/billing/module-09.ts",
+      "range": {
+        "start": 54,
+        "end": 55
+      },
+      "title": "Module 9: high issue in the new client call",
+      "body": "The call at lines 54–55 of `src/billing/module-09.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/billing/module-09.ts, handle the error branch of client.call at lines 54–55 and add a test for it."
+    },
+    {
+      "id": "F5",
+      "severity": "medium",
+      "confidence": 94,
+      "path": "src/jobs/module-12.ts",
+      "range": {
+        "start": 104,
+        "end": 104
+      },
+      "title": "Module 12: medium issue in the new client call",
+      "body": "The call at lines 104–104 of `src/jobs/module-12.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 12"
+        ],
+        "context": "  // module 12: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/jobs/module-12.ts, handle the error branch of client.call at lines 104–104 and add a test for it."
+    },
+    {
+      "id": "F6",
+      "severity": "medium",
+      "confidence": 59,
+      "path": "src/shared/module-15.ts",
+      "range": {
+        "start": 130,
+        "end": 130
+      },
+      "title": "Module 15: medium issue in the new client call",
+      "body": "The call at lines 130–130 of `src/shared/module-15.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/shared/module-15.ts, handle the error branch of client.call at lines 130–130 and add a test for it."
+    },
+    {
+      "id": "F7",
+      "severity": "medium",
+      "confidence": 58,
+      "path": "src/orgs/module-18.ts",
+      "range": {
+        "start": 42,
+        "end": 44
+      },
+      "title": "Module 18: medium issue in the new client call",
+      "body": "The call at lines 42–44 of `src/orgs/module-18.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 18"
+        ],
+        "context": "  // module 18: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/orgs/module-18.ts, handle the error branch of client.call at lines 42–44 and add a test for it."
+    },
+    {
+      "id": "F8",
+      "severity": "medium",
+      "confidence": 94,
+      "path": "src/web/module-21.ts",
+      "range": {
+        "start": 15,
+        "end": 16
+      },
+      "title": "Module 21: medium issue in the new client call",
+      "body": "The call at lines 15–16 of `src/web/module-21.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/web/module-21.ts, handle the error branch of client.call at lines 15–16 and add a test for it."
+    },
+    {
+      "id": "F9",
+      "severity": "medium",
+      "confidence": 87,
+      "path": "src/auth/module-24.ts",
+      "range": {
+        "start": 146,
+        "end": 147
+      },
+      "title": "Module 24: medium issue in the new client call",
+      "body": "The call at lines 146–147 of `src/auth/module-24.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 24"
+        ],
+        "context": "  // module 24: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/auth/module-24.ts, handle the error branch of client.call at lines 146–147 and add a test for it."
+    },
+    {
+      "id": "F10",
+      "severity": "low",
+      "confidence": 62,
+      "path": "src/api/module-27.ts",
+      "range": {
+        "start": 134,
+        "end": 136
+      },
+      "title": "Module 27: low issue in the new client call",
+      "body": "The call at lines 134–136 of `src/api/module-27.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/api/module-27.ts, handle the error branch of client.call at lines 134–136 and add a test for it."
+    },
+    {
+      "id": "F11",
+      "severity": "critical",
+      "confidence": 95,
+      "path": "src/db/module-30.ts",
+      "range": {
+        "start": 30,
+        "end": 30
+      },
+      "title": "Module 30: critical issue in the new client call",
+      "body": "The call at lines 30–30 of `src/db/module-30.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 30"
+        ],
+        "context": "  // module 30: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/db/module-30.ts, handle the error branch of client.call at lines 30–30 and add a test for it."
+    },
+    {
+      "id": "F12",
+      "severity": "high",
+      "confidence": 52,
+      "path": "src/billing/module-33.ts",
+      "range": {
+        "start": 156,
+        "end": 156
+      },
+      "title": "Module 33: high issue in the new client call",
+      "body": "The call at lines 156–156 of `src/billing/module-33.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/billing/module-33.ts, handle the error branch of client.call at lines 156–156 and add a test for it."
+    },
+    {
+      "id": "F13",
+      "severity": "low",
+      "confidence": 98,
+      "path": "src/jobs/module-36.ts",
+      "range": {
+        "start": 155,
+        "end": 155
+      },
+      "title": "Module 36: low issue in the new client call",
+      "body": "The call at lines 155–155 of `src/jobs/module-36.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 36"
+        ],
+        "context": "  // module 36: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/jobs/module-36.ts, handle the error branch of client.call at lines 155–155 and add a test for it."
+    },
+    {
+      "id": "F14",
+      "severity": "high",
+      "confidence": 87,
+      "path": "src/shared/module-39.ts",
+      "range": {
+        "start": 152,
+        "end": 152
+      },
+      "title": "Module 39: high issue in the new client call",
+      "body": "The call at lines 152–152 of `src/shared/module-39.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/shared/module-39.ts, handle the error branch of client.call at lines 152–152 and add a test for it."
+    },
+    {
+      "id": "F15",
+      "severity": "high",
+      "confidence": 69,
+      "path": "src/orgs/module-42.ts",
+      "range": {
+        "start": 5,
+        "end": 5
+      },
+      "title": "Module 42: high issue in the new client call",
+      "body": "The call at lines 5–5 of `src/orgs/module-42.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 42"
+        ],
+        "context": "  // module 42: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/orgs/module-42.ts, handle the error branch of client.call at lines 5–5 and add a test for it."
+    },
+    {
+      "id": "F16",
+      "severity": "medium",
+      "confidence": 91,
+      "path": "src/web/module-45.ts",
+      "range": {
+        "start": 76,
+        "end": 78
+      },
+      "title": "Module 45: medium issue in the new client call",
+      "body": "The call at lines 76–78 of `src/web/module-45.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/web/module-45.ts, handle the error branch of client.call at lines 76–78 and add a test for it."
+    },
+    {
+      "id": "F17",
+      "severity": "low",
+      "confidence": 65,
+      "path": "src/auth/module-48.ts",
+      "range": {
+        "start": 150,
+        "end": 150
+      },
+      "title": "Module 48: low issue in the new client call",
+      "body": "The call at lines 150–150 of `src/auth/module-48.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "suggestion": {
+        "lines": [
+          "  const result = await client.call(input); // module 48"
+        ],
+        "context": "  // module 48: before the call"
+      },
+      "memory": [
+        {
+          "entryId": "mem-1",
+          "text": "Shared client errors must be handled",
+          "source": "decision · PR #700"
+        }
+      ],
+      "agentPrompt": "In src/auth/module-48.ts, handle the error branch of client.call at lines 150–150 and add a test for it."
+    },
+    {
+      "id": "F18",
+      "severity": "low",
+      "confidence": 59,
+      "path": "src/api/module-51.ts",
+      "range": {
+        "start": 136,
+        "end": 136
+      },
+      "title": "Module 51: low issue in the new client call",
+      "body": "The call at lines 136–136 of `src/api/module-51.ts` ignores the error branch of the shared client. See `shared/client.ts` for the contract.",
+      "memory": [],
+      "agentPrompt": "In src/api/module-51.ts, handle the error branch of client.call at lines 136–136 and add a test for it."
+    }
+  ],
+  "graph": {
+    "lanes": [
+      {
+        "id": "lane-auth",
+        "label": "AUTH",
+        "order": 0
+      },
+      {
+        "id": "lane-billing",
+        "label": "BILLING",
+        "order": 1
+      },
+      {
+        "id": "lane-orgs",
+        "label": "ORGS",
+        "order": 2
+      },
+      {
+        "id": "lane-api",
+        "label": "API",
+        "order": 3
+      },
+      {
+        "id": "lane-jobs",
+        "label": "JOBS",
+        "order": 4
+      },
+      {
+        "id": "lane-web",
+        "label": "WEB",
+        "order": 5
+      },
+      {
+        "id": "lane-db",
+        "label": "DB",
+        "order": 6
+      },
+      {
+        "id": "lane-shared",
+        "label": "SHARED",
+        "order": 7
+      }
+    ],
+    "nodes": [
+      {
+        "id": "n0",
+        "label": "module-00",
+        "kind": "route",
+        "delta": "added",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-00.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n1",
+        "label": "module-01",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-01.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n2",
+        "label": "module-02",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-02.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n3",
+        "label": "module-03",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-03.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n4",
+        "label": "module-04",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-04.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n5",
+        "label": "module-05",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-05.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n6",
+        "label": "module-06",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-06.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n7",
+        "label": "module-07",
+        "kind": "job",
+        "delta": "added",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-07.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n8",
+        "label": "module-08",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-08.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n9",
+        "label": "module-09",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-09.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n10",
+        "label": "module-10",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-10.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n11",
+        "label": "module-11",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-11.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n12",
+        "label": "module-12",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-12.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n13",
+        "label": "module-13",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-13.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n14",
+        "label": "module-14",
+        "kind": "datastore",
+        "delta": "added",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-14.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n15",
+        "label": "module-15",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-15.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n16",
+        "label": "module-16",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-16.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n17",
+        "label": "module-17",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-17.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n18",
+        "label": "module-18",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-18.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n19",
+        "label": "module-19",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-19.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n20",
+        "label": "module-20",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-20.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n21",
+        "label": "module-21",
+        "kind": "ui",
+        "delta": "added",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-21.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n22",
+        "label": "module-22",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-22.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n23",
+        "label": "module-23",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-23.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n24",
+        "label": "module-24",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-24.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n25",
+        "label": "module-25",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-25.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n26",
+        "label": "module-26",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-26.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n27",
+        "label": "module-27",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-27.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n28",
+        "label": "module-28",
+        "kind": "route",
+        "delta": "added",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-28.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n29",
+        "label": "module-29",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-29.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n30",
+        "label": "module-30",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-30.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n31",
+        "label": "module-31",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-31.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n32",
+        "label": "module-32",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-32.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n33",
+        "label": "module-33",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-33.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n34",
+        "label": "module-34",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-34.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n35",
+        "label": "module-35",
+        "kind": "ui",
+        "delta": "added",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-35.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n36",
+        "label": "module-36",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-36.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n37",
+        "label": "module-37",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-37.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n38",
+        "label": "module-38",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-38.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n39",
+        "label": "module-39",
+        "kind": "ui",
+        "delta": "modified",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-39.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n40",
+        "label": "module-40",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-40.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n41",
+        "label": "module-41",
+        "kind": "route",
+        "delta": "modified",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-41.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n42",
+        "label": "module-42",
+        "kind": "job",
+        "delta": "added",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-42.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n43",
+        "label": "module-43",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-43.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n44",
+        "label": "module-44",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-jobs",
+        "files": [
+          {
+            "path": "src/jobs/module-44.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n45",
+        "label": "module-45",
+        "kind": "module",
+        "delta": "modified",
+        "lane": "lane-web",
+        "files": [
+          {
+            "path": "src/web/module-45.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n46",
+        "label": "module-46",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [
+          {
+            "path": "src/db/module-46.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n47",
+        "label": "module-47",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-shared",
+        "files": [
+          {
+            "path": "src/shared/module-47.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n48",
+        "label": "module-48",
+        "kind": "job",
+        "delta": "modified",
+        "lane": "lane-auth",
+        "files": [
+          {
+            "path": "src/auth/module-48.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n49",
+        "label": "module-49",
+        "kind": "function",
+        "delta": "added",
+        "lane": "lane-billing",
+        "files": [
+          {
+            "path": "src/billing/module-49.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n50",
+        "label": "module-50",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-orgs",
+        "files": [
+          {
+            "path": "src/orgs/module-50.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n51",
+        "label": "module-51",
+        "kind": "function",
+        "delta": "modified",
+        "lane": "lane-api",
+        "files": [
+          {
+            "path": "src/api/module-51.ts"
+          }
+        ],
+        "badges": []
+      },
+      {
+        "id": "n-db",
+        "label": "postgres",
+        "kind": "datastore",
+        "delta": "modified",
+        "lane": "lane-db",
+        "files": [],
+        "badges": []
+      }
+    ],
+    "edges": [
+      {
+        "id": "e0",
+        "from": "n0",
+        "to": "n-db",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e1",
+        "from": "n1",
+        "to": "n8",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e2",
+        "from": "n2",
+        "to": "n9",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e3",
+        "from": "n3",
+        "to": "n10",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "hero",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e4",
+        "from": "n4",
+        "to": "n11",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e5",
+        "from": "n5",
+        "to": "n-db",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e6",
+        "from": "n6",
+        "to": "n13",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e7",
+        "from": "n7",
+        "to": "n14",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e8",
+        "from": "n8",
+        "to": "n15",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e9",
+        "from": "n9",
+        "to": "n16",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e10",
+        "from": "n10",
+        "to": "n-db",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e11",
+        "from": "n11",
+        "to": "n18",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e12",
+        "from": "n12",
+        "to": "n19",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e13",
+        "from": "n13",
+        "to": "n20",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e14",
+        "from": "n14",
+        "to": "n21",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e15",
+        "from": "n15",
+        "to": "n-db",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e16",
+        "from": "n16",
+        "to": "n23",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e17",
+        "from": "n17",
+        "to": "n24",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e18",
+        "from": "n18",
+        "to": "n25",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e19",
+        "from": "n19",
+        "to": "n26",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e20",
+        "from": "n20",
+        "to": "n-db",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e21",
+        "from": "n21",
+        "to": "n28",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e22",
+        "from": "n22",
+        "to": "n29",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e23",
+        "from": "n23",
+        "to": "n30",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e24",
+        "from": "n24",
+        "to": "n31",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e25",
+        "from": "n25",
+        "to": "n-db",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e26",
+        "from": "n26",
+        "to": "n33",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e27",
+        "from": "n27",
+        "to": "n34",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e28",
+        "from": "n28",
+        "to": "n35",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e29",
+        "from": "n29",
+        "to": "n36",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e30",
+        "from": "n30",
+        "to": "n-db",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e31",
+        "from": "n31",
+        "to": "n38",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e32",
+        "from": "n32",
+        "to": "n39",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e33",
+        "from": "n33",
+        "to": "n40",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e34",
+        "from": "n34",
+        "to": "n41",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e35",
+        "from": "n35",
+        "to": "n-db",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e36",
+        "from": "n36",
+        "to": "n43",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e37",
+        "from": "n37",
+        "to": "n44",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e38",
+        "from": "n38",
+        "to": "n45",
+        "kind": "data",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e39",
+        "from": "n39",
+        "to": "n46",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e40",
+        "from": "n40",
+        "to": "n-db",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e41",
+        "from": "n41",
+        "to": "n48",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e42",
+        "from": "n42",
+        "to": "n49",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e43",
+        "from": "n43",
+        "to": "n50",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e44",
+        "from": "n44",
+        "to": "n51",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e45",
+        "from": "n45",
+        "to": "n-db",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e46",
+        "from": "n46",
+        "to": "n1",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e47",
+        "from": "n47",
+        "to": "n2",
+        "kind": "queue",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e48",
+        "from": "n48",
+        "to": "n3",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e49",
+        "from": "n49",
+        "to": "n4",
+        "kind": "call",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e50",
+        "from": "n50",
+        "to": "n-db",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      },
+      {
+        "id": "e51",
+        "from": "n51",
+        "to": "n6",
+        "kind": "http",
+        "delta": "modified",
+        "emphasis": "normal",
+        "animated": false,
+        "files": []
+      }
+    ],
+    "flows": [
+      {
+        "id": "flow-main",
+        "title": "Request through the shared client",
+        "delta": "modified",
+        "participants": [
+          {
+            "node": "n0"
+          },
+          {
+            "node": "n7"
+          },
+          {
+            "node": "n-db"
+          }
+        ],
+        "messages": [
+          {
+            "id": "m1",
+            "from": "n0",
+            "to": "n7",
+            "label": "call()",
+            "kind": "sync",
+            "delta": "modified",
+            "animated": true,
+            "files": []
+          },
+          {
+            "id": "m2",
+            "from": "n7",
+            "to": "n-db",
+            "label": "SELECT",
+            "kind": "sync",
+            "delta": "modified",
+            "animated": true,
+            "files": []
+          },
+          {
+            "id": "m3",
+            "from": "n-db",
+            "to": "n7",
+            "label": "rows",
+            "kind": "return",
+            "delta": "unchanged",
+            "animated": true,
+            "files": []
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "id": "all",
+        "title": "Everything",
+        "scope": {
+          "kind": "all"
+        },
+        "defaultOpen": true,
+        "children": [
+          {
+            "id": "view-auth",
+            "title": "auth lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-auth"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-billing",
+            "title": "billing lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-billing"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-orgs",
+            "title": "orgs lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-orgs"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-api",
+            "title": "api lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-api"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-jobs",
+            "title": "jobs lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-jobs"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-web",
+            "title": "web lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-web"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-db",
+            "title": "db lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-db"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          },
+          {
+            "id": "view-shared",
+            "title": "shared lane",
+            "scope": {
+              "kind": "selection",
+              "lanes": [
+                "lane-shared"
+              ],
+              "nodes": [],
+              "edges": [],
+              "flows": []
+            },
+            "defaultOpen": false,
+            "children": []
+          }
+        ]
+      }
+    ],
+    "walkthrough": {
+      "steps": [
+        {
+          "id": "s1",
+          "heading": "The shared client",
+          "body": "Every module now calls one client.",
+          "focus": {
+            "kind": "selection",
+            "lanes": [],
+            "nodes": [
+              "n0",
+              "n7"
+            ],
+            "edges": [],
+            "messages": []
+          }
+        },
+        {
+          "id": "s2",
+          "heading": "Where it hits the database",
+          "body": "Only the db lane talks to postgres.",
+          "stage": {
+            "kind": "flow",
+            "flow": "flow-main"
+          },
+          "focus": {
+            "kind": "selection",
+            "lanes": [],
+            "nodes": [],
+            "edges": [],
+            "messages": [
+              "m2"
+            ]
+          }
+        },
+        {
+          "id": "s3",
+          "heading": "Generated types",
+          "body": "Six generated files follow; trust them.",
+          "focus": {
+            "kind": "all"
+          }
+        }
+      ]
+    }
+  },
+  "schemaVersion": "1.0.0",
+  "provenance": {
+    "repo": {
+      "owner": "acme",
+      "name": "rocky-app"
+    },
+    "pullRequest": {
+      "number": 1200
+    },
+    "base": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main"
+    },
+    "head": {
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "refactor/shared-client"
+    },
+    "files": [
+      {
+        "path": "src/auth/module-00.ts",
+        "status": "added",
+        "additions": 30,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 30
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-01.ts",
+        "status": "modified",
+        "additions": 68,
+        "deletions": 28,
+        "hunks": [
+          {
+            "oldStart": 23,
+            "oldLines": 20,
+            "newStart": 23,
+            "newLines": 55
+          },
+          {
+            "oldStart": 106,
+            "oldLines": 8,
+            "newStart": 106,
+            "newLines": 13
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-02.ts",
+        "status": "modified",
+        "additions": 88,
+        "deletions": 44,
+        "hunks": [
+          {
+            "oldStart": 34,
+            "oldLines": 30,
+            "newStart": 34,
+            "newLines": 51
+          },
+          {
+            "oldStart": 109,
+            "oldLines": 14,
+            "newStart": 109,
+            "newLines": 37
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-03.ts",
+        "status": "modified",
+        "additions": 54,
+        "deletions": 29,
+        "hunks": [
+          {
+            "oldStart": 34,
+            "oldLines": 29,
+            "newStart": 34,
+            "newLines": 54
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-04.ts",
+        "status": "modified",
+        "additions": 20,
+        "deletions": 13,
+        "hunks": [
+          {
+            "oldStart": 39,
+            "oldLines": 13,
+            "newStart": 39,
+            "newLines": 20
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-05.ts",
+        "status": "modified",
+        "additions": 39,
+        "deletions": 23,
+        "hunks": [
+          {
+            "oldStart": 7,
+            "oldLines": 7,
+            "newStart": 7,
+            "newLines": 15
+          },
+          {
+            "oldStart": 43,
+            "oldLines": 16,
+            "newStart": 43,
+            "newLines": 24
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-06.ts",
+        "status": "modified",
+        "additions": 31,
+        "deletions": 25,
+        "hunks": [
+          {
+            "oldStart": 15,
+            "oldLines": 21,
+            "newStart": 15,
+            "newLines": 21
+          },
+          {
+            "oldStart": 51,
+            "oldLines": 4,
+            "newStart": 51,
+            "newLines": 10
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-07.ts",
+        "status": "added",
+        "additions": 10,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 10
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-08.ts",
+        "status": "modified",
+        "additions": 92,
+        "deletions": 40,
+        "hunks": [
+          {
+            "oldStart": 21,
+            "oldLines": 4,
+            "newStart": 21,
+            "newLines": 40
+          },
+          {
+            "oldStart": 88,
+            "oldLines": 17,
+            "newStart": 88,
+            "newLines": 27
+          },
+          {
+            "oldStart": 135,
+            "oldLines": 19,
+            "newStart": 135,
+            "newLines": 25
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-09.ts",
+        "status": "modified",
+        "additions": 47,
+        "deletions": 10,
+        "hunks": [
+          {
+            "oldStart": 18,
+            "oldLines": 3,
+            "newStart": 18,
+            "newLines": 15
+          },
+          {
+            "oldStart": 43,
+            "oldLines": 7,
+            "newStart": 43,
+            "newLines": 32
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-10.ts",
+        "status": "modified",
+        "additions": 29,
+        "deletions": 29,
+        "hunks": [
+          {
+            "oldStart": 27,
+            "oldLines": 29,
+            "newStart": 27,
+            "newLines": 29
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-11.ts",
+        "status": "modified",
+        "additions": 85,
+        "deletions": 27,
+        "hunks": [
+          {
+            "oldStart": 19,
+            "oldLines": 16,
+            "newStart": 19,
+            "newLines": 30
+          },
+          {
+            "oldStart": 62,
+            "oldLines": 11,
+            "newStart": 62,
+            "newLines": 55
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-12.ts",
+        "status": "modified",
+        "additions": 81,
+        "deletions": 61,
+        "hunks": [
+          {
+            "oldStart": 40,
+            "oldLines": 30,
+            "newStart": 40,
+            "newLines": 30
+          },
+          {
+            "oldStart": 77,
+            "oldLines": 31,
+            "newStart": 77,
+            "newLines": 51
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-13.ts",
+        "status": "modified",
+        "additions": 73,
+        "deletions": 62,
+        "hunks": [
+          {
+            "oldStart": 37,
+            "oldLines": 23,
+            "newStart": 37,
+            "newLines": 30
+          },
+          {
+            "oldStart": 77,
+            "oldLines": 18,
+            "newStart": 77,
+            "newLines": 18
+          },
+          {
+            "oldStart": 114,
+            "oldLines": 21,
+            "newStart": 114,
+            "newLines": 25
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-14.ts",
+        "status": "added",
+        "additions": 47,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 47
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-15.ts",
+        "status": "modified",
+        "additions": 73,
+        "deletions": 39,
+        "hunks": [
+          {
+            "oldStart": 33,
+            "oldLines": 19,
+            "newStart": 33,
+            "newLines": 37
+          },
+          {
+            "oldStart": 83,
+            "oldLines": 13,
+            "newStart": 83,
+            "newLines": 22
+          },
+          {
+            "oldStart": 126,
+            "oldLines": 7,
+            "newStart": 126,
+            "newLines": 14
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-16.ts",
+        "status": "modified",
+        "additions": 46,
+        "deletions": 16,
+        "hunks": [
+          {
+            "oldStart": 30,
+            "oldLines": 16,
+            "newStart": 30,
+            "newLines": 46
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-17.ts",
+        "status": "modified",
+        "additions": 45,
+        "deletions": 30,
+        "hunks": [
+          {
+            "oldStart": 29,
+            "oldLines": 16,
+            "newStart": 29,
+            "newLines": 19
+          },
+          {
+            "oldStart": 65,
+            "oldLines": 14,
+            "newStart": 65,
+            "newLines": 26
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-18.ts",
+        "status": "modified",
+        "additions": 29,
+        "deletions": 17,
+        "hunks": [
+          {
+            "oldStart": 15,
+            "oldLines": 14,
+            "newStart": 15,
+            "newLines": 19
+          },
+          {
+            "oldStart": 42,
+            "oldLines": 3,
+            "newStart": 42,
+            "newLines": 10
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-19.ts",
+        "status": "modified",
+        "additions": 117,
+        "deletions": 46,
+        "hunks": [
+          {
+            "oldStart": 34,
+            "oldLines": 18,
+            "newStart": 34,
+            "newLines": 46
+          },
+          {
+            "oldStart": 104,
+            "oldLines": 21,
+            "newStart": 104,
+            "newLines": 34
+          },
+          {
+            "oldStart": 151,
+            "oldLines": 7,
+            "newStart": 151,
+            "newLines": 37
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-20.ts",
+        "status": "modified",
+        "additions": 89,
+        "deletions": 68,
+        "hunks": [
+          {
+            "oldStart": 38,
+            "oldLines": 8,
+            "newStart": 38,
+            "newLines": 28
+          },
+          {
+            "oldStart": 82,
+            "oldLines": 24,
+            "newStart": 82,
+            "newLines": 24
+          },
+          {
+            "oldStart": 128,
+            "oldLines": 36,
+            "newStart": 128,
+            "newLines": 37
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-21.ts",
+        "status": "added",
+        "additions": 21,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 21
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-22.ts",
+        "status": "modified",
+        "additions": 98,
+        "deletions": 65,
+        "hunks": [
+          {
+            "oldStart": 7,
+            "oldLines": 15,
+            "newStart": 7,
+            "newLines": 18
+          },
+          {
+            "oldStart": 52,
+            "oldLines": 6,
+            "newStart": 52,
+            "newLines": 22
+          },
+          {
+            "oldStart": 84,
+            "oldLines": 44,
+            "newStart": 84,
+            "newLines": 58
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-23.ts",
+        "status": "modified",
+        "additions": 121,
+        "deletions": 41,
+        "hunks": [
+          {
+            "oldStart": 26,
+            "oldLines": 16,
+            "newStart": 26,
+            "newLines": 59
+          },
+          {
+            "oldStart": 96,
+            "oldLines": 11,
+            "newStart": 96,
+            "newLines": 33
+          },
+          {
+            "oldStart": 141,
+            "oldLines": 14,
+            "newStart": 141,
+            "newLines": 29
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-24.ts",
+        "status": "modified",
+        "additions": 112,
+        "deletions": 45,
+        "hunks": [
+          {
+            "oldStart": 18,
+            "oldLines": 15,
+            "newStart": 18,
+            "newLines": 46
+          },
+          {
+            "oldStart": 75,
+            "oldLines": 22,
+            "newStart": 75,
+            "newLines": 23
+          },
+          {
+            "oldStart": 118,
+            "oldLines": 8,
+            "newStart": 118,
+            "newLines": 43
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-25.ts",
+        "status": "modified",
+        "additions": 43,
+        "deletions": 28,
+        "hunks": [
+          {
+            "oldStart": 31,
+            "oldLines": 11,
+            "newStart": 31,
+            "newLines": 21
+          },
+          {
+            "oldStart": 78,
+            "oldLines": 9,
+            "newStart": 78,
+            "newLines": 13
+          },
+          {
+            "oldStart": 100,
+            "oldLines": 8,
+            "newStart": 100,
+            "newLines": 9
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-26.ts",
+        "status": "modified",
+        "additions": 45,
+        "deletions": 20,
+        "hunks": [
+          {
+            "oldStart": 24,
+            "oldLines": 6,
+            "newStart": 24,
+            "newLines": 22
+          },
+          {
+            "oldStart": 71,
+            "oldLines": 14,
+            "newStart": 71,
+            "newLines": 23
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-27.ts",
+        "status": "modified",
+        "additions": 94,
+        "deletions": 50,
+        "hunks": [
+          {
+            "oldStart": 28,
+            "oldLines": 16,
+            "newStart": 28,
+            "newLines": 32
+          },
+          {
+            "oldStart": 77,
+            "oldLines": 27,
+            "newStart": 77,
+            "newLines": 33
+          },
+          {
+            "oldStart": 130,
+            "oldLines": 7,
+            "newStart": 130,
+            "newLines": 29
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-28.ts",
+        "status": "added",
+        "additions": 46,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 46
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-29.ts",
+        "status": "modified",
+        "additions": 92,
+        "deletions": 13,
+        "hunks": [
+          {
+            "oldStart": 20,
+            "oldLines": 10,
+            "newStart": 20,
+            "newLines": 41
+          },
+          {
+            "oldStart": 76,
+            "oldLines": 3,
+            "newStart": 76,
+            "newLines": 51
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-30.ts",
+        "status": "modified",
+        "additions": 14,
+        "deletions": 13,
+        "hunks": [
+          {
+            "oldStart": 30,
+            "oldLines": 13,
+            "newStart": 30,
+            "newLines": 14
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-31.ts",
+        "status": "modified",
+        "additions": 97,
+        "deletions": 71,
+        "hunks": [
+          {
+            "oldStart": 10,
+            "oldLines": 11,
+            "newStart": 10,
+            "newLines": 30
+          },
+          {
+            "oldStart": 64,
+            "oldLines": 47,
+            "newStart": 64,
+            "newLines": 51
+          },
+          {
+            "oldStart": 143,
+            "oldLines": 13,
+            "newStart": 143,
+            "newLines": 16
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-32.ts",
+        "status": "modified",
+        "additions": 35,
+        "deletions": 21,
+        "hunks": [
+          {
+            "oldStart": 15,
+            "oldLines": 21,
+            "newStart": 15,
+            "newLines": 35
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-33.ts",
+        "status": "modified",
+        "additions": 107,
+        "deletions": 63,
+        "hunks": [
+          {
+            "oldStart": 33,
+            "oldLines": 10,
+            "newStart": 33,
+            "newLines": 41
+          },
+          {
+            "oldStart": 102,
+            "oldLines": 14,
+            "newStart": 102,
+            "newLines": 18
+          },
+          {
+            "oldStart": 136,
+            "oldLines": 39,
+            "newStart": 136,
+            "newLines": 48
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-34.ts",
+        "status": "modified",
+        "additions": 42,
+        "deletions": 25,
+        "hunks": [
+          {
+            "oldStart": 23,
+            "oldLines": 25,
+            "newStart": 23,
+            "newLines": 42
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-35.ts",
+        "status": "added",
+        "additions": 55,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 55
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-36.ts",
+        "status": "modified",
+        "additions": 95,
+        "deletions": 69,
+        "hunks": [
+          {
+            "oldStart": 32,
+            "oldLines": 9,
+            "newStart": 32,
+            "newLines": 9
+          },
+          {
+            "oldStart": 71,
+            "oldLines": 21,
+            "newStart": 71,
+            "newLines": 27
+          },
+          {
+            "oldStart": 116,
+            "oldLines": 39,
+            "newStart": 116,
+            "newLines": 59
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-37.ts",
+        "status": "modified",
+        "additions": 111,
+        "deletions": 54,
+        "hunks": [
+          {
+            "oldStart": 14,
+            "oldLines": 35,
+            "newStart": 14,
+            "newLines": 58
+          },
+          {
+            "oldStart": 78,
+            "oldLines": 19,
+            "newStart": 78,
+            "newLines": 53
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-38.ts",
+        "status": "modified",
+        "additions": 109,
+        "deletions": 84,
+        "hunks": [
+          {
+            "oldStart": 39,
+            "oldLines": 30,
+            "newStart": 39,
+            "newLines": 50
+          },
+          {
+            "oldStart": 99,
+            "oldLines": 54,
+            "newStart": 99,
+            "newLines": 59
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-39.ts",
+        "status": "modified",
+        "additions": 99,
+        "deletions": 26,
+        "hunks": [
+          {
+            "oldStart": 31,
+            "oldLines": 12,
+            "newStart": 31,
+            "newLines": 51
+          },
+          {
+            "oldStart": 109,
+            "oldLines": 14,
+            "newStart": 109,
+            "newLines": 48
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-40.ts",
+        "status": "modified",
+        "additions": 47,
+        "deletions": 27,
+        "hunks": [
+          {
+            "oldStart": 22,
+            "oldLines": 27,
+            "newStart": 22,
+            "newLines": 47
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-41.ts",
+        "status": "modified",
+        "additions": 34,
+        "deletions": 27,
+        "hunks": [
+          {
+            "oldStart": 30,
+            "oldLines": 19,
+            "newStart": 30,
+            "newLines": 25
+          },
+          {
+            "oldStart": 60,
+            "oldLines": 8,
+            "newStart": 60,
+            "newLines": 9
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-42.ts",
+        "status": "added",
+        "additions": 43,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 43
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-43.ts",
+        "status": "modified",
+        "additions": 80,
+        "deletions": 28,
+        "hunks": [
+          {
+            "oldStart": 39,
+            "oldLines": 11,
+            "newStart": 39,
+            "newLines": 46
+          },
+          {
+            "oldStart": 110,
+            "oldLines": 17,
+            "newStart": 110,
+            "newLines": 34
+          }
+        ]
+      },
+      {
+        "path": "src/jobs/module-44.ts",
+        "status": "modified",
+        "additions": 28,
+        "deletions": 13,
+        "hunks": [
+          {
+            "oldStart": 18,
+            "oldLines": 13,
+            "newStart": 18,
+            "newLines": 28
+          }
+        ]
+      },
+      {
+        "path": "src/web/module-45.ts",
+        "status": "modified",
+        "additions": 99,
+        "deletions": 11,
+        "hunks": [
+          {
+            "oldStart": 1,
+            "oldLines": 8,
+            "newStart": 1,
+            "newLines": 39
+          },
+          {
+            "oldStart": 70,
+            "oldLines": 3,
+            "newStart": 70,
+            "newLines": 60
+          }
+        ]
+      },
+      {
+        "path": "src/db/module-46.ts",
+        "status": "modified",
+        "additions": 57,
+        "deletions": 7,
+        "hunks": [
+          {
+            "oldStart": 13,
+            "oldLines": 7,
+            "newStart": 13,
+            "newLines": 57
+          }
+        ]
+      },
+      {
+        "path": "src/shared/module-47.ts",
+        "status": "modified",
+        "additions": 129,
+        "deletions": 98,
+        "hunks": [
+          {
+            "oldStart": 19,
+            "oldLines": 46,
+            "newStart": 19,
+            "newLines": 55
+          },
+          {
+            "oldStart": 94,
+            "oldLines": 30,
+            "newStart": 94,
+            "newLines": 36
+          },
+          {
+            "oldStart": 151,
+            "oldLines": 22,
+            "newStart": 151,
+            "newLines": 38
+          }
+        ]
+      },
+      {
+        "path": "src/auth/module-48.ts",
+        "status": "modified",
+        "additions": 91,
+        "deletions": 63,
+        "hunks": [
+          {
+            "oldStart": 31,
+            "oldLines": 4,
+            "newStart": 31,
+            "newLines": 17
+          },
+          {
+            "oldStart": 72,
+            "oldLines": 48,
+            "newStart": 72,
+            "newLines": 57
+          },
+          {
+            "oldStart": 138,
+            "oldLines": 11,
+            "newStart": 138,
+            "newLines": 17
+          }
+        ]
+      },
+      {
+        "path": "src/billing/module-49.ts",
+        "status": "added",
+        "additions": 41,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 41
+          }
+        ]
+      },
+      {
+        "path": "src/orgs/module-50.ts",
+        "status": "modified",
+        "additions": 50,
+        "deletions": 38,
+        "hunks": [
+          {
+            "oldStart": 4,
+            "oldLines": 34,
+            "newStart": 4,
+            "newLines": 42
+          },
+          {
+            "oldStart": 67,
+            "oldLines": 4,
+            "newStart": 67,
+            "newLines": 8
+          }
+        ]
+      },
+      {
+        "path": "src/api/module-51.ts",
+        "status": "modified",
+        "additions": 81,
+        "deletions": 31,
+        "hunks": [
+          {
+            "oldStart": 18,
+            "oldLines": 4,
+            "newStart": 18,
+            "newLines": 37
+          },
+          {
+            "oldStart": 74,
+            "oldLines": 20,
+            "newStart": 74,
+            "newLines": 26
+          },
+          {
+            "oldStart": 123,
+            "oldLines": 7,
+            "newStart": 123,
+            "newLines": 18
+          }
+        ]
+      },
+      {
+        "path": "vendor/jobs/bundle-52.min.js",
+        "status": "modified",
+        "additions": 47,
+        "deletions": 38,
+        "hunks": [
+          {
+            "oldStart": 26,
+            "oldLines": 38,
+            "newStart": 26,
+            "newLines": 47
+          }
+        ]
+      },
+      {
+        "path": "vendor/web/bundle-53.min.js",
+        "status": "modified",
+        "additions": 69,
+        "deletions": 14,
+        "hunks": [
+          {
+            "oldStart": 2,
+            "oldLines": 4,
+            "newStart": 2,
+            "newLines": 37
+          },
+          {
+            "oldStart": 51,
+            "oldLines": 7,
+            "newStart": 51,
+            "newLines": 13
+          },
+          {
+            "oldStart": 79,
+            "oldLines": 3,
+            "newStart": 79,
+            "newLines": 19
+          }
+        ]
+      },
+      {
+        "path": "generated/db/types-54.ts",
+        "status": "modified",
+        "additions": 46,
+        "deletions": 11,
+        "hunks": [
+          {
+            "oldStart": 13,
+            "oldLines": 11,
+            "newStart": 13,
+            "newLines": 46
+          }
+        ]
+      },
+      {
+        "path": "generated/shared/types-55.ts",
+        "status": "modified",
+        "additions": 72,
+        "deletions": 37,
+        "hunks": [
+          {
+            "oldStart": 7,
+            "oldLines": 18,
+            "newStart": 7,
+            "newLines": 38
+          },
+          {
+            "oldStart": 71,
+            "oldLines": 19,
+            "newStart": 71,
+            "newLines": 34
+          }
+        ]
+      },
+      {
+        "path": "generated/auth/types-56.ts",
+        "status": "added",
+        "additions": 54,
+        "deletions": 0,
+        "hunks": [
+          {
+            "oldStart": 0,
+            "oldLines": 0,
+            "newStart": 1,
+            "newLines": 54
+          }
+        ]
+      },
+      {
+        "path": "generated/billing/types-57.ts",
+        "status": "modified",
+        "additions": 22,
+        "deletions": 11,
+        "hunks": [
+          {
+            "oldStart": 2,
+            "oldLines": 11,
+            "newStart": 2,
+            "newLines": 22
+          }
+        ]
+      },
+      {
+        "path": "generated/orgs/types-58.ts",
+        "status": "modified",
+        "additions": 51,
+        "deletions": 34,
+        "hunks": [
+          {
+            "oldStart": 28,
+            "oldLines": 34,
+            "newStart": 28,
+            "newLines": 51
+          }
+        ]
+      },
+      {
+        "path": "generated/api/types-59.ts",
+        "status": "modified",
+        "additions": 29,
+        "deletions": 23,
+        "hunks": [
+          {
+            "oldStart": 13,
+            "oldLines": 23,
+            "newStart": 13,
+            "newLines": 29
+          }
+        ]
+      }
+    ],
+    "unanalysed": [
+      {
+        "path": "vendor/jobs/bundle-52.min.js",
+        "reason": "too-large",
+        "detail": "Minified bundle over the per-file token budget."
+      },
+      {
+        "path": "vendor/web/bundle-53.min.js",
+        "reason": "too-large",
+        "detail": "Minified bundle over the per-file token budget."
+      }
+    ],
+    "generatedAt": "2026-10-25T12:00:00.000Z",
+    "generator": {
+      "name": "rocky",
+      "version": "0.0.0",
+      "roles": [
+        {
+          "role": "review",
+          "model": "fixture"
+        }
+      ]
+    }
+  }
+}

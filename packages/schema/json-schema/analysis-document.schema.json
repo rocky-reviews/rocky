@@ -1,0 +1,1900 @@
+{
+  "$defs": {
+    "JsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "array"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "propertyNames": {
+            "type": "string"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "View": {
+      "additionalProperties": false,
+      "description": "A drill-down section; children nest as further sections.",
+      "properties": {
+        "children": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/View"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "defaultOpen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "description": "Stable identifier, unique within its collection in a document.",
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+          "type": "string"
+        },
+        "scope": {
+          "default": {
+            "kind": "all"
+          },
+          "description": "What a drill-down section shows.",
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "all",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "properties": {
+                    "lanes": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "lanes"
+                  ]
+                },
+                {
+                  "properties": {
+                    "nodes": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "nodes"
+                  ]
+                },
+                {
+                  "properties": {
+                    "edges": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "edges"
+                  ]
+                },
+                {
+                  "properties": {
+                    "flows": {
+                      "minItems": 1
+                    }
+                  },
+                  "required": [
+                    "flows"
+                  ]
+                }
+              ],
+              "properties": {
+                "edges": {
+                  "default": [],
+                  "items": {
+                    "description": "Stable identifier, unique within its collection in a document.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "maxItems": 512,
+                  "type": "array"
+                },
+                "flows": {
+                  "default": [],
+                  "items": {
+                    "description": "Stable identifier, unique within its collection in a document.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "selection",
+                  "type": "string"
+                },
+                "lanes": {
+                  "default": [],
+                  "items": {
+                    "description": "Stable identifier, unique within its collection in a document.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "maxItems": 16,
+                  "type": "array"
+                },
+                "nodes": {
+                  "default": [],
+                  "items": {
+                    "description": "Stable identifier, unique within its collection in a document.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "maxItems": 256,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "summary": {
+          "description": "One or two sentences of plain prose.",
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "title": {
+          "description": "Short single-line display label.",
+          "maxLength": 120,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/rocky-reviews/rocky/main/packages/schema/json-schema/analysis-document.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A Rocky Reviews analysis document: one PR revision, fully analysed.",
+  "properties": {
+    "briefing": {
+      "additionalProperties": false,
+      "description": "What to read before the diff.",
+      "properties": {
+        "checkedOk": {
+          "default": [],
+          "description": "Things the AI checked and found fine, so the reviewer need not.",
+          "items": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 30,
+          "type": "array"
+        },
+        "estimatedReviewMinutes": {
+          "maximum": 480,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "memoryApplied": {
+          "default": [],
+          "description": "Project-memory entries used anywhere in the analysis.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A project-memory entry this finding or briefing relied on.",
+            "properties": {
+              "entryId": {
+                "description": "Id of the project-memory entry.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "source": {
+                "description": "Where it came from, e.g. 'decision · PR #612'.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "text": {
+                "description": "The entry as quoted to the reviewer.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "entryId",
+              "text",
+              "source"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "reviewPath": {
+          "description": "Files in the order to read them; each triaged file at most once.",
+          "items": {
+            "additionalProperties": false,
+            "description": "One stop on the suggested review path.",
+            "properties": {
+              "path": {
+                "description": "Must be one of the triaged (non-noise) files.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "why": {
+                "description": "Why this file comes here in the order.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "why"
+            ],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "summary": {
+          "description": "What the PR does, for someone who has not read it.",
+          "maxLength": 2000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "verdict": {
+          "additionalProperties": false,
+          "description": "The one-line risk call for the whole PR.",
+          "properties": {
+            "level": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "type": "string"
+            },
+            "reason": {
+              "description": "One or two sentences: what makes this PR this risky.",
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "level",
+            "reason"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "summary",
+        "verdict",
+        "estimatedReviewMinutes",
+        "reviewPath"
+      ],
+      "type": "object"
+    },
+    "findings": {
+      "items": {
+        "additionalProperties": false,
+        "description": "A draft review comment.",
+        "properties": {
+          "agentPrompt": {
+            "description": "Self-contained instruction for a coding agent to fix this finding. No invisible characters of any kind.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "body": {
+            "description": "Markdown subset: paragraphs, inline code, lists. No raw HTML.",
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "confidence": {
+            "description": "How sure the model is, in percent.",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "description": "Stable identifier, unique within its collection in a document.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          "memory": {
+            "default": [],
+            "items": {
+              "additionalProperties": false,
+              "description": "A project-memory entry this finding or briefing relied on.",
+              "properties": {
+                "entryId": {
+                  "description": "Id of the project-memory entry.",
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                  "type": "string"
+                },
+                "source": {
+                  "description": "Where it came from, e.g. 'decision · PR #612'.",
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "text": {
+                  "description": "The entry as quoted to the reviewer.",
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "entryId",
+                "text",
+                "source"
+              ],
+              "type": "object"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          "path": {
+            "description": "Must be one of the PR's triaged (non-noise) files.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+            "type": "string"
+          },
+          "range": {
+            "additionalProperties": false,
+            "description": "New-side lines the finding is about; must be inside a hunk.",
+            "properties": {
+              "end": {
+                "description": "Last line, 1-based, inclusive.",
+                "maximum": 10000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start": {
+                "description": "First line, 1-based, inclusive.",
+                "maximum": 10000000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "type": "string"
+          },
+          "suggestion": {
+            "additionalProperties": false,
+            "description": "A replacement for the finding's referenced lines.",
+            "properties": {
+              "context": {
+                "description": "The unchanged line immediately before the range, verbatim.",
+                "maxLength": 500,
+                "minLength": 0,
+                "type": "string"
+              },
+              "lines": {
+                "description": "Replacement for the finding's range. Empty deletes the range.",
+                "items": {
+                  "maxLength": 500,
+                  "minLength": 0,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": [
+              "lines"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "description": "One line, no trailing period.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "path",
+          "range",
+          "title",
+          "body",
+          "agentPrompt"
+        ],
+        "type": "object"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
+    "graph": {
+      "additionalProperties": false,
+      "description": "Absent when the change map could not be produced.",
+      "properties": {
+        "edges": {
+          "default": [],
+          "items": {
+            "additionalProperties": false,
+            "description": "A directed connection between two nodes.",
+            "properties": {
+              "animated": {
+                "default": false,
+                "description": "Render a travelling pulse along this edge.",
+                "type": "boolean"
+              },
+              "delta": {
+                "description": "Change state relative to the base commit.",
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "unchanged"
+                ],
+                "type": "string"
+              },
+              "emphasis": {
+                "default": "normal",
+                "enum": [
+                  "normal",
+                  "hero",
+                  "muted"
+                ],
+                "type": "string"
+              },
+              "files": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "description": "A file (and optional line range) backing a graph element.",
+                  "properties": {
+                    "path": {
+                      "description": "Repository-relative path with POSIX separators.",
+                      "maxLength": 1024,
+                      "minLength": 1,
+                      "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                      "type": "string"
+                    },
+                    "range": {
+                      "additionalProperties": false,
+                      "description": "Lines backing the element, when known.",
+                      "properties": {
+                        "end": {
+                          "description": "Last line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "start": {
+                          "description": "First line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "from": {
+                "description": "Source node id.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable identifier, unique within its collection in a document.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "call",
+                  "http",
+                  "rpc",
+                  "event",
+                  "queue",
+                  "data",
+                  "dependency",
+                  "render",
+                  "other"
+                ],
+                "type": "string"
+              },
+              "label": {
+                "description": "Text on the edge, e.g. a route or protocol.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summary": {
+                "description": "One or two sentences of plain prose.",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "to": {
+                "description": "Target node id.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "from",
+              "to",
+              "kind",
+              "delta"
+            ],
+            "type": "object"
+          },
+          "maxItems": 512,
+          "type": "array"
+        },
+        "flows": {
+          "default": [],
+          "items": {
+            "additionalProperties": false,
+            "description": "An ordered message sequence (data-flow view).",
+            "properties": {
+              "delta": {
+                "default": "modified",
+                "description": "Change state relative to the base commit.",
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "unchanged"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable identifier, unique within its collection in a document.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "messages": {
+                "description": "Ordered by array position.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One ordered step in a flow.",
+                  "properties": {
+                    "animated": {
+                      "default": true,
+                      "description": "Whether the data-flow view pulses this step.",
+                      "type": "boolean"
+                    },
+                    "delta": {
+                      "description": "Change state relative to the base commit.",
+                      "enum": [
+                        "added",
+                        "modified",
+                        "removed",
+                        "unchanged"
+                      ],
+                      "type": "string"
+                    },
+                    "files": {
+                      "default": [],
+                      "items": {
+                        "additionalProperties": false,
+                        "description": "A file (and optional line range) backing a graph element.",
+                        "properties": {
+                          "path": {
+                            "description": "Repository-relative path with POSIX separators.",
+                            "maxLength": 1024,
+                            "minLength": 1,
+                            "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                            "type": "string"
+                          },
+                          "range": {
+                            "additionalProperties": false,
+                            "description": "Lines backing the element, when known.",
+                            "properties": {
+                              "end": {
+                                "description": "Last line, 1-based, inclusive.",
+                                "maximum": 10000000,
+                                "minimum": 1,
+                                "type": "integer"
+                              },
+                              "start": {
+                                "description": "First line, 1-based, inclusive.",
+                                "maximum": 10000000,
+                                "minimum": 1,
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "start",
+                              "end"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "path"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 32,
+                      "type": "array"
+                    },
+                    "from": {
+                      "description": "Participant node id the message originates from.",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "Stable identifier, unique within its collection in a document.",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                      "type": "string"
+                    },
+                    "kind": {
+                      "default": "sync",
+                      "enum": [
+                        "sync",
+                        "async",
+                        "return",
+                        "self"
+                      ],
+                      "type": "string"
+                    },
+                    "label": {
+                      "description": "Short single-line display label.",
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "note": {
+                      "description": "Aside rendered beside the step in the drill-down.",
+                      "maxLength": 2000,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "payload": {
+                      "additionalProperties": false,
+                      "anyOf": [
+                        {
+                          "required": [
+                            "request"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "response"
+                          ]
+                        }
+                      ],
+                      "description": "Sample traffic, for a step that moves data.",
+                      "properties": {
+                        "request": {
+                          "additionalProperties": false,
+                          "dependentRequired": {
+                            "before": [
+                              "sample"
+                            ]
+                          },
+                          "description": "What the step carries from `from` to `to`.",
+                          "properties": {
+                            "before": {
+                              "$ref": "#/$defs/JsonValue",
+                              "description": "The same exemplar before the change, when it differs.",
+                              "not": {
+                                "type": "string"
+                              }
+                            },
+                            "sample": {
+                              "$ref": "#/$defs/JsonValue",
+                              "description": "One exemplar instance after the change, as a JSON value.",
+                              "not": {
+                                "type": "string"
+                              }
+                            },
+                            "shape": {
+                              "description": "Type signature as text, taken from the code's own types.",
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "description": "Fixture or type the shape and sample were taken from.",
+                              "properties": {
+                                "path": {
+                                  "description": "Repository-relative path with POSIX separators.",
+                                  "maxLength": 1024,
+                                  "minLength": 1,
+                                  "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                                  "type": "string"
+                                },
+                                "range": {
+                                  "additionalProperties": false,
+                                  "description": "Lines backing the element, when known.",
+                                  "properties": {
+                                    "end": {
+                                      "description": "Last line, 1-based, inclusive.",
+                                      "maximum": 10000000,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "start": {
+                                      "description": "First line, 1-based, inclusive.",
+                                      "maximum": 10000000,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "start",
+                                    "end"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "path"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "description": "Type name a reader would recognise, e.g. Invitation. `void` for a side that carries nothing.",
+                              "maxLength": 120,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        },
+                        "response": {
+                          "additionalProperties": false,
+                          "dependentRequired": {
+                            "before": [
+                              "sample"
+                            ]
+                          },
+                          "description": "What comes back, when something does.",
+                          "properties": {
+                            "before": {
+                              "$ref": "#/$defs/JsonValue",
+                              "description": "The same exemplar before the change, when it differs.",
+                              "not": {
+                                "type": "string"
+                              }
+                            },
+                            "sample": {
+                              "$ref": "#/$defs/JsonValue",
+                              "description": "One exemplar instance after the change, as a JSON value.",
+                              "not": {
+                                "type": "string"
+                              }
+                            },
+                            "shape": {
+                              "description": "Type signature as text, taken from the code's own types.",
+                              "maxLength": 2048,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "description": "Fixture or type the shape and sample were taken from.",
+                              "properties": {
+                                "path": {
+                                  "description": "Repository-relative path with POSIX separators.",
+                                  "maxLength": 1024,
+                                  "minLength": 1,
+                                  "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                                  "type": "string"
+                                },
+                                "range": {
+                                  "additionalProperties": false,
+                                  "description": "Lines backing the element, when known.",
+                                  "properties": {
+                                    "end": {
+                                      "description": "Last line, 1-based, inclusive.",
+                                      "maximum": 10000000,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    },
+                                    "start": {
+                                      "description": "First line, 1-based, inclusive.",
+                                      "maximum": 10000000,
+                                      "minimum": 1,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "start",
+                                    "end"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "required": [
+                                "path"
+                              ],
+                              "type": "object"
+                            },
+                            "type": {
+                              "description": "Type name a reader would recognise, e.g. Invitation. `void` for a side that carries nothing.",
+                              "maxLength": 120,
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "repeat": {
+                      "description": "Times the step occurs per run, e.g. 4 batched requests.",
+                      "maximum": 1000000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "to": {
+                      "description": "Participant node id the message arrives at. Equals `from` when kind is self.",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "from",
+                    "to",
+                    "label",
+                    "delta"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "participants": {
+                "items": {
+                  "additionalProperties": false,
+                  "description": "A column in the sequence diagram, ordered by array position.",
+                  "properties": {
+                    "label": {
+                      "description": "Shorter name for the column when the node label is long.",
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "node": {
+                      "description": "Id of the graph node this column represents.",
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "node"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "minItems": 2,
+                "type": "array"
+              },
+              "summary": {
+                "description": "One or two sentences of plain prose.",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "description": "Short single-line display label.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "participants",
+              "messages"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "type": "array"
+        },
+        "lanes": {
+          "items": {
+            "additionalProperties": false,
+            "description": "A grouping band of the diagram. Every node belongs to exactly one lane.",
+            "properties": {
+              "delta": {
+                "description": "Set only when the lane itself is new or gone.",
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "unchanged"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable identifier, unique within its collection in a document.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "label": {
+                "description": "Short single-line display label.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "order": {
+                "description": "Left-to-right placement. Ties fall back to array order.",
+                "maximum": 64,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "subtitle": {
+                "description": "Secondary line in the lane header, e.g. the platform.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summary": {
+                "description": "One or two sentences of plain prose.",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "type": "object"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "type": "array"
+        },
+        "nodes": {
+          "items": {
+            "additionalProperties": false,
+            "description": "A node in the change map.",
+            "properties": {
+              "badges": {
+                "default": [],
+                "description": "Extra chips on the card, beyond the delta badge the renderer adds.",
+                "items": {
+                  "description": "Short single-line display label.",
+                  "maxLength": 120,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 6,
+                "type": "array"
+              },
+              "delta": {
+                "description": "Change state relative to the base commit.",
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "unchanged"
+                ],
+                "type": "string"
+              },
+              "files": {
+                "default": [],
+                "description": "Backing source locations, used for click-through and permalinks.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "A file (and optional line range) backing a graph element.",
+                  "properties": {
+                    "path": {
+                      "description": "Repository-relative path with POSIX separators.",
+                      "maxLength": 1024,
+                      "minLength": 1,
+                      "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                      "type": "string"
+                    },
+                    "range": {
+                      "additionalProperties": false,
+                      "description": "Lines backing the element, when known.",
+                      "properties": {
+                        "end": {
+                          "description": "Last line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "start": {
+                          "description": "First line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "group": {
+                "description": "Optional sub-cluster within the lane, e.g. a package.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "id": {
+                "description": "Stable identifier, unique within its collection in a document.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "service",
+                  "app",
+                  "module",
+                  "function",
+                  "route",
+                  "job",
+                  "queue",
+                  "datastore",
+                  "cache",
+                  "external",
+                  "ui",
+                  "config",
+                  "test",
+                  "package",
+                  "other"
+                ],
+                "type": "string"
+              },
+              "label": {
+                "description": "Short single-line display label.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "lane": {
+                "description": "Id of the lane this node sits in.",
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                "type": "string"
+              },
+              "subtitle": {
+                "description": "Secondary line on the card, e.g. a path or signature.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "summary": {
+                "description": "Body text for this node's drill-down section.",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind",
+              "delta",
+              "lane"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array"
+        },
+        "views": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/View"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "walkthrough": {
+          "additionalProperties": false,
+          "description": "An ordered tour of the change map.",
+          "properties": {
+            "steps": {
+              "description": "Ordered by array position.",
+              "items": {
+                "additionalProperties": false,
+                "description": "One stop on the walkthrough: a heading, a line, and the part of a diagram it is about.",
+                "properties": {
+                  "body": {
+                    "description": "A single line under the step heading.",
+                    "maxLength": 140,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "focus": {
+                    "default": {
+                      "kind": "all"
+                    },
+                    "description": "What stays lit while a walkthrough step plays.",
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "all",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "lanes": {
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "lanes"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "nodes": {
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "nodes"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "edges": {
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "edges"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "messages": {
+                                "minItems": 1
+                              }
+                            },
+                            "required": [
+                              "messages"
+                            ]
+                          }
+                        ],
+                        "properties": {
+                          "edges": {
+                            "default": [],
+                            "items": {
+                              "description": "Stable identifier, unique within its collection in a document.",
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 512,
+                            "type": "array"
+                          },
+                          "kind": {
+                            "const": "selection",
+                            "type": "string"
+                          },
+                          "lanes": {
+                            "default": [],
+                            "items": {
+                              "description": "Stable identifier, unique within its collection in a document.",
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 16,
+                            "type": "array"
+                          },
+                          "messages": {
+                            "default": [],
+                            "description": "Steps of the flow on the stage.",
+                            "items": {
+                              "description": "Stable identifier, unique within its collection in a document.",
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 64,
+                            "type": "array"
+                          },
+                          "nodes": {
+                            "default": [],
+                            "items": {
+                              "description": "Stable identifier, unique within its collection in a document.",
+                              "maxLength": 128,
+                              "minLength": 1,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                              "type": "string"
+                            },
+                            "maxItems": 256,
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "kind"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  },
+                  "heading": {
+                    "description": "A step heading, short enough to read at a glance.",
+                    "maxLength": 48,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "id": {
+                    "description": "Stable identifier, unique within its collection in a document.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "stage": {
+                    "description": "Which diagram a walkthrough step plays over.",
+                    "oneOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "kind": {
+                            "const": "view",
+                            "type": "string"
+                          },
+                          "view": {
+                            "description": "Id of the view to draw.",
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "view"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "flow": {
+                            "description": "Id of the flow to draw.",
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                            "type": "string"
+                          },
+                          "kind": {
+                            "const": "flow",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "flow"
+                        ],
+                        "type": "object"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "heading",
+                  "body"
+                ],
+                "type": "object"
+              },
+              "maxItems": 12,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "steps"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "lanes",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "provenance": {
+      "additionalProperties": false,
+      "description": "Known facts from git and the pipeline. Never written by a model.",
+      "properties": {
+        "base": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)[^\\u0000-\\u0020\\u007F~^:?*[\\\\]+$",
+              "type": "string"
+            },
+            "sha": {
+              "description": "Git commit sha, in full.",
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha"
+          ],
+          "type": "object"
+        },
+        "files": {
+          "description": "Every file the PR changes. The only files the rest of the document may name.",
+          "items": {
+            "additionalProperties": false,
+            "description": "One file in the PR's diff, as git reports it.",
+            "properties": {
+              "additions": {
+                "maximum": 10000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "deletions": {
+                "maximum": 10000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hunks": {
+                "description": "Hunks of this file's diff, in order.",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Unified diff hunk header numbers.",
+                  "properties": {
+                    "newLines": {
+                      "maximum": 10000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "newStart": {
+                      "maximum": 10000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "oldLines": {
+                      "maximum": 10000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "oldStart": {
+                      "maximum": 10000000,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "oldStart",
+                    "oldLines",
+                    "newStart",
+                    "newLines"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              "path": {
+                "description": "Path on the head side (the new path for a rename).",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "previousPath": {
+                "description": "Path on the base side, for renames.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "added",
+                  "modified",
+                  "removed",
+                  "renamed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "additions",
+              "deletions",
+              "hunks"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
+        "generatedAt": {
+          "description": "When the pipeline produced the document (UTC).",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+          "type": "string"
+        },
+        "generator": {
+          "additionalProperties": false,
+          "description": "What produced the document.",
+          "properties": {
+            "name": {
+              "description": "The producing software, e.g. rocky.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "roles": {
+              "default": [],
+              "items": {
+                "additionalProperties": false,
+                "description": "Which model produced which part of the document.",
+                "properties": {
+                  "model": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "provider": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "role": {
+                    "enum": [
+                      "triage",
+                      "review",
+                      "graph",
+                      "ask",
+                      "embed"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role",
+                  "model"
+                ],
+                "type": "object"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "version": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "head": {
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)[^\\u0000-\\u0020\\u007F~^:?*[\\\\]+$",
+              "type": "string"
+            },
+            "sha": {
+              "description": "Git commit sha, in full.",
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sha"
+          ],
+          "type": "object"
+        },
+        "pullRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "maximum": 1000000000,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "number"
+          ],
+          "type": "object"
+        },
+        "repo": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "maxLength": 100,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._-]+$",
+              "type": "string"
+            },
+            "owner": {
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "owner",
+            "name"
+          ],
+          "type": "object"
+        },
+        "unanalysed": {
+          "default": [],
+          "description": "Files the pipeline could not analyse; they count toward triage coverage.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A file the AI could not analyse.",
+            "properties": {
+              "detail": {
+                "description": "Human-readable detail, if any.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "path": {
+                "description": "Must be one of the PR's files.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "analysis-failed",
+                  "too-large",
+                  "binary",
+                  "timeout"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        }
+      },
+      "required": [
+        "repo",
+        "pullRequest",
+        "base",
+        "head",
+        "files",
+        "generatedAt",
+        "generator"
+      ],
+      "type": "object"
+    },
+    "schemaVersion": {
+      "description": "Contract version the document targets. Current: 1.0.0.",
+      "pattern": "^1\\.(0)\\.\\d+$",
+      "type": "string"
+    },
+    "triage": {
+      "additionalProperties": false,
+      "description": "Per-file attention scores. Files and noise, plus provenance.unanalysed, cover every PR file once.",
+      "properties": {
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "description": "Triage for one changed file.",
+            "properties": {
+              "flags": {
+                "default": [],
+                "items": {
+                  "additionalProperties": false,
+                  "description": "A note under a hunk line: look here, a question, or something checked.",
+                  "properties": {
+                    "kind": {
+                      "enum": [
+                        "look",
+                        "question",
+                        "ok"
+                      ],
+                      "type": "string"
+                    },
+                    "range": {
+                      "additionalProperties": false,
+                      "description": "New-side lines the flag sits under; must be inside a hunk.",
+                      "properties": {
+                        "end": {
+                          "description": "Last line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "start": {
+                          "description": "First line, 1-based, inclusive.",
+                          "maximum": 10000000,
+                          "minimum": 1,
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "start",
+                        "end"
+                      ],
+                      "type": "object"
+                    },
+                    "text": {
+                      "description": "What to look at, as markdown (inline code allowed).",
+                      "maxLength": 1000,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "range",
+                    "kind",
+                    "text"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "level": {
+                "enum": [
+                  "critical",
+                  "important",
+                  "normal",
+                  "low"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "Must be one of the PR's files.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "reason": {
+                "description": "One line: why this file matters to the reviewer.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "score": {
+                "description": "Triage score: how much of the reviewer's attention this file deserves.",
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "whatChanged": {
+                "description": "What the change does, in plain words.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "whyThisLevel": {
+                "description": "Why the file got this level.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "score",
+              "level",
+              "reason",
+              "whatChanged",
+              "whyThisLevel"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
+        "noise": {
+          "default": [],
+          "items": {
+            "additionalProperties": false,
+            "description": "A file a reviewer can trust without reading: lockfile, generated code, vendored.",
+            "properties": {
+              "path": {
+                "description": "Must be one of the PR's files.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "summary": {
+                "description": "What the file is and why it can be trusted unread.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "summary"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "briefing",
+    "triage",
+    "findings",
+    "schemaVersion",
+    "provenance"
+  ],
+  "title": "Rocky Reviews analysis document",
+  "type": "object",
+  "version": "1.0.0"
+}
