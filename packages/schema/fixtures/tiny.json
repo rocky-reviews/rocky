@@ -32,6 +32,7 @@
         ]
       }
     ],
+    "unanalysed": [],
     "generatedAt": "2026-10-25T12:00:00.000Z",
     "generator": {
       "name": "rocky",
@@ -66,8 +67,7 @@
         "flags": []
       }
     ],
-    "noise": [],
-    "unanalysed": []
+    "noise": []
   },
   "findings": []
 }

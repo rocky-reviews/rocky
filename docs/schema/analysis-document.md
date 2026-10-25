@@ -40,14 +40,14 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 ## What the document contains
 
-| Section         | Written by          | What it holds                                                                                                                                                                                                                    |
-| --------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                                         |
-| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, timestamp, which model did what.                                                                     |
-| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                        |
-| `triage`        | model + pipeline    | Per changed file: score 0–100, level, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary. Files the AI could not analyse, with a reason (set by the pipeline). |
-| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                            |
-| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough.                                                                                                |
+| Section         | Written by          | What it holds                                                                                                                                                                                                          |
+| --------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                               |
+| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), timestamp, which model did what. |
+| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes, suggested review path (files + why), "checked, looks fine" list, memory used.                                                              |
+| `triage`        | model               | Per changed file: score 0–100, level, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                            |
+| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                  |
+| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough.                                                                                      |
 
 The `provenance` section is the **known facts**. `applyKnownFields(modelOutput, facts)` writes
 it over whatever the model returned, so a model can never state a SHA, a file list, a line
@@ -148,23 +148,34 @@ count or a hunk range. Every other section is then checked against those facts.
 - **Ids** match `^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, at most 128 characters. They survive SVG ids,
   URL fragments and comment anchors without escaping.
 - **Paths** are repository-relative POSIX: no leading `/`, no drive letter, no backslash, no
-  `.` or `..` segment, no empty segment, no trailing slash, at most 1 024 characters,
-  NFC-normalised, with no control, format (bidi, zero-width, BOM) or line-separator
-  characters, and no segment that is only dots or dot look-alikes (`．．`, `‥`, `…`,
-  `%2e%2e`), only whitespace, or `.git`. The same type is used for graph file references.
-  This holds for the file list from git too: a PR that adds a file with a newline, a
-  backslash or a bidi character in its name cannot be analysed (fail closed).
-- **Text cannot hide or reorder anything.** Every field rejects control characters (C0 and
-  C1), bidi controls (the Trojan Source characters), zero-width/BOM hiding characters and
-  lone surrogates. Single-line fields (labels, titles) also reject tab, newline and the
-  line/paragraph separators; prose fields (bodies, reasons, summaries) allow `\n` and `\t`
-  and keep ZWJ/ZWNJ for emoji and scripts that need them; code lines (suggestions) allow tab,
-  may be empty, and reject every format character so a suggestion cannot carry a Trojan Source
-  payload. Payload samples are checked recursively, keys included, and may not use the keys
+  `.` or `..` segment, no empty segment, no trailing slash, at most 1 024 characters, with no
+  control, invisible or line-separator characters and no runs of combining marks. No segment
+  may, after Unicode compatibility folding, mark stripping and percent-decoding of dots, be
+  only punctuation (`．．`, `‥`, `…`, `۔۔`, `.̸`, `%2e%2e`, `%252e`), only whitespace or
+  blank-looking letters, or a spelling of the `.git` directory (`.git`, `.GIT.`, `.git `,
+  `git~1`). The same type is used for graph file references. This holds for the file list
+  from git too: a PR that adds a file with a newline, a backslash or a hidden character in its
+  name cannot be analysed (fail closed).
+- **Normalisation.** Paths are not required to be in NFC: git reports what the filesystem has,
+  and macOS repositories legitimately carry NFD names. Instead, a PR whose file list has two
+  paths equal under NFC is refused (`DUPLICATE_PATH`), and every model-written path must equal
+  a listed path byte for byte (`UNKNOWN_FILE` otherwise).
+- **Text cannot hide, reorder or smuggle anything.** The rules come from Unicode properties,
+  not hand lists. Every text field rejects control characters (C0 and C1), lone surrogates and
+  every _default-ignorable_ or _format_ character — soft hyphen, zero-width and bidi controls
+  (Trojan Source), word joiners, Hangul fillers, variation selectors, interlinear annotation
+  marks and the TAG block used for ASCII smuggling — plus the braille blank. Ordinary prose and
+  single-line fields keep three exceptions emoji and some scripts need: ZWJ, ZWNJ and VS16.
+  Single-line fields (labels, titles) also reject tab, newline, the line/paragraph separators
+  and runs of five or more combining marks (zalgo). The **agent prompt** is the strictest field:
+  no invisible character of any kind, so what the reviewer reads is exactly what the coding
+  agent receives. Code lines (suggestions) allow tab, may be empty, and reject every invisible
+  character. Payload samples are checked recursively, keys included, and may not use the keys
   `__proto__`, `constructor` or `prototype`.
 - **The whole document is capped** at 4 MiB of JSON (`MAX_DOCUMENT_BYTES`), checked on the raw
   text by `parseAnalysisDocumentJson` before anything is parsed; input may nest at most 64
-  levels and may not contain cycles. Flags are capped at 2 000 across the document.
+  levels and every object may appear once (no cycles, no shared subtrees). Flags are capped at
+  2 000 across the document.
 - **Every string has a maximum length and every array a maximum size.** They live in
   `packages/schema/src/limits.ts` with the reason for each. The main ones:
 
@@ -192,12 +203,12 @@ count or a hunk range. Every other section is then checked against those facts.
 | Code                            | Guarantee                                                                                                                                                                                                                                            |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DUPLICATE_ID`                  | Ids are unique per collection, compared case-insensitively (lanes, nodes, edges, flows, messages per flow, views across the tree, steps, findings, memory refs).                                                                                     |
-| `DUPLICATE_PATH`                | A path appears once per collection (PR files, triaged files, noise, unanalysed, review path).                                                                                                                                                        |
+| `DUPLICATE_PATH`                | A path appears once per collection (PR files, unanalysed, triaged files, noise, review path); no two PR files are equal under NFC.                                                                                                                   |
 | `BROKEN_REFERENCE`              | Nodes name declared lanes; edges and flow participants name declared nodes; messages name participants of their flow; view scopes, walkthrough stages and focus name existing elements; focused messages belong to a flow drawn on the step's stage. |
 | `UNKNOWN_FILE`                  | Triage entries, noise entries and findings name files in the PR's file list; review-path steps name triaged files.                                                                                                                                   |
-| `TRIAGE_COVERAGE`               | Every PR file is triaged, noise or unanalysed, exactly once.                                                                                                                                                                                         |
+| `TRIAGE_COVERAGE`               | Every PR file is triaged, noise or (per the facts) unanalysed, exactly once.                                                                                                                                                                         |
 | `FINDING_IN_NOISE_FILE`         | No finding sits in a file triage calls noise.                                                                                                                                                                                                        |
-| `FINDING_IN_UNANALYSED_FILE`    | No finding sits in a file the AI could not analyse; such files carry no flags or review-path steps either.                                                                                                                                           |
+| `FINDING_IN_UNANALYSED_FILE`    | No finding sits in a file the pipeline lists as unanalysed (`provenance.unanalysed`, written by the overlay, never by the model); such files carry no triage entry, flag or review-path step either.                                                 |
 | `MEMORY_REF_MISMATCH`           | Every memory entry a finding cites appears in `briefing.memoryApplied` with identical id, text and source.                                                                                                                                           |
 | `LINE_OUTSIDE_DIFF`             | Finding and flag ranges sit inside **one** new-side hunk (context lines included) of that file's diff.                                                                                                                                               |
 | `SCORE_LEVEL_MISMATCH`          | Scores match their level: critical 80–100, important 50–79, normal 20–49, low 0–19.                                                                                                                                                                  |
@@ -210,7 +221,7 @@ count or a hunk range. Every other section is then checked against those facts.
 | `LIMIT_EXCEEDED`                | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                  |
 | `UNSUPPORTED_SCHEMA_VERSION`    | Only `1.0.x` is read.                                                                                                                                                                                                                                |
 | `INVALID_JSON`                  | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                         |
-| `TOO_DEEP` / `INTERNAL_ERROR`   | The parser never throws; input nested over 64 levels or containing a cycle is `TOO_DEEP` (with the path), an unexpected error is `INTERNAL_ERROR` without echoing input.                                                                             |
+| `TOO_DEEP` / `INTERNAL_ERROR`   | The parser never throws; input nested over 64 levels, or reaching any object twice (a cycle or a shared subtree), is `TOO_DEEP` with the path, found in one linear pass; an unexpected error is `INTERNAL_ERROR` without echoing input.              |
 
 **What suggestions can and cannot be checked without file contents.** The hunk ranges in the
 facts tell us a range is in the diff, and that a context line at line 1 is impossible. Whether
@@ -220,9 +231,11 @@ the head file can only be checked when the pipeline passes the new-side file con
 should always pass them for files that carry suggestions; the document itself never embeds
 file contents.
 
-**Input contract.** `parseAnalysisDocument` takes JSON-parsed data. Untrusted text (a model
-response, a stored blob) goes through `parseAnalysisDocumentJson`, which applies the size cap
-before `JSON.parse`. Shared or cyclic object graphs are not valid input and are reported as
+**Input contract.** The pipeline must hand model responses and stored blobs to
+`parseAnalysisDocumentJson` as text: it is the only entry point with the byte cap, and
+`parseAnalysisDocument` (JSON-parsed data) has none. A leading BOM is tolerated; duplicate JSON
+keys follow `JSON.parse` (last one wins), which is safe because only the returned, validated
+value is ever stored. Shared or cyclic object graphs are not valid input and are reported as
 `TOO_DEEP`.
 
 **Design notes on small rules.** Self-loop edges are allowed (a module that calls itself is a
@@ -231,13 +244,15 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 
 ## How this is tested
 
-- 240+ unit tests, one per rule, each asserting the code **and** the JSON path; the
-  independent review's probe inputs (bidi and invisible characters, look-alike dot paths,
-  `__proto__` keys, a file named `constructor`, cyclic and 100 000-deep input, an 80 MB
-  document) are regression tests in `hardening.test.ts`.
+- 270+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
+  rounds' probe inputs (bidi, default-ignorable and blank-looking characters, ASCII smuggling
+  via TAG characters, zalgo, look-alike dot paths, `.git` spellings, `__proto__` keys, a file
+  named `constructor`, cyclic and shared input, 100 000-deep input, an 80 MB document, a model
+  declaring the critical file unanalysed) are regression tests in `hardening.test.ts` and
+  `known-fields.test.ts`.
 - Property tests (fast-check, fixed seed): 150 random valid documents (with noise, unanalysed
   files, memory references, graphs, flows and walkthroughs) are accepted and re-parse to
-  themselves; 400 random mutations from 40 mutators (unknown fields, control and Unicode
+  themselves; 400 random mutations from 46 mutators (unknown fields, control and Unicode
   hiding characters in text, code and paths, path traversal and look-alikes, oversized strings
   and arrays, duplicate ids incl. case-only, duplicate paths, broken references, lines outside
   the diff, files outside the PR, missing or doubled triage, findings in noise or unanalysed
@@ -252,29 +267,32 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 
 ## Open questions for the founder
 
-0. **Markdown bodies may still contain `<`.** The schema now guarantees no hidden or
+NFD handling (above) is a decision, not a question: the facts keep git's spelling, collisions
+under NFC are refused, and model paths must match exactly.
+
+1. **Markdown bodies may still contain `<`.** The schema now guarantees no hidden or
    direction-changing characters and bounded size, but it does not strip HTML tags (see 6).
-1. **Graph is optional.** If the graph role fails, the rest of the document still ships and the
+2. **Graph is optional.** If the graph role fails, the rest of the document still ships and the
    UI shows no change map. Should a missing graph instead block the whole analysis?
-2. **Noise files are a separate record** (path + summary) rather than a triaged file with
+3. **Noise files are a separate record** (path + summary) rather than a triaged file with
    level `noise`. The UI groups by five levels; the document has four levels plus a noise list.
    Fine, or should noise carry a score too?
-3. **Score bands** (80/50/20) are a contract now. The POC's numbers fit; do yours?
-4. **Verdict floor** is deliberately mild (critical finding → at least `high`). Should a
+4. **Score bands** (80/50/20) are a contract now. The POC's numbers fit; do yours?
+5. **Verdict floor** is deliberately mild (critical finding → at least `high`). Should a
    critical finding force a `critical` verdict?
-5. **Graph file references are not restricted to PR files** (unchanged context nodes point at
+6. **Graph file references are not restricted to PR files** (unchanged context nodes point at
    untouched files). Click-through on such a node (P5-3) has nothing to open; acceptable?
-6. **Markdown bodies are not HTML-filtered here.** The schema guarantees bounded size and no
+7. **Markdown bodies are not HTML-filtered here.** The schema guarantees bounded size and no
    control characters; the UI must render markdown with no raw HTML (P6). Do you want a
    blocklist (`<script`, `javascript:`) in the schema as well, at the cost of false positives
    on code like `Array<string>`?
-7. **PR title, author and URL are not in the document.** They come from the PR mirror in the
+8. **PR title, author and URL are not in the document.** They come from the PR mirror in the
    database, and the title is untrusted PR content. OK?
-8. **Per-file review minutes.** The POC derives "about N min left" from additions ÷ 14; the
+9. **Per-file review minutes.** The POC derives "about N min left" from additions ÷ 14; the
    document carries only a PR-level estimate. Should triage carry a per-file estimate?
-9. **The POC's PR header says +214** while its per-file numbers add up to 215. The fixture keeps
-   the per-file numbers; totals are derived, never stored.
-10. **Model-facing schema.** The emitted JSON Schema is the full document. Phase 4 will likely
+10. **The POC's PR header says +214** while its per-file numbers add up to 215. The fixture keeps
+    the per-file numbers; totals are derived, never stored.
+11. **Model-facing schema.** The emitted JSON Schema is the full document. Phase 4 will likely
     send the model `AnalysisModelOutput` (everything except `provenance` and `schemaVersion`),
     and may need a variant without `pattern`/`maxLength` for providers whose structured-output
     mode rejects them. Not decided here.

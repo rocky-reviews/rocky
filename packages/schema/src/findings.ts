@@ -15,7 +15,16 @@ import {
   MAX_SUGGESTION_LINES,
   MAX_TITLE_LENGTH,
 } from "./limits.js";
-import { codeLine, Confidence, Id, line, LineRange, prose, RepositoryPath } from "./primitives.js";
+import {
+  codeLine,
+  Confidence,
+  Id,
+  line,
+  LineRange,
+  prose,
+  RepositoryPath,
+  strictProse,
+} from "./primitives.js";
 
 export const Severity = z.enum(["critical", "high", "medium", "low"]);
 export type Severity = z.infer<typeof Severity>;
@@ -60,9 +69,9 @@ export const Finding = z
     body: prose(MAX_BODY_LENGTH, "Markdown subset: paragraphs, inline code, lists. No raw HTML."),
     suggestion: Suggestion.optional(),
     memory: z.array(MemoryRef).max(MAX_MEMORY_REFS_PER_FINDING).default([]),
-    agentPrompt: prose(
+    agentPrompt: strictProse(
       MAX_AGENT_PROMPT_LENGTH,
-      "Self-contained instruction for a coding agent to fix this finding.",
+      "Self-contained instruction for a coding agent to fix this finding. No invisible characters of any kind.",
     ),
   })
   .describe("A draft review comment.");

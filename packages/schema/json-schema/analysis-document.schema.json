@@ -336,7 +336,7 @@
         "description": "A draft review comment.",
         "properties": {
           "agentPrompt": {
-            "description": "Self-contained instruction for a coding agent to fix this finding.",
+            "description": "Self-contained instruction for a coding agent to fix this finding. No invisible characters of any kind.",
             "maxLength": 2000,
             "minLength": 1,
             "type": "string"
@@ -1453,7 +1453,7 @@
             "ref": {
               "maxLength": 255,
               "minLength": 1,
-              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)(?!.*(?:\\/|\\.|\\.lock)$)[^\\u0000-\\u001F \\u007F~^:?*[\\\\]+$",
+              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)[^\\u0000-\\u0020\\u007F~^:?*[\\\\]+$",
               "type": "string"
             },
             "sha": {
@@ -1626,7 +1626,7 @@
             "ref": {
               "maxLength": 255,
               "minLength": 1,
-              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)(?!.*(?:\\/|\\.|\\.lock)$)[^\\u0000-\\u001F \\u007F~^:?*[\\\\]+$",
+              "pattern": "^(?!-)(?!.*\\.\\.)(?!.*@\\{)(?!.*\\/\\/)[^\\u0000-\\u0020\\u007F~^:?*[\\\\]+$",
               "type": "string"
             },
             "sha": {
@@ -1675,6 +1675,45 @@
             "name"
           ],
           "type": "object"
+        },
+        "unanalysed": {
+          "default": [],
+          "description": "Files the pipeline could not analyse; they count toward triage coverage.",
+          "items": {
+            "additionalProperties": false,
+            "description": "A file the AI could not analyse.",
+            "properties": {
+              "detail": {
+                "description": "Human-readable detail, if any.",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "path": {
+                "description": "Must be one of the PR's files.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "reason": {
+                "enum": [
+                  "analysis-failed",
+                  "too-large",
+                  "binary",
+                  "timeout"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
         }
       },
       "required": [
@@ -1695,7 +1734,7 @@
     },
     "triage": {
       "additionalProperties": false,
-      "description": "Per-file attention scores. Together, files, noise and unanalysed cover every PR file once.",
+      "description": "Per-file attention scores. Files and noise, plus provenance.unanalysed, cover every PR file once.",
       "properties": {
         "files": {
           "items": {
@@ -1833,44 +1872,6 @@
             "required": [
               "path",
               "summary"
-            ],
-            "type": "object"
-          },
-          "maxItems": 1000,
-          "type": "array"
-        },
-        "unanalysed": {
-          "default": [],
-          "items": {
-            "additionalProperties": false,
-            "description": "A file the AI could not analyse.",
-            "properties": {
-              "detail": {
-                "description": "Human-readable detail, if any.",
-                "maxLength": 500,
-                "minLength": 1,
-                "type": "string"
-              },
-              "path": {
-                "description": "Must be one of the PR's files.",
-                "maxLength": 1024,
-                "minLength": 1,
-                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
-                "type": "string"
-              },
-              "reason": {
-                "enum": [
-                  "analysis-failed",
-                  "too-large",
-                  "binary",
-                  "timeout"
-                ],
-                "type": "string"
-              }
-            },
-            "required": [
-              "path",
-              "reason"
             ],
             "type": "object"
           },

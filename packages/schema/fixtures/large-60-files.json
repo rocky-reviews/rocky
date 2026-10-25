@@ -713,18 +713,6 @@
         "path": "generated/api/types-59.ts",
         "summary": "Regenerated from the OpenAPI spec; no hand edits."
       }
-    ],
-    "unanalysed": [
-      {
-        "path": "vendor/jobs/bundle-52.min.js",
-        "reason": "too-large",
-        "detail": "Minified bundle over the per-file token budget."
-      },
-      {
-        "path": "vendor/web/bundle-53.min.js",
-        "reason": "too-large",
-        "detail": "Minified bundle over the per-file token budget."
-      }
     ]
   },
   "findings": [
@@ -3744,6 +3732,18 @@
             "newLines": 29
           }
         ]
+      }
+    ],
+    "unanalysed": [
+      {
+        "path": "vendor/jobs/bundle-52.min.js",
+        "reason": "too-large",
+        "detail": "Minified bundle over the per-file token budget."
+      },
+      {
+        "path": "vendor/web/bundle-53.min.js",
+        "reason": "too-large",
+        "detail": "Minified bundle over the per-file token budget."
       }
     ],
     "generatedAt": "2026-10-25T12:00:00.000Z",

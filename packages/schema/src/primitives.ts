@@ -20,30 +20,50 @@ import {
 
 // --- Character rules ---------------------------------------------------------------------------
 //
-// Text the UI shows must not be able to hide, reorder or spoof anything:
-// - Cc: C0 and C1 control characters and DEL (only \t and \n are ever allowed, by field kind).
-// - Bidi controls (Trojan Source): U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069.
-// - Invisible characters that hide content: zero-width space U+200B, word joiner U+2060,
-//   BOM U+FEFF, U+180E. (ZWNJ/ZWJ U+200C/U+200D stay allowed in prose: scripts and emoji
-//   need them; code lines, ids and paths reject every Cf.)
-// - Line/paragraph separators U+2028/U+2029 in single-line fields.
+// Text the UI shows must not be able to hide, reorder or spoof anything. The rules are built
+// from Unicode properties, not hand lists, so new code points are covered:
+// - Cc: C0 and C1 control characters and DEL. Only \t and \n are ever allowed, by field kind.
+// - Default_Ignorable_Code_Point (DI): everything a renderer may draw as nothing — soft hyphen,
+//   zero-width and bidi controls, word joiners, Hangul fillers, variation selectors, the TAG
+//   block U+E0000–E007F used for ASCII smuggling, and more. Three exceptions in ordinary text:
+//   ZWNJ U+200C and ZWJ U+200D (scripts and emoji need them) and VS16 U+FE0F (emoji).
+// - Cf: format characters not in DI (interlinear annotation U+FFF9–FFFB, bidi marks).
+// - Blank-looking letters that DI misses: braille blank U+2800 (U+3164, U+115F, U+1160 and
+//   U+FFA0 are DI already).
+// - Zl/Zp line and paragraph separators in single-line fields.
+// - Zalgo: five or more consecutive combining marks in single-line fields, paths and ids.
 // - Lone surrogates: not representable in UTF-8, so never valid text.
 
-const BIDI_OR_HIDING =
-  "\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069\\u200B\\u2060\\uFEFF\\u180E";
-/** Prose: any Cc other than \t and \n, or a bidi/hiding character. */
-const FORBIDDEN_IN_PROSE = new RegExp(`[^\\P{Cc}\\t\\n]|[${BIDI_OR_HIDING}]`, "u");
-/** Single-line text: any Cc, bidi/hiding, or a line/paragraph separator. */
-const FORBIDDEN_IN_LINE = new RegExp(`\\p{Cc}|[${BIDI_OR_HIDING}]|\\p{Zl}|\\p{Zp}`, "u");
-/** Code lines: any Cc other than \t, any format character, any line/paragraph separator. */
-const FORBIDDEN_IN_CODE = /[^\P{Cc}\t]|\p{Cf}|\p{Zl}|\p{Zp}/u;
-/** Paths and ids: no control, format or line/paragraph separator characters at all. */
-const FORBIDDEN_IN_NAME = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const EMOJI_JOINERS = "\\u200C\\u200D\\uFE0F";
+// As an alternation, not a class: a class holding U+115F U+1160 reads as one Hangul syllable.
+const BLANK_LETTERS = "\\u2800|\\u3164|\\u115F|\\u1160|\\uFFA0";
+/** Any DI or Cf other than the emoji joiners, or a blank-looking letter. */
+const INVISIBLE = `(?![${EMOJI_JOINERS}])(?:\\p{Default_Ignorable_Code_Point}|\\p{Cf})|${BLANK_LETTERS}`;
+/** Every DI or Cf, no exceptions. */
+const INVISIBLE_STRICT = `\\p{Default_Ignorable_Code_Point}|\\p{Cf}|${BLANK_LETTERS}`;
+const ZALGO = "\\p{M}{5}";
+const LINE_BREAKS = "\\p{Zl}|\\p{Zp}";
+
+/** Prose: any Cc other than \t and \n, or an invisible character. */
+const FORBIDDEN_IN_PROSE = new RegExp(`(?!\\t|\\n)\\p{Cc}|${INVISIBLE}`, "u");
+/** Strict prose (agent prompts): like prose, but no joiner exceptions and no line separators. */
+const FORBIDDEN_IN_STRICT_PROSE = new RegExp(
+  `(?!\\t|\\n)\\p{Cc}|${INVISIBLE_STRICT}|${LINE_BREAKS}`,
+  "u",
+);
+/** Single-line text: any Cc, invisible, line separator, or a zalgo run. */
+const FORBIDDEN_IN_LINE = new RegExp(`\\p{Cc}|${INVISIBLE}|${LINE_BREAKS}|${ZALGO}`, "u");
+/** Code lines: any Cc other than \t, every invisible (no joiner exceptions), line separators. */
+const FORBIDDEN_IN_CODE = new RegExp(`(?!\\t)\\p{Cc}|${INVISIBLE_STRICT}|${LINE_BREAKS}`, "u");
+/** Paths and ids: no Cc, no invisible at all, no line separators, no zalgo. */
+const FORBIDDEN_IN_NAME = new RegExp(`\\p{Cc}|${INVISIBLE_STRICT}|${LINE_BREAKS}|${ZALGO}`, "u");
 
 const malformed = (text: string): boolean => !text.isWellFormed();
 
 export const hasForbiddenProseCharacters = (text: string): boolean =>
   malformed(text) || FORBIDDEN_IN_PROSE.test(text);
+export const hasForbiddenStrictProseCharacters = (text: string): boolean =>
+  malformed(text) || FORBIDDEN_IN_STRICT_PROSE.test(text);
 export const hasForbiddenLineCharacters = (text: string): boolean =>
   malformed(text) || FORBIDDEN_IN_LINE.test(text);
 export const hasForbiddenCodeCharacters = (text: string): boolean =>
@@ -51,19 +71,20 @@ export const hasForbiddenCodeCharacters = (text: string): boolean =>
 export const hasForbiddenNameCharacters = (text: string): boolean =>
   malformed(text) || FORBIDDEN_IN_NAME.test(text);
 
-/** Single-line text: no control, bidi, hiding or line-separator characters, not even \t or \n. */
+/** Single-line text: no control, invisible or line-separator characters, not even \t or \n. */
 export const line = (max: number, description?: string) => {
   const schema = z
     .string()
     .min(1)
     .max(max)
     .refine((text) => !hasForbiddenLineCharacters(text), {
-      message: "must not contain control, bidi, invisible or line-separator characters",
+      message:
+        "must not contain control, invisible or line-separator characters, or runs of combining marks",
     });
   return description === undefined ? schema : schema.describe(description);
 };
 
-/** Multi-line text: \n and \t are allowed, every other control, bidi or hiding character is not. */
+/** Multi-line text: \n and \t are allowed, every other control or invisible character is not. */
 export const prose = (max: number, description?: string) => {
   const schema = z
     .string()
@@ -71,14 +92,30 @@ export const prose = (max: number, description?: string) => {
     .max(max)
     .refine((text) => !hasForbiddenProseCharacters(text), {
       message:
-        "must not contain control characters other than newline and tab, or bidi/invisible characters",
+        "must not contain control characters other than newline and tab, or invisible characters",
+    });
+  return description === undefined ? schema : schema.describe(description);
+};
+
+/**
+ * Text handed to another machine (the agent prompt): the strictest rule, because a reviewer
+ * who sees "Fix it. ok" must be sure the coding agent sees the same. No invisible character of
+ * any kind, not even the emoji joiners.
+ */
+export const strictProse = (max: number, description?: string) => {
+  const schema = z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((text) => !hasForbiddenStrictProseCharacters(text), {
+      message: "must not contain any control, invisible or line-separator character",
     });
   return description === undefined ? schema : schema.describe(description);
 };
 
 /**
  * A line of code, as it would appear in a file: may be empty, may contain tabs, never a
- * newline (lines are already split), a control character or any format character (Trojan
+ * newline (lines are already split), a control character or any invisible character (Trojan
  * Source hides in those).
  */
 export const codeLine = (max: number, description?: string) => {
@@ -125,28 +162,36 @@ export const REPOSITORY_PATH_PATTERN = new RegExp(
   `^(?![A-Za-z]:)${PATH_SEGMENT}(?:/${PATH_SEGMENT})*$`,
 );
 
-/** Dots and every look-alike NFKC leaves alone; NFKC folds the fullwidth and compat forms itself. */
-const DOT_LIKE_SEGMENT = /^(?:[.。·‧・｡]|%2e)+$/iu;
-const WHITESPACE_SEGMENT = /^[\s\p{Z}]+$/u;
+/** `%2e`, `%252e`, `%25252e`…: a dot however many times it was percent-encoded. */
+const ENCODED_DOT = /%(?:25)*2e/giu;
+/** After NFKC and with marks stripped: nothing but punctuation (every dot look-alike is Po). */
+const PUNCTUATION_ONLY = /^\p{Po}+$/u;
+const WHITESPACE_ONLY = /^[\s\p{Z}]+$/u;
+/** `.git`, `.git.`, `.git ` (Windows trailing-dot/space forms), `git~1` (8.3 short name). */
+const GIT_DIR = /^(?:\.git[. ]*|git~\d+)$/iu;
 
 /**
  * Why a path is not acceptable, or undefined when it is. Beyond the structural pattern:
- * - no control, format (bidi, zero-width, BOM) or line-separator characters anywhere;
- * - NFC-normalised, so two spellings of one name cannot both pass as different files;
- * - no segment that is only dots, dot look-alikes (`．．`, `‥`, `…`) or percent-encoded dots
- *   (`%2e%2e`), or only whitespace, or `.git`.
+ * - no control, invisible or line-separator characters anywhere, no zalgo runs;
+ * - no segment that, after NFKC folding, mark stripping and percent-decoding of dots, is
+ *   only punctuation (`．．`, `‥`, `…`, `۔۔`, `%2e%2e`, `%252e`, `.̸`), only whitespace, or a
+ *   spelling of the `.git` directory (`.git`, `.GIT.`, `git~1`).
+ *
+ * Normalisation form is deliberately not required: paths in the facts are what git reports,
+ * and macOS repositories legitimately carry NFD names. The integrity pass rejects a file list
+ * with two paths equal under NFC, and every model-written path must equal a listed path.
  */
 export const pathProblem = (path: string): string | undefined => {
   if (hasForbiddenNameCharacters(path))
-    return "must not contain control, bidi, invisible or line-separator characters";
-  if (path.normalize("NFC") !== path) return "must be NFC-normalised";
+    return "must not contain control, invisible or line-separator characters, or runs of combining marks";
   if (!REPOSITORY_PATH_PATTERN.test(path))
     return "must be a repository-relative POSIX path: no leading '/', drive letter, backslash, '.' or '..' segment";
   for (const segment of path.split("/")) {
-    const folded = segment.normalize("NFKC");
-    if (DOT_LIKE_SEGMENT.test(folded)) return `segment '${segment}' spells a dot segment`;
-    if (WHITESPACE_SEGMENT.test(folded)) return "segments must not be only whitespace";
-    if (folded.toLowerCase() === ".git") return "must not point into .git";
+    const folded = segment.normalize("NFKC").replace(/\p{M}/gu, "").replace(ENCODED_DOT, ".");
+    if (folded.length === 0 || PUNCTUATION_ONLY.test(folded))
+      return `segment '${segment}' spells a dot segment or is only punctuation`;
+    if (WHITESPACE_ONLY.test(folded)) return "segments must not be only whitespace";
+    if (GIT_DIR.test(folded)) return "must not point into .git";
   }
   return undefined;
 };

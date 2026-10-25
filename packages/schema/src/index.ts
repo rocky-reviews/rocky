@@ -10,6 +10,7 @@ export {
   hasForbiddenLineCharacters,
   hasForbiddenNameCharacters,
   hasForbiddenProseCharacters,
+  hasForbiddenStrictProseCharacters,
   Id,
   ID_PATTERN,
   LineNumber,
@@ -18,6 +19,7 @@ export {
   REPOSITORY_PATH_PATTERN,
   RepositoryPath,
   Score,
+  strictProse,
 } from "./primitives.js";
 
 export {
@@ -57,8 +59,6 @@ export {
   TriagedFile,
   TriagedFileLevel,
   TriageLevel,
-  UnanalysedFile,
-  UnanalysedReason,
   type TriageInput,
 } from "./triage.js";
 
@@ -79,12 +79,15 @@ export {
   Generator,
   GeneratorRole,
   GitRef,
+  gitRefProblem,
   Hunk,
   hunksInOrder,
   LlmRole,
   Provenance,
   RepoName,
   RepoOwner,
+  UnanalysedFile,
+  UnanalysedReason,
   type ProvenanceInput,
 } from "./provenance.js";
 

@@ -234,6 +234,11 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
       base: { sha: "a".repeat(40), ref: "main" },
       head: { sha: "b".repeat(40), ref: "refactor/shared-client" },
       files,
+      unanalysed: unanalysedFiles.map((file) => ({
+        path: file.path,
+        reason: "too-large" as const,
+        detail: "Minified bundle over the per-file token budget.",
+      })),
       generatedAt: "2026-10-25T12:00:00.000Z",
       generator: { name: "rocky", version: "0.0.0", roles: [{ role: "review", model: "fixture" }] },
     },
@@ -259,11 +264,6 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
       noise: noiseFiles.map((file) => ({
         path: file.path,
         summary: "Regenerated from the OpenAPI spec; no hand edits.",
-      })),
-      unanalysed: unanalysedFiles.map((file) => ({
-        path: file.path,
-        reason: "too-large" as const,
-        detail: "Minified bundle over the per-file token budget.",
       })),
     },
     findings,

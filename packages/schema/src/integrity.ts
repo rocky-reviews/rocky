@@ -22,8 +22,9 @@
  * - a suggestion with a context line cannot start at line 1; when the new file content is
  *   supplied, the context line must match, the range must exist, and the replacement must
  *   differ from the original lines.
- * - files the AI could not analyse (triage.unanalysed) count toward coverage and carry no
- *   finding, flag or review-path step.
+ * - files the AI could not analyse (provenance.unanalysed, pipeline-owned) count toward
+ *   coverage and carry no triage entry, finding, flag or review-path step.
+ * - no two PR file paths are equal under NFC normalisation.
  * - every memory reference on a finding appears in briefing.memoryApplied, quoted identically.
  * - at most MAX_FLAGS_TOTAL flags across the document.
  */
@@ -347,7 +348,11 @@ const graphIssues = (graph: Graph): Issues => {
 
 // --- Triage --------------------------------------------------------------------------------
 
-const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFile>): Issues => {
+const triageIssues = (
+  triage: Triage,
+  filesByPath: ReadonlyMap<string, ChangedFile>,
+  unanalysed: ReadonlySet<string>,
+): Issues => {
   const issues: Issues = [];
 
   reportDuplicatePaths(
@@ -399,14 +404,16 @@ const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFi
       message: `${totalFlags} flags across the document; at most ${MAX_FLAGS_TOTAL} are allowed`,
     });
 
-  reportDuplicatePaths(
-    issues,
-    "triage.unanalysed",
-    triage.unanalysed.map((file) => file.path),
-  );
   const noise = new Set(triage.noise.map((file) => file.path));
-  const seenIn = (path: string, except: "noise" | "unanalysed"): string | undefined =>
-    triaged.has(path) ? "triaged" : except !== "noise" && noise.has(path) ? "noise" : undefined;
+
+  triage.files.forEach((file, index) => {
+    if (unanalysed.has(file.path))
+      issues.push({
+        code: "TRIAGE_COVERAGE",
+        path: `triage.files[${index}].path`,
+        message: `'${file.path}' could not be analysed (provenance.unanalysed); it cannot also be triaged`,
+      });
+  });
 
   triage.noise.forEach((file, index) => {
     if (!filesByPath.has(file.path))
@@ -415,7 +422,11 @@ const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFi
         path: `triage.noise[${index}].path`,
         message: `'${file.path}' is not in the PR's file list`,
       });
-    const other = seenIn(file.path, "noise");
+    const other = triaged.has(file.path)
+      ? "triaged"
+      : unanalysed.has(file.path)
+        ? "unanalysed"
+        : undefined;
     if (other !== undefined)
       issues.push({
         code: "TRIAGE_COVERAGE",
@@ -424,23 +435,6 @@ const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFi
       });
   });
 
-  triage.unanalysed.forEach((file, index) => {
-    if (!filesByPath.has(file.path))
-      issues.push({
-        code: "UNKNOWN_FILE",
-        path: `triage.unanalysed[${index}].path`,
-        message: `'${file.path}' is not in the PR's file list`,
-      });
-    const other = seenIn(file.path, "unanalysed");
-    if (other !== undefined)
-      issues.push({
-        code: "TRIAGE_COVERAGE",
-        path: `triage.unanalysed[${index}].path`,
-        message: `'${file.path}' is both ${other} and unanalysed`,
-      });
-  });
-
-  const unanalysed = new Set(triage.unanalysed.map((file) => file.path));
   for (const path of filesByPath.keys()) {
     if (!triaged.has(path) && !noise.has(path) && !unanalysed.has(path))
       issues.push({
@@ -513,6 +507,7 @@ const findingIssues = (
   triage: Triage,
   applied: readonly MemoryRef[],
   filesByPath: ReadonlyMap<string, ChangedFile>,
+  unanalysed: ReadonlySet<string>,
   fileLines: FileLines | undefined,
 ): Issues => {
   const issues: Issues = [];
@@ -524,7 +519,6 @@ const findingIssues = (
 
   const levelByPath = new Map(triage.files.map((file) => [file.path, file.level] as const));
   const noise = new Set(triage.noise.map((file) => file.path));
-  const unanalysed = new Set(triage.unanalysed.map((file) => file.path));
   const appliedById = new Map(applied.map((ref) => [ref.entryId, ref] as const));
 
   findings.forEach((finding, index) => {
@@ -656,15 +650,37 @@ export const integrityIssues = (
 ): SchemaIssue[] => {
   const issues: Issues = [];
 
-  reportDuplicatePaths(
-    issues,
-    "provenance.files",
-    doc.provenance.files.map((file) => file.path),
-  );
+  const paths = doc.provenance.files.map((file) => file.path);
+  reportDuplicatePaths(issues, "provenance.files", paths);
+  // Two spellings of one name (NFC vs NFD) would be two files to the schema and one to a
+  // filesystem; such a PR is refused rather than analysed ambiguously.
+  for (const { index, value } of duplicateIndexes(paths, (path) => path.normalize("NFC"))) {
+    if (!paths.slice(0, index).includes(value))
+      issues.push({
+        code: "DUPLICATE_PATH",
+        path: `provenance.files[${index}].path`,
+        message: `'${value}' equals another listed path under Unicode normalisation`,
+      });
+  }
   const filesByPath = new Map(doc.provenance.files.map((file) => [file.path, file] as const));
 
+  reportDuplicatePaths(
+    issues,
+    "provenance.unanalysed",
+    doc.provenance.unanalysed.map((file) => file.path),
+  );
+  doc.provenance.unanalysed.forEach((file, index) => {
+    if (!filesByPath.has(file.path))
+      issues.push({
+        code: "UNKNOWN_FILE",
+        path: `provenance.unanalysed[${index}].path`,
+        message: `'${file.path}' is not in the PR's file list`,
+      });
+  });
+  const unanalysed = new Set(doc.provenance.unanalysed.map((file) => file.path));
+
   if (doc.graph !== undefined) append(issues, graphIssues(doc.graph));
-  append(issues, triageIssues(doc.triage, filesByPath));
+  append(issues, triageIssues(doc.triage, filesByPath, unanalysed));
   append(
     issues,
     findingIssues(
@@ -672,6 +688,7 @@ export const integrityIssues = (
       doc.triage,
       doc.briefing.memoryApplied,
       filesByPath,
+      unanalysed,
       options.newFileLines,
     ),
   );

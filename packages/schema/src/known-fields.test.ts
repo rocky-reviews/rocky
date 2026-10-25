@@ -31,6 +31,7 @@ describe("applyKnownFields", () => {
       head: { sha: "e".repeat(40) },
       generatedAt: "1999-01-01T00:00:00.000Z",
       generator: { name: "model", roles: [] },
+      unanalysed: [],
       files: pr847().provenance.files.map((file) => ({
         ...file,
         additions: 0,
@@ -90,6 +91,62 @@ describe("applyKnownFields", () => {
     expect(
       issues.some((issue) => issue.code === "UNKNOWN_FILE" && issue.path === "findings[10].path"),
     ).toBe(true);
+  });
+
+  it("a model cannot hide a file by calling it unanalysed (reviewer's attack)", () => {
+    // The model drops the critical auth file from triage, removes its findings and review-path
+    // step, and declares it unanalysed. `unanalysed` is a fact: the overlay replaces it.
+    const output = modelOutput();
+    const critical = output.triage.files[0]!.path;
+    output.triage.files = output.triage.files.slice(1);
+    output.findings = output.findings.filter((finding) => finding.path !== critical);
+    output.briefing.reviewPath = output.briefing.reviewPath.filter(
+      (step) => step.path !== critical,
+    );
+
+    // Spelled where it used to live: now an unknown field.
+    const inTriage = applyKnownFields(
+      {
+        ...output,
+        triage: { ...output.triage, unanalysed: [{ path: critical, reason: "analysis-failed" }] },
+      },
+      facts(),
+    );
+    expectRejected(inTriage, "INVALID_SHAPE", "triage");
+
+    // Spelled where it lives now: overwritten by the facts, so the file is simply missing.
+    const inProvenance = applyKnownFields(
+      {
+        ...output,
+        provenance: { ...facts(), unanalysed: [{ path: critical, reason: "analysis-failed" }] },
+      },
+      facts(),
+    );
+    const parsed = parseAnalysisDocument(inProvenance);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(
+        parsed.error.issues.some(
+          (issue) => issue.code === "TRIAGE_COVERAGE" && issue.message.includes(critical),
+        ),
+      ).toBe(true);
+    }
+    expect(
+      (inProvenance as { provenance: { unanalysed: unknown[] } }).provenance.unanalysed,
+    ).toEqual([]);
+  });
+
+  it("pipeline-declared unanalysed files are accepted and keep the model out of them", () => {
+    const output = modelOutput();
+    const critical = output.triage.files[0]!.path;
+    output.triage.files = output.triage.files.slice(1);
+    output.findings = output.findings.filter((finding) => finding.path !== critical);
+    output.briefing.reviewPath = output.briefing.reviewPath.filter(
+      (step) => step.path !== critical,
+    );
+    const known = { ...facts(), unanalysed: [{ path: critical, reason: "timeout" as const }] };
+    const value = expectAccepted(applyKnownFields(output, known));
+    expect(value.provenance.unanalysed[0]!.path).toBe(critical);
   });
 
   it("a model cannot remove files: a dropped triage entry fails coverage", () => {

@@ -160,17 +160,14 @@ const rangeIn = (file: ChangedFile, hunkIndex: number, offset: number, length: n
 };
 
 const buildTriage = (params: Params, files: ChangedFile[]): TriageInput => {
-  const triage: TriageInput = { files: [], noise: [], unanalysed: [] };
+  const triage: TriageInput = { files: [], noise: [] };
   files.forEach((file, index) => {
     const p = params.triage[index]!;
     if (p.noise && files.length > 1 && index > 0) {
       triage.noise!.push({ path: file.path, summary: "Generated; trust it." });
       return;
     }
-    if (p.unanalysed && files.length > 1 && index > 0) {
-      triage.unanalysed!.push({ path: file.path, reason: "too-large" });
-      return;
-    }
+    if (p.unanalysed && files.length > 1 && index > 0) return; // listed in provenance.unanalysed
     const level = LEVELS[p.level % LEVELS.length]!;
     const band = SCORE_BANDS[level];
     triage.files.push({
@@ -329,6 +326,15 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
       base: { sha: "a".repeat(40) },
       head: { sha: "b".repeat(40) },
       files,
+      unanalysed: files
+        .filter(
+          (file, index) =>
+            index > 0 &&
+            files.length > 1 &&
+            params.triage[index]!.unanalysed &&
+            !params.triage[index]!.noise,
+        )
+        .map((file) => ({ path: file.path, reason: "too-large" as const })),
       generatedAt: "2026-10-25T12:00:00.000Z",
       generator: { name: "rocky" },
     },
@@ -575,8 +581,15 @@ const MUTATORS: Mutator[] = [
       "a/\u2025/b",
       "a/%2E/b",
       ".git/config",
-      "e\u0301/x.ts", // decomposed é: not NFC
-    ][pick % 13]!;
+      "a/\u06D4\u06D4/b",
+      "a/.\u0338/b",
+      "a/.git./x",
+      "a/git~1/x",
+      "a/%252e%252e/b",
+      "a/\u3164/b",
+      "a/\u2800/b",
+      `a/${"\u0301".repeat(5)}x/b`,
+    ][pick % 20]!;
     return { code: "INVALID_SHAPE", path: `provenance.files[${i}].path` };
   },
   (doc) => {
@@ -596,9 +609,9 @@ const MUTATORS: Mutator[] = [
     return { code: "FINDING_IN_NOISE_FILE", path: `findings[${i}].path` };
   },
   (doc, pick) => {
-    if (doc.findings.length === 0 || doc.triage.unanalysed.length === 0) return undefined;
+    if (doc.findings.length === 0 || doc.provenance.unanalysed.length === 0) return undefined;
     const i = pick % doc.findings.length;
-    const target = doc.triage.unanalysed[pick % doc.triage.unanalysed.length]!;
+    const target = doc.provenance.unanalysed[pick % doc.provenance.unanalysed.length]!;
     const known = doc.provenance.files.find((f) => f.path === target.path)!;
     doc.findings[i]!.path = target.path;
     doc.findings[i]!.range = rangeIn(known, 0, 0, 0);
@@ -660,6 +673,83 @@ const MUTATORS: Mutator[] = [
     const i = pick % doc.provenance.files.length;
     set(doc.provenance.files[i]!, "additions", -0);
     return { code: "INVALID_SHAPE", path: `provenance.files[${i}].additions` };
+  },
+  // --- Second review round: default ignorables, blank letters, zalgo, refs, NFC collisions ---
+  (doc, pick) => {
+    if (doc.findings.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    const c = [
+      "\u{E0049}\u{E0047}",
+      "\u00AD",
+      "\u2062",
+      "\u206A",
+      "\uFFF9",
+      "\u{E0100}",
+      "\u034F",
+      "\u3164",
+      "\u2800",
+      "\u2060",
+      "\u180E",
+      "\uFFA0",
+    ][pick % 12]!;
+    doc.findings[i]!.title = `Title${c}x`;
+    return { code: "INVALID_SHAPE", path: `findings[${i}].title` };
+  },
+  (doc, pick) => {
+    const c = [
+      "\u{E004E}",
+      "\u00AD",
+      "\u2063",
+      "\u206F",
+      "\uFFFB",
+      "\u{E01EF}",
+      "\u034F",
+      "\u115F",
+      "\u2800",
+    ][pick % 9]!;
+    doc.briefing.summary = `x${c.repeat(3)}y`;
+    return { code: "INVALID_SHAPE", path: "briefing.summary" };
+  },
+  (doc, pick) => {
+    if (doc.findings.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    const c = [
+      "\u{E0049}\u{E0047}\u{E004E}",
+      "\u200D",
+      "\u200C",
+      "\uFE0F",
+      "\u00AD",
+      "\u2028",
+      "\u2800",
+      "\u202E",
+    ][pick % 8]!;
+    doc.findings[i]!.agentPrompt = `Fix it.${c.repeat(2)} ok`;
+    return { code: "INVALID_SHAPE", path: `findings[${i}].agentPrompt` };
+  },
+  (doc, pick) => {
+    if (doc.findings.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    doc.findings[i]!.title = `a${"\u0301".repeat(5 + (pick % 20))}b`;
+    return { code: "INVALID_SHAPE", path: `findings[${i}].title` };
+  },
+  (doc, pick) => {
+    doc.provenance.base.ref = [
+      "a\u202Eb",
+      "a.lock/b",
+      ".hidden",
+      "a/.b",
+      "@",
+      "a/b.lock",
+      "a\u200Bb",
+      "x@{y",
+    ][pick % 8]!;
+    return { code: "INVALID_SHAPE", path: "provenance.base.ref" };
+  },
+  (doc) => {
+    if (doc.provenance.files.length < 2) return undefined;
+    doc.provenance.files[0]!.path = "src/caf\u00E9.ts";
+    doc.provenance.files[1]!.path = "src/cafe\u0301.ts";
+    return { code: "DUPLICATE_PATH", path: "provenance.files[1].path" };
   },
 ];
 

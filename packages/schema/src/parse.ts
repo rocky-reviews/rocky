@@ -4,10 +4,11 @@
  * an attacker steering one) must not be able to crash the pipeline with a document.
  *
  * Input contract: `parseAnalysisDocument` takes JSON-parsed data (plain objects, arrays and
- * primitives, as `JSON.parse` returns). Shared or cyclic object graphs are not supported
- * input; a cycle in a recursive position (the view tree) is reported as TOO_DEEP, elsewhere
- * the strict shape rejects it. Untrusted text goes through `parseAnalysisDocumentJson`, which
- * enforces MAX_DOCUMENT_BYTES before parsing.
+ * primitives, as `JSON.parse` returns). An object reached twice (a cycle or a shared subtree)
+ * is reported as TOO_DEEP in linear time. Untrusted text must go through
+ * `parseAnalysisDocumentJson`: it is the only entry point with the byte cap, and JSON.parse's
+ * duplicate-key rule (last wins) applies there, which is fine because only the returned value
+ * is ever stored.
  *
  * Shape-issue mapping adapted from PR Lens (https://github.com/coldteadotai/pr-lens), MIT
  * License, Copyright (c) 2026 Coldtea AI. See NOTICE.
@@ -81,27 +82,29 @@ const attemptParse = (
  * Returns the first problem with its JSON path, or undefined.
  */
 const inspectRawInput = (input: unknown): SchemaIssue | undefined => {
-  const stack: { value: unknown; path: string; depth: number; ancestors: readonly object[] }[] = [
-    { value: input, path: "", depth: 0, ancestors: [] },
+  // Every object may be reached once. A second visit is a cycle or a shared subtree; either
+  // way it is not JSON-parsed data, and shared subtrees expand exponentially downstream.
+  const visited = new WeakSet<object>();
+  const stack: { value: unknown; path: string; depth: number }[] = [
+    { value: input, path: "", depth: 0 },
   ];
   while (stack.length > 0) {
     const next = stack.pop();
     if (next === undefined) break;
-    const { value, path, depth, ancestors } = next;
+    const { value, path, depth } = next;
     if (typeof value !== "object" || value === null) continue;
     if (depth > MAX_INPUT_DEPTH)
       return { code: "TOO_DEEP", path, message: `nests deeper than ${MAX_INPUT_DEPTH} levels` };
-    if (ancestors.includes(value))
-      return { code: "TOO_DEEP", path, message: "the document contains a cycle" };
-    const lineage = [...ancestors, value];
+    if (visited.has(value))
+      return {
+        code: "TOO_DEEP",
+        path,
+        message: "the document contains a shared or cyclic reference",
+      };
+    visited.add(value);
     if (Array.isArray(value)) {
       value.forEach((child, index) =>
-        stack.push({
-          value: child,
-          path: `${path}[${index}]`,
-          depth: depth + 1,
-          ancestors: lineage,
-        }),
+        stack.push({ value: child, path: `${path}[${index}]`, depth: depth + 1 }),
       );
       continue;
     }
@@ -117,7 +120,6 @@ const inspectRawInput = (input: unknown): SchemaIssue | undefined => {
         value: (value as Record<string, unknown>)[key],
         path: childPath,
         depth: depth + 1,
-        ancestors: lineage,
       });
     }
   }
@@ -187,7 +189,8 @@ export const parseAnalysisDocumentJson = (
     ]);
   let data: unknown;
   try {
-    data = JSON.parse(text);
+    // A leading BOM is not JSON, but some producers emit one; it carries no content.
+    data = JSON.parse(text.startsWith("\uFEFF") ? text.slice(1) : text);
   } catch {
     return fail([{ code: "INVALID_JSON", path: "", message: "input is not valid JSON" }]);
   }

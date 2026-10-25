@@ -150,6 +150,7 @@
         ]
       }
     ],
+    "unanalysed": [],
     "generatedAt": "2026-10-25T12:00:00.000Z",
     "generator": {
       "name": "rocky",
@@ -362,8 +363,7 @@
         "path": "src/generated/api-types.ts",
         "summary": "Types regenerated from `openapi.yaml` for the two new endpoints. No hand edits found."
       }
-    ],
-    "unanalysed": []
+    ]
   },
   "findings": [
     {

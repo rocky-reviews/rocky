@@ -13,12 +13,20 @@ import {
   MAX_LINE_NUMBER,
   MAX_MODEL_NAME_LENGTH,
   MAX_PR_NUMBER,
+  MAX_REASON_LENGTH,
   MAX_REF_LENGTH,
   MAX_REPO_NAME_LENGTH,
   MAX_REPO_OWNER_LENGTH,
   MAX_VERSION_LENGTH,
 } from "./limits.js";
-import { count, FullSha, line, RepositoryPath } from "./primitives.js";
+import {
+  count,
+  FullSha,
+  hasForbiddenNameCharacters,
+  line,
+  prose,
+  RepositoryPath,
+} from "./primitives.js";
 
 /** GitHub's own rules for logins and repository names; other forges will need widening. */
 export const RepoOwner = z
@@ -33,19 +41,46 @@ export const RepoName = z
   .regex(/^[A-Za-z0-9._-]+$/, "must be a valid repository name");
 
 /**
- * Git ref names (git-check-ref-format): no leading '-', no '..', '@{' or '//', no control
- * characters, space or '~^:?*[\\', no trailing '/', '.' or '.lock'.
+ * Why a ref name is not acceptable (git-check-ref-format), or undefined when it is: no control,
+ * invisible or line-separator characters; no `..`, `@{` or `//`; not `@`; no leading `-`; no
+ * trailing `/` or `.`; per component: not empty, no leading `.`, no `.lock` suffix, none of
+ * space `~ ^ : ? * [ \`.
  */
+/** Characters git-check-ref-format refuses inside a component. */
+// eslint-disable-next-line no-control-regex -- the rule is about control characters
+const GIT_FORBIDDEN = /[\u0000-\u0020\u007F~^:?*[\\]/u;
+
+export const gitRefProblem = (ref: string): string | undefined => {
+  if (hasForbiddenNameCharacters(ref))
+    return "must not contain control, invisible or line-separator characters";
+  if (ref === "@") return "must not be '@'";
+  if (ref.startsWith("-")) return "must not start with '-'";
+  if (ref.includes("..") || ref.includes("@{") || ref.includes("//"))
+    return "must not contain '..', '@{' or '//'";
+  if (ref.endsWith("/") || ref.endsWith(".")) return "must not end with '/' or '.'";
+  for (const component of ref.split("/")) {
+    if (component.length === 0) return "must not have empty components";
+    if (component.startsWith(".")) return `component '${component}' must not start with '.'`;
+    if (component.endsWith(".lock")) return `component '${component}' must not end with '.lock'`;
+    if (GIT_FORBIDDEN.test(component))
+      return `component '${component}' contains a character git forbids`;
+  }
+  return undefined;
+};
+
+/** Structural half of the ref rule, for the JSON Schema; `gitRefProblem` adds the rest. */
+// eslint-disable-next-line no-control-regex -- the rule is about control characters
+const GIT_REF_PATTERN = /^(?!-)(?!.*\.\.)(?!.*@\{)(?!.*\/\/)[^\u0000-\u0020\u007F~^:?*[\\]+$/;
+
 export const GitRef = z
   .string()
   .min(1)
   .max(MAX_REF_LENGTH)
-  // No control characters, no space (the literal in the class), none of git's forbidden marks.
-  .regex(
-    // eslint-disable-next-line no-control-regex -- the rule is about control characters
-    /^(?!-)(?!.*\.\.)(?!.*@\{)(?!.*\/\/)(?!.*(?:\/|\.|\.lock)$)[^\u0000-\u001F \u007F~^:?*[\\]+$/,
-    "must be a valid git ref name",
-  );
+  .regex(GIT_REF_PATTERN, "must be a valid git ref name")
+  .superRefine((ref, context) => {
+    const problem = gitRefProblem(ref);
+    if (problem !== undefined) context.addIssue({ code: "custom", message: problem });
+  });
 
 /**
  * One hunk as the unified diff header states it: `@@ -oldStart,oldLines +newStart,newLines @@`.
@@ -123,6 +158,26 @@ export const Generator = z
   .describe("What produced the document.");
 export type Generator = z.infer<typeof Generator>;
 
+/** Why the pipeline could not analyse a file. Written by the pipeline, never by the model. */
+export const UnanalysedReason = z.enum(["analysis-failed", "too-large", "binary", "timeout"]);
+export type UnanalysedReason = z.infer<typeof UnanalysedReason>;
+
+/**
+ * A file the AI could not analyse (ADR 0004 §2): the model's output for it failed validation
+ * after the repair round, or the file was never sent. It lives in the facts, so
+ * `applyKnownFields` overwrites whatever a model claims: a model cannot hide a file from
+ * review by calling it unanalysed. The UI shows "AI couldn't analyse this file"; no finding,
+ * flag, triage entry or review-path step may name it.
+ */
+export const UnanalysedFile = z
+  .strictObject({
+    path: RepositoryPath.describe("Must be one of the PR's files."),
+    reason: UnanalysedReason,
+    detail: prose(MAX_REASON_LENGTH).optional().describe("Human-readable detail, if any."),
+  })
+  .describe("A file the AI could not analyse.");
+export type UnanalysedFile = z.infer<typeof UnanalysedFile>;
+
 export const Provenance = z
   .strictObject({
     repo: z.strictObject({ owner: RepoOwner, name: RepoName }),
@@ -133,6 +188,11 @@ export const Provenance = z
       .array(ChangedFile)
       .max(MAX_FILES)
       .describe("Every file the PR changes. The only files the rest of the document may name."),
+    unanalysed: z
+      .array(UnanalysedFile)
+      .max(MAX_FILES)
+      .default([])
+      .describe("Files the pipeline could not analyse; they count toward triage coverage."),
     generatedAt: z.iso.datetime().describe("When the pipeline produced the document (UTC)."),
     generator: Generator,
   })

@@ -58,32 +58,13 @@ export const NoiseFile = z
   .describe("A file a reviewer can trust without reading: lockfile, generated code, vendored.");
 export type NoiseFile = z.infer<typeof NoiseFile>;
 
-/** Why the pipeline could not analyse a file. Set by the pipeline, never by the model. */
-export const UnanalysedReason = z.enum(["analysis-failed", "too-large", "binary", "timeout"]);
-export type UnanalysedReason = z.infer<typeof UnanalysedReason>;
-
-/**
- * A file the AI could not analyse (ADR 0004 §2): the model's output for it failed validation
- * after the repair round, or the file was never sent. The UI shows "AI couldn't analyse this
- * file" and the reviewer reads it unaided. No finding, flag or review-path step may name it.
- */
-export const UnanalysedFile = z
-  .strictObject({
-    path: RepositoryPath.describe("Must be one of the PR's files."),
-    reason: UnanalysedReason,
-    detail: prose(MAX_REASON_LENGTH).optional().describe("Human-readable detail, if any."),
-  })
-  .describe("A file the AI could not analyse.");
-export type UnanalysedFile = z.infer<typeof UnanalysedFile>;
-
 export const Triage = z
   .strictObject({
     files: z.array(TriagedFile).max(MAX_FILES),
     noise: z.array(NoiseFile).max(MAX_FILES).default([]),
-    unanalysed: z.array(UnanalysedFile).max(MAX_FILES).default([]),
   })
   .describe(
-    "Per-file attention scores. Together, files, noise and unanalysed cover every PR file once.",
+    "Per-file attention scores. Files and noise, plus provenance.unanalysed, cover every PR file once.",
   );
 export type Triage = z.infer<typeof Triage>;
 export type TriageInput = z.input<typeof Triage>;

@@ -83,8 +83,24 @@ describe("unicode hardening: paths", () => {
     "a/\uD800",
     "a/\uFEFFb",
     ".git/config",
+    "a/\u2024\u2024/b",
+    "a/\u2025/b",
+    "a/\uFE52\uFE52/b",
+    "a/\u06D4\u06D4/b",
+    "a/\u3164/b",
+    "a/\u2800/b",
+    "a/.\u0338/b",
+    "a/\u00B7\u00B7/b",
+    "a/.git\u200C/x",
+    "a/.git./x",
+    "a/.git /x",
+    "a/git~1/x",
+    "a/GIT~12/x",
+    "a/.%2E/b",
+    "a/%252e%252e/b",
+    "a/%25252e/b",
+    "a/!!!/b",
     "a/.GIT/hooks",
-    "e\u0301/x.ts",
     "C:x",
     "c:/x",
     "a//b",
@@ -97,6 +113,7 @@ describe("unicode hardening: paths", () => {
   it.each([
     "a b/c d.txt",
     "é/x.ts",
+    "e\u0301/x.ts", // NFD, as macOS git reports it
     "a/..b",
     "a/b...",
     "日本語/ファイル.md",
@@ -139,17 +156,17 @@ describe("document size cap", () => {
 
   it("caps the total number of flags", () => {
     const doc = pr847();
-    const flag = { range: { start: 1, end: 1 }, kind: "ok" as const, text: "fine" };
-    for (const file of doc.triage.files.slice(0, 6))
-      file.flags = Array.from({ length: 50 }, () => flag);
+    const flag = () => ({ range: { start: 1, end: 1 }, kind: "ok" as const, text: "fine" });
+    for (const file of doc.triage.files.slice(0, 6)) file.flags = Array.from({ length: 50 }, flag);
     expect(6 * 50).toBeLessThanOrEqual(MAX_FLAGS_TOTAL);
     expectAccepted(doc);
-    for (const file of doc.triage.files) file.flags = Array.from({ length: 50 }, () => flag);
+    for (const file of doc.triage.files) file.flags = Array.from({ length: 50 }, flag);
     doc.triage.files = [
       ...doc.triage.files,
       ...Array.from({ length: 40 }, (_, i) => ({
         ...doc.triage.files[6]!,
         path: `extra/${i}.ts`,
+        flags: Array.from({ length: 50 }, flag),
       })),
     ];
     for (let i = 0; i < 40; i += 1)
@@ -231,10 +248,10 @@ describe("prototype-key safety", () => {
   });
 });
 
-describe("per-file failure state", () => {
+describe("per-file failure state (provenance.unanalysed, pipeline-owned)", () => {
   const unanalyse = (doc = pr847()) => {
     const dropped = doc.triage.files.pop()!;
-    doc.triage.unanalysed = [
+    doc.provenance.unanalysed = [
       { path: dropped.path, reason: "analysis-failed", detail: "Repair failed." },
     ];
     doc.findings = doc.findings.filter((finding) => finding.path !== dropped.path);
@@ -244,19 +261,22 @@ describe("per-file failure state", () => {
   it("an unanalysed file counts toward coverage", () => {
     const { doc } = unanalyse();
     const value = expectAccepted(doc);
-    expect(value.triage.unanalysed).toHaveLength(1);
+    expect(value.provenance.unanalysed).toHaveLength(1);
   });
 
   it("must still be a PR file and appear once", () => {
     const { doc } = unanalyse();
-    doc.triage.unanalysed![0]!.path = "src/ghost.ts";
-    expectRejected(doc, "UNKNOWN_FILE", "triage.unanalysed[0].path");
+    doc.provenance.unanalysed![0]!.path = "src/ghost.ts";
+    expectRejected(doc, "UNKNOWN_FILE", "provenance.unanalysed[0].path");
     const twice = pr847();
-    twice.triage.unanalysed = [{ path: twice.triage.files[0]!.path, reason: "binary" }];
-    expectRejected(twice, "TRIAGE_COVERAGE", "triage.unanalysed[0].path");
+    twice.provenance.unanalysed = [{ path: twice.triage.files[0]!.path, reason: "binary" }];
+    expectRejected(twice, "TRIAGE_COVERAGE", "triage.files[0].path");
     const alsoNoise = pr847();
-    alsoNoise.triage.unanalysed = [{ path: "pnpm-lock.yaml", reason: "too-large" }];
-    expectRejected(alsoNoise, "TRIAGE_COVERAGE", "triage.unanalysed[0].path");
+    alsoNoise.provenance.unanalysed = [{ path: "pnpm-lock.yaml", reason: "too-large" }];
+    expectRejected(alsoNoise, "TRIAGE_COVERAGE", "triage.noise[0].path");
+    const listedTwice = unanalyse().doc;
+    listedTwice.provenance.unanalysed!.push({ ...listedTwice.provenance.unanalysed![0]! });
+    expectRejected(listedTwice, "DUPLICATE_PATH", "provenance.unanalysed[1].path");
   });
 
   it("carries no finding or review-path step", () => {
@@ -273,10 +293,13 @@ describe("per-file failure state", () => {
     expectRejected(path, "UNKNOWN_FILE", "briefing.reviewPath[4].path");
   });
 
-  it("rejects unknown reasons", () => {
+  it("rejects unknown reasons, and the old model-writable location", () => {
     const { doc } = unanalyse();
-    (doc.triage.unanalysed![0] as { reason: string }).reason = "lazy";
-    expectRejected(doc, "INVALID_SHAPE", "triage.unanalysed[0].reason");
+    (doc.provenance.unanalysed![0] as { reason: string }).reason = "lazy";
+    expectRejected(doc, "INVALID_SHAPE", "provenance.unanalysed[0].reason");
+    const legacy = pr847();
+    (legacy.triage as { unanalysed?: unknown }).unanalysed = [];
+    expectRejected(legacy, "INVALID_SHAPE", "triage");
   });
 });
 
@@ -406,7 +429,7 @@ describe("small rules", () => {
     if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
   });
 
-  it("a shared (DAG) view subtree is rejected by duplicate ids before it can blow up", () => {
+  it("a shared (DAG) view subtree is refused as a shared reference before it can blow up", () => {
     const doc = pr847();
     let leaf: unknown = { id: "leaf", title: "t" };
     for (let i = 0; i < 16; i += 1) leaf = { id: `n${i}`, title: "t", children: [leaf, leaf] };
@@ -415,7 +438,7 @@ describe("small rules", () => {
     const result = parseAnalysisDocument(doc);
     expect(Date.now() - started).toBeLessThan(5000);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("LIMIT_EXCEEDED");
+    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
   });
 
   it("a 100 000-deep array is TOO_DEEP with the path where nesting became excessive", () => {
@@ -443,5 +466,181 @@ describe("small rules", () => {
     const result = parseAnalysisDocument(doc);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+  });
+});
+
+describe("second review round", () => {
+  const INVISIBLE: Record<string, string> = {
+    TAG: "\u{E0049}\u{E0047}\u{E004E}",
+    SHY: "\u00AD",
+    INVISIBLE_TIMES: "\u2062",
+    DEPRECATED_FORMAT: "\u206A",
+    ANNOTATION: "\uFFF9",
+    VS_SUPPLEMENT: "\u{E0100}",
+    CGJ: "\u034F",
+    HANGUL_FILLER: "\u3164",
+    HALFWIDTH_FILLER: "\uFFA0",
+    BRAILLE_BLANK: "\u2800",
+    MVS: "\u180E",
+    WORD_JOINER: "\u2060",
+  };
+
+  it("default-ignorable and blank-looking characters are rejected in titles and prose", () => {
+    for (const [name, c] of Object.entries(INVISIBLE)) {
+      const title = pr847();
+      title.findings[0]!.title = `Title${c}x`;
+      expectRejected(title, "INVALID_SHAPE", "findings[0].title");
+      const body = pr847();
+      body.findings[0]!.body = `Body${c.repeat(3)}x`;
+      expectRejected(body, "INVALID_SHAPE", "findings[0].body");
+      expect(name).toBeDefined();
+    }
+  });
+
+  it("ordinary text keeps ZWJ, ZWNJ and VS16; the agent prompt rejects them too", () => {
+    for (const joiner of ["\u200D", "\u200C", "\uFE0F"]) {
+      const ok = pr847();
+      ok.findings[0]!.body = `emoji 👍${joiner} and text`;
+      ok.findings[0]!.title = `emoji 👍${joiner}`;
+      expectAccepted(ok);
+      const prompt = pr847();
+      prompt.findings[0]!.agentPrompt = `Fix it.${joiner} ok`;
+      expectRejected(prompt, "INVALID_SHAPE", "findings[0].agentPrompt");
+    }
+  });
+
+  it("ASCII smuggling into the agent prompt is rejected", () => {
+    const doc = pr847();
+    doc.findings[0]!.agentPrompt = `Fix it.${"\u{E0049}\u{E0047}\u{E004E}\u{E004F}\u{E0052}\u{E0045}".repeat(5)} ok`;
+    expectRejected(doc, "INVALID_SHAPE", "findings[0].agentPrompt");
+    for (const [, c] of Object.entries(INVISIBLE)) {
+      const other = pr847();
+      other.findings[0]!.agentPrompt = `Fix it.${c.repeat(5)} ok`;
+      expectRejected(other, "INVALID_SHAPE", "findings[0].agentPrompt");
+    }
+    const separators = pr847();
+    separators.findings[0]!.agentPrompt = "Fix it.\u2028ok";
+    expectRejected(separators, "INVALID_SHAPE", "findings[0].agentPrompt");
+  });
+
+  it("zalgo runs are rejected in single-line fields, paths and code; short marks are fine", () => {
+    const title = pr847();
+    title.findings[0]!.title = `a${"\u0301".repeat(199)}`;
+    expectRejected(title, "INVALID_SHAPE", "findings[0].title");
+    const ok = pr847();
+    ok.findings[0]!.title = "e\u0301\u0302\u0303\u0304 fine";
+    expectAccepted(ok);
+    expect(RepositoryPath.safeParse(`a${"\u0301".repeat(5)}/b`).success).toBe(false);
+    expect(RepositoryPath.safeParse("e\u0301\u0302/b").success).toBe(true);
+  });
+
+  it("a shared view subtree is detected in linear time at depth 30", () => {
+    const doc = pr847();
+    let leaf: unknown = { id: "leaf", title: "t" };
+    for (let i = 0; i < 30; i += 1) leaf = { id: `n${i}`, title: "t", children: [leaf, leaf] };
+    doc.graph!.views = [leaf as never];
+    const started = Date.now();
+    const result = parseAnalysisDocument(doc);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("TOO_DEEP");
+      expect(result.error.message).toContain("shared or cyclic");
+    }
+  });
+
+  it("a shared object anywhere (two findings sharing one range object) is refused", () => {
+    const doc = pr847();
+    doc.findings[1]!.range = doc.findings[0]!.range;
+    const result = parseAnalysisDocument(doc);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+  });
+
+  it("JSON entry point: leading BOM tolerated, duplicate keys last-wins, exact byte boundary", () => {
+    const text = JSON.stringify(pr847());
+    expect(parseAnalysisDocumentJson(`\uFEFF${text}`).ok).toBe(true);
+
+    const dup = parseAnalysisDocumentJson(
+      text.replace('"findings":', '"findings": [], "findings":'),
+    );
+    expect(dup.ok).toBe(true);
+    if (dup.ok) expect(dup.value.findings).toHaveLength(10);
+    const dupVersion = parseAnalysisDocumentJson(
+      text.replace('"schemaVersion":"1.0.0"', '"schemaVersion":"9.0.0","schemaVersion":"1.0.0"'),
+    );
+    expect(dupVersion.ok).toBe(true);
+
+    const bytes = new TextEncoder().encode(text).length;
+    expect(parseAnalysisDocumentJson(text + " ".repeat(MAX_DOCUMENT_BYTES - bytes)).ok).toBe(true);
+    const over = parseAnalysisDocumentJson(text + " ".repeat(MAX_DOCUMENT_BYTES - bytes + 1));
+    expect(over.ok).toBe(false);
+    if (!over.ok) expect(over.error.code).toBe("LIMIT_EXCEEDED");
+  });
+
+  it("git refs follow check-ref-format per component and the name character rules", () => {
+    for (const bad of [
+      "a.lock/b",
+      ".hidden",
+      "a/.b",
+      "@",
+      "a/b.lock",
+      "a\u202Eb",
+      "a\u200Bb",
+      "a@{b",
+      "a//b",
+      "a/",
+      "a.",
+      "-x",
+      "a..b",
+      "a b",
+      "a\tb",
+    ])
+      expect(GitRef.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    for (const ok of [
+      "feat/x",
+      "refs/heads/main",
+      "é",
+      "v1.2.3",
+      "user@host",
+      "a.lockfile",
+      "release-2026.10",
+    ])
+      expect(GitRef.safeParse(ok).success, ok).toBe(true);
+    const doc = pr847();
+    doc.provenance.base.ref = "a\u202Eb";
+    expectRejected(doc, "INVALID_SHAPE", "provenance.base.ref");
+  });
+
+  it("NFD paths from git are accepted; two spellings of one name are a collision", () => {
+    const doc = pr847();
+    const nfd = "cafe\u0301.ts";
+    const old = doc.provenance.files[0]!.path;
+    doc.provenance.files[0]!.path = nfd;
+    for (const file of doc.triage.files) if (file.path === old) file.path = nfd;
+    for (const finding of doc.findings) if (finding.path === old) finding.path = nfd;
+    for (const step of doc.briefing.reviewPath) if (step.path === old) step.path = nfd;
+    expectAccepted(doc);
+
+    const collision = pr847();
+    collision.provenance.files[0]!.path = nfd;
+    collision.provenance.files[1]!.path = "caf\u00E9.ts";
+    expectRejected(collision, "DUPLICATE_PATH", "provenance.files[1].path");
+
+    const exact = pr847();
+    exact.triage.files[0]!.path = "cafe\u0301.ts";
+    exact.provenance.files[0]!.path = "caf\u00E9.ts";
+    expectRejected(exact, "UNKNOWN_FILE", "triage.files[0].path");
+  });
+
+  it("memory ids are compared exactly: a case variant is a mismatch", () => {
+    const doc = pr847();
+    const finding = doc.findings.find((candidate) => candidate.memory!.length > 0)!;
+    finding.memory![0]!.entryId = finding.memory![0]!.entryId.toUpperCase();
+    expectRejected(
+      doc,
+      "MEMORY_REF_MISMATCH",
+      `findings[${doc.findings.indexOf(finding)}].memory[0]`,
+    );
   });
 });

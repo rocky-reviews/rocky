@@ -52,7 +52,7 @@ describe("golden fixtures", () => {
     expect(built.value).toEqual(loadFixture("large-60-files"));
     expect(built.value.provenance.files).toHaveLength(FILE_COUNT);
     expect(built.value.triage.noise).toHaveLength(NOISE_COUNT);
-    expect(built.value.triage.unanalysed).toHaveLength(UNANALYSED_COUNT);
+    expect(built.value.provenance.unanalysed).toHaveLength(UNANALYSED_COUNT);
     expect(built.value.triage.files).toHaveLength(FILE_COUNT - NOISE_COUNT - UNANALYSED_COUNT);
     expect(built.value.findings.length).toBeGreaterThan(10);
   });
