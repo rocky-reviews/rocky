@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/crypto",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Envelope encryption for tokens and customer keys.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

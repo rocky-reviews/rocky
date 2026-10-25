@@ -1,0 +1,14 @@
+{
+  "name": "@rocky-reviews/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Rocky Reviews web app (PR review page, inbox, settings).",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5173 --strictPort"
+  },
+  "devDependencies": {
+    "vite": "8.3.5"
+  }
+}

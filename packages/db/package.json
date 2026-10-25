@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Drizzle schema, SQL migrations, RLS policies and the tenant-scoped client.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

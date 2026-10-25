@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/renderer",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deterministic change-map SVG renderer (adapted from PR Lens, MIT).",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

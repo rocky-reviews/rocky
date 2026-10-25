@@ -1,0 +1,19 @@
+{
+  "name": "@rocky-reviews/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HTTP API, GitHub webhook receiver, and static host for the web app.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/main.ts"
+  },
+  "dependencies": {
+    "@rocky-reviews/log": "workspace:*",
+    "fastify": "5.12.7",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1"
+  }
+}

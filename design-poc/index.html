@@ -1,0 +1,1448 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rocky Reviews POC</title>
+<style>
+/* ---------- theme: Slate, light/dark set on <html data-mode> ---------- */
+:root, :root[data-mode="light"] {
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.06);
+  --bg: #f4f6fa; --panel: #ffffff; --panel-2: #eef1f6; --border: #dde3ec;
+  --text: #0f172a; --muted: #5b6578; --faint: #94a0b4;
+  --you: #4f46e5; --you-bg: #eef0ff; --on-you: #ffffff; --ai: #0891b2; --ai-bg: #e4f5f9;
+  --crit: #dc2626; --crit-bg: #fdecec; --high: #ea580c; --high-bg: #fff1e8;
+  --med: #b7791f; --med-bg: #fdf6e3; --low: #64748b; --low-bg: #eef1f5; --ok: #15803d; --ok-bg: #e9f7ee;
+  --add-bg: #e7f6ec; --add-sign: #1a7f37; --del-bg: #fdecec; --del-sign: #cf222e;
+  --code: #1e293b; --tk-kw: #4f46e5; --tk-str: #0e7490; --tk-com: #7c8799; --tk-num: #b45309;
+}
+:root[data-mode="dark"] {
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.35);
+  --bg: #0b1120; --panel: #111827; --panel-2: #1a2234; --border: #263045;
+  --text: #e5e9f2; --muted: #94a0b8; --faint: #64708a;
+  --you: #818cf8; --you-bg: #1e2148; --on-you: #0b1020; --ai: #22d3ee; --ai-bg: #0c2a33;
+  --crit: #f87171; --crit-bg: #3a1717; --high: #fb923c; --high-bg: #3a2214;
+  --med: #fbbf24; --med-bg: #362a10; --low: #94a3b8; --low-bg: #1f2633; --ok: #4ade80; --ok-bg: #12301d;
+  --add-bg: #0f2a1c; --add-sign: #4ade80; --del-bg: #2d1518; --del-sign: #f87171;
+  --code: #e2e8f0; --tk-kw: #a5b4fc; --tk-str: #67e8f9; --tk-com: #6b7a93; --tk-num: #fdba74;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 13.5px/1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; }
+kbd {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--border); border-bottom-width: 2px; background: var(--panel); color: var(--muted);
+}
+
+/* ---------- shell ---------- */
+.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.topbar {
+  display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--ai), var(--you)); }
+.pr-meta { min-width: 0; flex: 1; }
+.pr-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-sub { color: var(--muted); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+.pr-sub .add { color: var(--add-sign); } .pr-sub .del { color: var(--del-sign); }
+.branch { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; background: var(--panel-2); padding: 0 6px; border-radius: 4px; }
+.mode-btn { border: 1px solid var(--border); background: var(--panel-2); border-radius: 7px; padding: 4px 9px; font-size: 14px; color: var(--muted); }
+.mode-btn:hover { color: var(--text); }
+.gh-stat { color: var(--text); font-weight: 550; }
+.gh-link { color: var(--you); font-weight: 600; text-decoration: none; }
+.gh-link:hover { text-decoration: underline; }
+.risk-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+.risk-table td { padding: 7px 10px; border-top: 1px solid var(--border); vertical-align: middle; }
+.risk-table tr:first-child td { border-top: 0; }
+.risk-table .n { width: 1%; white-space: nowrap; }
+.risk-table .files { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+.risk-table .files button { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; }
+.risk-table .files button:hover { color: var(--you); text-decoration: underline; }
+.status-pill { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+.btn {
+  border: 1px solid var(--border); background: var(--panel); border-radius: 7px; padding: 6px 12px;
+  font-weight: 550; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.btn:hover { background: var(--panel-2); }
+.btn-primary { background: var(--you); border-color: var(--you); color: var(--on-you); }
+.kbd-on { background: transparent; color: var(--on-you); border-color: color-mix(in srgb, var(--on-you) 40%, transparent); }
+.btn-primary:hover { background: var(--you); filter: brightness(1.08); }
+.btn-ai { color: var(--ai); border-color: color-mix(in srgb, var(--ai) 35%, var(--border)); }
+.btn-sm { padding: 3px 9px; font-size: 12px; border-radius: 6px; }
+.btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn-ghost:hover { color: var(--text); }
+.count { background: color-mix(in srgb, var(--on-you) 22%, transparent); border-radius: 999px; padding: 0 6px; font-size: 11.5px; }
+
+.body { display: grid; grid-template-columns: 290px minmax(0, 1fr) 370px; min-height: 0; }
+.col { min-height: 0; overflow: auto; }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: 12px 10px 24px; }
+.main { padding: 18px 22px 80px; }
+.panel { background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+
+/* ---------- sidebar ---------- */
+.coverage { padding: 10px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; background: var(--panel-2); }
+.coverage-top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.coverage-top b { color: var(--text); }
+.bar { height: 6px; background: var(--border); border-radius: 99px; overflow: hidden; margin-top: 7px; }
+.bar > div { height: 100%; background: linear-gradient(90deg, var(--ai), var(--you)); transition: width .3s; }
+.coverage-note { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+.group-label {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--faint);
+  padding: 12px 8px 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: 0; background: transparent; padding: 6px 8px; border-radius: 7px; min-width: 0;
+}
+.nav-item:hover { background: var(--panel-2); }
+.nav-item.sel { background: var(--you-bg); }
+.nav-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.nav-item .name span { direction: ltr; unicode-bidi: plaintext; }
+.nav-item.viewed .name { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--faint) 50%, transparent); }
+.score {
+  font-size: 10.5px; font-weight: 700; min-width: 26px; text-align: center; border-radius: 5px; padding: 1px 4px;
+}
+.r-critical .score, .score.r-critical { background: var(--crit-bg); color: var(--crit); }
+.r-important .score, .score.r-important { background: var(--high-bg); color: var(--high); }
+.r-normal .score, .score.r-normal { background: var(--low-bg); color: var(--low); }
+.r-low .score, .score.r-low { background: var(--panel-2); color: var(--faint); }
+.dots { display: flex; gap: 2px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; }
+.dot.critical { background: var(--crit); } .dot.high { background: var(--high); } .dot.medium { background: var(--med); } .dot.low { background: var(--low); }
+.dot.done { opacity: .25; }
+.check { width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--border); flex: none; display: grid; place-items: center; font-size: 10px; color: var(--panel); }
+.viewed .check { background: var(--ok); border-color: var(--ok); }
+.brief-icon { width: 15px; height: 15px; border-radius: 4px; flex: none; background: linear-gradient(135deg, var(--ai), var(--you)); }
+.noise-box { margin: 4px 6px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 12px; }
+.noise-box .btn { margin-top: 6px; }
+
+/* ---------- main ---------- */
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+.section { padding: 16px 18px; }
+.section + .section { border-top: 1px solid var(--border); }
+.h-eyebrow { font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.ai-tag { color: var(--ai); font-weight: 650; display: inline-flex; align-items: center; gap: 4px; }
+.ai-tag::before { content: "✦"; }
+.brief-summary { font-size: 15px; line-height: 1.55; margin: 0; }
+.verdict { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border-radius: 10px; background: var(--crit-bg); margin-top: 14px; }
+.verdict-level { font-weight: 700; color: var(--crit); white-space: nowrap; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.chip { border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--muted); background: var(--panel); }
+.chip b { color: var(--text); }
+.path-list { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+.path-list li { counter-increment: step; }
+.path-list button {
+  display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent;
+  padding: 7px 8px; border-radius: 8px;
+}
+.path-list button:hover { background: var(--panel-2); }
+.path-list button::before {
+  content: counter(step); width: 20px; height: 20px; border-radius: 50%; flex: none; display: grid; place-items: center;
+  font-size: 11px; font-weight: 700; background: var(--you-bg); color: var(--you);
+}
+.path-list .why { color: var(--muted); font-size: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.mini-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.mini-list li { display: flex; gap: 8px; font-size: 12.5px; }
+.mini-list .ic { flex: none; width: 18px; text-align: center; }
+.memory { color: var(--ai); }
+.diagram { width: 100%; height: auto; display: block; }
+.diagram .lane-bg { fill: var(--panel-2); }
+.diagram .lane-label { fill: var(--faint); font-size: 10.5px; font-weight: 650; letter-spacing: .06em; }
+.diagram .node rect { stroke-width: 1.5; }
+.diagram .node.added rect { fill: var(--add-bg); stroke: var(--add-sign); }
+.diagram .node.modified rect { fill: var(--med-bg); stroke: var(--med); }
+.diagram .node.unchanged rect { fill: var(--panel); stroke: var(--border); }
+.diagram .node.clickable { cursor: pointer; }
+.diagram .node.clickable:hover rect { filter: brightness(.96); stroke-width: 2.2; }
+.diagram .node-title { fill: var(--text); font-size: 12px; font-weight: 600; }
+.diagram .node-sub { fill: var(--muted); font-size: 10px; }
+.diagram .edge { fill: none; stroke: var(--faint); stroke-width: 1.4; }
+.diagram .edge.added { stroke: var(--add-sign); }
+.diagram .edge.hero { stroke: var(--ai); stroke-width: 2.4; stroke-dasharray: 6 5; animation: flow 1s linear infinite; }
+.diagram .edge-label { fill: var(--muted); font-size: 9.5px; }
+.diagram .badge-c { stroke: var(--panel); stroke-width: 2; }
+.diagram .badge-t { fill: var(--panel); font-size: 9.5px; font-weight: 700; }
+@keyframes flow { to { stroke-dashoffset: -22; } }
+.legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.lg-add::before { background: var(--add-bg); border: 1.5px solid var(--add-sign); }
+.lg-unch::before { background: var(--panel); border: 1.5px solid var(--border); }
+.lg-hero::before { background: var(--ai); height: 3px !important; vertical-align: 3px !important; }
+.lg-find::before { background: var(--crit); border-radius: 50% !important; }
+
+/* file view */
+.file-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); position: sticky; top: -18px; background: var(--panel); border-radius: 12px 12px 0 0; z-index: 2; }
+.file-path { font-family: ui-monospace, Menlo, monospace; font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.risk-label { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.risk-label.r-critical { background: var(--crit-bg); color: var(--crit); }
+.risk-label.r-important { background: var(--high-bg); color: var(--high); }
+.risk-label.r-normal { background: var(--low-bg); color: var(--low); }
+.risk-label.r-low { background: var(--panel-2); color: var(--muted); }
+.file-ai { padding: 12px 16px; background: var(--ai-bg); border-bottom: 1px solid var(--border); display: grid; gap: 4px; font-size: 13px; }
+.file-ai .row { display: flex; gap: 8px; }
+.file-ai .k { color: var(--ai); font-weight: 650; min-width: 92px; }
+.diff { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.6; }
+.hunk-head { background: var(--panel-2); color: var(--muted); padding: 4px 16px; font-size: 12px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.ln { display: grid; grid-template-columns: 44px 44px 18px minmax(0, 1fr); position: relative; }
+.ln .no { color: var(--faint); text-align: right; padding-right: 8px; user-select: none; font-size: 11.5px; }
+.ln .no.new { cursor: pointer; }
+.ln .no.new:hover { color: var(--you); }
+.ln .no.new:hover::after { content: " +"; }
+.ln .sign { color: var(--faint); user-select: none; text-align: center; }
+.ln .src { white-space: pre-wrap; word-break: break-word; color: var(--code); padding-right: 16px; }
+.ln.add { background: var(--add-bg); } .ln.add .sign { color: var(--add-sign); }
+.ln.del { background: var(--del-bg); } .ln.del .sign { color: var(--del-sign); }
+.ln.hot::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.ln.hot-critical::before { background: var(--crit); }
+.ln.hot-high::before { background: var(--high); }
+.ln.hot-medium::before { background: var(--med); }
+.ln.hot-low::before { background: var(--low); }
+.ln.hot-look::before { background: var(--med); }
+.ln.hot-question::before { background: var(--ai); }
+.ln.hot-ok::before { background: var(--ok); }
+.tk-kw { color: var(--tk-kw); } .tk-str { color: var(--tk-str); } .tk-com { color: var(--tk-com); font-style: italic; } .tk-num { color: var(--tk-num); }
+.inline { padding: 8px 16px 10px 106px; font-family: var(--font-ui); font-size: 13px; }
+.flag { display: flex; gap: 8px; align-items: baseline; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; }
+.flag.look { background: var(--med-bg); }
+.flag.question { background: var(--ai-bg); }
+.flag.ok { background: var(--ok-bg); }
+.flag .k { font-weight: 650; white-space: nowrap; }
+.flag.look .k { color: var(--med); } .flag.question .k { color: var(--ai); } .flag.ok .k { color: var(--ok); }
+
+/* AI draft finding */
+.draft { border: 1px solid color-mix(in srgb, var(--ai) 35%, var(--border)); border-left: 4px solid var(--ai); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+.draft.focus { outline: 2px solid var(--you); outline-offset: 2px; }
+.draft-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px 0; font-size: 12px; flex-wrap: wrap; }
+.sev { font-weight: 700; font-size: 11px; padding: 1px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+.sev.critical { background: var(--crit-bg); color: var(--crit); }
+.sev.high { background: var(--high-bg); color: var(--high); }
+.sev.medium { background: var(--med-bg); color: var(--med); }
+.sev.low { background: var(--low-bg); color: var(--low); }
+.conf { color: var(--muted); }
+.draft-title { font-weight: 650; padding: 4px 12px 0; font-size: 13.5px; }
+.draft-body { padding: 4px 12px 0; color: var(--text); }
+.draft-body code, .msg code, .flag code, .chat-a code { background: var(--panel-2); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+.suggestion { margin: 8px 12px 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.suggestion-label { font-size: 11px; color: var(--muted); padding: 3px 10px; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.suggestion .ln { grid-template-columns: 18px minmax(0,1fr); }
+.evidence { margin: 8px 12px 0; font-size: 12px; color: var(--ai); display: flex; gap: 6px; }
+.draft-actions { display: flex; gap: 6px; padding: 10px 12px; align-items: center; flex-wrap: wrap; }
+.draft-actions .spacer { flex: 1; }
+.draft-actions kbd { margin-left: 2px; }
+.draft textarea, .compose textarea, .chat-input textarea, .modal textarea {
+  width: 100%; font: inherit; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--panel); color: var(--text); resize: vertical;
+}
+.draft .edit-area { padding: 8px 12px 0; }
+.dismiss-reasons { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
+.dismiss-reasons .lead { width: 100%; font-size: 12px; color: var(--muted); }
+.mine { border: 1px solid color-mix(in srgb, var(--you) 40%, var(--border)); border-left: 4px solid var(--you); border-radius: 10px; background: var(--panel); padding: 9px 12px; box-shadow: var(--shadow); }
+.mine-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+.avatar { width: 18px; height: 18px; border-radius: 50%; background: var(--you); color: var(--on-you); font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+.pending { color: var(--you); font-weight: 600; }
+.from-ai { color: var(--ai); }
+.collapsed-draft { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); padding: 4px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.compose { border: 1px solid var(--you); border-radius: 10px; padding: 8px; background: var(--panel); }
+.compose-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.noise-card { padding: 28px; text-align: center; color: var(--muted); }
+.noise-card .big { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+.file-foot { display: flex; justify-content: space-between; padding: 12px 16px; border-top: 1px solid var(--border); }
+
+/* ---------- right panel ---------- */
+.tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 8px; flex: none; }
+.tab { border: 0; background: transparent; padding: 11px 12px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab.sel { color: var(--text); border-bottom-color: var(--you); }
+.panel-body { overflow: auto; padding: 12px; flex: 1; min-height: 0; }
+.tally { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+.tally div { border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; }
+.tally b { display: block; font-size: 18px; }
+.tally span { font-size: 11.5px; color: var(--muted); }
+.f-item { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; border: 1px solid var(--border); background: var(--panel); border-radius: 9px; padding: 8px 10px; margin-bottom: 6px; }
+.f-item:hover { border-color: var(--you); }
+.f-item.focus { border-color: var(--you); box-shadow: 0 0 0 2px var(--you-bg); }
+.f-item .t { font-weight: 600; font-size: 12.5px; }
+.f-item .loc { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); }
+.f-item.st-accepted { border-left: 3px solid var(--you); }
+.f-item.st-dismissed { opacity: .5; }
+.f-item.st-dismissed .t { text-decoration: line-through; }
+.st-badge { margin-left: auto; font-size: 10.5px; font-weight: 650; white-space: nowrap; }
+.st-badge.accepted { color: var(--you); } .st-badge.dismissed { color: var(--faint); } .st-badge.draft { color: var(--ai); }
+.sub-h { font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); margin: 14px 2px 6px; }
+.learn { font-size: 12px; color: var(--ai); background: var(--ai-bg); padding: 8px 10px; border-radius: 8px; margin-top: 8px; }
+.chat { display: flex; flex-direction: column; gap: 10px; }
+.chat-q { align-self: flex-end; background: var(--you); color: var(--on-you); border-radius: 12px 12px 3px 12px; padding: 7px 11px; max-width: 88%; }
+.chat-a { align-self: flex-start; background: var(--panel-2); border-radius: 12px 12px 12px 3px; padding: 8px 11px; max-width: 94%; }
+.chat-a .cite { display: inline-block; margin-top: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--you); cursor: pointer; }
+.chat-input { border-top: 1px solid var(--border); padding: 10px 12px; flex: none; }
+.suggest { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.suggest button { border: 1px solid var(--border); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--muted); }
+.suggest button:hover { color: var(--text); border-color: var(--you); }
+.typing { color: var(--muted); font-style: italic; }
+.shortcut-strip { flex: none; border-top: 1px solid var(--border); padding: 8px 12px; font-size: 11.5px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ---------- modal + toast ---------- */
+.overlay { position: fixed; inset: 0; background: rgba(10,10,15,.45); display: grid; place-items: center; z-index: 50; padding: 16px; }
+.modal { background: var(--panel); border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.3); width: min(560px, 100%); max-height: 90vh; overflow: auto; }
+.modal-head { padding: 16px 18px 6px; font-size: 16px; font-weight: 650; display: flex; justify-content: space-between; align-items: center; }
+.modal .section { padding: 12px 18px; }
+.warn { background: var(--med-bg); border-radius: 9px; padding: 9px 12px; font-size: 12.5px; }
+.warn b { color: var(--med); }
+.good { background: var(--ok-bg); border-radius: 9px; padding: 9px 12px; font-size: 12.5px; color: var(--ok); }
+.verdict-opts { display: grid; gap: 6px; }
+.verdict-opts label { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; cursor: pointer; }
+.verdict-opts label:has(input:checked) { border-color: var(--you); background: var(--you-bg); }
+.verdict-opts small { display: block; color: var(--muted); }
+.post-list { margin: 0; padding-left: 18px; font-size: 12.5px; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 16px; }
+.shortcuts-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--panel); padding: 9px 16px; border-radius: 9px; box-shadow: var(--shadow); z-index: 60; font-size: 13px; animation: pop .2s ease-out; }
+@keyframes pop { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+@media (max-width: 1180px) {
+  .body { grid-template-columns: 250px minmax(0, 1fr); }
+  .panel { display: none; }
+}
+@media (max-width: 760px) {
+  .body { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .main { padding: 12px 16px 60px; }
+  .two { grid-template-columns: 1fr; }
+  .inline { padding-left: 16px; }
+  .topbar .hide-sm { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar" id="topbar"></header>
+  <div class="body">
+    <nav class="col sidebar" id="sidebar"></nav>
+    <main class="col main" id="main"></main>
+    <aside class="panel" id="panel"></aside>
+  </div>
+</div>
+<div id="layer"></div>
+
+<script>
+/* =====================================================================
+   Mock data: one PR, as Rocky's analysis pipeline would produce it.
+   In the real product this is the validated "analysis document"
+   (graph + triage + findings) for the PR.
+   ===================================================================== */
+
+const PR = {
+  repo: "acme/rocky-app",
+  number: 847,
+  title: "Team invitations with expiring links",
+  author: "dana-k",
+  base: "main",
+  head: "feat/team-invites",
+  additions: 214,
+  deletions: 3,
+  updated: "12 min ago",
+  url: "https://github.com/acme/rocky-app/pull/847",
+  approvals: ["sam-r"],
+  comments: 4,
+};
+
+const ME = { login: "you", initials: "YO" };
+
+const RISK_ORDER = ["critical", "important", "normal", "low"];
+const RISK_LABEL = { critical: "Critical", important: "Important", normal: "Normal", low: "Low" };
+
+const FILES = [
+  {
+    id: "auth", path: "src/auth/invitations.ts", risk: "critical", score: 97, status: "added",
+    additions: 33, deletions: 0,
+    what: "New createInvitation() and acceptInvitation(). Accepting one adds the user to an org.",
+    why: "New path that grants org membership and sets the member's role.",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,33 @@", lines: [
+      '+import { randomBytes } from "node:crypto";',
+      '+import { db } from "../db";',
+      '+import { addMembership } from "../orgs/memberships";',
+      '+import { enqueue } from "../jobs/queue";',
+      '+import { Gone, NotFound } from "../errors";',
+      '+',
+      '+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;',
+      '+',
+      '+export async function createInvitation(orgId: string, email: string, role: Role, invitedBy: string) {',
+      '+  const token = randomBytes(32).toString("hex");',
+      '+  const invite = await db.invitations.insert({',
+      '+    orgId, email, role, token, invitedBy,',
+      '+    expiresAt: new Date(Date.now() + INVITE_TTL_MS),',
+      '+  });',
+      '+  await enqueue("send-invite-email", { inviteId: invite.id, token });',
+      '+  return invite;',
+      '+}',
+      '+',
+      '+export async function acceptInvitation(token: string, user: User, requestedRole?: Role) {',
+      '+  const invite = await db.invitations.findOne({ token });',
+      '+  if (!invite) throw new NotFound("invitation");',
+      '+',
+      '+  if (invite.expiresAt < new Date()) throw new Gone("invitation expired");',
+      '+',
+      '+  await addMembership({',
+      '+    orgId: invite.orgId,',
+      '+    userId: user.id,',
+      '+    role: requestedRole ?? invite.role,',
+      '+  });',
+      '+',
+      '+  await db.invitations.update(invite.id, { acceptedAt: new Date() });',
+      '+  return invite.orgId;',
+      '+}',
+    ]}],
+    flags: [
+      { line: 10, kind: "ok", text: "Token uses 32 bytes from <code>crypto.randomBytes</code>. That's enough entropy." },
+      { line: 20, kind: "look", text: "Lookup by raw token. That only works because the token is stored in plaintext (see migration finding)." },
+      { line: 27, kind: "question", text: "The invite's email is never compared with <code>user.email</code>, so anyone holding the link can join. That's fine for shareable links but not for invites meant for one person. Which is it?" },
+    ],
+  },
+  {
+    id: "routes", path: "src/api/routes/invitations.ts", risk: "critical", score: 91, status: "added",
+    additions: 22, deletions: 0,
+    what: "Two endpoints: create an invitation for an org, and accept one by token.",
+    why: "Public API surface that touches org permissions.",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,22 @@", lines: [
+      '+import { Router } from "express";',
+      '+import { z } from "zod";',
+      '+import { requireSession } from "../middleware/session";',
+      '+import { createInvitation, acceptInvitation } from "../../auth/invitations";',
+      '+',
+      '+export const invitations = Router();',
+      '+',
+      '+const CreateBody = z.object({',
+      '+  email: z.string().email(),',
+      '+  role: z.enum(["member", "admin"]).default("member"),',
+      '+});',
+      '+',
+      '+invitations.post("/orgs/:orgId/invitations", requireSession, async (req, res) => {',
+      '+  const body = CreateBody.parse(req.body);',
+      '+  const invite = await createInvitation(req.params.orgId, body.email, body.role, req.user.id);',
+      '+  res.status(201).json({ id: invite.id, expiresAt: invite.expiresAt });',
+      '+});',
+      '+',
+      '+invitations.post("/invitations/:token/accept", requireSession, async (req, res) => {',
+      '+  const orgId = await acceptInvitation(req.params.token, req.user, req.body.role);',
+      '+  res.json({ orgId });',
+      '+});',
+    ]}],
+    flags: [
+      { line: 8, kind: "ok", text: "Request body is validated with zod, and the role is limited to <code>member | admin</code>." },
+      { line: 20, kind: "look", text: "This is where <code>req.body.role</code> enters. It's the source of the critical finding in <code>auth/invitations.ts:28</code>." },
+    ],
+  },
+  {
+    id: "migration", path: "db/migrations/20261020_add_invitations.sql", risk: "critical", score: 85, status: "added",
+    additions: 17, deletions: 0,
+    what: "Creates the invitations table, an org index, and the tenant RLS policy.",
+    why: "Schema migration that stores a credential (the invite token).",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,17 @@", lines: [
+      '+CREATE TABLE invitations (',
+      '+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),',
+      '+  org_id      uuid NOT NULL REFERENCES organizations(id),',
+      '+  email       text NOT NULL,',
+      "+  role        text NOT NULL DEFAULT 'member',",
+      '+  token       text NOT NULL,',
+      '+  invited_by  uuid NOT NULL REFERENCES users(id),',
+      '+  expires_at  timestamptz NOT NULL,',
+      '+  accepted_at timestamptz,',
+      '+  created_at  timestamptz NOT NULL DEFAULT now()',
+      '+);',
+      '+',
+      '+CREATE INDEX invitations_org_id_idx ON invitations (org_id);',
+      '+',
+      '+ALTER TABLE invitations ENABLE ROW LEVEL SECURITY;',
+      '+CREATE POLICY tenant_isolation ON invitations',
+      "+  USING (org_id = current_setting('app.org_id')::uuid);",
+    ]}],
+    flags: [
+      { line: 15, kind: "ok", text: "RLS is enabled and the policy matches the team's tenant-isolation convention." },
+    ],
+  },
+  {
+    id: "job", path: "src/jobs/sendInviteEmail.ts", risk: "important", score: 61, status: "added",
+    additions: 16, deletions: 0,
+    what: "Background job that renders and sends the invite email.",
+    why: "Handles personal data (email) and a credential (token).",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,16 @@", lines: [
+      '+import { mailer } from "../email/mailer";',
+      '+import { db } from "../db";',
+      '+import { log } from "../log";',
+      '+',
+      '+export async function sendInviteEmail({ inviteId, token }: { inviteId: string; token: string }) {',
+      '+  const invite = await db.invitations.get(inviteId);',
+      '+  const org = await db.organizations.get(invite.orgId);',
+      '+',
+      '+  log.info(`sending invite to ${invite.email} for ${org.name}`);',
+      '+',
+      '+  await mailer.send({',
+      '+    to: invite.email,',
+      '+    template: "invite",',
+      '+    data: { orgName: org.name, link: `${process.env.APP_URL}/invite/${token}` },',
+      '+  });',
+      '+}',
+    ]}],
+    flags: [
+      { line: 5, kind: "look", text: "The raw token sits in the job payload, which stays in the <code>jobs</code> table until it's processed." },
+    ],
+  },
+  {
+    id: "page", path: "web/src/pages/InvitePage.tsx", risk: "normal", score: 38, status: "added",
+    additions: 23, deletions: 0,
+    what: "Landing page for the invite link with an Accept button.",
+    why: "UI only. It calls the new accept endpoint.",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,23 @@", lines: [
+      '+import { useState } from "react";',
+      '+import { useNavigate, useParams } from "react-router-dom";',
+      '+import { api } from "../lib/api";',
+      '+import { Button, Card } from "../ui";',
+      '+',
+      '+export function InvitePage() {',
+      '+  const { token } = useParams();',
+      '+  const navigate = useNavigate();',
+      '+  const [busy, setBusy] = useState(false);',
+      '+',
+      '+  async function accept() {',
+      '+    setBusy(true);',
+      '+    const res = await api.post(`/invitations/${token}/accept`);',
+      '+    navigate(`/orgs/${res.orgId}`);',
+      '+  }',
+      '+',
+      '+  return (',
+      '+    <Card title="You\'re invited">',
+      '+      <p>Join your team on Rocky to start reviewing.</p>',
+      '+      <Button onClick={accept} loading={busy}>Accept invitation</Button>',
+      '+    </Card>',
+      '+  );',
+      '+}',
+    ]}],
+    flags: [],
+  },
+  {
+    id: "tests", path: "src/auth/invitations.test.ts", risk: "normal", score: 30, status: "added",
+    additions: 20, deletions: 0,
+    what: "Tests for the happy path and for expired invitations.",
+    why: "Covers 2 of the 4 behaviours the AI found in acceptInvitation().",
+    hunks: [{ oldStart: 0, newStart: 1, header: "@@ -0,0 +1,20 @@", lines: [
+      '+import { describe, it, expect, vi } from "vitest";',
+      '+import { acceptInvitation, createInvitation } from "./invitations";',
+      '+import { makeOrg, makeUser } from "../../test/factories";',
+      '+',
+      '+const setup = async () => {',
+      '+  const org = await makeOrg();',
+      '+  const invite = await createInvitation(org.id, "a@b.co", "member", org.ownerId);',
+      '+  return { org, invite, user: await makeUser() };',
+      '+};',
+      '+',
+      '+describe("acceptInvitation", () => {',
+      '+  it("adds the user to the org with the invited role", async () => {',
+      '+    const { org, invite, user } = await setup();',
+      '+    await acceptInvitation(invite.token, user);',
+      '+    expect(await org.roleOf(user.id)).toBe("member");',
+      '+  });',
+      '+',
+      '+  it("rejects expired invitations", async () => { /* … */ });',
+      '+});',
+      '+',
+    ]}],
+    flags: [],
+  },
+  {
+    id: "index", path: "src/api/index.ts", risk: "low", score: 12, status: "modified",
+    additions: 2, deletions: 0,
+    what: "Registers the new router.",
+    why: "Two-line wiring change.",
+    hunks: [
+      { oldStart: 3, newStart: 3, header: "@@ -3,3 +3,4 @@", lines: [
+        ' import { orgs } from "./routes/orgs";',
+        '+import { invitations } from "./routes/invitations";',
+        ' import { health } from "./routes/health";',
+      ]},
+      { oldStart: 18, newStart: 19, header: "@@ -18,4 +19,5 @@", lines: [
+        ' app.use("/api", health);',
+        ' app.use("/api", orgs);',
+        '+app.use("/api", invitations);',
+        ' ',
+        ' export { app };',
+      ]},
+    ],
+    flags: [],
+  },
+];
+
+const NOISE = [
+  { id: "lock", path: "pnpm-lock.yaml", additions: 34, deletions: 3, summary: "One patch bump, <code>zod 4.6.5 → 4.6.6</code>. No new packages, and no install scripts changed." },
+  { id: "gen", path: "src/generated/api-types.ts", additions: 48, deletions: 0, summary: "Types regenerated from <code>openapi.yaml</code> for the two new endpoints. No hand edits found." },
+];
+
+const FINDINGS = [
+  {
+    id: "F1", file: "auth", line: 28, severity: "critical", confidence: 94,
+    title: "Invitee can choose their own role, e.g. admin",
+    body: "<code>requestedRole</code> comes straight from <code>req.body.role</code> and overrides the role the admin invited them with. Anyone with a member invite can send <code>{\"role\":\"admin\"}</code> and join as an admin.",
+    suggestion: { del: ["    role: requestedRole ?? invite.role,"], add: ["    role: invite.role,"] },
+    agentPrompt: "In src/auth/invitations.ts, remove the requestedRole parameter from acceptInvitation and always use invite.role. Update the caller in src/api/routes/invitations.ts and add a test that a member invite cannot be accepted as admin.",
+  },
+  {
+    id: "F2", file: "routes", line: 13, severity: "high", confidence: 90,
+    title: "No permission check: any logged-in user can invite to any org",
+    body: "<code>requireSession</code> only checks that the user is logged in. A user from org A can create invitations, including admin invites, for org B by changing <code>:orgId</code>.",
+    suggestion: { del: ['invitations.post("/orgs/:orgId/invitations", requireSession, async (req, res) => {'], add: ['invitations.post("/orgs/:orgId/invitations", requireSession, requireOrgRole("admin"), async (req, res) => {'] },
+    memory: { text: "Org-scoped routes use requireOrgRole()", source: "convention · PR #598" },
+    agentPrompt: "Add requireOrgRole(\"admin\") to POST /orgs/:orgId/invitations in src/api/routes/invitations.ts and add a test that a non-admin gets 403.",
+  },
+  {
+    id: "F3", file: "auth", line: 23, severity: "high", confidence: 86,
+    title: "Invitations can be reused after they're accepted",
+    body: "<code>acceptedAt</code> gets set but is never checked, so one link can add any number of accounts until it expires.",
+    suggestion: { del: [], add: ['  if (invite.acceptedAt) throw new Gone("invitation already used");'], after: "  if (invite.expiresAt < new Date()) throw new Gone(\"invitation expired\");" },
+    agentPrompt: "In acceptInvitation (src/auth/invitations.ts), reject invitations whose acceptedAt is set, and add a test for reusing an invite.",
+  },
+  {
+    id: "F4", file: "migration", line: 6, severity: "high", confidence: 88,
+    title: "Invite token stored in plaintext",
+    body: "Anyone who can read this table, or a backup of it, can accept any pending invite. Store a SHA-256 hash and look up by the hash.",
+    suggestion: { del: ["  token       text NOT NULL,"], add: ["  token_hash  bytea NOT NULL UNIQUE,"] },
+    memory: { text: "Secrets and tokens are stored hashed, never raw", source: "decision · PR #612" },
+    agentPrompt: "Store invitation tokens hashed: change the column to token_hash bytea UNIQUE, hash with SHA-256 in createInvitation, and look up by hash in acceptInvitation.",
+  },
+  {
+    id: "F5", file: "migration", line: 3, severity: "medium", confidence: 82,
+    title: "Deleting an org won't remove its invitations",
+    body: "Without <code>ON DELETE CASCADE</code>, deleting an org either fails or leaves invitee emails behind. That breaks the org-deletion guarantee in the GDPR erasure path.",
+    suggestion: { del: ["  org_id      uuid NOT NULL REFERENCES organizations(id),"], add: ["  org_id      uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,"] },
+    memory: { text: "Org deletion must cascade to all tenant data", source: "decision · PR #640" },
+    agentPrompt: "Add ON DELETE CASCADE to invitations.org_id in the migration.",
+  },
+  {
+    id: "F6", file: "job", line: 9, severity: "medium", confidence: 91,
+    title: "Logs the invitee's email address",
+    body: "This puts personal data in the logs, which the logging policy doesn't allow. Log IDs instead.",
+    suggestion: { del: ["  log.info(`sending invite to ${invite.email} for ${org.name}`);"], add: ['  log.info("sending invite", { inviteId, orgId: invite.orgId });'] },
+    memory: { text: "Never log emails, tokens or source code", source: "policy · PR #655" },
+    agentPrompt: "In src/jobs/sendInviteEmail.ts, replace the log line so it logs inviteId and orgId instead of the email.",
+  },
+  {
+    id: "F7", file: "routes", line: 19, severity: "medium", confidence: 68,
+    title: "Token in the URL path ends up in access logs",
+    body: "Path parameters get recorded by proxies and access logs. Send the token in the POST body instead: <code>POST /invitations/accept { token }</code>.",
+    agentPrompt: "Move the invitation token from the URL path to the JSON body of the accept endpoint, and update InvitePage.tsx.",
+  },
+  {
+    id: "F8", file: "auth", line: 31, severity: "low", confidence: 57,
+    title: "Membership and acceptedAt aren't written atomically",
+    body: "If the second write fails, the user is a member but the invite still looks open. Wrap both writes in <code>db.transaction()</code>.",
+    agentPrompt: "Wrap addMembership and the invitations update in acceptInvitation in a single db.transaction().",
+  },
+  {
+    id: "F9", file: "page", line: 13, severity: "low", confidence: 79,
+    title: "Expired invite leaves the button spinning",
+    body: "The API returns 410 for expired invites, but there's no catch, so <code>busy</code> stays true and the user sees nothing.",
+    agentPrompt: "Handle errors in InvitePage accept(): reset busy and show a message for 410 (expired) and 404.",
+  },
+  {
+    id: "F10", file: "tests", line: 18, severity: "low", confidence: 84,
+    title: "Missing tests for the two riskiest behaviours",
+    body: "There are no tests for reusing an invite (F3) or overriding the role (F1). Both should fail today.",
+    agentPrompt: "Add tests to src/auth/invitations.test.ts: reusing an accepted invite is rejected, and a member invite cannot be accepted as admin.",
+  },
+];
+
+const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+
+const GRAPH = {
+  lanes: ["WEB", "API", "DATA", "WORKERS"],
+  nodes: [
+    { id: "page", lane: 0, row: 0, title: "InvitePage", sub: "web/src/pages", delta: "added", file: "page" },
+    { id: "route", lane: 1, row: 0, title: "Invitation routes", sub: "POST create · accept", delta: "added", file: "routes" },
+    { id: "auth", lane: 1, row: 1, title: "acceptInvitation()", sub: "src/auth", delta: "added", file: "auth" },
+    { id: "inv", lane: 2, row: 1, title: "invitations", sub: "new table · RLS", delta: "added", file: "migration" },
+    { id: "mem", lane: 2, row: 2, title: "memberships", sub: "existing table", delta: "unchanged" },
+    { id: "job", lane: 3, row: 0, title: "send-invite-email", sub: "src/jobs", delta: "added", file: "job" },
+    { id: "mail", lane: 3, row: 1, title: "Mailer", sub: "Postmark · external", delta: "unchanged" },
+  ],
+  edges: [
+    { from: "page", to: "route", delta: "added", label: "POST /accept" },
+    { from: "route", to: "auth", delta: "added", hero: true },
+    { from: "auth", to: "inv", delta: "added", label: "read token" },
+    { from: "auth", to: "mem", delta: "added", hero: true, label: "grant role" },
+    { from: "auth", to: "job", delta: "added", label: "enqueue" },
+    { from: "job", to: "inv", delta: "added" },
+    { from: "job", to: "mail", delta: "added" },
+  ],
+};
+
+const MEMORY_USED = [
+  { text: "Secrets and tokens are stored hashed", source: "PR #612" },
+  { text: "Org-scoped routes use requireOrgRole()", source: "PR #598" },
+  { text: "Org deletion must cascade", source: "PR #640" },
+  { text: "Never log emails, tokens or code", source: "PR #655" },
+];
+
+const CHECKED_OK = [
+  "Tenant RLS policy on the new table",
+  "Input validated with zod and the role enum restricted",
+  "Tokens are 256-bit and come from a CSPRNG",
+  "No new dependencies (lockfile has only a patch bump)",
+];
+
+const CHAT_SUGGEST = ["Who calls acceptInvitation?", "Is this covered by tests?", "What does an attacker need to exploit F1?", "Summarize for the author"];
+
+/* =====================================================================
+   State
+   ===================================================================== */
+
+const S = {
+  sel: "brief",
+  viewed: new Set(),
+  st: Object.fromEntries(FINDINGS.map(f => [f.id, { s: "draft" }])),
+  comments: [],
+  editing: null,
+  dismissing: null,
+  composing: null,
+  focus: null,
+  tab: "review",
+  chat: [],
+  typing: false,
+  submitted: null,
+  noiseOpen: false,
+};
+
+/* =====================================================================
+   Theme: light/dark, remembered per browser
+   ===================================================================== */
+
+const THEME = (() => {
+  let saved;
+  try { saved = localStorage.getItem("rocky-mode"); } catch {}
+  const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+  return { mode: saved === "light" || saved === "dark" ? saved : systemDark ? "dark" : "light" };
+})();
+
+function applyTheme() {
+  document.documentElement.dataset.mode = THEME.mode;
+  try { localStorage.setItem("rocky-mode", THEME.mode); } catch {}
+}
+
+function setTheme(patch) {
+  Object.assign(THEME, patch);
+  applyTheme();
+  renderAll();
+}
+
+applyTheme();
+
+/* =====================================================================
+   Helpers
+   ===================================================================== */
+
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fileById = id => FILES.find(f => f.id === id);
+const findingsFor = id => FINDINGS.filter(f => f.file === id);
+const navOrder = () => ["brief", ...FILES.map(f => f.id), ...NOISE.map(n => n.id)];
+
+const KW = "import|from|export|const|let|async|await|function|return|if|throw|new|typeof|describe|it|expect|CREATE|TABLE|INDEX|ON|ALTER|ENABLE|ROW|LEVEL|SECURITY|POLICY|USING|PRIMARY|KEY|DEFAULT|NOT|NULL|REFERENCES|UNIQUE|DELETE|CASCADE|true|false";
+const TOKEN_RE = new RegExp(`(\\/\\/.*$|--.*$|\\/\\*.*?\\*\\/)|("(?:[^"\\\\]|\\\\.)*"|'(?:[^'\\\\]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)|\\b(${KW})\\b|\\b(\\d[\\d_]*)\\b`, "g");
+
+function hl(code) {
+  let out = "", last = 0;
+  code.replace(TOKEN_RE, (m, com, str, kw, num, idx) => {
+    out += esc(code.slice(last, idx));
+    const cls = com ? "tk-com" : str ? "tk-str" : kw ? "tk-kw" : "tk-num";
+    out += `<span class="${cls}">${esc(m)}</span>`;
+    last = idx + m.length;
+    return m;
+  });
+  return out + esc(code.slice(last));
+}
+
+function parseHunk(h) {
+  let o = h.oldStart, n = h.newStart;
+  return h.lines.map(raw => {
+    const t = raw[0], text = raw.slice(1);
+    if (t === "+") return { t: "add", o: null, n: n++, text };
+    if (t === "-") return { t: "del", o: o++, n: null, text };
+    return { t: "ctx", o: o++, n: n++, text };
+  });
+}
+
+const counts = () => {
+  const c = { draft: 0, accepted: 0, dismissed: 0 };
+  FINDINGS.forEach(f => c[S.st[f.id].s]++);
+  return c;
+};
+
+const mustReview = () => FILES.filter(f => f.risk === "critical" || f.risk === "important");
+
+function toast(msg) {
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.innerHTML = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2600);
+}
+
+/* =====================================================================
+   Render: top bar
+   ===================================================================== */
+
+function renderTop() {
+  const c = counts();
+  const pending = c.accepted + S.comments.length;
+  const status = S.submitted
+    ? `<span class="status-pill" style="background:var(--${S.submitted === "approve" ? "ok" : S.submitted === "request" ? "crit" : "low"}-bg);color:var(--${S.submitted === "approve" ? "ok" : S.submitted === "request" ? "crit" : "low"})">${S.submitted === "approve" ? "Approved" : S.submitted === "request" ? "Changes requested" : "Commented"}</span>`
+    : `<span class="status-pill">Open</span>`;
+  $("#topbar").innerHTML = `
+    <div class="brand"><div class="brand-mark"></div><span class="hide-sm">Rocky Reviews</span></div>
+    <div class="pr-meta">
+      <div class="pr-title">${esc(PR.title)} <span style="color:var(--faint);font-weight:400">#${PR.number}</span></div>
+      <div class="pr-sub">
+        ${status}
+        <span>${esc(PR.repo)}</span>
+        <span class="hide-sm">@${esc(PR.author)} wants to merge <span class="branch">${PR.head}</span> → <span class="branch">${PR.base}</span></span>
+        <span><span class="add">+${PR.additions}</span> <span class="del">−${PR.deletions}</span> · ${FILES.length + NOISE.length} files</span>
+        <span class="hide-sm">updated ${PR.updated}</span>
+        <span class="gh-stat" title="Approved by ${PR.approvals.map(a => "@" + a).join(", ")}">✓ ${PR.approvals.length} approval${PR.approvals.length === 1 ? "" : "s"}</span>
+        <span class="gh-stat">💬 ${PR.comments} comments</span>
+        <a class="gh-link" href="${PR.url}" target="_blank" rel="noopener">View on GitHub ↗</a>
+      </div>
+    </div>
+    <button class="mode-btn" data-act="mode" title="Switch to ${THEME.mode === "dark" ? "light" : "dark"} mode (m)">${THEME.mode === "dark" ? "☀" : "☾"}</button>
+    <button class="btn btn-ghost btn-sm hide-sm" data-act="help"><kbd>?</kbd> Shortcuts</button>
+    <button class="btn btn-primary" data-act="finish">Finish review <span class="count">${pending}</span></button>`;
+}
+
+/* =====================================================================
+   Render: sidebar (triaged file list)
+   ===================================================================== */
+
+function renderSidebar() {
+  const must = mustReview();
+  const done = must.filter(f => S.viewed.has(f.id)).length;
+  const pct = Math.round(done / must.length * 100);
+  const mins = Math.max(1, Math.round(must.filter(f => !S.viewed.has(f.id)).reduce((a, f) => a + f.additions, 0) / 14));
+
+  let html = `
+    <div class="coverage">
+      <div class="coverage-top"><span>Critical + Important reviewed</span><b>${done}/${must.length}</b></div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      <div class="coverage-note">${done === must.length ? "All high-risk files reviewed ✓" : `About ${mins} min of high-risk code left`}</div>
+    </div>
+    <button class="nav-item ${S.sel === "brief" ? "sel" : ""}" data-act="go" data-id="brief">
+      <span class="brief-icon"></span><span class="name"><span>Briefing &amp; change map</span></span>
+    </button>`;
+
+  for (const risk of RISK_ORDER) {
+    const files = FILES.filter(f => f.risk === risk);
+    if (!files.length) continue;
+    html += `<div class="group-label"><span>${RISK_LABEL[risk]}</span><span>${files.length}</span></div>`;
+    for (const f of files) {
+      const fs = findingsFor(f.id).sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+      html += `
+        <button class="nav-item r-${f.risk} ${S.sel === f.id ? "sel" : ""} ${S.viewed.has(f.id) ? "viewed" : ""}" data-act="go" data-id="${f.id}" title="${esc(f.path)}">
+          <span class="check" data-act="toggle-viewed" data-id="${f.id}">${S.viewed.has(f.id) ? "✓" : ""}</span>
+          <span class="name"><span>${esc(f.path)}</span></span>
+          <span class="dots">${fs.map(x => `<span class="dot ${x.severity} ${S.st[x.id].s !== "draft" ? "done" : ""}"></span>`).join("")}</span>
+          <span class="score">${f.score}</span>
+        </button>`;
+    }
+  }
+
+  const noiseViewed = NOISE.every(n => S.viewed.has(n.id));
+  html += `<div class="group-label"><span>Noise · auto-summarized</span><span>${NOISE.length}</span></div>`;
+  if (S.noiseOpen || noiseViewed) {
+    for (const n of NOISE) {
+      html += `
+        <button class="nav-item r-low ${S.sel === n.id ? "sel" : ""} ${S.viewed.has(n.id) ? "viewed" : ""}" data-act="go" data-id="${n.id}">
+          <span class="check" data-act="toggle-viewed" data-id="${n.id}">${S.viewed.has(n.id) ? "✓" : ""}</span>
+          <span class="name"><span>${esc(n.path)}</span></span>
+        </button>`;
+    }
+  } else {
+    html += `
+      <div class="noise-box">
+        Lockfile + generated types (${NOISE.reduce((a, n) => a + n.additions, 0)} lines). The AI found nothing unusual.
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" data-act="trust-noise">Trust &amp; mark viewed</button>
+          <button class="btn btn-sm btn-ghost" data-act="open-noise">Show</button>
+        </div>
+      </div>`;
+  }
+  $("#sidebar").innerHTML = html;
+}
+
+/* =====================================================================
+   Render: main — briefing
+   ===================================================================== */
+
+function renderDiagram() {
+  const LW = 184, GAP = 12, PAD = 8, NW = 156, NH = 44, TOP = 34, RH = 72;
+  const W = PAD * 2 + LW * 4 + GAP * 3, H = TOP + RH * 3 + 4;
+  const laneX = l => PAD + l * (LW + GAP);
+  const pos = {};
+  GRAPH.nodes.forEach(n => {
+    const x = laneX(n.lane) + (LW - NW) / 2, y = TOP + n.row * RH + 6;
+    pos[n.id] = { x, y, cx: x + NW / 2, cy: y + NH / 2, n };
+  });
+
+  let svg = `<svg class="diagram" viewBox="0 0 ${W} ${H}" role="img" aria-label="Change map">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--faint)"/></marker>
+      <marker id="arr-add" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--add-sign)"/></marker>
+      <marker id="arr-hero" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ai)"/></marker>
+    </defs>`;
+  GRAPH.lanes.forEach((l, i) => {
+    svg += `<rect class="lane-bg" x="${laneX(i)}" y="0" width="${LW}" height="${H}" rx="10"/>
+      <text class="lane-label" x="${laneX(i) + 12}" y="20">${l}</text>`;
+  });
+
+  for (const e of GRAPH.edges) {
+    const a = pos[e.from], b = pos[e.to];
+    let d, lx, ly;
+    if (a.n.lane === b.n.lane) {
+      const down = b.y > a.y;
+      const y1 = down ? a.y + NH : a.y, y2 = down ? b.y : b.y + NH;
+      d = `M${a.cx},${y1} L${b.cx},${y2}`;
+      lx = a.cx + 6; ly = (y1 + y2) / 2 + 3;
+    } else {
+      const fwd = b.n.lane > a.n.lane;
+      const x1 = fwd ? a.x + NW : a.x, x2 = fwd ? b.x : b.x + NW;
+      const mid = (x1 + x2) / 2;
+      d = `M${x1},${a.cy} C${mid},${a.cy} ${mid},${b.cy} ${x2},${b.cy}`;
+      lx = mid; ly = (a.cy + b.cy) / 2 - 5;
+    }
+    const cls = e.hero ? "edge hero" : `edge ${e.delta}`;
+    const marker = e.hero ? "arr-hero" : e.delta === "added" ? "arr-add" : "arr";
+    svg += `<path class="${cls}" d="${d}" marker-end="url(#${marker})"/>`;
+    if (e.label) svg += `<text class="edge-label" x="${lx}" y="${ly}" text-anchor="${a.n.lane === b.n.lane ? "start" : "middle"}">${esc(e.label)}</text>`;
+  }
+
+  for (const id in pos) {
+    const { x, y, n } = pos[id];
+    const fs = n.file ? findingsFor(n.file).filter(f => S.st[f.id].s !== "dismissed") : [];
+    const worst = fs.sort((p, q) => SEV_ORDER[p.severity] - SEV_ORDER[q.severity])[0];
+    const color = worst ? { critical: "var(--crit)", high: "var(--high)", medium: "var(--med)", low: "var(--low)" }[worst.severity] : null;
+    svg += `<g class="node ${n.delta} ${n.file ? "clickable" : ""}" ${n.file ? `data-act="go" data-id="${n.file}"` : ""}>
+      <title>${esc(n.title)}${n.file ? " · click to open" : " · unchanged"}</title>
+      <rect x="${x}" y="${y}" width="${NW}" height="${NH}" rx="8"/>
+      <text class="node-title" x="${x + 10}" y="${y + 19}">${esc(n.title)}</text>
+      <text class="node-sub" x="${x + 10}" y="${y + 34}">${esc(n.sub)}</text>
+      ${worst ? `<circle class="badge-c" cx="${x + NW - 2}" cy="${y + 2}" r="9" fill="${color}"/><text class="badge-t" x="${x + NW - 2}" y="${y + 5.5}" text-anchor="middle">${fs.length}</text>` : ""}
+    </g>`;
+  }
+  return svg + "</svg>";
+}
+
+function renderRiskTable() {
+  const fileBtn = f => `<button data-act="go" data-id="${f.id}">${esc(f.path.split("/").pop())}</button>`;
+  const plural = n => `${n} file${n === 1 ? "" : "s"}`;
+  const ignore = [...FILES.filter(f => f.risk === "low"), ...NOISE];
+  const rows = [
+    { cls: "r-critical", label: "Critical", files: FILES.filter(f => f.risk === "critical"), text: n => `${plural(n)} need${n === 1 ? "s" : ""} your attention` },
+    { cls: "r-important", label: "Important", files: FILES.filter(f => f.risk === "important"), text: n => `${plural(n)} worth a careful look` },
+    { cls: "r-normal", label: "Normal", files: FILES.filter(f => f.risk === "normal"), text: n => `${plural(n)} to skim` },
+    { cls: "r-low", label: "Ignore", files: ignore, text: n => `${plural(n)} don't matter` },
+  ];
+  return `<table class="risk-table">${rows.map(r => `
+    <tr>
+      <td class="n"><span class="risk-label ${r.cls}">${r.label}</span></td>
+      <td class="n"><b>${r.text(r.files.length)}</b></td>
+      <td class="files">${r.files.map(fileBtn).join(", ")}</td>
+    </tr>`).join("")}
+  </table>`;
+}
+
+function renderBrief() {
+  const crit = FINDINGS.filter(f => f.severity === "critical").length;
+  const high = FINDINGS.filter(f => f.severity === "high").length;
+  const path = FILES.filter(f => f.risk === "critical" || f.risk === "important");
+  return `
+  <div class="card">
+    <div class="section">
+      <div class="h-eyebrow"><span class="ai-tag">AI briefing</span> · est. ~7 min review</div>
+      <p class="brief-summary">Adds <b>email invitations to orgs</b>. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.</p>
+      <div class="verdict">
+        <div class="verdict-level">High risk</div>
+        <div>This PR adds a <b>new way to gain membership in an org</b>. Rocky drafted ${crit} critical and ${high} high findings, all on the auth path. The UI and wiring look routine.</div>
+      </div>
+      ${renderRiskTable()}
+    </div>
+    <div class="section">
+      <div class="h-eyebrow">Change map <span style="font-weight:400;text-transform:none;letter-spacing:0">· click a card to open its file</span></div>
+      ${renderDiagram()}
+      <div class="legend"><span class="lg-add">New in this PR</span><span class="lg-unch">Existing, untouched</span><span class="lg-hero">Where the change matters</span><span class="lg-find">Open findings</span></div>
+    </div>
+    <div class="section">
+      <div class="h-eyebrow">Suggested review path</div>
+      <ol class="path-list">
+        ${path.map(f => `<li><button data-act="go" data-id="${f.id}"><span style="flex:1;min-width:0"><code>${esc(f.path)}</code><div class="why">${esc(f.why)}</div></span><span class="score r-${f.risk}">${f.score}</span></button></li>`).join("")}
+      </ol>
+    </div>
+    <div class="section two">
+      <div>
+        <div class="h-eyebrow">Project memory applied</div>
+        <ul class="mini-list">${MEMORY_USED.map(m => `<li><span class="ic memory">◆</span><span>${esc(m.text)} <span style="color:var(--faint)">· ${m.source}</span></span></li>`).join("")}</ul>
+      </div>
+      <div>
+        <div class="h-eyebrow">AI checked, looks fine</div>
+        <ul class="mini-list">${CHECKED_OK.map(t => `<li><span class="ic" style="color:var(--ok)">✓</span><span>${esc(t)}</span></li>`).join("")}</ul>
+      </div>
+    </div>
+  </div>
+  <div style="text-align:center;margin-top:16px">
+    <button class="btn btn-primary" data-act="go" data-id="${path[0].id}">Start with the riskiest file <kbd class="kbd-on">k</kbd></button>
+  </div>`;
+}
+
+/* =====================================================================
+   Render: main — file diff with inline AI
+   ===================================================================== */
+
+function renderSuggestion(f) {
+  const s = f.suggestion;
+  if (!s) return "";
+  const rows = [];
+  if (s.after) rows.push(`<div class="ln"><span class="sign"> </span><span class="src">${hl(s.after)}</span></div>`);
+  s.del.forEach(l => rows.push(`<div class="ln del"><span class="sign">−</span><span class="src">${hl(l)}</span></div>`));
+  s.add.forEach(l => rows.push(`<div class="ln add"><span class="sign">+</span><span class="src">${hl(l)}</span></div>`));
+  return `<div class="suggestion"><div class="suggestion-label">Suggested change</div><div class="diff">${rows.join("")}</div></div>`;
+}
+
+function renderFinding(f) {
+  const st = S.st[f.id];
+  const focus = S.focus === f.id ? "focus" : "";
+  if (st.s === "dismissed") {
+    return `<div class="collapsed-draft" id="f-${f.id}"><span class="ai-tag">AI draft</span> dismissed · ${esc(f.title)} <span style="color:var(--faint)">(${esc(st.reason)})</span><span style="flex:1"></span><button class="btn btn-sm btn-ghost" data-act="undo" data-id="${f.id}">Undo</button></div>`;
+  }
+  if (st.s === "accepted") {
+    return `<div class="mine ${focus}" id="f-${f.id}">
+      <div class="mine-head"><span class="avatar">${ME.initials}</span><b style="color:var(--text)">@${ME.login}</b><span class="pending">Pending</span><span class="from-ai">· ${st.edited ? "edited from" : "from"} AI draft</span><span style="flex:1"></span><button class="btn btn-sm btn-ghost" data-act="undo" data-id="${f.id}">Undo</button></div>
+      <div><b>${esc(f.title)}</b></div>
+      <div>${st.body ?? f.body}</div>
+      ${renderSuggestion(f).replace('class="suggestion"', 'class="suggestion" style="margin:8px 0 0"')}
+    </div>`;
+  }
+  const editing = S.editing === f.id;
+  const dismissing = S.dismissing === f.id;
+  return `<div class="draft ${focus}" id="f-${f.id}">
+    <div class="draft-head"><span class="ai-tag">AI draft</span><span class="sev ${f.severity}">${f.severity}</span><span class="conf">${f.confidence}% confident</span><span style="flex:1"></span><span style="color:var(--faint);font-size:11px">Only you can see this until you accept it</span></div>
+    <div class="draft-title">${esc(f.title)}</div>
+    ${editing
+      ? `<div class="edit-area"><textarea id="edit-${f.id}" rows="4">${esc(f.body.replace(/<\/?code>/g, "`"))}</textarea></div>`
+      : `<div class="draft-body">${f.body}</div>`}
+    ${renderSuggestion(f)}
+    ${f.memory ? `<div class="evidence"><span>◆</span><span>Project memory: <b>${esc(f.memory.text)}</b> <span style="color:var(--faint)">· ${esc(f.memory.source)}</span></span></div>` : ""}
+    ${dismissing ? `
+      <div class="draft-actions" style="padding-bottom:6px"></div>
+      <div class="dismiss-reasons"><span class="lead">Why? Rocky learns from this for future reviews.</span>
+        ${["Not a real issue", "Intentional", "Not worth it here", "Already handled elsewhere"].map(r => `<button class="btn btn-sm" data-act="dismiss-reason" data-id="${f.id}" data-reason="${r}">${r}</button>`).join("")}
+        <button class="btn btn-sm btn-ghost" data-act="cancel" data-id="${f.id}">Cancel</button>
+      </div>`
+    : editing ? `
+      <div class="draft-actions"><button class="btn btn-sm btn-primary" data-act="save-edit" data-id="${f.id}">Save as my comment</button><button class="btn btn-sm btn-ghost" data-act="cancel" data-id="${f.id}">Cancel</button></div>`
+    : `
+      <div class="draft-actions">
+        <button class="btn btn-sm btn-primary" data-act="accept" data-id="${f.id}">Accept <kbd class="kbd-on">a</kbd></button>
+        <button class="btn btn-sm" data-act="edit" data-id="${f.id}">Edit <kbd>e</kbd></button>
+        <button class="btn btn-sm" data-act="dismiss" data-id="${f.id}">Dismiss <kbd>d</kbd></button>
+        <span class="spacer"></span>
+        <button class="btn btn-sm btn-ai" data-act="agent" data-id="${f.id}">Send to agent ↗</button>
+      </div>`}
+  </div>`;
+}
+
+function renderFile(f) {
+  const fs = findingsFor(f.id);
+  const hot = {};
+  f.flags.forEach(x => hot[x.line] = hot[x.line] || x.kind);
+  fs.forEach(x => { if (S.st[x.id].s !== "dismissed") hot[x.line] = x.severity; });
+
+  let rows = "";
+  for (const h of f.hunks) {
+    rows += `<div class="hunk-head">${esc(h.header)}</div>`;
+    for (const l of parseHunk(h)) {
+      const hk = l.n != null && hot[l.n] ? `hot hot-${hot[l.n]}` : "";
+      rows += `<div class="ln ${l.t} ${hk}" ${l.n != null ? `id="L-${f.id}-${l.n}"` : ""}>
+        <span class="no">${l.o ?? ""}</span>
+        <span class="no ${l.n != null ? "new" : ""}" ${l.n != null ? `data-act="compose" data-line="${l.n}" title="Add a comment"` : ""}>${l.n ?? ""}</span>
+        <span class="sign">${l.t === "add" ? "+" : l.t === "del" ? "−" : " "}</span>
+        <span class="src">${hl(l.text) || " "}</span>
+      </div>`;
+      if (l.n == null) continue;
+      const inl = [];
+      f.flags.filter(x => x.line === l.n).forEach(x => {
+        const k = { look: "Look here", question: "Your call", ok: "Checked" }[x.kind];
+        inl.push(`<div class="flag ${x.kind}"><span class="k">${x.kind === "ok" ? "✓" : "✦"} ${k}</span><span>${x.text}</span></div>`);
+      });
+      fs.filter(x => x.line === l.n).forEach(x => inl.push(renderFinding(x)));
+      S.comments.filter(c => c.file === f.id && c.line === l.n).forEach((c, i) => inl.push(`
+        <div class="mine"><div class="mine-head"><span class="avatar">${ME.initials}</span><b style="color:var(--text)">@${ME.login}</b><span class="pending">Pending</span><span style="flex:1"></span><button class="btn btn-sm btn-ghost" data-act="del-comment" data-idx="${S.comments.indexOf(c)}">Delete</button></div><div>${esc(c.body)}</div></div>`));
+      if (S.composing && S.composing.file === f.id && S.composing.line === l.n) inl.push(`
+        <div class="compose"><textarea id="compose-box" rows="3" placeholder="Leave a comment on line ${l.n}…"></textarea>
+          <div class="compose-actions"><button class="btn btn-sm btn-ai" data-act="ai-polish">✦ Polish with AI</button><span style="flex:1"></span><button class="btn btn-sm btn-ghost" data-act="cancel-compose">Cancel</button><button class="btn btn-sm btn-primary" data-act="save-comment">Add comment</button></div></div>`);
+      if (inl.length) rows += `<div class="inline" style="display:grid;gap:8px">${inl.join("")}</div>`;
+    }
+  }
+
+  const order = navOrder();
+  const next = order[order.indexOf(f.id) + 1];
+  const viewed = S.viewed.has(f.id);
+  return `
+  <div class="card">
+    <div class="file-head">
+      <span class="risk-label r-${f.risk}">${RISK_LABEL[f.risk]} · ${f.score}</span>
+      <span class="file-path" title="${esc(f.path)}">${esc(f.path)}</span>
+      <span style="font-size:12px"><span style="color:var(--add-sign)">+${f.additions}</span> <span style="color:var(--del-sign)">−${f.deletions}</span></span>
+      <button class="btn btn-sm ${viewed ? "" : "btn-primary"}" data-act="toggle-viewed" data-id="${f.id}">${viewed ? "✓ Viewed" : "Mark viewed"} <kbd ${viewed ? "" : 'class="kbd-on"'}>v</kbd></button>
+    </div>
+    <div class="file-ai">
+      <div class="row"><span class="k">✦ What changed</span><span>${esc(f.what)}</span></div>
+      <div class="row"><span class="k">✦ Why ${RISK_LABEL[f.risk].toLowerCase()}</span><span>${esc(f.why)}</span></div>
+      ${fs.length ? `<div class="row"><span class="k">✦ Drafts</span><span>${fs.length} finding${fs.length > 1 ? "s" : ""} on this file. Accept, edit or dismiss each one inline.</span></div>` : ""}
+    </div>
+    <div class="diff">${rows}</div>
+    <div class="file-foot">
+      <span style="color:var(--muted);font-size:12px">Click a line number to add your own comment</span>
+      ${next ? `<button class="btn btn-sm" data-act="viewed-next" data-id="${f.id}">${viewed ? "Next file" : "Mark viewed & next"} →</button>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderNoise(n) {
+  const viewed = S.viewed.has(n.id);
+  return `<div class="card">
+    <div class="file-head"><span class="risk-label r-low">Noise</span><span class="file-path">${esc(n.path)}</span>
+      <button class="btn btn-sm" data-act="toggle-viewed" data-id="${n.id}">${viewed ? "✓ Viewed" : "Mark viewed"}</button></div>
+    <div class="noise-card">
+      <div class="big"><span class="ai-tag">AI summary</span></div>
+      <div style="color:var(--text);max-width:480px;margin:0 auto">${n.summary}</div>
+      <div style="margin-top:14px"><button class="btn btn-sm btn-ghost" data-act="toast" data-msg="Prototype: the raw diff (${n.additions} lines) would expand here.">Show raw diff (+${n.additions} −${n.deletions})</button></div>
+    </div>
+  </div>`;
+}
+
+function renderMain() {
+  const main = $("#main");
+  const f = fileById(S.sel);
+  const n = NOISE.find(x => x.id === S.sel);
+  main.innerHTML = S.sel === "brief" ? renderBrief() : f ? renderFile(f) : renderNoise(n);
+}
+
+/* =====================================================================
+   Render: right panel (review drafts + ask)
+   ===================================================================== */
+
+function renderPanel() {
+  const c = counts();
+  let body = "";
+  if (S.tab === "review") {
+    const sorted = [...FINDINGS].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+    const item = f => {
+      const st = S.st[f.id].s;
+      const file = fileById(f.file);
+      return `<button class="f-item st-${st} ${S.focus === f.id ? "focus" : ""}" data-act="jump" data-id="${f.id}">
+        <span class="dot ${f.severity}" style="margin-top:5px;flex:none"></span>
+        <span style="min-width:0"><div class="t">${esc(f.title)}</div><div class="loc">${esc(file.path.split("/").pop())}:${f.line}</div></span>
+        <span class="st-badge ${st}">${st === "draft" ? "✦ draft" : st === "accepted" ? "yours" : "dismissed"}</span>
+      </button>`;
+    };
+    const drafts = sorted.filter(f => S.st[f.id].s === "draft");
+    const decided = sorted.filter(f => S.st[f.id].s !== "draft");
+    const learned = FINDINGS.filter(f => S.st[f.id].s === "dismissed");
+    body = `
+      <div class="tally">
+        <div><b style="color:var(--ai)">${c.draft}</b><span>AI drafts to decide</span></div>
+        <div><b style="color:var(--you)">${c.accepted + S.comments.length}</b><span>Your comments</span></div>
+        <div><b style="color:var(--faint)">${c.dismissed}</b><span>Dismissed</span></div>
+      </div>
+      ${drafts.length ? `<div class="sub-h">To decide · by severity</div>${drafts.map(item).join("")}` : `<div class="good">✓ Every AI draft has a decision.</div>`}
+      ${decided.length ? `<div class="sub-h">Decided</div>${decided.map(item).join("")}` : ""}
+      ${learned.length ? `<div class="learn">◆ Rocky will remember ${learned.length} dismissal${learned.length > 1 ? "s" : ""} for future reviews of this repo. You can manage this in Project memory.</div>` : ""}
+      ${S.comments.length ? `<div class="sub-h">Your own comments</div>${S.comments.map(cm => `<button class="f-item st-accepted" data-act="go-line" data-id="${cm.file}" data-line="${cm.line}"><span style="min-width:0"><div class="t">${esc(cm.body.slice(0, 70))}</div><div class="loc">${esc(fileById(cm.file).path.split("/").pop())}:${cm.line}</div></span></button>`).join("")}` : ""}
+    `;
+  } else {
+    body = `<div class="chat">
+      ${S.chat.length ? "" : `<div style="color:var(--muted);font-size:12.5px">Ask about this PR. Answers come from the diff and the indexed repo, with links to the code. Select code in the diff and press <kbd>/</kbd> to ask about it.</div>`}
+      ${S.chat.map(m => m.q ? `<div class="chat-q">${esc(m.q)}</div>` : `<div class="chat-a">${m.a}</div>`).join("")}
+      ${S.typing ? `<div class="chat-a typing">Reading the code…</div>` : ""}
+    </div>`;
+  }
+  $("#panel").innerHTML = `
+    <div class="tabs">
+      <button class="tab ${S.tab === "review" ? "sel" : ""}" data-act="tab" data-id="review">Review <span style="color:var(--ai)">${c.draft ? `· ${c.draft}` : ""}</span></button>
+      <button class="tab ${S.tab === "ask" ? "sel" : ""}" data-act="tab" data-id="ask">✦ Ask</button>
+    </div>
+    <div class="panel-body" id="panel-body">${body}</div>
+    ${S.tab === "ask" ? `
+      <div class="chat-input">
+        <div class="suggest">${CHAT_SUGGEST.map(q => `<button data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join("")}</div>
+        <textarea id="chat-box" rows="2" placeholder="Ask anything about this change…  (Enter to send)"></textarea>
+      </div>` : `
+      <div class="shortcut-strip"><span><kbd>k</kbd>/<kbd>j</kbd> next/prev file</span><span><kbd>n</kbd>/<kbd>p</kbd> drafts</span><span><kbd>a</kbd> accept</span><span><kbd>e</kbd> edit</span><span><kbd>d</kbd> dismiss</span><span><kbd>v</kbd> viewed</span><span><kbd>/</kbd> ask</span></div>`}`;
+  const pb = $("#panel-body");
+  if (S.tab === "ask") pb.scrollTop = pb.scrollHeight;
+}
+
+function renderAll() {
+  renderTop();
+  renderSidebar();
+  renderMain();
+  renderPanel();
+}
+
+/* =====================================================================
+   Modals
+   ===================================================================== */
+
+function openFinish() {
+  const c = counts();
+  const unreviewed = mustReview().filter(f => !S.viewed.has(f.id));
+  const posts = [
+    ...FINDINGS.filter(f => S.st[f.id].s === "accepted").map(f => `${esc(f.title)} <span style="color:var(--faint)">· ${esc(fileById(f.file).path.split("/").pop())}:${f.line}</span>`),
+    ...S.comments.map(cm => `${esc(cm.body.slice(0, 60))} <span style="color:var(--faint)">· ${esc(fileById(cm.file).path.split("/").pop())}:${cm.line}</span>`),
+  ];
+  const serious = FINDINGS.some(f => S.st[f.id].s === "accepted" && SEV_ORDER[f.severity] <= 1);
+  $("#layer").innerHTML = `
+  <div class="overlay" data-act="close-modal">
+    <div class="modal" data-stop>
+      <div class="modal-head">Finish your review <button class="btn btn-sm btn-ghost" data-act="close-modal">✕</button></div>
+      <div class="section" style="display:grid;gap:8px">
+        ${unreviewed.length
+          ? `<div class="warn"><b>${unreviewed.length} high-risk file${unreviewed.length > 1 ? "s" : ""} not marked viewed:</b> ${unreviewed.map(f => `<code>${esc(f.path.split("/").pop())}</code>`).join(", ")}</div>`
+          : `<div class="good">✓ You reviewed every Critical and Important file.</div>`}
+        ${c.draft ? `<div class="warn"><b>${c.draft} AI draft${c.draft > 1 ? "s" : ""} still undecided.</b> They won't be posted. Only what you accepted goes out.</div>` : ""}
+      </div>
+      <div class="section">
+        <div class="h-eyebrow">Will be posted to GitHub as @${ME.login} (${posts.length})</div>
+        ${posts.length ? `<ol class="post-list">${posts.map(p => `<li>${p}</li>`).join("")}</ol>` : `<div style="color:var(--muted);font-size:12.5px">No inline comments.</div>`}
+      </div>
+      <div class="section">
+        <textarea id="summary-box" rows="3" placeholder="Overall comment (optional)"></textarea>
+        <div style="margin-top:6px"><button class="btn btn-sm btn-ai" data-act="ai-summary">✦ Draft a summary from my comments</button></div>
+      </div>
+      <div class="section verdict-opts">
+        <label><input type="radio" name="verdict" value="comment" ${!serious && !posts.length ? "" : ""}> <span><b>Comment</b><small>General feedback, no explicit approval.</small></span></label>
+        <label><input type="radio" name="verdict" value="approve" ${!serious ? "checked" : ""}> <span><b>Approve</b><small>Ready to merge.</small></span></label>
+        <label><input type="radio" name="verdict" value="request" ${serious ? "checked" : ""}> <span><b>Request changes</b><small>${serious ? "Suggested because you accepted a critical or high finding." : "Must be addressed before merging."}</small></span></label>
+      </div>
+      <div class="modal-foot"><button class="btn" data-act="close-modal">Keep reviewing</button><button class="btn btn-primary" data-act="submit">Submit review</button></div>
+    </div>
+  </div>`;
+}
+
+function openHelp() {
+  const rows = [["k / j", "Next / previous file (in risk order)"], ["n / p", "Next / previous AI draft"], ["a", "Accept focused draft as your comment"], ["e", "Edit focused draft"], ["d", "Dismiss focused draft"], ["v", "Toggle viewed on current file"], ["/", "Ask about the PR (uses selected code)"], ["b", "Back to briefing"], ["m", "Toggle light / dark"], ["⌘ ↵", "Finish review"], ["Esc", "Close / cancel"]];
+  $("#layer").innerHTML = `
+  <div class="overlay" data-act="close-modal">
+    <div class="modal" data-stop style="width:min(440px,100%)">
+      <div class="modal-head">Keyboard shortcuts <button class="btn btn-sm btn-ghost" data-act="close-modal">✕</button></div>
+      <div class="section shortcuts-grid">${rows.map(([k, v]) => `<span>${k.split(" ").map(x => x === "/" && k !== "/" ? " / " : `<kbd>${x}</kbd>`).join("")}</span><span>${v}</span>`).join("")}</div>
+    </div>
+  </div>`;
+}
+
+const closeModal = () => { $("#layer").innerHTML = ""; };
+
+/* =====================================================================
+   Actions
+   ===================================================================== */
+
+function go(id, opts = {}) {
+  S.sel = id;
+  S.composing = null;
+  renderAll();
+  if (!opts.keepScroll) $("#main").scrollTop = 0;
+}
+
+function jumpTo(fid) {
+  const f = FINDINGS.find(x => x.id === fid);
+  S.focus = fid;
+  if (S.sel !== f.file) S.sel = f.file;
+  renderAll();
+  requestAnimationFrame(() => document.getElementById(`f-${fid}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+}
+
+function cycleFinding(dir) {
+  const list = [...FINDINGS].sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity]);
+  const drafts = list.filter(f => S.st[f.id].s === "draft");
+  const pool = drafts.length ? drafts : list;
+  let i = pool.findIndex(f => f.id === S.focus);
+  i = i === -1 ? (dir > 0 ? 0 : pool.length - 1) : (i + dir + pool.length) % pool.length;
+  jumpTo(pool[i].id);
+}
+
+function setStatus(id, patch) {
+  S.st[id] = { ...S.st[id], ...patch };
+  S.editing = null;
+  S.dismissing = null;
+  renderAll();
+  requestAnimationFrame(() => document.getElementById(`f-${id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+}
+
+function cycleFile(dir) {
+  const order = navOrder();
+  const i = order.indexOf(S.sel);
+  const next = order[Math.min(order.length - 1, Math.max(0, i + dir))];
+  if (NOISE.some(n => n.id === next)) S.noiseOpen = true;
+  go(next);
+}
+
+const ANSWERS = [
+  { m: /who calls|callers?/i, a: 'Only one caller: <code>POST /invitations/:token/accept</code>. Nothing else in the repo index calls <code>acceptInvitation</code>.<br><span class="cite" data-act="go-line" data-id="routes" data-line="20">src/api/routes/invitations.ts:20</span>' },
+  { m: /test|cover/i, a: 'Partly. The happy path and expiry are tested. <b>Not tested:</b> reusing an accepted invite (F3), role override (F1), and the permission check on create (F2). All three would fail today.<br><span class="cite" data-act="go-line" data-id="tests" data-line="12">src/auth/invitations.test.ts:12</span>' },
+  { m: /attacker|exploit|F1/i, a: 'Any valid invite link plus a logged-in account. Open the link, then send <code>POST /invitations/&lt;token&gt;/accept</code> with <code>{"role":"admin"}</code>. With F2 they can also create their own invite to any org, so <b>F1 + F2 together let anyone become admin of any org</b>.<br><span class="cite" data-act="go-line" data-id="auth" data-line="28">src/auth/invitations.ts:28</span>' },
+  { m: /summar/i, a: 'Draft for @dana-k:<br><br>"The invite flow looks good overall, and the RLS and zod validation are spot on. Before merge: (1) don\'t let the accept call choose the role, (2) check org-admin on create, (3) make invites single-use, (4) store a hashed token. Smaller items are inline."<br><br><span style="color:var(--muted);font-size:12px">You can paste this into the summary when you finish the review.</span>' },
+];
+
+function ask(q) {
+  if (!q.trim()) return;
+  S.tab = "ask";
+  S.chat.push({ q });
+  S.typing = true;
+  renderPanel();
+  setTimeout(() => {
+    const hit = ANSWERS.find(x => x.m.test(q));
+    S.chat.push({ a: hit ? hit.a : 'Prototype: answers here are mocked. In the product, Rocky answers from the diff and the indexed repo, with links to the exact lines.' });
+    S.typing = false;
+    renderPanel();
+  }, 700);
+}
+
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  if (el.dataset.act === "close-modal" && e.target.closest("[data-stop]") && !e.target.closest('button[data-act="close-modal"]')) return;
+  const { act, id } = el.dataset;
+  e.stopPropagation();
+
+  switch (act) {
+    case "go": go(id); break;
+    case "go-line":
+      S.sel = id; renderAll();
+      requestAnimationFrame(() => document.getElementById(`L-${id}-${el.dataset.line}`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+      break;
+    case "jump": jumpTo(id); break;
+    case "toggle-viewed":
+      S.viewed.has(id) ? S.viewed.delete(id) : S.viewed.add(id);
+      renderAll(); break;
+    case "viewed-next":
+      S.viewed.add(id); cycleFile(1); break;
+    case "trust-noise":
+      NOISE.forEach(n => S.viewed.add(n.id)); renderAll();
+      toast("2 noise files marked viewed from the AI summary"); break;
+    case "open-noise": S.noiseOpen = true; renderSidebar(); break;
+    case "accept": S.focus = id; setStatus(id, { s: "accepted" }); toast("Added to your pending review. Not posted yet."); break;
+    case "edit": S.focus = id; S.editing = id; S.dismissing = null; renderMain(); setTimeout(() => $(`#edit-${id}`)?.focus(), 0); break;
+    case "save-edit": {
+      const v = $(`#edit-${id}`).value;
+      setStatus(id, { s: "accepted", edited: true, body: esc(v).replace(/`([^`]+)`/g, "<code>$1</code>") });
+      break;
+    }
+    case "dismiss": S.focus = id; S.dismissing = id; S.editing = null; renderMain(); break;
+    case "dismiss-reason": setStatus(id, { s: "dismissed", reason: el.dataset.reason }); break;
+    case "cancel": S.editing = null; S.dismissing = null; renderMain(); break;
+    case "undo": setStatus(id, { s: "draft", body: undefined, edited: false, reason: undefined }); break;
+    case "agent": {
+      const f = FINDINGS.find(x => x.id === id);
+      navigator.clipboard?.writeText(f.agentPrompt).catch(() => {});
+      toast("Fix prompt copied. Paste it into your coding agent.");
+      break;
+    }
+    case "compose": S.composing = { file: S.sel, line: +el.dataset.line }; renderMain(); setTimeout(() => $("#compose-box")?.focus(), 0); break;
+    case "cancel-compose": S.composing = null; renderMain(); break;
+    case "save-comment": {
+      const v = $("#compose-box").value.trim();
+      if (!v) return;
+      S.comments.push({ ...S.composing, body: v });
+      S.composing = null; renderAll(); break;
+    }
+    case "ai-polish": {
+      const box = $("#compose-box");
+      if (box.value.trim()) box.value = box.value.trim().replace(/^./, c => c.toUpperCase()).replace(/([^.?!])$/, "$1.") + " Could you add a test for this case?";
+      else box.value = "Could we add a short comment explaining why this is safe?";
+      toast("✦ Polished. You're still the author, so edit freely.");
+      break;
+    }
+    case "del-comment": S.comments.splice(+el.dataset.idx, 1); renderAll(); break;
+    case "tab": S.tab = id; renderPanel(); break;
+    case "ask": ask(el.dataset.q); break;
+    case "finish": openFinish(); break;
+    case "help": openHelp(); break;
+    case "close-modal": closeModal(); break;
+    case "ai-summary": {
+      const accepted = FINDINGS.filter(f => S.st[f.id].s === "accepted");
+      $("#summary-box").value = accepted.length
+        ? `Thanks! The flow is clear and the RLS and validation look right. Please address before merging:\n${accepted.filter(f => SEV_ORDER[f.severity] <= 1).map(f => `• ${f.title}`).join("\n") || "• See inline comments"}\nThe smaller notes are inline.`
+        : "Looks good to me. Thanks for the clean PR!";
+      break;
+    }
+    case "submit": {
+      const v = document.querySelector('input[name="verdict"]:checked')?.value ?? "comment";
+      S.submitted = v;
+      closeModal(); renderAll();
+      toast(`Review submitted to GitHub as @${ME.login} (mock)`);
+      break;
+    }
+    case "toast": toast(el.dataset.msg); break;
+    case "mode": setTheme({ mode: THEME.mode === "dark" ? "light" : "dark" }); break;
+  }
+});
+
+document.addEventListener("keydown", e => {
+  const typing = /^(TEXTAREA|INPUT)$/.test(document.activeElement?.tagName);
+  if (e.key === "Escape") {
+    if ($("#layer").innerHTML) return closeModal();
+    if (typing) document.activeElement.blur();
+    S.editing = null; S.dismissing = null; S.composing = null; renderMain(); return;
+  }
+  if (typing) {
+    if (document.activeElement.id === "chat-box" && e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault(); const q = e.target.value; ask(q);
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && document.activeElement.id === "compose-box") $('[data-act="save-comment"]').click();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") return openFinish();
+  if (e.metaKey || e.ctrlKey || e.altKey || $("#layer").innerHTML) return;
+
+  const focused = S.focus && S.st[S.focus].s === "draft" && FINDINGS.find(f => f.id === S.focus).file === S.sel ? S.focus : null;
+  switch (e.key) {
+    case "k": cycleFile(1); break;
+    case "j": cycleFile(-1); break;
+    case "n": cycleFinding(1); break;
+    case "p": cycleFinding(-1); break;
+    case "b": go("brief"); break;
+    case "v":
+      if (S.sel !== "brief") { S.viewed.has(S.sel) ? S.viewed.delete(S.sel) : S.viewed.add(S.sel); renderAll(); }
+      break;
+    case "a": if (focused) { setStatus(focused, { s: "accepted" }); toast("Added to your pending review. Not posted yet."); } break;
+    case "e": if (focused) { e.preventDefault(); S.editing = focused; renderMain(); setTimeout(() => $(`#edit-${focused}`)?.focus(), 0); } break;
+    case "d": if (focused) { S.dismissing = focused; renderMain(); } break;
+    case "?": openHelp(); break;
+    case "m": setTheme({ mode: THEME.mode === "dark" ? "light" : "dark" }); break;
+    case "/": {
+      e.preventDefault();
+      const sel = window.getSelection()?.toString().trim();
+      S.tab = "ask"; renderPanel();
+      const box = $("#chat-box");
+      if (box) { if (sel) box.value = `About \`${sel.slice(0, 120)}\`: `; box.focus(); }
+      break;
+    }
+  }
+});
+
+renderAll();
+</script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/ee",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Rocky Reviews Enterprise features (SSO, audit log UI, org policies, insights).",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

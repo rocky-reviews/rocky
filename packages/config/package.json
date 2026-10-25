@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/config",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Config loader and validation (env + rocky.config.yaml).",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

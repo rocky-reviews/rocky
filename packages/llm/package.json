@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/llm",
+  "version": "0.0.0",
+  "private": true,
+  "description": "LLM roles (triage, review, graph, ask, embed), providers, validate-and-repair, metering hooks.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

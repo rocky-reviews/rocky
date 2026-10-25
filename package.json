@@ -1,0 +1,37 @@
+{
+  "name": "rocky",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Rocky Reviews: code review where AI does the reading and a human makes the call.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "dev": "docker compose -f docker-compose.dev.yml up -d --wait && pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:down": "docker compose -f docker-compose.dev.yml down",
+    "seed": "tsx scripts/seed.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
+    "lint": "eslint . --max-warnings=0 && node scripts/check-no-raw-colors.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}

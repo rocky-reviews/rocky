@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/forge-github",
+  "version": "0.0.0",
+  "private": true,
+  "description": "GitHub adapter: App auth, webhooks, PR mirror, posting reviews.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

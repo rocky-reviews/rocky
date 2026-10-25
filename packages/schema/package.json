@@ -1,0 +1,11 @@
+{
+  "name": "@rocky-reviews/schema",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The analysis document (graph + triage + findings) as Zod schemas, plus JSON Schema emit.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
