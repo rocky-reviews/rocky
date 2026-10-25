@@ -34,11 +34,12 @@ import {
 // - Zalgo: five or more consecutive combining marks in single-line fields, paths and ids.
 // - Lone surrogates: not representable in UTF-8, so never valid text.
 
-const EMOJI_JOINERS = "\\u200C\\u200D\\uFE0F";
+// Alternation, not a class: ESLint reads a class holding ZWJ and VS16 as one joined character.
+const EMOJI_JOINERS = "\\u200C|\\u200D|\\uFE0F";
 // As an alternation, not a class: a class holding U+115F U+1160 reads as one Hangul syllable.
 const BLANK_LETTERS = "\\u2800|\\u3164|\\u115F|\\u1160|\\uFFA0";
 /** Any DI or Cf other than the emoji joiners, or a blank-looking letter. */
-const INVISIBLE = `(?![${EMOJI_JOINERS}])(?:\\p{Default_Ignorable_Code_Point}|\\p{Cf})|${BLANK_LETTERS}`;
+const INVISIBLE = `(?!${EMOJI_JOINERS})(?:\\p{Default_Ignorable_Code_Point}|\\p{Cf})|${BLANK_LETTERS}`;
 /** Every DI or Cf, no exceptions. */
 const INVISIBLE_STRICT = `\\p{Default_Ignorable_Code_Point}|\\p{Cf}|${BLANK_LETTERS}`;
 const ZALGO = "\\p{M}{5}";
