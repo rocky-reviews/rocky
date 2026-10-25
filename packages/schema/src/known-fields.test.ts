@@ -54,6 +54,7 @@ describe("applyKnownFields", () => {
       path: "src/planted.ts",
       score: 90,
       level: "critical",
+      reviewMinutes: 0,
       reason: "r",
       whatChanged: "w",
       whyThisLevel: "y",
@@ -147,6 +148,46 @@ describe("applyKnownFields", () => {
     const known = { ...facts(), unanalysed: [{ path: critical, reason: "timeout" as const }] };
     const value = expectAccepted(applyKnownFields(output, known));
     expect(value.provenance.unanalysed[0]!.path).toBe(critical);
+  });
+
+  it("the change-map reason is pipeline-owned: a model cannot write it (H2 #2)", () => {
+    // The model drops the graph and tries to tell the UI why, with text of its choosing.
+    const output = modelOutput();
+    delete (output as { graph?: unknown }).graph;
+    const planted = applyKnownFields(
+      {
+        ...output,
+        provenance: {
+          ...facts(),
+          graphUnavailable: { reason: "timeout", detail: "Click here to retry: evil.example" },
+        },
+      },
+      facts(),
+    );
+    const value = expectAccepted(planted);
+    expect(value.provenance.graphUnavailable).toBeUndefined();
+  });
+
+  it("a pipeline-declared change-map reason survives the overlay and is shown", () => {
+    const output = modelOutput();
+    delete (output as { graph?: unknown }).graph;
+    const known = {
+      ...facts(),
+      graphUnavailable: { reason: "analysis-failed" as const, detail: "Repair round failed." },
+    };
+    const value = expectAccepted(applyKnownFields(output, known));
+    expect(value.provenance.graphUnavailable).toEqual(known.graphUnavailable);
+  });
+
+  it("a model that returns a graph while the pipeline says none was produced is rejected", () => {
+    // Fail closed: the pipeline marks the graph unavailable only when the graph role's output
+    // did not validate, so a graph in the same document is a contradiction, not a bonus.
+    const known = { ...facts(), graphUnavailable: { reason: "analysis-failed" as const } };
+    expectRejected(
+      applyKnownFields(modelOutput(), known),
+      "INVALID_SHAPE",
+      "provenance.graphUnavailable",
+    );
   });
 
   it("a model cannot remove files: a dropped triage entry fails coverage", () => {

@@ -9,9 +9,9 @@ import type { AnalysisDocument, AnalysisDocumentInput } from "./document.js";
 import type { IssueCode } from "./errors.js";
 import type { FindingInput, Severity } from "./findings.js";
 import type { GraphInput } from "./graph.js";
-import { MAX_LINE_NUMBER, SCORE_BANDS } from "./limits.js";
+import { MAX_FILE_REVIEW_MINUTES, MAX_LINE_NUMBER, SCORE_BANDS } from "./limits.js";
 import { parseAnalysisDocument } from "./parse.js";
-import type { ChangedFile } from "./provenance.js";
+import type { ChangedFile, GraphUnavailableReason } from "./provenance.js";
 import type { TriagedFileLevel, TriageInput } from "./triage.js";
 
 const RUNS = { seed: 847, numRuns: 150 };
@@ -25,6 +25,11 @@ const nat = fc.nat({ max: 1000 });
 const LEVELS: TriagedFileLevel[] = ["critical", "important", "normal", "low"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 const RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
+const GRAPH_UNAVAILABLE_REASONS: GraphUnavailableReason[] = [
+  "analysis-failed",
+  "too-large",
+  "timeout",
+];
 
 const arbPath = fc
   .tuple(
@@ -46,6 +51,8 @@ const arbFile = fc.record({
 const arbTriageParams = fc.record({
   level: nat,
   score: nat,
+  // 8 files × 60 stays inside MAX_REVIEW_MINUTES, so the PR estimate can always cover the sum.
+  minutes: fc.integer({ min: 0, max: 60 }),
   noise: fc.boolean(),
   unanalysed: fc.boolean(),
   flags: fc.array(
@@ -123,6 +130,7 @@ const arbParams = fc.record({
   reviewPath: fc.array(nat, { maxLength: 4 }),
   checkedOk: fc.array(text(40), { maxLength: 3 }),
   graph: fc.option(arbGraphParams, { nil: undefined }),
+  graphUnavailable: fc.option(fc.constantFrom(...GRAPH_UNAVAILABLE_REASONS), { nil: undefined }),
   summary: text(200),
 });
 
@@ -174,6 +182,7 @@ const buildTriage = (params: Params, files: ChangedFile[]): TriageInput => {
       path: file.path,
       level,
       score: band.min + (p.score % (band.max - band.min + 1)),
+      reviewMinutes: p.minutes,
       reason: "Because.",
       whatChanged: "Something.",
       whyThisLevel: "Area and size.",
@@ -315,9 +324,11 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
   const triage = buildTriage(params, files);
   const findings = buildFindings(params, files, triage);
   const worst = Math.max(-1, ...findings.map((finding) => RANK[finding.severity]));
-  const floor = worst === 3 ? 2 : worst === 2 ? 1 : 0;
+  // A critical finding forces a critical verdict; a high one needs at least medium (H2 #5).
+  const floor = worst === 3 ? 3 : worst === 2 ? 1 : 0;
   const levels = (["low", "medium", "high", "critical"] as const).slice(floor);
   const triagedPaths = triage.files.map((file) => file.path);
+  const fileMinutes = triage.files.reduce((sum, file) => sum + file.reviewMinutes, 0);
   const doc: AnalysisDocumentInput = {
     schemaVersion: "1.0.0",
     provenance: {
@@ -341,7 +352,7 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
     briefing: {
       summary: params.summary,
       verdict: { level: levels[params.verdict % levels.length]!, reason: "Because." },
-      estimatedReviewMinutes: params.minutes,
+      estimatedReviewMinutes: Math.max(params.minutes, fileMinutes),
       reviewPath: [
         ...new Set(
           params.reviewPath
@@ -360,6 +371,8 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
   };
   const graph = buildGraph(params, files);
   if (graph) doc.graph = graph;
+  else if (params.graphUnavailable !== undefined)
+    doc.provenance.graphUnavailable = { reason: params.graphUnavailable, detail: "Pipeline." };
   return doc;
 };
 
@@ -524,6 +537,39 @@ const MUTATORS: Mutator[] = [
     if (!doc.findings.some((finding) => RANK[finding.severity] >= 2)) return undefined;
     doc.briefing.verdict.level = "low";
     return { code: "VERDICT_TOO_LOW", path: "briefing.verdict.level" };
+  },
+  (doc, pick) => {
+    if (!doc.findings.some((finding) => finding.severity === "critical")) return undefined;
+    doc.briefing.verdict.level = (["high", "medium"] as const)[pick % 2]!;
+    return { code: "VERDICT_TOO_LOW", path: "briefing.verdict.level" };
+  },
+  (doc) => {
+    const sum = doc.triage.files.reduce((total, file) => total + file.reviewMinutes, 0);
+    if (sum < 2) return undefined; // the estimate's floor is 1, so nothing below the sum exists
+    doc.briefing.estimatedReviewMinutes = sum - 1;
+    return { code: "REVIEW_MINUTES_TOO_LOW", path: "briefing.estimatedReviewMinutes" };
+  },
+  (doc, pick) => {
+    if (doc.triage.files.length === 0) return undefined;
+    const i = pick % doc.triage.files.length;
+    set(
+      doc.triage.files[i]!,
+      "reviewMinutes",
+      [-1, MAX_FILE_REVIEW_MINUTES + 1, 2.5, -0, "5"][pick % 5],
+    );
+    return { code: "INVALID_SHAPE", path: `triage.files[${i}].reviewMinutes` };
+  },
+  (doc) => {
+    if (!doc.graph) return undefined;
+    doc.provenance.graphUnavailable = { reason: "timeout" };
+    return { code: "INVALID_SHAPE", path: "provenance.graphUnavailable" };
+  },
+  (doc, pick) => {
+    if (doc.graph) return undefined;
+    set(doc.provenance, "graphUnavailable", {
+      reason: ["failed", "", "Timeout", "<script>"][pick % 4],
+    });
+    return { code: "INVALID_SHAPE", path: "provenance.graphUnavailable.reason" };
   },
   (doc) => {
     if (doc.triage.files.length === 0) return undefined;
@@ -806,10 +852,19 @@ describe("property: valid documents", () => {
   });
 
   it("the generator exercises graphs, flows, walkthroughs, noise, suggestions and findings", () => {
-    const seen = { graph: 0, flow: 0, walkthrough: 0, noise: 0, suggestion: 0, finding: 0 };
+    const seen = {
+      graph: 0,
+      graphUnavailable: 0,
+      flow: 0,
+      walkthrough: 0,
+      noise: 0,
+      suggestion: 0,
+      finding: 0,
+    };
     fc.assert(
       fc.property(arbDocument, (doc) => {
         if (doc.graph) seen.graph += 1;
+        if (doc.provenance.graphUnavailable) seen.graphUnavailable += 1;
         if (doc.graph?.flows?.length) seen.flow += 1;
         if (doc.graph?.walkthrough) seen.walkthrough += 1;
         if (doc.triage.noise?.length) seen.noise += 1;
@@ -842,12 +897,18 @@ describe("property: mutated documents", () => {
   });
 
   it("every mutator applies to some generated document", () => {
+    // Every mutator is tried on every document, so this does not depend on which mutator
+    // `arbInvalid` happens to pick first.
     const used = new Set<number>();
     fc.assert(
-      fc.property(arbInvalid, ({ mutator }) => {
-        used.add(mutator);
+      fc.property(arbDocument, fc.nat(), (input, pick) => {
+        const parsed = parseAnalysisDocument(input);
+        if (!parsed.ok) throw new Error(`generator produced an invalid document`);
+        MUTATORS.forEach((mutator, index) => {
+          if (mutator(structuredClone(parsed.value), pick) !== undefined) used.add(index);
+        });
       }),
-      { ...RUNS, numRuns: 400 },
+      RUNS,
     );
     expect([...used].sort((a, b) => a - b)).toEqual(MUTATORS.map((_, i) => i));
   });

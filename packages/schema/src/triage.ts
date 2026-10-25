@@ -7,12 +7,14 @@
  */
 import { z } from "zod";
 import {
+  MAX_FILE_REVIEW_MINUTES,
   MAX_FILES,
   MAX_FLAG_TEXT_LENGTH,
   MAX_FLAGS_PER_FILE,
   MAX_REASON_LENGTH,
+  MIN_FILE_REVIEW_MINUTES,
 } from "./limits.js";
-import { LineRange, prose, RepositoryPath, Score } from "./primitives.js";
+import { count, LineRange, prose, RepositoryPath, Score } from "./primitives.js";
 
 /**
  * The level the UI groups by. `noise` files are described by the smaller `NoiseFile` record
@@ -37,11 +39,21 @@ export const Flag = z
   .describe("A note under a hunk line: look here, a question, or something checked.");
 export type Flag = z.infer<typeof Flag>;
 
+/**
+ * Minutes a careful reviewer needs for this file. The briefing's PR-level estimate must be at
+ * least the sum of these (REVIEW_MINUTES_TOO_LOW): the sidebar's "minutes of high-risk code
+ * left" counts files, the briefing counts the whole PR, and the two must not contradict.
+ */
+export const ReviewMinutes = count(MAX_FILE_REVIEW_MINUTES)
+  .refine((value) => value >= MIN_FILE_REVIEW_MINUTES)
+  .describe("Estimated minutes a careful reviewer needs for this file. Zero for a glance.");
+
 export const TriagedFile = z
   .strictObject({
     path: RepositoryPath.describe("Must be one of the PR's files."),
     score: Score,
     level: TriagedFileLevel,
+    reviewMinutes: ReviewMinutes,
     reason: prose(MAX_REASON_LENGTH, "One line: why this file matters to the reviewer."),
     whatChanged: prose(MAX_REASON_LENGTH, "What the change does, in plain words."),
     whyThisLevel: prose(MAX_REASON_LENGTH, "Why the file got this level."),

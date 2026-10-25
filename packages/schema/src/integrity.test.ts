@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { integrityIssues, rangeInsideHunks } from "./integrity.js";
-import { MAX_VIEW_DEPTH, MAX_VIEWS_TOTAL } from "./limits.js";
+import {
+  MAX_FILE_REVIEW_MINUTES,
+  MAX_REASON_LENGTH,
+  MAX_REVIEW_MINUTES,
+  MAX_VIEW_DEPTH,
+  MAX_VIEWS_TOTAL,
+} from "./limits.js";
 import { expectAccepted, expectRejected, pr847, PR847_AUTH_LINES } from "./test-helpers.js";
 
 const AUTH = "src/auth/invitations.ts";
@@ -366,12 +372,37 @@ describe("integrity: briefing", () => {
     expectRejected(foreign, "UNKNOWN_FILE", "briefing.reviewPath[0].path");
   });
 
-  it("VERDICT_TOO_LOW with a critical finding and a verdict below high", () => {
+  it("VERDICT_TOO_LOW with a critical finding and any verdict but critical (H2 #5)", () => {
+    for (const level of ["low", "medium", "high"] as const) {
+      const doc = pr847();
+      doc.briefing.verdict.level = level;
+      expectRejected(doc, "VERDICT_TOO_LOW", "briefing.verdict.level");
+    }
     const doc = pr847();
-    doc.briefing.verdict.level = "medium";
-    expectRejected(doc, "VERDICT_TOO_LOW", "briefing.verdict.level");
     doc.briefing.verdict.level = "critical";
     expectAccepted(doc);
+  });
+
+  it("a critical finding forces the verdict whatever its confidence or file level", () => {
+    const doc = pr847();
+    doc.briefing.verdict.level = "high";
+    doc.findings[0]!.confidence = 0;
+    expectRejected(doc, "VERDICT_TOO_LOW", "briefing.verdict.level");
+    // Only the finding's severity counts, not the triage level of the file it sits in.
+    const normal = pr847();
+    normal.briefing.verdict.level = "high";
+    normal.findings = [{ ...normal.findings[8]!, severity: "critical" }]; // InvitePage, normal
+    expectRejected(normal, "VERDICT_TOO_LOW", "briefing.verdict.level");
+  });
+
+  it("the schema has no dismissed or decided state a model could use to lower the floor", () => {
+    // Accept/edit/dismiss decisions are the human's and live outside the document (ADR 0004).
+    for (const field of ["state", "dismissed", "decided", "status"]) {
+      const doc = pr847();
+      doc.briefing.verdict.level = "high";
+      Object.assign(doc.findings[0]!, { [field]: "dismissed" });
+      expectRejected(doc, "INVALID_SHAPE", "findings[0]");
+    }
   });
 
   it("VERDICT_TOO_LOW with a high finding and a low verdict", () => {
@@ -392,6 +423,112 @@ describe("integrity: briefing", () => {
     expectAccepted(doc);
     doc.findings = [];
     expectAccepted(doc);
+  });
+});
+
+describe("integrity: review minutes (H2 #9)", () => {
+  const perFileTotal = (doc: ReturnType<typeof pr847>) =>
+    doc.triage.files.reduce((sum, file) => sum + file.reviewMinutes, 0);
+
+  it("pr-847's files add up to its estimate", () => {
+    const doc = pr847();
+    expect(perFileTotal(doc)).toBe(doc.briefing.estimatedReviewMinutes);
+  });
+
+  it("REVIEW_MINUTES_TOO_LOW when the PR estimate is below the sum of its files", () => {
+    const doc = pr847();
+    doc.briefing.estimatedReviewMinutes = perFileTotal(doc) - 1;
+    expectRejected(doc, "REVIEW_MINUTES_TOO_LOW", "briefing.estimatedReviewMinutes");
+  });
+
+  it("the PR estimate may exceed the sum: the briefing and noise take time too", () => {
+    const doc = pr847();
+    doc.briefing.estimatedReviewMinutes = perFileTotal(doc) + 5;
+    expectAccepted(doc);
+  });
+
+  it("a file may take zero minutes, and the estimate may equal the sum", () => {
+    const doc = pr847();
+    for (const file of doc.triage.files) file.reviewMinutes = 0;
+    doc.triage.files[0]!.reviewMinutes = MAX_FILE_REVIEW_MINUTES;
+    doc.briefing.estimatedReviewMinutes = MAX_FILE_REVIEW_MINUTES;
+    expectAccepted(doc);
+  });
+
+  it.each([-1, MAX_FILE_REVIEW_MINUTES + 1, 1.5, -0, "3", null, undefined])(
+    "INVALID_SHAPE for reviewMinutes %s",
+    (value) => {
+      const doc = pr847();
+      Object.assign(doc.triage.files[0]!, { reviewMinutes: value });
+      expectRejected(doc, "INVALID_SHAPE", "triage.files[0].reviewMinutes");
+    },
+  );
+
+  it("the per-file cap is the PR cap: a larger value could never pass the sum check", () => {
+    expect(MAX_FILE_REVIEW_MINUTES).toBe(MAX_REVIEW_MINUTES);
+  });
+});
+
+describe("integrity: change map unavailable (H2 #2)", () => {
+  it("a document may lack a graph and say why, from the pipeline", () => {
+    const doc = pr847();
+    delete doc.graph;
+    doc.provenance.graphUnavailable = {
+      reason: "analysis-failed",
+      detail: "The graph role's output failed validation twice.",
+    };
+    const value = expectAccepted(doc);
+    expect(value.graph).toBeUndefined();
+    expect(value.provenance.graphUnavailable?.reason).toBe("analysis-failed");
+  });
+
+  it("the reason is optional: a graph that was never attempted has none", () => {
+    const doc = pr847();
+    delete doc.graph;
+    expectAccepted(doc);
+  });
+
+  it("a graph and a reason for its absence cannot both be present", () => {
+    const doc = pr847();
+    doc.provenance.graphUnavailable = { reason: "timeout" };
+    expectRejected(doc, "INVALID_SHAPE", "provenance.graphUnavailable");
+  });
+
+  it("the reason is an enum; the detail is bounded, prose-checked text", () => {
+    const reason = pr847();
+    delete reason.graph;
+    Object.assign(reason.provenance, { graphUnavailable: { reason: "<b>see console</b>" } });
+    expectRejected(reason, "INVALID_SHAPE", "provenance.graphUnavailable.reason");
+
+    const hidden = pr847();
+    delete hidden.graph;
+    hidden.provenance.graphUnavailable = { reason: "timeout", detail: "Retry‮ later" };
+    expectRejected(hidden, "INVALID_SHAPE", "provenance.graphUnavailable.detail");
+
+    const long = pr847();
+    delete long.graph;
+    long.provenance.graphUnavailable = {
+      reason: "timeout",
+      detail: "x".repeat(MAX_REASON_LENGTH + 1),
+    };
+    expectRejected(long, "INVALID_SHAPE", "provenance.graphUnavailable.detail");
+
+    const extra = pr847();
+    delete extra.graph;
+    Object.assign(extra.provenance, { graphUnavailable: { reason: "timeout", retry: true } });
+    expectRejected(extra, "INVALID_SHAPE", "provenance.graphUnavailable");
+  });
+
+  it("the reason lives in provenance only; the model cannot place it elsewhere", () => {
+    const top = pr847();
+    delete top.graph;
+    Object.assign(top, { graphUnavailable: { reason: "timeout" } });
+    expectRejected(top, "INVALID_SHAPE", "");
+
+    const inBriefing = pr847();
+    delete inBriefing.graph;
+    Object.assign(inBriefing.briefing, { graphUnavailable: { reason: "timeout" } });
+    expectRejected(inBriefing, "INVALID_SHAPE", "briefing");
   });
 });
 

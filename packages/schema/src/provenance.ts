@@ -178,6 +178,29 @@ export const UnanalysedFile = z
   .describe("A file the AI could not analyse.");
 export type UnanalysedFile = z.infer<typeof UnanalysedFile>;
 
+/**
+ * Why the pipeline could not produce a change map. Written by the pipeline, never by the model:
+ * `analysis-failed` is the graph role's output failing validation after the repair round,
+ * `too-large` a PR over the graph's budget, `timeout` the role not answering in time.
+ */
+export const GraphUnavailableReason = z.enum(["analysis-failed", "too-large", "timeout"]);
+export type GraphUnavailableReason = z.infer<typeof GraphUnavailableReason>;
+
+/**
+ * The change map is optional (gate H2, #2): when the graph role fails, the rest of the review
+ * still ships and the UI shows "Change map unavailable", this reason and a Retry button. The
+ * reason lives in the facts, like `unanalysed`, so `applyKnownFields` overwrites whatever a
+ * model claims and the text the UI shows for it is never model-written. A document carries
+ * either a `graph` or this field, never both.
+ */
+export const GraphUnavailable = z
+  .strictObject({
+    reason: GraphUnavailableReason,
+    detail: prose(MAX_REASON_LENGTH).optional().describe("Human-readable detail, if any."),
+  })
+  .describe("Why the change map is missing. Written by the pipeline, never by a model.");
+export type GraphUnavailable = z.infer<typeof GraphUnavailable>;
+
 export const Provenance = z
   .strictObject({
     repo: z.strictObject({ owner: RepoOwner, name: RepoName }),
@@ -193,6 +216,9 @@ export const Provenance = z
       .max(MAX_FILES)
       .default([])
       .describe("Files the pipeline could not analyse; they count toward triage coverage."),
+    graphUnavailable: GraphUnavailable.optional().describe(
+      "Present only when the pipeline could not produce the change map; the document then has no graph.",
+    ),
     generatedAt: z.iso.datetime().describe("When the pipeline produced the document (UTC)."),
     generator: Generator,
   })

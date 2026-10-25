@@ -17,7 +17,8 @@
  * - findings and flags name triaged (non-noise) PR files and their ranges sit inside one
  *   new-side hunk of that file's diff.
  * - a critical or high finding cannot sit in a file triaged `low`; the verdict cannot be `low`
- *   with a high finding or below `high` with a critical finding.
+ *   with a high finding and must be `critical` with a critical finding (gate H2, #5).
+ * - the PR's estimated review minutes are at least the sum of the per-file estimates (H2, #9).
  * - review-path steps name triaged files, each once.
  * - a suggestion with a context line cannot start at line 1; when the new file content is
  *   supplied, the context line must match, the range must exist, and the replacement must
@@ -620,11 +621,14 @@ const briefingIssues = (
     "entryId",
   );
 
+  // A critical finding is, by definition, a critical PR: the verdict cannot soften it. Only the
+  // severity counts; the document has no accept/dismiss state (those decisions are the human's
+  // and live outside it), so nothing a model writes can lower this floor.
   const worst = Math.max(-1, ...findings.map((finding) => SEVERITY_RANK[finding.severity]));
   const verdict = RISK_RANK[briefing.verdict.level];
   const floor =
     worst === SEVERITY_RANK.critical
-      ? RISK_RANK.high
+      ? RISK_RANK.critical
       : worst === SEVERITY_RANK.high
         ? RISK_RANK.medium
         : RISK_RANK.low;
@@ -632,7 +636,20 @@ const briefingIssues = (
     issues.push({
       code: "VERDICT_TOO_LOW",
       path: "briefing.verdict.level",
-      message: `verdict '${briefing.verdict.level}' is too low for a document with ${worst === SEVERITY_RANK.critical ? "critical" : "high"} findings`,
+      message:
+        worst === SEVERITY_RANK.critical
+          ? `verdict '${briefing.verdict.level}' contradicts a critical finding; a document with a critical finding has verdict 'critical'`
+          : `verdict '${briefing.verdict.level}' is too low for a document with high findings; at least 'medium' is required`,
+    });
+
+  // The sidebar adds up per-file minutes; the briefing states the PR's. Reading the briefing
+  // and the noise takes time too, so the PR estimate may exceed the sum but never fall short.
+  const fileMinutes = triage.files.reduce((sum, file) => sum + file.reviewMinutes, 0);
+  if (briefing.estimatedReviewMinutes < fileMinutes)
+    issues.push({
+      code: "REVIEW_MINUTES_TOO_LOW",
+      path: "briefing.estimatedReviewMinutes",
+      message: `the PR estimate of ${briefing.estimatedReviewMinutes} minutes is below the ${fileMinutes} minutes its triaged files add up to`,
     });
 
   return issues;
