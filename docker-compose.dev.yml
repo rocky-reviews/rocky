@@ -1,0 +1,21 @@
+# Local development services. Production runs on Fly.io (see docs/adr/0001-hosting.md).
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_USER: rocky
+      POSTGRES_PASSWORD: rocky-dev-only
+      POSTGRES_DB: rocky
+    ports:
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - rocky-pg:/var/lib/postgresql/data
+      - ./deploy/dev/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rocky -d rocky"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  rocky-pg:

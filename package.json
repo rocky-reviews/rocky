@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "docker compose -f docker-compose.dev.yml up -d --wait && pnpm --parallel --filter \"./apps/*\" dev",
     "dev:down": "docker compose -f docker-compose.dev.yml down",
-    "seed": "tsx scripts/seed.ts",
+    "seed": "tsx --env-file=.env scripts/seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
     "lint": "eslint . --max-warnings=0 && node scripts/check-no-raw-colors.mjs",
     "format": "prettier --write .",
@@ -24,10 +24,12 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.0.5",
     "eslint": "10.13.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.13.0",
+    "pg": "8.23.1",
     "prettier": "3.9.10",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
