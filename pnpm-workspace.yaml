@@ -13,3 +13,9 @@ onlyBuiltDependencies:
 minimumReleaseAge: 10080
 trustPolicy: no-downgrade
 blockExoticSubdeps: true
+
+# vite 8.3.5 (and the rolldown it pulls in) is younger than minimumReleaseAge, so
+# pin the last mature patch for everyone (apps/web and vitest). Drop this once
+# the next vite release is 7 days old and Dependabot bumps it.
+overrides:
+  vite: 8.3.4
