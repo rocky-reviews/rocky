@@ -1,0 +1,39 @@
+# Secret scanning with gitleaks (pinned container, repo config .gitleaks.toml).
+# We run the container directly instead of gitleaks-action, which needs a paid
+# licence key for organisation repositories.
+#   - pull_request: scans every commit in the PR range (base..head), full history fetched.
+#   - push to main / weekly: scans the whole history as a safety net.
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * 1" # Mondays 04:41 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan PR commits for secrets
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: scripts/security/gitleaks.sh --range "$BASE_SHA..$HEAD_SHA"
+
+      - name: Scan full history for secrets
+        if: github.event_name != 'pull_request'
+        run: scripts/security/gitleaks.sh

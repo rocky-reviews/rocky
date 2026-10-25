@@ -5,3 +5,11 @@ packages:
 
 onlyBuiltDependencies:
   - esbuild
+
+# Supply-chain hardening (pnpm >= 10.21; enforced by Semgrep in CI).
+# Wait 7 days before resolving a newly published version (malicious releases are
+# usually pulled within days), never let an update downgrade trust settings, and
+# block exotic (git/url/tarball) transitive dependencies.
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
+blockExoticSubdeps: true

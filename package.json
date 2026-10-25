@@ -5,7 +5,7 @@
   "description": "Rocky Reviews: code review where AI does the reading and a human makes the call.",
   "license": "AGPL-3.0-only",
   "type": "module",
-  "packageManager": "pnpm@10.15.1",
+  "packageManager": "pnpm@10.34.8",
   "engines": {
     "node": ">=24.11.0"
   },
@@ -20,7 +20,12 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
-    "design:poc-screenshots": "tsx scripts/screenshot-poc.ts"
+    "design:poc-screenshots": "tsx scripts/screenshot-poc.ts",
+    "prepare": "simple-git-hooks",
+    "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "sh scripts/precommit.sh"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -33,6 +38,7 @@
     "globals": "17.13.0",
     "pg": "8.23.1",
     "prettier": "3.9.10",
+    "simple-git-hooks": "2.14.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.0",

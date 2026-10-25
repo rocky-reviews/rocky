@@ -1,0 +1,41 @@
+# Dependabot keeps npm dependencies and GitHub Actions SHAs current.
+# We use Dependabot rather than Renovate so no extra GitHub App is required.
+# Note: container image digests in scripts/security/images.sh are NOT covered
+# by Dependabot; bump them by hand (see that file).
+version: 2
+updates:
+  - package-ecosystem: npm # pnpm workspaces are supported by the npm ecosystem
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    versioning-strategy: increase # keep exact pins (.npmrc save-exact=true), bump the pin
+    cooldown:
+      default-days: 7 # matches pnpm minimumReleaseAge; skips just-published (possibly malicious) versions
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+      include: scope
+    labels: [dependencies, mechanical]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies, mechanical]

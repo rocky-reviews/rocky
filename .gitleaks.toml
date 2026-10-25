@@ -1,0 +1,14 @@
+# gitleaks configuration for Rocky Reviews.
+# Used by CI (.github/workflows/gitleaks.yml) and the pre-commit hook
+# (scripts/precommit.sh) through scripts/security/gitleaks.sh.
+#
+# We extend the default rule set that ships with the gitleaks binary/image, so
+# every built-in detector (AWS, GitHub, Anthropic, Stripe, private keys, generic
+# API keys, ...) applies. Nothing is allowlisted yet. When a false positive
+# appears, add the narrowest possible entry under [allowlist] with a comment
+# explaining why — never a whole directory.
+
+title = "rocky-reviews"
+
+[extend]
+useDefault = true
