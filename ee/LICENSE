@@ -1,0 +1,110 @@
+DRAFT — pending legal review (PLAN.md gate H6)
+
+                     ROCKY REVIEWS ENTERPRISE LICENSE
+                            Version 0.1 (draft)
+
+Copyright (c) 2026 Rocky Reviews. All rights reserved.
+
+This licence applies to every file in the "ee/" directory of the Rocky
+Reviews repository and to any file that states it is covered by this licence
+(together, the "Enterprise Software"). It does NOT apply to the rest of the
+repository, which is licensed under the GNU Affero General Public License,
+version 3, found in the top-level LICENSE file.
+
+The Enterprise Software is source-available, not open source. You may read it
+and work with it under the terms below, but you may not run it in production
+without a paid subscription.
+
+1. DEFINITIONS
+
+   "Rocky Reviews" means the copyright holder named above and its successors.
+
+   "Subscription" means a current, paid Rocky Reviews Enterprise subscription
+   agreement between you (or your organisation) and Rocky Reviews that covers
+   the Enterprise Software you are using.
+
+   "Development Use" means running the Enterprise Software only to develop,
+   test, evaluate, debug or contribute changes to it, with no real users and
+   no real organisational data, for no longer than is reasonably needed for
+   that purpose.
+
+   "Production Use" means any use that is not Development Use, including
+   serving the Enterprise Software, or a product that includes it, to anyone
+   other than the developer working on it, whether or not for payment.
+
+2. WHAT YOU MAY DO WITHOUT A SUBSCRIPTION
+
+   Subject to Section 5, Rocky Reviews grants you a worldwide, non-exclusive,
+   non-transferable, royalty-free licence to:
+
+   (a) read, copy and study the source code of the Enterprise Software;
+   (b) modify it and create derivative works of it; and
+   (c) run it, including modified versions, for Development Use only.
+
+3. WHAT REQUIRES A SUBSCRIPTION
+
+   Production Use of the Enterprise Software, in original or modified form,
+   requires a valid Subscription. The Subscription's terms (seats, term,
+   support, permitted deployments) govern that use and prevail over this
+   licence where they conflict. When the Subscription ends, your right to
+   Production Use ends with it.
+
+4. WHAT YOU MAY NOT DO
+
+   Unless a separate written agreement with Rocky Reviews allows it, you may
+   not:
+
+   (a) use the Enterprise Software in production without a Subscription;
+   (b) distribute, sell, sublicense, rent, lease or host the Enterprise
+       Software, or a derivative of it, for third parties;
+   (c) remove, change or work around any licence check, usage limit or
+       subscription validation in the Enterprise Software;
+   (d) remove or alter copyright, licence or attribution notices; or
+   (e) use the Rocky Reviews name or logos except to identify the software.
+
+   You may redistribute unmodified copies of the whole Rocky Reviews
+   repository (including the "ee/" directory) as a convenience, provided this
+   licence file is kept intact and no Production Use of the Enterprise
+   Software is enabled for the recipient.
+
+5. CONTRIBUTIONS
+
+   Contributions you submit to the Enterprise Software are governed by the
+   Rocky Reviews Contributor License Agreement (.github/CLA.md). By
+   submitting a contribution you confirm you have the right to grant the
+   rights described there.
+
+6. OWNERSHIP
+
+   The Enterprise Software is licensed, not sold. Rocky Reviews and its
+   licensors keep all rights not expressly granted here.
+
+7. TERMINATION
+
+   This licence ends automatically if you breach it. On termination you must
+   stop all use of the Enterprise Software and delete copies that are not
+   needed for Development Use, which may resume once the breach is cured.
+   Sections 6, 8 and 9 survive termination.
+
+8. NO WARRANTY
+
+   THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
+   Warranties for Production Use, if any, are set out in the Subscription.
+
+9. LIMITATION OF LIABILITY
+
+   TO THE FULLEST EXTENT PERMITTED BY LAW, ROCKY REVIEWS SHALL NOT BE LIABLE
+   FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR PUNITIVE DAMAGES,
+   OR ANY LOSS OF PROFITS, DATA OR GOODWILL, ARISING OUT OF OR IN CONNECTION
+   WITH THE ENTERPRISE SOFTWARE OR THIS LICENCE, HOWEVER CAUSED.
+
+10. GOVERNING LAW
+
+   Governing law and venue: TO BE DETERMINED at legal review (gate H6).
+
+11. CONTACT
+
+   Subscriptions and licensing questions: licensing@rockyreviews.dev
+   Security reports: security@rockyreviews.dev (see SECURITY.md)
