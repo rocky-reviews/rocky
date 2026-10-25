@@ -47,6 +47,7 @@ const arbTriageParams = fc.record({
   level: nat,
   score: nat,
   noise: fc.boolean(),
+  unanalysed: fc.boolean(),
   flags: fc.array(
     fc.tuple(
       nat,
@@ -159,11 +160,15 @@ const rangeIn = (file: ChangedFile, hunkIndex: number, offset: number, length: n
 };
 
 const buildTriage = (params: Params, files: ChangedFile[]): TriageInput => {
-  const triage: TriageInput = { files: [], noise: [] };
+  const triage: TriageInput = { files: [], noise: [], unanalysed: [] };
   files.forEach((file, index) => {
     const p = params.triage[index]!;
     if (p.noise && files.length > 1 && index > 0) {
       triage.noise!.push({ path: file.path, summary: "Generated; trust it." });
+      return;
+    }
+    if (p.unanalysed && files.length > 1 && index > 0) {
+      triage.unanalysed!.push({ path: file.path, reason: "too-large" });
       return;
     }
     const level = LEVELS[p.level % LEVELS.length]!;
@@ -184,6 +189,9 @@ const buildTriage = (params: Params, files: ChangedFile[]): TriageInput => {
   });
   return triage;
 };
+
+/** The same quote everywhere: a finding's memory ref must match briefing.memoryApplied exactly. */
+const memoryRef = (i: number) => ({ entryId: `mem${i}`, text: `Rule ${i}.`, source: `PR #${i}` });
 
 const buildFindings = (
   params: Params,
@@ -206,11 +214,7 @@ const buildFindings = (
       range,
       title: p.title,
       body: p.body,
-      memory: Array.from({ length: p.memory }, (_, i) => ({
-        entryId: `mem${i}`,
-        text: "Rule.",
-        source: `PR #${i}`,
-      })),
+      memory: Array.from({ length: p.memory }, (_, i) => memoryRef(i)),
       agentPrompt: "Fix it.",
     };
     if (p.suggestion) {
@@ -340,6 +344,10 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
         ),
       ].map((path) => ({ path, why: "Next." })),
       checkedOk: params.checkedOk,
+      memoryApplied: Array.from(
+        { length: Math.max(0, ...findings.map((finding) => finding.memory?.length ?? 0)) },
+        (_, i) => memoryRef(i),
+      ),
     },
     triage,
     findings,
@@ -528,6 +536,130 @@ const MUTATORS: Mutator[] = [
     finding.range = { start: 1, end: 1 };
     finding.suggestion = { lines: ["x"], context: "before" };
     return { code: "SUGGESTION_CONTEXT_IMPOSSIBLE", path: `findings[${i}].suggestion.context` };
+  },
+  // --- Unicode: bidi, C1, invisible, line separators, lone surrogates ---
+  (doc, pick) => {
+    if (doc.findings.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    doc.findings[i]!.title =
+      `a${["\u202E", "\u2066", "\u200F", "\u061C", "\u2028", "\u0085", "\u200B", "\uFEFF", "\uD800"][pick % 9]}b`;
+    return { code: "INVALID_SHAPE", path: `findings[${i}].title` };
+  },
+  (doc, pick) => {
+    doc.briefing.summary = `x${["\u202A", "\u2069", "\u009B", "\u0085", "\u200B", "\uDFFF", "\u0007"][pick % 7]}y`;
+    return { code: "INVALID_SHAPE", path: "briefing.summary" };
+  },
+  (doc, pick) => {
+    const withSuggestion = doc.findings
+      .map((finding, index) => ({ finding, index }))
+      .filter(({ finding }) => finding.suggestion);
+    if (withSuggestion.length === 0) return undefined;
+    const { finding, index } = withSuggestion[pick % withSuggestion.length]!;
+    finding.suggestion!.lines = [
+      `if (ok) { ${["\u202E", "\u2066", "\u200D", "\u200B", "\uFEFF", "\u00AD", "\u2028"][pick % 7]} } // x`,
+    ];
+    return { code: "INVALID_SHAPE", path: `findings[${index}].suggestion.lines[0]` };
+  },
+  (doc, pick) => {
+    const i = pick % doc.provenance.files.length;
+    doc.provenance.files[i]!.path = [
+      "a/\u202Etxt.exe",
+      "a/\u200B/b",
+      "\uFF0E\uFF0E/etc/passwd",
+      "%2e%2e/x",
+      "a/ /b",
+      "a/.../b",
+      "a\u2028b",
+      "a/\u0085",
+      "a/\uD800",
+      "a/\u2025/b",
+      "a/%2E/b",
+      ".git/config",
+      "e\u0301/x.ts", // decomposed é: not NFC
+    ][pick % 13]!;
+    return { code: "INVALID_SHAPE", path: `provenance.files[${i}].path` };
+  },
+  (doc) => {
+    if (!doc.graph) return undefined;
+    doc.graph.nodes[0]!.files = [{ path: "src/\u202Eevil.ts" }];
+    return { code: "INVALID_SHAPE", path: "graph.nodes[0].files[0].path" };
+  },
+  // --- Codes that previously had unit tests only ---
+  (doc, pick) => {
+    if (doc.findings.length === 0 || doc.triage.noise.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    const noise = doc.triage.noise[pick % doc.triage.noise.length]!;
+    const known = doc.provenance.files.find((f) => f.path === noise.path)!;
+    doc.findings[i]!.path = noise.path;
+    doc.findings[i]!.range = rangeIn(known, 0, 0, 0);
+    delete doc.findings[i]!.suggestion;
+    return { code: "FINDING_IN_NOISE_FILE", path: `findings[${i}].path` };
+  },
+  (doc, pick) => {
+    if (doc.findings.length === 0 || doc.triage.unanalysed.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    const target = doc.triage.unanalysed[pick % doc.triage.unanalysed.length]!;
+    const known = doc.provenance.files.find((f) => f.path === target.path)!;
+    doc.findings[i]!.path = target.path;
+    doc.findings[i]!.range = rangeIn(known, 0, 0, 0);
+    delete doc.findings[i]!.suggestion;
+    return { code: "FINDING_IN_UNANALYSED_FILE", path: `findings[${i}].path` };
+  },
+  (doc, pick) => {
+    if (doc.triage.files.length < 2) return undefined;
+    const i = 1 + (pick % (doc.triage.files.length - 1));
+    doc.triage.files[i]!.path = doc.triage.files[0]!.path;
+    return { code: "DUPLICATE_PATH", path: `triage.files[${i}].path` };
+  },
+  (doc) => {
+    if (!doc.graph) return undefined;
+    doc.graph.views = Array.from({ length: 32 }, (_, i) => ({
+      id: `big${i}`,
+      title: "v",
+      scope: { kind: "all" },
+      defaultOpen: false,
+      children: Array.from({ length: 2 }, (_, j) => ({
+        id: `big${i}-${j}`,
+        title: "v",
+        scope: { kind: "all" },
+        defaultOpen: false,
+        children: [],
+      })),
+    }));
+    return { code: "LIMIT_EXCEEDED", path: "graph.views" };
+  },
+  (doc, pick) => {
+    const withMemory = doc.findings
+      .map((finding, index) => ({ finding, index }))
+      .filter(({ finding }) => finding.memory.length > 0);
+    if (withMemory.length === 0) return undefined;
+    const { finding, index } = withMemory[pick % withMemory.length]!;
+    const ref = finding.memory[0]!;
+    if (pick % 2 === 0) ref.text = `${ref.text} (misquoted)`;
+    else ref.entryId = "never-applied";
+    return { code: "MEMORY_REF_MISMATCH", path: `findings[${index}].memory[0]` };
+  },
+  (doc, pick) => {
+    if (doc.findings.length < 2) return undefined;
+    const i = 1 + (pick % (doc.findings.length - 1));
+    doc.findings[i]!.id = doc.findings[0]!.id.toUpperCase();
+    if (doc.findings[i]!.id === doc.findings[0]!.id)
+      doc.findings[i]!.id = doc.findings[0]!.id.toLowerCase();
+    return { code: "DUPLICATE_ID", path: `findings[${i}].id` };
+  },
+  (doc, pick) => {
+    const multi = doc.provenance.files
+      .map((file, index) => ({ file, index }))
+      .filter(({ file }) => file.hunks.length >= 2);
+    if (multi.length === 0) return undefined;
+    const { file, index } = multi[pick % multi.length]!;
+    file.hunks.reverse();
+    return { code: "INVALID_SHAPE", path: `provenance.files[${index}].hunks` };
+  },
+  (doc, pick) => {
+    const i = pick % doc.provenance.files.length;
+    set(doc.provenance.files[i]!, "additions", -0);
+    return { code: "INVALID_SHAPE", path: `provenance.files[${i}].additions` };
   },
 ];
 

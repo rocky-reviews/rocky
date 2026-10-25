@@ -13,7 +13,8 @@ contain prompt-injection attempts. Self-hosters may use weaker local models.
 
 1. **One analysis document per PR revision**, defined in Zod in `packages/schema`
    (graph + triage + findings) and emitted as JSON Schema. The UI, the renderer, posting and
-   metering all read this document; nothing reads raw model text.
+   metering all read the AI's analysis from this document; nothing reads raw model text. PR
+   metadata and diff content come from the GitHub mirror, not from the document.
 2. **Every model call returns schema-valid JSON.** On Claude this uses structured outputs; for
    other providers the schema is in the prompt. The response is parsed, validated, and on
    failure the exact validation errors go back to the model for **one** repair round. If it

@@ -15,6 +15,24 @@
  *   before analysis (P4-6); graph caps follow PR Lens, whose renderer they were tuned for.
  */
 
+// --- Whole document --------------------------------------------------------------------------
+
+/**
+ * Cap on the serialised document, checked on the raw JSON text before parsing
+ * (`parseAnalysisDocumentJson`). The per-field limits alone still allow tens of megabytes
+ * (1 000 files × 50 flags × 1 000 characters); the UI loads the whole document for one PR, and
+ * a realistic 1 000-file PR serialises to under 2 MB. 4 MiB leaves headroom for the graph and
+ * payload samples while keeping a hostile document from filling storage or the browser.
+ */
+export const MAX_DOCUMENT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * How deep the raw input may nest before the parser refuses it (TOO_DEEP). A legitimate
+ * document reaches about 20 (view tree 4 deep inside the graph, payload samples 8 deep inside
+ * a flow message); 64 leaves room without letting a hostile document exhaust the stack.
+ */
+export const MAX_INPUT_DEPTH = 64;
+
 // --- Identifiers, paths, hashes ------------------------------------------------------------
 
 /** Ids are model-authored, so they are shaped to survive SVG ids and URL fragments. */
@@ -113,6 +131,8 @@ export const SCORE_BANDS = {
 export const MAX_FILES = 1000;
 export const MAX_FINDINGS = 200;
 export const MAX_FLAGS_PER_FILE = 50;
+/** Flags across the whole document; the per-file cap alone allows 50 000. */
+export const MAX_FLAGS_TOTAL = 2000;
 export const MAX_MEMORY_REFS_PER_FINDING = 8;
 export const MAX_MEMORY_APPLIED = 50;
 export const MAX_CHECKED_ITEMS = 30;

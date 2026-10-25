@@ -2,15 +2,19 @@ export * as limits from "./limits.js";
 
 export {
   Confidence,
+  count,
   Delta,
   FileRef,
   FullSha,
+  hasForbiddenCodeCharacters,
   hasForbiddenLineCharacters,
+  hasForbiddenNameCharacters,
   hasForbiddenProseCharacters,
   Id,
   ID_PATTERN,
   LineNumber,
   LineRange,
+  pathProblem,
   REPOSITORY_PATH_PATTERN,
   RepositoryPath,
   Score,
@@ -28,6 +32,7 @@ export {
   GraphNode,
   jsonDepth,
   jsonHasForbiddenCharacters,
+  jsonHasUnsafeKeys,
   JsonValue,
   Lane,
   MessageKind,
@@ -52,6 +57,8 @@ export {
   TriagedFile,
   TriagedFileLevel,
   TriageLevel,
+  UnanalysedFile,
+  UnanalysedReason,
   type TriageInput,
 } from "./triage.js";
 
@@ -73,6 +80,7 @@ export {
   GeneratorRole,
   GitRef,
   Hunk,
+  hunksInOrder,
   LlmRole,
   Provenance,
   RepoName,
@@ -108,8 +116,13 @@ export {
   type IntegrityOptions,
 } from "./integrity.js";
 
-export { parseAnalysisDocument, type ParseOptions } from "./parse.js";
+export { parseAnalysisDocument, parseAnalysisDocumentJson, type ParseOptions } from "./parse.js";
 
 export { applyKnownFields, type KnownFacts } from "./known-fields.js";
 
-export { buildJsonSchema, emitJsonSchema, JSON_SCHEMA_ID } from "./json-schema.js";
+export {
+  BEYOND_JSON_SCHEMA,
+  buildJsonSchema,
+  emitJsonSchema,
+  JSON_SCHEMA_ID,
+} from "./json-schema.js";

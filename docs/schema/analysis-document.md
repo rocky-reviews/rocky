@@ -7,27 +7,47 @@ Schema is `packages/schema/json-schema/analysis-document.schema.json`; the worke
 
 Reading time: about 15 minutes.
 
+## In one paragraph (for a non-specialist)
+
+When a pull request arrives, Rocky's AI reads it and writes down what it found as one
+structured file: a short briefing, a score and a few notes for every changed file, a list of
+draft comments with suggested fixes, and a diagram of what the change touches. Before Rocky
+keeps or shows any of that, a checker goes through the file with a fixed rulebook: every
+field has the right type and a size limit; nothing in it can hide or spoof text (no invisible
+or direction-changing characters); every file and line it mentions really is in the pull
+request's diff; its scores, levels and verdict agree with each other; and the facts about the
+pull request (commits, files, line counts) come from git, never from the AI. If the file
+breaks a rule, Rocky tells the AI exactly which rule and where, lets it try once more, and
+otherwise shows "AI couldn't analyse this" instead of a guess. Nothing the AI writes is ever
+posted to GitHub without a person accepting it.
+
 ## Why one document
 
-Everything the reviewer sees (sidebar, briefing, change map, flags under hunks, draft findings,
-"send to agent" prompts) and everything Rocky does with AI output (store, render, post after a
-human accepts) reads **one validated JSON document per PR revision**. The model never writes
-free text that the UI shows directly, and nothing reads raw model output (ADR 0004).
+Everything the AI contributes to a review (sidebar scores, briefing, change map, flags under
+hunks, draft findings, "send to agent" prompts) and everything Rocky does with AI output
+(store, render, post after a human accepts) goes through **one validated JSON document per PR
+revision**. The model never writes free text that the UI shows directly, and nothing reads
+raw model output (ADR 0004).
+
+What is **not** in the document: the PR's title, author, URL, approvals and comments, and the
+diff's line content. Those come from Rocky's mirror of GitHub (the source of truth) and the UI
+reads them from there; the document carries the AI's analysis and the facts it is checked
+against. ADR 0004 says the same.
 
 A document that passes `parseAnalysisDocument` is safe to store and show. One that does not is
-sent back to the model once with the exact errors; if it still fails, the UI shows "AI couldn't
-analyse this" instead of anything the model said.
+sent back to the model once with the exact errors; if it still fails, the file (or the whole
+PR) is marked "AI couldn't analyse this" instead of showing anything the model said.
 
 ## What the document contains
 
-| Section         | Written by          | What it holds                                                                                                                                                |
-| --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                     |
-| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, timestamp, which model did what. |
-| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes, suggested review path (files + why), "checked, looks fine" list, memory used.    |
-| `triage`        | model               | Per changed file: score 0–100, level, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.  |
-| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.        |
-| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough.                            |
+| Section         | Written by          | What it holds                                                                                                                                                                                                                    |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                                         |
+| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, timestamp, which model did what.                                                                     |
+| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                        |
+| `triage`        | model + pipeline    | Per changed file: score 0–100, level, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary. Files the AI could not analyse, with a reason (set by the pipeline). |
+| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                            |
+| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough.                                                                                                |
 
 The `provenance` section is the **known facts**. `applyKnownFields(modelOutput, facts)` writes
 it over whatever the model returned, so a model can never state a SHA, a file list, a line
@@ -128,13 +148,23 @@ count or a hunk range. Every other section is then checked against those facts.
 - **Ids** match `^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, at most 128 characters. They survive SVG ids,
   URL fragments and comment anchors without escaping.
 - **Paths** are repository-relative POSIX: no leading `/`, no drive letter, no backslash, no
-  `.` or `..` segment, no empty segment, no trailing slash, no control characters, at most
-  1 024 characters. This holds for the file list from git too: a PR that adds a file with a
-  newline or backslash in its name cannot be analysed (fail closed).
-- **Text** rejects control characters. Single-line fields (labels, titles, paths, ids) reject
-  all of them including tab and newline; prose fields (bodies, reasons, summaries) allow only
-  `\n` and `\t`; code lines (suggestions) allow tab, may be empty, never contain a newline.
-  Payload samples are checked recursively, keys included.
+  `.` or `..` segment, no empty segment, no trailing slash, at most 1 024 characters,
+  NFC-normalised, with no control, format (bidi, zero-width, BOM) or line-separator
+  characters, and no segment that is only dots or dot look-alikes (`．．`, `‥`, `…`,
+  `%2e%2e`), only whitespace, or `.git`. The same type is used for graph file references.
+  This holds for the file list from git too: a PR that adds a file with a newline, a
+  backslash or a bidi character in its name cannot be analysed (fail closed).
+- **Text cannot hide or reorder anything.** Every field rejects control characters (C0 and
+  C1), bidi controls (the Trojan Source characters), zero-width/BOM hiding characters and
+  lone surrogates. Single-line fields (labels, titles) also reject tab, newline and the
+  line/paragraph separators; prose fields (bodies, reasons, summaries) allow `\n` and `\t`
+  and keep ZWJ/ZWNJ for emoji and scripts that need them; code lines (suggestions) allow tab,
+  may be empty, and reject every format character so a suggestion cannot carry a Trojan Source
+  payload. Payload samples are checked recursively, keys included, and may not use the keys
+  `__proto__`, `constructor` or `prototype`.
+- **The whole document is capped** at 4 MiB of JSON (`MAX_DOCUMENT_BYTES`), checked on the raw
+  text by `parseAnalysisDocumentJson` before anything is parsed; input may nest at most 64
+  levels and may not contain cycles. Flags are capped at 2 000 across the document.
 - **Every string has a maximum length and every array a maximum size.** They live in
   `packages/schema/src/limits.ts` with the reason for each. The main ones:
 
@@ -161,12 +191,14 @@ count or a hunk range. Every other section is then checked against those facts.
 
 | Code                            | Guarantee                                                                                                                                                                                                                                            |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DUPLICATE_ID`                  | Ids are unique per collection (lanes, nodes, edges, flows, messages per flow, views across the tree, steps, findings, memory refs).                                                                                                                  |
-| `DUPLICATE_PATH`                | A path appears once per collection (PR files, triaged files, noise, review path).                                                                                                                                                                    |
+| `DUPLICATE_ID`                  | Ids are unique per collection, compared case-insensitively (lanes, nodes, edges, flows, messages per flow, views across the tree, steps, findings, memory refs).                                                                                     |
+| `DUPLICATE_PATH`                | A path appears once per collection (PR files, triaged files, noise, unanalysed, review path).                                                                                                                                                        |
 | `BROKEN_REFERENCE`              | Nodes name declared lanes; edges and flow participants name declared nodes; messages name participants of their flow; view scopes, walkthrough stages and focus name existing elements; focused messages belong to a flow drawn on the step's stage. |
 | `UNKNOWN_FILE`                  | Triage entries, noise entries and findings name files in the PR's file list; review-path steps name triaged files.                                                                                                                                   |
-| `TRIAGE_COVERAGE`               | Every PR file is triaged or noise, exactly once.                                                                                                                                                                                                     |
+| `TRIAGE_COVERAGE`               | Every PR file is triaged, noise or unanalysed, exactly once.                                                                                                                                                                                         |
 | `FINDING_IN_NOISE_FILE`         | No finding sits in a file triage calls noise.                                                                                                                                                                                                        |
+| `FINDING_IN_UNANALYSED_FILE`    | No finding sits in a file the AI could not analyse; such files carry no flags or review-path steps either.                                                                                                                                           |
+| `MEMORY_REF_MISMATCH`           | Every memory entry a finding cites appears in `briefing.memoryApplied` with identical id, text and source.                                                                                                                                           |
 | `LINE_OUTSIDE_DIFF`             | Finding and flag ranges sit inside **one** new-side hunk (context lines included) of that file's diff.                                                                                                                                               |
 | `SCORE_LEVEL_MISMATCH`          | Scores match their level: critical 80–100, important 50–79, normal 20–49, low 0–19.                                                                                                                                                                  |
 | `SEVERITY_LEVEL_MISMATCH`       | A critical or high finding cannot sit in a file triaged `low` ("don't matter" in the sidebar).                                                                                                                                                       |
@@ -175,9 +207,10 @@ count or a hunk range. Every other section is then checked against those facts.
 | `SUGGESTION_CONTEXT_MISMATCH`   | With the file's content available, the context line equals the line before the range.                                                                                                                                                                |
 | `SUGGESTION_RANGE_OUTSIDE_FILE` | With content available, the range exists in the file.                                                                                                                                                                                                |
 | `SUGGESTION_NOOP`               | With content available, the replacement differs from the original lines.                                                                                                                                                                             |
-| `LIMIT_EXCEEDED`                | The view tree holds at most 64 views and nests at most 4 deep (the shape cannot bound a tree's total).                                                                                                                                               |
+| `LIMIT_EXCEEDED`                | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                  |
 | `UNSUPPORTED_SCHEMA_VERSION`    | Only `1.0.x` is read.                                                                                                                                                                                                                                |
-| `TOO_DEEP` / `INTERNAL_ERROR`   | The parser never throws; a document too deep to walk, or an unexpected error, is reported as such.                                                                                                                                                   |
+| `INVALID_JSON`                  | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                         |
+| `TOO_DEEP` / `INTERNAL_ERROR`   | The parser never throws; input nested over 64 levels or containing a cycle is `TOO_DEEP` (with the path), an unexpected error is `INTERNAL_ERROR` without echoing input.                                                                             |
 
 **What suggestions can and cannot be checked without file contents.** The hunk ranges in the
 facts tell us a range is in the diff, and that a context line at line 1 is impossible. Whether
@@ -187,14 +220,29 @@ the head file can only be checked when the pipeline passes the new-side file con
 should always pass them for files that carry suggestions; the document itself never embeds
 file contents.
 
+**Input contract.** `parseAnalysisDocument` takes JSON-parsed data. Untrusted text (a model
+response, a stored blob) goes through `parseAnalysisDocumentJson`, which applies the size cap
+before `JSON.parse`. Shared or cyclic object graphs are not valid input and are reported as
+`TOO_DEEP`.
+
+**Design notes on small rules.** Self-loop edges are allowed (a module that calls itself is a
+real thing to draw). A node's `group` is a free label, not a reference: groups have no
+registry to point at. Ids are compared case-insensitively because anchors often are.
+
 ## How this is tested
 
-- 170+ unit tests, one per rule, each asserting the code **and** the JSON path.
-- Property tests (fast-check, fixed seed): 150 random valid documents are accepted and
-  re-parse to themselves; 400 random mutations (unknown fields, control characters, path
-  traversal, oversized strings and arrays, duplicate ids, broken references, lines outside the
-  diff, files outside the PR, missing or doubled triage, score and verdict inconsistencies,
-  bad suggestions) are each rejected with the expected code at the expected path.
+- 240+ unit tests, one per rule, each asserting the code **and** the JSON path; the
+  independent review's probe inputs (bidi and invisible characters, look-alike dot paths,
+  `__proto__` keys, a file named `constructor`, cyclic and 100 000-deep input, an 80 MB
+  document) are regression tests in `hardening.test.ts`.
+- Property tests (fast-check, fixed seed): 150 random valid documents (with noise, unanalysed
+  files, memory references, graphs, flows and walkthroughs) are accepted and re-parse to
+  themselves; 400 random mutations from 40 mutators (unknown fields, control and Unicode
+  hiding characters in text, code and paths, path traversal and look-alikes, oversized strings
+  and arrays, duplicate ids incl. case-only, duplicate paths, broken references, lines outside
+  the diff, files outside the PR, missing or doubled triage, findings in noise or unanalysed
+  files, score, verdict and memory inconsistencies, bad suggestions, out-of-order hunks, -0)
+  are each rejected with the expected code at the expected path.
 - Golden fixtures `pr-847.json`, `tiny.json`, `large-60-files.json` validate and are stored in
   canonical form; the large one is regenerated by a deterministic script and compared.
 - The emitted JSON Schema is byte-identical across runs and matches the committed file.
@@ -204,6 +252,8 @@ file contents.
 
 ## Open questions for the founder
 
+0. **Markdown bodies may still contain `<`.** The schema now guarantees no hidden or
+   direction-changing characters and bounded size, but it does not strip HTML tags (see 6).
 1. **Graph is optional.** If the graph role fails, the rest of the document still ships and the
    UI shows no change map. Should a missing graph instead block the whole analysis?
 2. **Noise files are a separate record** (path + summary) rather than a triaged file with

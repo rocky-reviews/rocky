@@ -188,6 +188,17 @@ export const jsonHasForbiddenCharacters = (value: JsonValue): boolean => {
   );
 };
 
+/** Keys that mean something to JavaScript consumers are refused outright rather than dropped. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+export const jsonHasUnsafeKeys = (value: JsonValue): boolean => {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(jsonHasUnsafeKeys);
+  return Object.entries(value).some(
+    ([key, child]) => UNSAFE_KEYS.has(key) || jsonHasUnsafeKeys(child),
+  );
+};
+
 /** A root string is either JSON text, which belongs here as the value it spells, or a scalar nobody learns a shape from. */
 const Sample = JsonValue.superRefine((value, context) => {
   if (typeof value === "string") {
@@ -206,6 +217,11 @@ const Sample = JsonValue.superRefine((value, context) => {
     });
   if (jsonHasForbiddenCharacters(value))
     context.addIssue({ code: "custom", message: "must not contain control characters" });
+  if (jsonHasUnsafeKeys(value))
+    context.addIssue({
+      code: "custom",
+      message: "must not use the keys __proto__, constructor or prototype",
+    });
 });
 
 /**

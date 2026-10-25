@@ -18,7 +18,7 @@ import {
   MAX_REPO_OWNER_LENGTH,
   MAX_VERSION_LENGTH,
 } from "./limits.js";
-import { FullSha, line, RepositoryPath } from "./primitives.js";
+import { count, FullSha, line, RepositoryPath } from "./primitives.js";
 
 /** GitHub's own rules for logins and repository names; other forges will need widening. */
 export const RepoOwner = z
@@ -32,14 +32,20 @@ export const RepoName = z
   .max(MAX_REPO_NAME_LENGTH)
   .regex(/^[A-Za-z0-9._-]+$/, "must be a valid repository name");
 
-/** Git ref names cannot start with '-', contain '..', control characters, spaces or '~^:?*[\\'. */
+/**
+ * Git ref names (git-check-ref-format): no leading '-', no '..', '@{' or '//', no control
+ * characters, space or '~^:?*[\\', no trailing '/', '.' or '.lock'.
+ */
 export const GitRef = z
   .string()
   .min(1)
   .max(MAX_REF_LENGTH)
   // No control characters, no space (the literal in the class), none of git's forbidden marks.
-  // eslint-disable-next-line no-control-regex -- the rule is about control characters
-  .regex(/^(?!-)(?!.*\.\.)[^\u0000-\u001F \u007F~^:?*[\\]+$/, "must be a valid git ref name");
+  .regex(
+    // eslint-disable-next-line no-control-regex -- the rule is about control characters
+    /^(?!-)(?!.*\.\.)(?!.*@\{)(?!.*\/\/)(?!.*(?:\/|\.|\.lock)$)[^\u0000-\u001F \u007F~^:?*[\\]+$/,
+    "must be a valid git ref name",
+  );
 
 /**
  * One hunk as the unified diff header states it: `@@ -oldStart,oldLines +newStart,newLines @@`.
@@ -48,17 +54,34 @@ export const GitRef = z
  */
 export const Hunk = z
   .strictObject({
-    oldStart: z.int().min(0).max(MAX_LINE_NUMBER),
-    oldLines: z.int().min(0).max(MAX_LINE_NUMBER),
-    newStart: z.int().min(0).max(MAX_LINE_NUMBER),
-    newLines: z.int().min(0).max(MAX_LINE_NUMBER),
+    oldStart: count(MAX_LINE_NUMBER),
+    oldLines: count(MAX_LINE_NUMBER),
+    newStart: count(MAX_LINE_NUMBER),
+    newLines: count(MAX_LINE_NUMBER),
   })
   .refine((hunk) => hunk.newLines === 0 || hunk.newStart >= 1, {
     message: "a hunk with new-side lines starts at line 1 or later",
     path: ["newStart"],
   })
+  .refine((hunk) => hunk.oldLines === 0 || hunk.oldStart >= 1, {
+    message: "a hunk with old-side lines starts at line 1 or later",
+    path: ["oldStart"],
+  })
   .describe("Unified diff hunk header numbers.");
 export type Hunk = z.infer<typeof Hunk>;
+
+/**
+ * Hunks come in file order and never overlap on the new side. A pure deletion (`newLines` 0)
+ * sits after `newStart`, so the next hunk may begin at `newStart + 1`.
+ */
+export const hunksInOrder = (hunks: readonly Hunk[]): boolean =>
+  hunks.every((hunk, index) => {
+    const previous = hunks[index - 1];
+    if (previous === undefined) return true;
+    const firstFree =
+      previous.newLines === 0 ? previous.newStart + 1 : previous.newStart + previous.newLines;
+    return hunk.newStart >= firstFree;
+  });
 
 export const FileStatus = z.enum(["added", "modified", "removed", "renamed"]);
 export type FileStatus = z.infer<typeof FileStatus>;
@@ -68,9 +91,13 @@ export const ChangedFile = z
     path: RepositoryPath.describe("Path on the head side (the new path for a rename)."),
     previousPath: RepositoryPath.optional().describe("Path on the base side, for renames."),
     status: FileStatus,
-    additions: z.int().min(0).max(MAX_FILE_LINE_COUNT),
-    deletions: z.int().min(0).max(MAX_FILE_LINE_COUNT),
-    hunks: z.array(Hunk).max(MAX_HUNKS_PER_FILE).describe("Hunks of this file's diff, in order."),
+    additions: count(MAX_FILE_LINE_COUNT),
+    deletions: count(MAX_FILE_LINE_COUNT),
+    hunks: z
+      .array(Hunk)
+      .max(MAX_HUNKS_PER_FILE)
+      .refine(hunksInOrder, { message: "hunks must be in ascending order and not overlap" })
+      .describe("Hunks of this file's diff, in order."),
   })
   .describe("One file in the PR's diff, as git reports it.");
 export type ChangedFile = z.infer<typeof ChangedFile>;

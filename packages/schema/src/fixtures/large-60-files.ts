@@ -34,6 +34,8 @@ const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 
 export const FILE_COUNT = 60;
 export const NOISE_COUNT = 6;
+/** Files the pipeline could not analyse; they count toward coverage but carry nothing else. */
+export const UNANALYSED_COUNT = 2;
 
 export const buildLargeFixture = (): AnalysisDocumentInput => {
   const random = seeded(847);
@@ -44,9 +46,12 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
   for (let index = 0; index < FILE_COUNT; index += 1) {
     const area = AREAS[index % AREAS.length] as (typeof AREAS)[number];
     const isNoise = index >= FILE_COUNT - NOISE_COUNT;
+    const isUnanalysed = !isNoise && index >= FILE_COUNT - NOISE_COUNT - UNANALYSED_COUNT;
     const path = isNoise
       ? `generated/${area}/types-${index}.ts`
-      : `src/${area}/module-${String(index).padStart(2, "0")}.ts`;
+      : isUnanalysed
+        ? `vendor/${area}/bundle-${index}.min.js`
+        : `src/${area}/module-${String(index).padStart(2, "0")}.ts`;
     const status = index % 7 === 0 ? "added" : "modified";
     const hunkCount = status === "added" ? 1 : int(1, 3);
     const hunks = [];
@@ -66,7 +71,11 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
     files.push({ path, status, additions, deletions, hunks });
   }
 
-  const triagedFiles = files.slice(0, FILE_COUNT - NOISE_COUNT);
+  const triagedFiles = files.slice(0, FILE_COUNT - NOISE_COUNT - UNANALYSED_COUNT);
+  const unanalysedFiles = files.slice(
+    FILE_COUNT - NOISE_COUNT - UNANALYSED_COUNT,
+    FILE_COUNT - NOISE_COUNT,
+  );
   const noiseFiles = files.slice(FILE_COUNT - NOISE_COUNT);
 
   const triage = triagedFiles.map((file, index) => {
@@ -238,7 +247,11 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
       reviewPath: triage.slice(0, 20).map((file) => ({ path: file.path, why: file.reason })),
       checkedOk: ["Generated files match the OpenAPI spec", "No new dependencies"],
       memoryApplied: [
-        { entryId: "mem-1", text: "Shared client errors must be handled", source: "PR #700" },
+        {
+          entryId: "mem-1",
+          text: "Shared client errors must be handled",
+          source: "decision · PR #700",
+        },
       ],
     },
     triage: {
@@ -246,6 +259,11 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
       noise: noiseFiles.map((file) => ({
         path: file.path,
         summary: "Regenerated from the OpenAPI spec; no hand edits.",
+      })),
+      unanalysed: unanalysedFiles.map((file) => ({
+        path: file.path,
+        reason: "too-large" as const,
+        detail: "Minified bundle over the per-file token budget.",
       })),
     },
     findings,

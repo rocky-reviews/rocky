@@ -22,13 +22,17 @@
  * - a suggestion with a context line cannot start at line 1; when the new file content is
  *   supplied, the context line must match, the range must exist, and the replacement must
  *   differ from the original lines.
+ * - files the AI could not analyse (triage.unanalysed) count toward coverage and carry no
+ *   finding, flag or review-path step.
+ * - every memory reference on a finding appears in briefing.memoryApplied, quoted identically.
+ * - at most MAX_FLAGS_TOTAL flags across the document.
  */
 import type { Briefing } from "./briefing.js";
 import type { AnalysisDocument } from "./document.js";
 import type { SchemaIssue } from "./errors.js";
-import type { Finding, Severity } from "./findings.js";
+import type { Finding, MemoryRef, Severity } from "./findings.js";
 import type { Flow, Graph, StepStage, View } from "./graph.js";
-import { MAX_VIEW_DEPTH, MAX_VIEWS_TOTAL, SCORE_BANDS } from "./limits.js";
+import { MAX_FLAGS_TOTAL, MAX_VIEW_DEPTH, MAX_VIEWS_TOTAL, SCORE_BANDS } from "./limits.js";
 import type { LineRange } from "./primitives.js";
 import type { ChangedFile, Hunk } from "./provenance.js";
 import type { Triage } from "./triage.js";
@@ -47,6 +51,11 @@ export type IntegrityOptions = {
 
 type Issues = SchemaIssue[];
 
+/** Append without spreading: a spread of a very long array overflows the call stack. */
+const append = (issues: Issues, more: readonly SchemaIssue[]): void => {
+  for (const issue of more) issues.push(issue);
+};
+
 const SEVERITY_RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 const RISK_RANK: Record<Briefing["verdict"]["level"], number> = {
   low: 0,
@@ -55,16 +64,23 @@ const RISK_RANK: Record<Briefing["verdict"]["level"], number> = {
   critical: 3,
 };
 
-/** Indexes of every repeated value after its first occurrence. */
-const duplicateIndexes = (values: readonly string[]): { index: number; value: string }[] => {
+/** Indexes of every repeated value after its first occurrence, under a key function. */
+const duplicateIndexes = (
+  values: readonly string[],
+  key: (value: string) => string = (value) => value,
+): { index: number; value: string }[] => {
   const seen = new Set<string>();
   const repeated: { index: number; value: string }[] = [];
   values.forEach((value, index) => {
-    if (seen.has(value)) repeated.push({ index, value });
-    seen.add(value);
+    const k = key(value);
+    if (seen.has(k)) repeated.push({ index, value });
+    seen.add(k);
   });
   return repeated;
 };
+
+/** Ids are compared case-insensitively: anchors and ids often are, so `F1` and `f1` collide. */
+const idKey = (id: string): string => id.toLowerCase();
 
 const reportDuplicateIds = (
   issues: Issues,
@@ -72,11 +88,11 @@ const reportDuplicateIds = (
   ids: readonly string[],
   field = "id",
 ): void => {
-  for (const { index, value } of duplicateIndexes(ids))
+  for (const { index, value } of duplicateIndexes(ids, idKey))
     issues.push({
       code: "DUPLICATE_ID",
       path: `${collection}[${index}].${field}`,
-      message: `duplicate id '${value}' in ${collection}`,
+      message: `duplicate id '${value}' in ${collection} (ids are compared case-insensitively)`,
     });
 };
 
@@ -102,15 +118,24 @@ export const rangeInsideHunks = (range: LineRange, hunks: readonly Hunk[]): bool
 
 // --- Graph ---------------------------------------------------------------------------------
 
+/**
+ * Depth-first, with a budget: a shared subtree (a DAG the shape cannot see) would otherwise
+ * expand exponentially. Once the budget is spent the tree is over MAX_VIEWS_TOTAL anyway, so
+ * the caller reports that and skips the per-view checks.
+ */
 const flattenViews = (
   views: readonly View[],
   prefix: string,
   depth: number,
-): { view: View; path: string; depth: number }[] =>
-  views.flatMap((view, index) => {
+  out: { view: View; path: string; depth: number }[],
+): void => {
+  for (const [index, view] of views.entries()) {
+    if (out.length > MAX_VIEWS_TOTAL) return;
     const path = `${prefix}[${index}]`;
-    return [{ view, path, depth }, ...flattenViews(view.children, `${path}.children`, depth + 1)];
-  });
+    out.push({ view, path, depth });
+    flattenViews(view.children, `${path}.children`, depth + 1, out);
+  }
+};
 
 const messageIdsOf = (flows: readonly Flow[]): Set<string> =>
   new Set(flows.flatMap((flow) => flow.messages.map((message) => message.id)));
@@ -214,8 +239,20 @@ const graphIssues = (graph: Graph): Issues => {
     });
   });
 
-  const views = flattenViews(graph.views, "graph.views", 1);
-  for (const { index, value } of duplicateIndexes(views.map(({ view }) => view.id))) {
+  const views: { view: View; path: string; depth: number }[] = [];
+  flattenViews(graph.views, "graph.views", 1, views);
+  if (views.length > MAX_VIEWS_TOTAL) {
+    issues.push({
+      code: "LIMIT_EXCEEDED",
+      path: "graph.views",
+      message: `the view tree holds more than ${MAX_VIEWS_TOTAL} views (shared subtrees count every time they appear)`,
+    });
+    return issues;
+  }
+  for (const { index, value } of duplicateIndexes(
+    views.map(({ view }) => view.id),
+    idKey,
+  )) {
     const entry = views[index];
     if (entry !== undefined)
       issues.push({
@@ -224,12 +261,6 @@ const graphIssues = (graph: Graph): Issues => {
         message: `duplicate id '${value}' in graph.views`,
       });
   }
-  if (views.length > MAX_VIEWS_TOTAL)
-    issues.push({
-      code: "LIMIT_EXCEEDED",
-      path: "graph.views",
-      message: `the view tree holds ${views.length} views; at most ${MAX_VIEWS_TOTAL} are allowed`,
-    });
   const tooDeep = views.find(({ depth }) => depth > MAX_VIEW_DEPTH);
   if (tooDeep !== undefined)
     issues.push({
@@ -360,6 +391,23 @@ const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFi
     });
   });
 
+  const totalFlags = triage.files.reduce((sum, file) => sum + file.flags.length, 0);
+  if (totalFlags > MAX_FLAGS_TOTAL)
+    issues.push({
+      code: "LIMIT_EXCEEDED",
+      path: "triage.files",
+      message: `${totalFlags} flags across the document; at most ${MAX_FLAGS_TOTAL} are allowed`,
+    });
+
+  reportDuplicatePaths(
+    issues,
+    "triage.unanalysed",
+    triage.unanalysed.map((file) => file.path),
+  );
+  const noise = new Set(triage.noise.map((file) => file.path));
+  const seenIn = (path: string, except: "noise" | "unanalysed"): string | undefined =>
+    triaged.has(path) ? "triaged" : except !== "noise" && noise.has(path) ? "noise" : undefined;
+
   triage.noise.forEach((file, index) => {
     if (!filesByPath.has(file.path))
       issues.push({
@@ -367,21 +415,38 @@ const triageIssues = (triage: Triage, filesByPath: ReadonlyMap<string, ChangedFi
         path: `triage.noise[${index}].path`,
         message: `'${file.path}' is not in the PR's file list`,
       });
-    if (triaged.has(file.path))
+    const other = seenIn(file.path, "noise");
+    if (other !== undefined)
       issues.push({
         code: "TRIAGE_COVERAGE",
         path: `triage.noise[${index}].path`,
-        message: `'${file.path}' is both triaged and noise`,
+        message: `'${file.path}' is both ${other} and noise`,
       });
   });
 
-  const noise = new Set(triage.noise.map((file) => file.path));
+  triage.unanalysed.forEach((file, index) => {
+    if (!filesByPath.has(file.path))
+      issues.push({
+        code: "UNKNOWN_FILE",
+        path: `triage.unanalysed[${index}].path`,
+        message: `'${file.path}' is not in the PR's file list`,
+      });
+    const other = seenIn(file.path, "unanalysed");
+    if (other !== undefined)
+      issues.push({
+        code: "TRIAGE_COVERAGE",
+        path: `triage.unanalysed[${index}].path`,
+        message: `'${file.path}' is both ${other} and unanalysed`,
+      });
+  });
+
+  const unanalysed = new Set(triage.unanalysed.map((file) => file.path));
   for (const path of filesByPath.keys()) {
-    if (!triaged.has(path) && !noise.has(path))
+    if (!triaged.has(path) && !noise.has(path) && !unanalysed.has(path))
       issues.push({
         code: "TRIAGE_COVERAGE",
         path: "triage",
-        message: `'${path}' is in the PR but neither triaged nor noise`,
+        message: `'${path}' is in the PR but neither triaged, noise nor unanalysed`,
       });
   }
 
@@ -440,9 +505,13 @@ const suggestionIssues = (
   return issues;
 };
 
+const sameRef = (a: MemoryRef, b: MemoryRef): boolean =>
+  a.entryId === b.entryId && a.text === b.text && a.source === b.source;
+
 const findingIssues = (
   findings: readonly Finding[],
   triage: Triage,
+  applied: readonly MemoryRef[],
   filesByPath: ReadonlyMap<string, ChangedFile>,
   fileLines: FileLines | undefined,
 ): Issues => {
@@ -455,6 +524,8 @@ const findingIssues = (
 
   const levelByPath = new Map(triage.files.map((file) => [file.path, file.level] as const));
   const noise = new Set(triage.noise.map((file) => file.path));
+  const unanalysed = new Set(triage.unanalysed.map((file) => file.path));
+  const appliedById = new Map(applied.map((ref) => [ref.entryId, ref] as const));
 
   findings.forEach((finding, index) => {
     const at = `findings[${index}]`;
@@ -471,6 +542,12 @@ const findingIssues = (
         code: "FINDING_IN_NOISE_FILE",
         path: `${at}.path`,
         message: `'${finding.path}' is triaged as noise; a finding there contradicts the triage`,
+      });
+    else if (unanalysed.has(finding.path))
+      issues.push({
+        code: "FINDING_IN_UNANALYSED_FILE",
+        path: `${at}.path`,
+        message: `'${finding.path}' could not be analysed; a finding there cannot be trusted`,
       });
 
     if (known !== undefined && !rangeInsideHunks(finding.range, known.hunks))
@@ -494,7 +571,25 @@ const findingIssues = (
       "entryId",
     );
 
-    issues.push(...suggestionIssues(finding, at, fileLines?.[finding.path]));
+    finding.memory.forEach((ref, refIndex) => {
+      const known = appliedById.get(ref.entryId);
+      if (known === undefined || !sameRef(known, ref))
+        issues.push({
+          code: "MEMORY_REF_MISMATCH",
+          path: `${at}.memory[${refIndex}]`,
+          message:
+            known === undefined
+              ? `memory entry '${ref.entryId}' is not listed in briefing.memoryApplied`
+              : `memory entry '${ref.entryId}' is quoted differently from briefing.memoryApplied`,
+        });
+    });
+
+    // Own-property lookup: a path like "constructor" must not reach Object.prototype.
+    const lines =
+      fileLines !== undefined && Object.hasOwn(fileLines, finding.path)
+        ? fileLines[finding.path]
+        : undefined;
+    append(issues, suggestionIssues(finding, at, lines));
   });
 
   return issues;
@@ -568,10 +663,19 @@ export const integrityIssues = (
   );
   const filesByPath = new Map(doc.provenance.files.map((file) => [file.path, file] as const));
 
-  if (doc.graph !== undefined) issues.push(...graphIssues(doc.graph));
-  issues.push(...triageIssues(doc.triage, filesByPath));
-  issues.push(...findingIssues(doc.findings, doc.triage, filesByPath, options.newFileLines));
-  issues.push(...briefingIssues(doc.briefing, doc.triage, doc.findings));
+  if (doc.graph !== undefined) append(issues, graphIssues(doc.graph));
+  append(issues, triageIssues(doc.triage, filesByPath));
+  append(
+    issues,
+    findingIssues(
+      doc.findings,
+      doc.triage,
+      doc.briefing.memoryApplied,
+      filesByPath,
+      options.newFileLines,
+    ),
+  );
+  append(issues, briefingIssues(doc.briefing, doc.triage, doc.findings));
 
   return issues;
 };

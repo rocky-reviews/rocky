@@ -1,6 +1,10 @@
 /**
- * The analysis document: one per PR revision, the only thing the UI, renderer, posting and
- * metering read (ADR 0004).
+ * The analysis document: one per PR revision, the only AI output the UI, renderer, posting and
+ * metering read (ADR 0004). PR metadata and diff content come from the GitHub mirror.
+ *
+ * Versioning (SCHEMA_VERSION, SUPPORTED_VERSION_PATTERN, isSupportedVersion, SchemaVersionField)
+ * adapted from PR Lens (https://github.com/coldteadotai/pr-lens), MIT License,
+ * Copyright (c) 2026 Coldtea AI. See NOTICE.
  */
 import { z } from "zod";
 import { Briefing } from "./briefing.js";
