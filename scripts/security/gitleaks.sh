@@ -43,8 +43,27 @@ cd "$ROOT"
 # fallback when Docker isn't running.
 if docker_available; then
   echo "gitleaks: using container $GITLEAKS_IMAGE" >&2
-  # shellcheck disable=SC2086  # GIT_SAFE_DIR_ENV is intentionally word-split
-  exec docker run --rm -v "$ROOT:/repo:ro" -w /repo $GIT_SAFE_DIR_ENV "$GITLEAKS_IMAGE" "$@"
+  # Mount the checkout at its real path, and in a git worktree also the shared git directory: the
+  # worktree's `.git` file points there by absolute path, and without it gitleaks logs "not a git
+  # repository", scans nothing and still exits 0.
+  COMMON_DIR=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  ROOT_REAL=$(pwd -P)
+  # run_container <docker run args...>: adds the mounts, working dir and safe.directory.
+  run_container() {
+    case "$COMMON_DIR/" in
+      "$ROOT_REAL"/*) set -- -v "$ROOT_REAL:$ROOT_REAL:ro" "$@" ;;
+      *) set -- -v "$ROOT_REAL:$ROOT_REAL:ro" -v "$COMMON_DIR:$COMMON_DIR:ro" "$@" ;;
+    esac
+    # shellcheck disable=SC2086  # GIT_SAFE_DIR_ENV is intentionally word-split
+    docker run --rm -w "$ROOT_REAL" $GIT_SAFE_DIR_ENV "$@"
+  }
+  # gitleaks ignores git errors, so check git works in the container first (fail closed).
+  if ! run_container --entrypoint git "$GITLEAKS_IMAGE" rev-parse --git-dir >/dev/null; then
+    echo "gitleaks: git cannot read this checkout inside the container; refusing to continue." >&2
+    exit 1
+  fi
+  run_container "$GITLEAKS_IMAGE" "$@"
+  exit $?
 elif command -v gitleaks >/dev/null 2>&1; then
   echo "gitleaks: Docker unavailable; using local binary $(gitleaks version 2>/dev/null || echo '(unknown version)'). CI uses $GITLEAKS_IMAGE" >&2
   exec gitleaks "$@"
