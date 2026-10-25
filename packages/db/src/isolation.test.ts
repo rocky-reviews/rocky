@@ -1,0 +1,432 @@
+import type { OrgId } from "@rocky-reviews/core";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb, type Db } from "./client.js";
+import { APP_ROLE, RETENTION_ROLE } from "./roles.js";
+import {
+  CONTAINER_TIMEOUT_MS,
+  newOrgId,
+  seedOrg,
+  startPostgres,
+  TEST_ROLES,
+  type SeededOrg,
+} from "./testing/index.js";
+
+/**
+ * P2-2 isolation suite. Tables are enumerated from pg_catalog, not from a list in this file, so a
+ * new table that lacks RLS, org_id, the cascade FK or a fixture row fails here.
+ */
+
+/** The only non-tenant table allowed to exist. Everything else must be a tenant table. */
+const ALLOWED_NON_TENANT_TABLES = ["app.schema_migrations"];
+
+const INSUFFICIENT_PRIVILEGE = "42501";
+const FOREIGN_KEY_VIOLATION = "23503";
+const INVALID_TEXT_REPRESENTATION = "22P02";
+
+interface TenantTable {
+  schema: string;
+  name: string;
+  /** `org_id`, or `id` for `orgs` itself. */
+  tenantColumn: string;
+  hasIdentity: boolean;
+  qualified: string;
+}
+
+let pgs: Awaited<ReturnType<typeof startPostgres>>;
+let appPool: pg.Pool;
+let db: Db;
+let tables: TenantTable[];
+let a: SeededOrg;
+let b: SeededOrg;
+
+const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof pg.DatabaseError) return error;
+    throw error;
+  }
+  throw new Error("expected the query to fail");
+};
+
+beforeAll(async () => {
+  pgs = await startPostgres();
+  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 });
+  db = createDb({ pool: appPool });
+
+  const { rows } = await pgs.migrator.query<{
+    schema: string;
+    name: string;
+    columns: string[];
+    has_identity: boolean;
+  }>(
+    `select n.nspname as schema, c.relname as name,
+            array(select a.attname::text from pg_attribute a
+                   where a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped) as columns,
+            exists(select 1 from pg_attribute a
+                    where a.attrelid = c.oid and a.attidentity <> '') as has_identity
+       from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where c.relkind in ('r', 'p')
+        and n.nspname not in ('pg_catalog', 'information_schema')
+        and n.nspname not like 'pg_toast%'
+      order by n.nspname, c.relname`,
+  );
+  tables = rows
+    .filter((r) => !ALLOWED_NON_TENANT_TABLES.includes(`${r.schema}.${r.name}`))
+    .map((r) => ({
+      schema: r.schema,
+      name: r.name,
+      tenantColumn: r.name === "orgs" ? "id" : "org_id",
+      hasIdentity: r.has_identity,
+      qualified: `"${r.schema}"."${r.name}"`,
+    }));
+
+  a = await seedOrg(db, newOrgId(), { installationId: 1 });
+  b = await seedOrg(db, newOrgId(), { installationId: 2 });
+}, CONTAINER_TIMEOUT_MS);
+
+afterAll(async () => {
+  await db?.close();
+  await pgs?.stop();
+});
+
+const countAs = async (orgId: OrgId, table: TenantTable, where = ""): Promise<number> =>
+  db.withOrg(orgId, async (tx) => {
+    const { rows } = await tx.query<{ n: string }>(
+      `select count(*)::text as n from ${table.qualified} ${where}`,
+    );
+    return Number(rows[0]?.n);
+  });
+
+describe("every table in the database", () => {
+  it("is a tenant table in public (only the migration ledger is exempt)", () => {
+    expect(tables.length).toBeGreaterThanOrEqual(13);
+    for (const t of tables) expect(t.schema).toBe("public");
+    const names = tables.map((t) => t.name);
+    for (const required of [
+      "orgs",
+      "members",
+      "repos",
+      "pull_requests",
+      "pr_revisions",
+      "analyses",
+      "findings_state",
+      "comments_pending",
+      "memory_entries",
+      "embeddings",
+      "audit_events",
+      "llm_usage",
+      "jobs",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
+  it("has RLS enabled and forced, and a policy for the app role", async () => {
+    for (const t of tables) {
+      const { rows } = await pgs.migrator.query<{ rls: boolean; forced: boolean; owner: string }>(
+        `select relrowsecurity as rls, relforcerowsecurity as forced, relowner::regrole::text as owner
+           from pg_class where oid = $1::regclass`,
+        [t.qualified],
+      );
+      expect(rows[0], t.name).toEqual({ rls: true, forced: true, owner: TEST_ROLES.migrator });
+      const policies = await pgs.migrator.query<{ roles: string[]; cmd: string }>(
+        "select roles::text[] as roles, cmd from pg_policies where schemaname = $1 and tablename = $2",
+        [t.schema, t.name],
+      );
+      const forApp = policies.rows.filter((p) => p.roles.includes(APP_ROLE));
+      expect(
+        forApp.map((p) => p.cmd),
+        t.name,
+      ).toEqual(["ALL"]);
+      // No policy grants the app role anything beyond the tenant policy, and PUBLIC gets none.
+      for (const p of policies.rows) expect(p.roles, t.name).not.toContain("public");
+    }
+  });
+
+  it("has a NOT NULL uuid tenant column with a cascading FK to orgs", async () => {
+    for (const t of tables) {
+      const col = await pgs.migrator.query<{ data_type: string; is_nullable: string }>(
+        `select data_type, is_nullable from information_schema.columns
+          where table_schema = $1 and table_name = $2 and column_name = $3`,
+        [t.schema, t.name, t.tenantColumn],
+      );
+      expect(col.rows[0], `${t.name}.${t.tenantColumn}`).toEqual({
+        data_type: "uuid",
+        is_nullable: "NO",
+      });
+      if (t.name === "orgs") continue;
+      const fk = await pgs.migrator.query<{ confdeltype: string }>(
+        `select confdeltype from pg_constraint
+          where conrelid = $1::regclass and contype = 'f' and confrelid = 'public.orgs'::regclass
+            and conkey = array[(select attnum from pg_attribute where attrelid = $1::regclass and attname = 'org_id')]`,
+        [t.qualified],
+      );
+      expect(
+        fk.rows.map((r) => r.confdeltype),
+        `${t.name} FK to orgs`,
+      ).toEqual(["c"]);
+    }
+  });
+
+  it("references parents only through composite (org_id, id) foreign keys", async () => {
+    const { rows } = await pgs.migrator.query<{ table: string; cols: string[] }>(
+      `select conrelid::regclass::text as "table",
+              array(select attname::text from pg_attribute where attrelid = conrelid and attnum = any(conkey)) as cols
+         from pg_constraint
+        where contype = 'f' and connamespace = 'public'::regnamespace and confrelid <> 'public.orgs'::regclass`,
+    );
+    expect(rows.length).toBeGreaterThan(5);
+    for (const fk of rows) expect(fk.cols, fk.table).toContain("org_id");
+  });
+
+  it("received exactly one fixture row per org (so every table is exercised below)", async () => {
+    for (const t of tables) {
+      expect(await countAs(a.orgId, t), t.name).toBe(1);
+      expect(await countAs(b.orgId, t), t.name).toBe(1);
+    }
+  });
+
+  it("has no plaintext secret columns", async () => {
+    const { rows } = await pgs.migrator.query<{ table: string; column: string; type: string }>(
+      `select table_name as "table", column_name as "column", data_type as type
+         from information_schema.columns where table_schema = 'public'
+          and column_name ~* '(token|secret|api_key|password|credential)'`,
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const c of rows) {
+      // Ciphertext, a key version, or a numeric count (input_tokens): nothing that holds text.
+      const ok =
+        (c.column.endsWith("_ciphertext") && c.type === "bytea") ||
+        (c.column.endsWith("_key_version") && c.type === "integer") ||
+        (c.column.endsWith("_tokens") && c.type === "integer");
+      expect(ok, `${c.table}.${c.column} (${c.type})`).toBe(true);
+    }
+  });
+});
+
+describe("org A against org B's rows, per table", () => {
+  it("select without WHERE sees only its own row", async () => {
+    for (const t of tables) {
+      const rows = await db.withOrg(
+        a.orgId,
+        async (tx) =>
+          (await tx.query<Record<string, unknown>>(`select * from ${t.qualified}`)).rows,
+      );
+      expect(
+        rows.map((r) => r[t.tenantColumn]),
+        t.name,
+      ).toEqual([a.orgId]);
+    }
+  });
+
+  it("select with an explicit foreign org_id returns nothing", async () => {
+    for (const t of tables) {
+      expect(await countAs(a.orgId, t, `where "${t.tenantColumn}" = '${b.orgId}'`), t.name).toBe(0);
+      expect(await countAs(a.orgId, t, `where "${t.tenantColumn}" <> '${a.orgId}'`), t.name).toBe(
+        0,
+      );
+    }
+  });
+
+  it("update of foreign rows affects nothing and leaves them unchanged", async () => {
+    for (const t of tables) {
+      if (t.name === "audit_events") continue; // append-only: covered in audit.test.ts
+      const affected = await db.withOrg(a.orgId, async (tx) => {
+        const r = await tx.query(
+          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}" where "${t.tenantColumn}" = $1`,
+          [b.orgId],
+        );
+        return r.rowCount;
+      });
+      expect(affected, t.name).toBe(0);
+      const unconditional = await db.withOrg(a.orgId, async (tx) => {
+        const r = await tx.query(
+          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}"`,
+        );
+        return r.rowCount;
+      });
+      expect(unconditional, t.name).toBe(1);
+      expect(await countAs(b.orgId, t), t.name).toBe(1);
+    }
+  });
+
+  it("update that moves an own row to another org is refused", async () => {
+    for (const t of tables) {
+      if (t.name === "audit_events") continue;
+      const error = await pgError(
+        db.withOrg(a.orgId, (tx) =>
+          tx.query(`update ${t.qualified} set "${t.tenantColumn}" = $1`, [b.orgId]),
+        ),
+      );
+      expect(error.code, t.name).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await countAs(a.orgId, t), t.name).toBe(1);
+      expect(await countAs(b.orgId, t), t.name).toBe(1);
+    }
+  });
+
+  it("insert of a row with a foreign org_id is refused", async () => {
+    for (const t of tables) {
+      // Copy the own row with the tenant column replaced; RLS WITH CHECK runs before any
+      // constraint, so the refusal is the policy, not a duplicate key.
+      const override = JSON.stringify({ [t.tenantColumn]: b.orgId });
+      const overriding = t.hasIdentity ? "overriding system value" : "";
+      const error = await pgError(
+        db.withOrg(a.orgId, (tx) =>
+          tx.query(
+            `insert into ${t.qualified} ${overriding}
+             select (json_populate_record(r, $1::json)).* from ${t.qualified} r`,
+            [override],
+          ),
+        ),
+      );
+      expect(error.code, t.name).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(await countAs(b.orgId, t), t.name).toBe(1);
+    }
+  });
+
+  it("delete of foreign rows affects nothing", async () => {
+    for (const t of tables) {
+      if (t.name === "audit_events") continue;
+      const affected = await db.withOrg(a.orgId, async (tx) => {
+        const r = await tx.query(`delete from ${t.qualified} where "${t.tenantColumn}" = $1`, [
+          b.orgId,
+        ]);
+        return r.rowCount;
+      });
+      expect(affected, t.name).toBe(0);
+      expect(await countAs(b.orgId, t), t.name).toBe(1);
+    }
+  });
+
+  it("cannot reference another org's parent row (composite FK)", async () => {
+    const error = await pgError(
+      db.withOrg(a.orgId, (tx) =>
+        tx.query(
+          `insert into pull_requests (repo_id, number, title, state, head_sha, base_sha, opened_at)
+           values ($1, 1, 't', 'open', repeat('c', 40), repeat('d', 40), now())`,
+          [b.repoId],
+        ),
+      ),
+    );
+    expect(error.code).toBe(FOREIGN_KEY_VIOLATION);
+    const members = await pgError(
+      db.withOrg(a.orgId, (tx) =>
+        tx.query(
+          `insert into comments_pending (pull_request_id, revision_id, author_id, body) values ($1, $2, $3, 'x')`,
+          [a.pullRequestId, a.revisionId, b.memberId],
+        ),
+      ),
+    );
+    expect(members.code).toBe(FOREIGN_KEY_VIOLATION);
+  });
+
+  it("cannot see another org's rows through a join or a subquery", async () => {
+    const rows = await db.withOrg(
+      a.orgId,
+      async (tx) =>
+        (
+          await tx.query<{ n: string }>(
+            `select count(*)::text as n from repos r
+             left join pull_requests p on p.repo_id = r.id
+            where r.id in (select repo_id from pull_requests) or r.org_id in (select id from orgs)`,
+          )
+        ).rows,
+    );
+    expect(rows[0]?.n).toBe("1");
+  });
+});
+
+describe("tenant context outside and around withOrg", () => {
+  it("returns zero rows with no app.org_id, an empty one, or after RESET", async () => {
+    for (const t of tables) {
+      const none = await appPool.query(`select * from ${t.qualified}`);
+      expect(none.rowCount, t.name).toBe(0);
+    }
+    await appPool.query("set app.org_id = ''");
+    expect((await appPool.query("select * from repos")).rowCount).toBe(0);
+    await appPool.query("reset app.org_id");
+    expect((await appPool.query("select * from repos")).rowCount).toBe(0);
+  });
+
+  it("fails closed on a non-uuid app.org_id instead of widening the filter", async () => {
+    const client = await appPool.connect();
+    try {
+      await client.query("set app.org_id = 'garbage'");
+      const error = await pgError(client.query("select * from repos"));
+      expect(error.code).toBe(INVALID_TEXT_REPRESENTATION);
+      await client.query("reset app.org_id");
+    } finally {
+      client.release();
+    }
+  });
+
+  it("a session-level SET outside withOrg does not survive the next withOrg", async () => {
+    const client = await appPool.connect();
+    try {
+      await client.query("select set_config('app.org_id', $1, false)", [b.orgId]);
+      expect((await client.query("select org_id from repos")).rows).toEqual([{ org_id: b.orgId }]);
+    } finally {
+      client.release();
+    }
+    // The pool has 2 connections; drain both through withOrg so each is reset.
+    await Promise.all([
+      db.withOrg(a.orgId, (tx) => tx.query("select 1")),
+      db.withOrg(a.orgId, (tx) => tx.query("select 1")),
+    ]);
+    const after = await Promise.all([
+      appPool.query("select org_id from repos"),
+      appPool.query("select org_id from repos"),
+    ]);
+    for (const r of after) expect(r.rowCount).toBe(0);
+  });
+
+  it("nested withOrg for another org is refused and does not change what the outer sees", async () => {
+    const seen = await db.withOrg(a.orgId, async (outer) => {
+      await expect(db.withOrg(b.orgId, (tx) => tx.query("select 1"))).rejects.toThrow(/nested/);
+      return (await outer.query<{ org_id: string }>("select org_id from repos")).rows;
+    });
+    expect(seen).toEqual([{ org_id: a.orgId }]);
+  });
+});
+
+describe("the application role", () => {
+  it("is not superuser, cannot bypass RLS, owns nothing, and inherits no privileged role", async () => {
+    const role = await appPool.query<{
+      rolsuper: boolean;
+      rolbypassrls: boolean;
+      rolcreaterole: boolean;
+    }>("select rolsuper, rolbypassrls, rolcreaterole from pg_roles where rolname = current_user");
+    expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false, rolcreaterole: false });
+    const groups = await appPool.query<{
+      rolname: string;
+      rolbypassrls: boolean;
+      rolsuper: boolean;
+    }>(
+      `select r.rolname, r.rolbypassrls, r.rolsuper from pg_roles r
+        where pg_has_role(current_user, r.oid, 'MEMBER') and r.rolname <> current_user`,
+    );
+    expect(groups.rows.map((g) => g.rolname)).toEqual([APP_ROLE]);
+    for (const g of groups.rows) expect(g).toMatchObject({ rolbypassrls: false, rolsuper: false });
+    const owned = await appPool.query(
+      "select relname from pg_class where relowner in (select oid from pg_roles where pg_has_role(current_user, oid, 'MEMBER'))",
+    );
+    expect(owned.rowCount).toBe(0);
+  });
+
+  it("cannot assume the retention role, alter RLS, drop policies or create tables", async () => {
+    for (const sql of [
+      `set role ${RETENTION_ROLE}`,
+      "alter table repos disable row level security",
+      "alter table repos no force row level security",
+      "drop policy repos_tenant on repos",
+      "create table public.leak (id int)",
+      "create policy p on repos for all to public using (true)",
+      "alter table audit_events disable trigger all",
+    ]) {
+      const error = await pgError(appPool.query(sql));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+  });
+});
