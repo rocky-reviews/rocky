@@ -179,15 +179,41 @@ describe("applyKnownFields", () => {
     expect(value.provenance.graphUnavailable).toEqual(known.graphUnavailable);
   });
 
-  it("a model that returns a graph while the pipeline says none was produced is rejected", () => {
-    // Fail closed: the pipeline marks the graph unavailable only when the graph role's output
-    // did not validate, so a graph in the same document is a contradiction, not a bonus.
+  it("a model's graph is dropped when the pipeline says the change map is unavailable", () => {
+    // The pipeline decides, as for `unanalysed`: a graph returned next to the reason must not
+    // turn a failed graph into a failed review (a missing graph never blocks the review).
+    const output = modelOutput();
+    expect(output.graph).toBeDefined();
     const known = { ...facts(), graphUnavailable: { reason: "analysis-failed" as const } };
-    expectRejected(
-      applyKnownFields(modelOutput(), known),
-      "INVALID_SHAPE",
-      "provenance.graphUnavailable",
-    );
+    const result = applyKnownFields(output, known);
+    expect(Object.hasOwn(result as object, "graph")).toBe(false);
+    const value = expectAccepted(result);
+    expect(value.graph).toBeUndefined();
+    expect(value.provenance.graphUnavailable).toEqual(known.graphUnavailable);
+    expect(output.graph).toBeDefined(); // the model output itself is not mutated
+  });
+
+  it("the pipeline's recipe for an invalid graph: strip it, record the reason, keep the review", () => {
+    // The parser is all-or-nothing: a graph that still fails after the repair round fails the
+    // document, with every issue under `graph`. The pipeline then drops the graph and sets the
+    // reason; the rest of the review ships (docs/schema/analysis-document.md, "Change map").
+    const output = modelOutput();
+    output.graph!.edges![0]!.to = "ghost";
+    const failed = parseAnalysisDocument(applyKnownFields(output, facts()));
+    expect(failed.ok).toBe(false);
+    if (!failed.ok)
+      expect(failed.error.issues.every((issue) => issue.path.startsWith("graph."))).toBe(true);
+
+    const known = {
+      ...facts(),
+      graphUnavailable: {
+        reason: "analysis-failed" as const,
+        detail: "The change map did not validate after one repair round.",
+      },
+    };
+    const value = expectAccepted(applyKnownFields(output, known));
+    expect(value.graph).toBeUndefined();
+    expect(value.findings).toHaveLength(10);
   });
 
   it("a model cannot remove files: a dropped triage entry fails coverage", () => {

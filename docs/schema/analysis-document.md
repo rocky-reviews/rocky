@@ -78,7 +78,7 @@ count or a hunk range. Every other section is then checked against those facts.
       // … 8 more files, including pnpm-lock.yaml and a generated types file
     ],
     // Only when the pipeline could not produce a change map (the document then has no `graph`):
-    // "graphUnavailable": { "reason": "analysis-failed", "detail": "…" }
+    // "graphUnavailable": { "reason": "analysis-failed", "detail": "<fixed pipeline text>" }
     "generatedAt": "2026-10-25T12:00:00.000Z",
     "generator": { "name": "rocky", "roles": [{ "role": "review", "model": "…" }] }
   },
@@ -190,10 +190,16 @@ count or a hunk range. Every other section is then checked against those facts.
   `__proto__`, `constructor` or `prototype`.
 - **A change map is present or explained, never both.** `graph` is optional. When the pipeline
   could not produce one it records `provenance.graphUnavailable` (`reason`: `analysis-failed`,
-  `too-large` or `timeout`, plus an optional prose `detail`), which the UI shows as "Change map
-  unavailable" with the reason and a Retry button. The field lives in the facts, like
-  `unanalysed`: `applyKnownFields` overwrites it, so a model can neither write the text the UI
-  shows nor claim a graph failed. A document with both a `graph` and this field is refused.
+  `too-large` or `timeout`, plus an optional `detail`), which the UI shows as "Change map
+  unavailable" with the reason and a Retry button. `detail` holds only fixed strings the
+  pipeline writes itself, never a raw error message, a prompt or model output. The field lives
+  in the facts, like `unanalysed`: `applyKnownFields` overwrites it and, when it is set, drops
+  any `graph` the model returned, so a model can neither write the text the UI shows, claim a
+  graph failed, nor turn a failed graph into a failed review. A document that reaches the parser
+  with both a `graph` and this field is refused. The parser itself is all-or-nothing: a graph
+  that still fails validation after the repair round fails the document, with every issue under
+  `graph.…`. The pipeline (P4) then strips the graph, sets `graphUnavailable` to
+  `analysis-failed` and parses again; the rest of the review ships.
 - **The whole document is capped** at 4 MiB of JSON (`MAX_DOCUMENT_BYTES`), checked on the raw
   text by `parseAnalysisDocumentJson` before anything is parsed; input may nest at most 64
   levels (`TOO_DEEP`) and every object may appear once — a cycle or a shared subtree is
@@ -278,7 +284,7 @@ registry to point at. Ids are compared case-insensitively because anchors often 
   regression tests in `hardening.test.ts` and `known-fields.test.ts`.
 - Property tests (fast-check, fixed seed): 150 random valid documents (with noise, unanalysed
   files, memory references, graphs or a pipeline reason for their absence, flows and
-  walkthroughs) are accepted and re-parse to themselves; 400 random mutations from 51 mutators
+  walkthroughs) are accepted and re-parse to themselves; 600 random mutations from 51 mutators
   (unknown fields, control and Unicode hiding characters in text, code and paths, path
   traversal and look-alikes, oversized strings and arrays, duplicate ids incl. case-only,
   duplicate paths, broken references, lines outside the diff, files outside the PR, missing or
@@ -305,9 +311,10 @@ are refused, and model paths must match exactly.
    UI renders model text with raw HTML disabled (P6), and a blocklist would reject real code
    like `Array<string>`.
 2. **Graph is optional.** Decision: it stays optional. A missing or invalid graph never blocks
-   the review. The pipeline records why in `provenance.graphUnavailable`; the UI shows "Change
-   map unavailable", the reason and a Retry button. Reason: the change map is a reading aid; the
-   triage, briefing and findings are the review.
+   the review: the parser rejects a document whose graph is invalid, and the pipeline then
+   strips the graph, records why in `provenance.graphUnavailable` and keeps the rest; the UI
+   shows "Change map unavailable", the reason and a Retry button. Reason: the change map is a
+   reading aid; the triage, briefing and findings are the review.
 3. **Noise files are a separate record.** Decision: they stay a separate list, without a score.
    Reason: a noise file is one the reviewer can trust unread; a score would invite reading it.
 4. **Score bands.** Decision: they stay: critical 80–100, important 50–79, normal 20–49, low

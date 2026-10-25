@@ -190,13 +190,19 @@ export type GraphUnavailableReason = z.infer<typeof GraphUnavailableReason>;
  * The change map is optional (gate H2, #2): when the graph role fails, the rest of the review
  * still ships and the UI shows "Change map unavailable", this reason and a Retry button. The
  * reason lives in the facts, like `unanalysed`, so `applyKnownFields` overwrites whatever a
- * model claims and the text the UI shows for it is never model-written. A document carries
- * either a `graph` or this field, never both.
+ * model claims (and drops a model's `graph` when this is set) and the text the UI shows for it
+ * is never model-written. `detail` holds only fixed strings the pipeline writes itself: never a
+ * raw error message, a prompt or model output, which could carry PR content into the UI. A
+ * document carries either a `graph` or this field, never both.
  */
 export const GraphUnavailable = z
   .strictObject({
     reason: GraphUnavailableReason,
-    detail: prose(MAX_REASON_LENGTH).optional().describe("Human-readable detail, if any."),
+    detail: prose(MAX_REASON_LENGTH)
+      .optional()
+      .describe(
+        "Fixed, pipeline-written detail, if any. Never a raw error message, prompt or model output.",
+      ),
   })
   .describe("Why the change map is missing. Written by the pipeline, never by a model.");
 export type GraphUnavailable = z.infer<typeof GraphUnavailable>;

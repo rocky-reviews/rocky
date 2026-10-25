@@ -11,10 +11,12 @@ import type { FindingInput, Severity } from "./findings.js";
 import type { GraphInput } from "./graph.js";
 import { MAX_FILE_REVIEW_MINUTES, MAX_LINE_NUMBER, SCORE_BANDS } from "./limits.js";
 import { parseAnalysisDocument } from "./parse.js";
-import type { ChangedFile, GraphUnavailableReason } from "./provenance.js";
+import { type ChangedFile, GraphUnavailableReason } from "./provenance.js";
 import type { TriagedFileLevel, TriageInput } from "./triage.js";
 
 const RUNS = { seed: 847, numRuns: 150 };
+/** Mutation runs: enough for the seeded stream to pick every mutator at least once. */
+const MUTATION_RUNS = { ...RUNS, numRuns: 600 };
 
 // --- Raw parameters: independent arbitraries, combined by one deterministic builder --------
 
@@ -25,11 +27,6 @@ const nat = fc.nat({ max: 1000 });
 const LEVELS: TriagedFileLevel[] = ["critical", "important", "normal", "low"];
 const SEVERITIES: Severity[] = ["critical", "high", "medium", "low"];
 const RANK: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
-const GRAPH_UNAVAILABLE_REASONS: GraphUnavailableReason[] = [
-  "analysis-failed",
-  "too-large",
-  "timeout",
-];
 
 const arbPath = fc
   .tuple(
@@ -130,7 +127,9 @@ const arbParams = fc.record({
   reviewPath: fc.array(nat, { maxLength: 4 }),
   checkedOk: fc.array(text(40), { maxLength: 3 }),
   graph: fc.option(arbGraphParams, { nil: undefined }),
-  graphUnavailable: fc.option(fc.constantFrom(...GRAPH_UNAVAILABLE_REASONS), { nil: undefined }),
+  graphUnavailable: fc.option(fc.constantFrom(...GraphUnavailableReason.options), {
+    nil: undefined,
+  }),
   summary: text(200),
 });
 
@@ -892,8 +891,19 @@ describe("property: mutated documents", () => {
           `mutator ${mutator}: expected ${expected.code} at '${expected.path}', got\n${result.error.message}`,
         ).toBe(true);
       }),
-      { ...RUNS, numRuns: 400 },
+      MUTATION_RUNS,
     );
+  });
+
+  it("the mutation property itself exercises every mutator", () => {
+    const used = new Set<number>();
+    fc.assert(
+      fc.property(arbInvalid, ({ mutator }) => {
+        used.add(mutator);
+      }),
+      MUTATION_RUNS,
+    );
+    expect([...used].sort((a, b) => a - b)).toEqual(MUTATORS.map((_, i) => i));
   });
 
   it("every mutator applies to some generated document", () => {

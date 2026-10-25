@@ -21,6 +21,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * because model output has not been validated yet; the result still has to go through
  * `parseAnalysisDocument`. A non-object input is returned as-is so the parser reports it.
  *
+ * When the pipeline records that the change map is unavailable (`facts.graphUnavailable`), any
+ * `graph` the model returned is dropped: the pipeline decides, as it does for `unanalysed`.
+ * Otherwise a model could turn a failed graph into a failed review by returning a graph next to
+ * the reason, and a missing graph never blocks the review (gate H2, #2).
+ *
  * The facts object is copied, so later mutation of the caller's facts cannot leak into the
  * document.
  */
@@ -29,5 +34,6 @@ export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unkno
   const result: Record<string, unknown> = { ...modelOutput };
   result.schemaVersion = SCHEMA_VERSION;
   result.provenance = structuredClone(facts);
+  if (facts.graphUnavailable !== undefined) delete result.graph;
   return result;
 };

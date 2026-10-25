@@ -1628,7 +1628,7 @@
           "description": "Present only when the pipeline could not produce the change map; the document then has no graph.",
           "properties": {
             "detail": {
-              "description": "Human-readable detail, if any.",
+              "description": "Fixed, pipeline-written detail, if any. Never a raw error message, prompt or model output.",
               "maxLength": 500,
               "minLength": 1,
               "type": "string"
