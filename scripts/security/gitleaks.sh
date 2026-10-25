@@ -39,13 +39,15 @@ case "$MODE" in
 esac
 
 cd "$ROOT"
-if command -v gitleaks >/dev/null 2>&1; then
-  echo "gitleaks: using local binary $(gitleaks version 2>/dev/null || echo '(unknown version)'); CI uses $GITLEAKS_IMAGE" >&2
-  exec gitleaks "$@"
-elif docker_available; then
+# Prefer the pinned container so local scans use exactly CI's rules; a local binary is only a
+# fallback when Docker isn't running.
+if docker_available; then
   echo "gitleaks: using container $GITLEAKS_IMAGE" >&2
   # shellcheck disable=SC2086  # GIT_SAFE_DIR_ENV is intentionally word-split
-  exec docker run --rm -v "$ROOT:/repo" -w /repo $GIT_SAFE_DIR_ENV "$GITLEAKS_IMAGE" "$@"
+  exec docker run --rm -v "$ROOT:/repo:ro" -w /repo $GIT_SAFE_DIR_ENV "$GITLEAKS_IMAGE" "$@"
+elif command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks: Docker unavailable; using local binary $(gitleaks version 2>/dev/null || echo '(unknown version)'). CI uses $GITLEAKS_IMAGE" >&2
+  exec gitleaks "$@"
 else
   cat >&2 <<'EOF'
 gitleaks: neither a local `gitleaks` binary nor a running Docker daemon was found.

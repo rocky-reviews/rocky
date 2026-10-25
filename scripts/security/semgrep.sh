@@ -21,7 +21,7 @@ fi
 
 echo "semgrep: scanning $PROJECT_DIR with $SEMGREP_IMAGE" >&2
 # shellcheck disable=SC2086  # GIT_SAFE_DIR_ENV is intentionally word-split
-exec docker run --rm -v "$PROJECT_DIR:/src" -w /src $GIT_SAFE_DIR_ENV \
+exec docker run --rm -v "$PROJECT_DIR:/src:ro" -w /src $GIT_SAFE_DIR_ENV \
   -e SEMGREP_SEND_METRICS=off \
   "$SEMGREP_IMAGE" semgrep scan \
   --config p/typescript \

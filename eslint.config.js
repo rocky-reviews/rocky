@@ -3,22 +3,14 @@ import prettier from "eslint-config-prettier";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
-/** Adapters and I/O libraries that the domain core must never import (hexagonal rule, ADR-0002). */
-const ADAPTER_LIBS = [
-  "pg",
-  "pg-boss",
-  "drizzle-orm",
-  "drizzle-orm/*",
-  "fastify",
-  "@octokit/*",
-  "octokit",
-  "@anthropic-ai/*",
-  "@aws-sdk/*",
-  "@paddle/*",
-  "@rocky-reviews/db",
-  "@rocky-reviews/forge-github",
-  "@rocky-reviews/llm",
-];
+/**
+ * packages/core is domain logic + ports only (ADR-0002). It may import nothing but these
+ * and its own files; everything else (adapters, Node built-ins, other packages' sources) is
+ * an error. An allowlist, so new adapter libraries are blocked without updating a list.
+ */
+const CORE_ALLOWED_IMPORTS = ["zod", "@rocky-reviews/schema"];
+const CORE_MESSAGE =
+  "packages/core holds domain logic and ports only: import zod, @rocky-reviews/schema or core's own files; inject I/O through a port (ADR-0002).";
 
 export default tseslint.config(
   { ignores: ["**/node_modules/**", "**/dist/**", "coverage/**", "design-poc/**", "artifacts/**"] },
@@ -32,20 +24,36 @@ export default tseslint.config(
     },
   },
   {
-    files: ["packages/core/src/**/*.ts"],
+    files: ["packages/core/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+    // Tests may use vitest and fixtures; the purity rule is about production code.
+    ignores: ["packages/core/**/*.test.*"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           patterns: [
             {
-              group: ADAPTER_LIBS,
-              message:
-                "packages/core holds domain logic and ports only; import adapters from outside core (ADR-0002).",
+              regex: `^(?!(?:${CORE_ALLOWED_IMPORTS.map((m) => m.replace(/[/.]/g, "\\$&")).join("|")})$)(?!\\.{1,2}/)`,
+              message: CORE_MESSAGE,
             },
-            { group: ["node:*"], message: "packages/core does no I/O; inject it through a port." },
+            { regex: "^(?:\\.\\./)+(?:[^./][^/]*/)*src(?:/|$)", message: CORE_MESSAGE },
+            { regex: "^(?:\\.\\./){3,}", message: CORE_MESSAGE },
           ],
         },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        { selector: "ImportExpression", message: `No dynamic import in core. ${CORE_MESSAGE}` },
+        {
+          selector: "CallExpression[callee.name='require']",
+          message: `No require in core. ${CORE_MESSAGE}`,
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        ...["fetch", "process", "require", "XMLHttpRequest", "WebSocket", "Deno", "Bun"].map(
+          (name) => ({ name, message: `No I/O globals in core. ${CORE_MESSAGE}` }),
+        ),
       ],
     },
   },

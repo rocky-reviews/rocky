@@ -24,6 +24,12 @@ const DARK = /:root\[data-mode="dark"\]\s*\{([\s\S]*?)\n\}/;
 const poc = read("design-poc/index.html");
 const app = read("apps/web/src/styles/tokens.css");
 
+/**
+ * Tokens the app defines that the POC has no variable for. Anything else must come from the
+ * POC, so the palette can't drift by adding tokens either.
+ */
+const DERIVED = /^--(font|text|radius|space)-|^--shadow-modal$|^--overlay$/;
+
 describe("design tokens match the POC", () => {
   for (const [mode, selector] of [
     ["light", LIGHT],
@@ -36,6 +42,10 @@ describe("design tokens match the POC", () => {
       for (const [name, value] of expected) {
         expect(actual.get(name), name).toBe(value);
       }
+      const unexpected = [...actual.keys()].filter(
+        (name) => !expected.has(name) && !DERIVED.test(name),
+      );
+      expect(unexpected, "tokens not in the POC and not listed as derived").toEqual([]);
     });
   }
 });

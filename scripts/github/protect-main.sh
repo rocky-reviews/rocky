@@ -58,7 +58,10 @@ protection_summary='{
 }'
 before=$(gh api "repos/$REPO/branches/$BRANCH/protection" 2>/dev/null | jq "$protection_summary" || echo '{"protected": false}')
 
-checks_json=$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | jq -R '{context: .}' | jq -s .)
+# Pin every required check to the GitHub Actions app (id 15368) so a status posted by any
+# other app or token with the same name can't satisfy it.
+GITHUB_ACTIONS_APP_ID=15368
+checks_json=$(printf '%s\n' "${REQUIRED_CHECKS[@]}" | jq -R --argjson app "$GITHUB_ACTIONS_APP_ID" '{context: ., app_id: $app}' | jq -s .)
 body=$(jq -n \
   --argjson checks "$checks_json" \
   --argjson approvals "$REQUIRED_APPROVALS" \

@@ -4,6 +4,7 @@ import { buildApp } from "./app.js";
 
 const log = createLogger("server");
 const pool = new pg.Pool({ connectionString: process.env["DATABASE_URL"] });
+pool.on("error", (error) => log.error({ err: error.message }, "postgres idle client error"));
 
 const app = buildApp({
   checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,

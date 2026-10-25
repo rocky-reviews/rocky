@@ -4,8 +4,9 @@
 # Signatures are committed to the `cla-signatures` branch (create it with
 # scripts/github/setup-cla-branch.sh; it must NOT be branch-protected).
 #
-# Members/owners of the org and bots are exempt. The job is skipped for them,
-# which still satisfies a required status check.
+# The check runs on every PR and covers every committer, including org members
+# (who sign once like anyone else). Only GitHub's own bots are allowlisted; a
+# self-registered app named "*[bot]" is not exempt.
 #
 # pull_request_target runs with base-repo permissions: this workflow must never
 # check out or execute code from the PR head. It does not.
@@ -36,7 +37,6 @@ jobs:
           )
         )
       )
-      && !contains(fromJSON('["OWNER","MEMBER"]'), github.event.pull_request.author_association || github.event.issue.author_association)
     permissions:
       actions: write # re-run the PR check after a signature comment
       contents: write # commit signatures to the cla-signatures branch
@@ -53,7 +53,7 @@ jobs:
           path-to-document: https://github.com/${{ github.repository }}/blob/main/.github/CLA.md
           path-to-signatures: signatures/v1/cla.json
           branch: cla-signatures
-          allowlist: dependabot[bot],github-actions[bot],*[bot]
+          allowlist: dependabot[bot],github-actions[bot]
           lock-pullrequest-aftermerge: true
           custom-notsigned-prcomment: >-
             Thank you for your contribution to Rocky Reviews! Before we can merge it, we need

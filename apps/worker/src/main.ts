@@ -4,6 +4,8 @@ import pg from "pg";
 // Job consumers (pg-boss) arrive in Phase 3/4. For now the worker proves it can reach Postgres.
 const log = createLogger("worker");
 const pool = new pg.Pool({ connectionString: process.env["DATABASE_URL"] });
+// An idle client losing its connection must not crash the worker; pg reconnects on next use.
+pool.on("error", (error) => log.error({ err: error.message }, "postgres idle client error"));
 
 const { rows } = await pool.query<{ version: string }>("select version()");
 log.info({ postgres: rows[0]?.version }, "worker ready");

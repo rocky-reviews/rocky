@@ -102,7 +102,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Feedback
 
-- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, review submitted
+- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, "✦ Polished" after Polish with AI, review submitted
 
 ## Responsive
 

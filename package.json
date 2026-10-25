@@ -10,9 +10,9 @@
     "node": ">=24.11.0"
   },
   "scripts": {
-    "dev": "docker compose -f docker-compose.dev.yml up -d --wait && pnpm --parallel --filter \"./apps/*\" dev",
+    "dev": "node scripts/ensure-env.mjs && docker compose -f docker-compose.dev.yml up -d --wait && pnpm --parallel --filter \"./apps/*\" dev",
     "dev:down": "docker compose -f docker-compose.dev.yml down",
-    "seed": "tsx --env-file=.env scripts/seed.ts",
+    "seed": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
     "lint": "eslint . --max-warnings=0 && node scripts/check-no-raw-colors.mjs",
     "format": "prettier --write .",

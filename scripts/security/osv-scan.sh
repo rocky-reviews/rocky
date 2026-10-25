@@ -59,6 +59,13 @@ SUMMARY=$(jq -r '
   | .[] | "\(.sev)\t\(.pkg)\t\(.ids)"' "$RESULT")
 
 if [ -z "$SUMMARY" ]; then
+  if [ "$STATUS" -eq 1 ]; then
+    # osv-scanner says there are vulnerabilities but none could be parsed: the JSON format
+    # changed or the output is truncated. Fail closed instead of passing silently.
+    echo "osv-scan: osv-scanner reported vulnerabilities but the result could not be parsed" >&2
+    cat "$RESULT" >&2
+    exit 1
+  fi
   echo "osv-scan: no known vulnerabilities in $LOCKFILE" >&2
   exit 0
 fi
