@@ -588,8 +588,12 @@ const MUTATORS: Mutator[] = [
       "a/%252e%252e/b",
       "a/\u3164/b",
       "a/\u2800/b",
-      `a/${"\u0301".repeat(5)}x/b`,
-    ][pick % 20]!;
+      `a/${"\u0301".repeat(7)}x/b`,
+      "a/.git:x",
+      "a/.git::$INDEX_ALLOCATION/x",
+      "a/.%c0%ae/x",
+      "a/\u0701\u0701/x",
+    ][pick % 24]!;
     return { code: "INVALID_SHAPE", path: `provenance.files[${i}].path` };
   },
   (doc) => {
@@ -729,7 +733,7 @@ const MUTATORS: Mutator[] = [
   (doc, pick) => {
     if (doc.findings.length === 0) return undefined;
     const i = pick % doc.findings.length;
-    doc.findings[i]!.title = `a${"\u0301".repeat(5 + (pick % 20))}b`;
+    doc.findings[i]!.title = `a${"\u0301".repeat(7 + (pick % 20))}b`;
     return { code: "INVALID_SHAPE", path: `findings[${i}].title` };
   },
   (doc, pick) => {
@@ -750,6 +754,24 @@ const MUTATORS: Mutator[] = [
     doc.provenance.files[0]!.path = "src/caf\u00E9.ts";
     doc.provenance.files[1]!.path = "src/cafe\u0301.ts";
     return { code: "DUPLICATE_PATH", path: "provenance.files[1].path" };
+  },
+  // --- Third review round: joiner steganography and interleaved zalgo ---
+  (doc, pick) => {
+    if (doc.findings.length === 0) return undefined;
+    const i = pick % doc.findings.length;
+    const bits = "\u200C\u200D".repeat(1 + (pick % 100));
+    doc.findings[i]!.title =
+      ["Fix", "a\u200D b", "a\u200D", "\u200Da", "x\uFE0F", "a\u200Db\u200Dc\u200Dd"][pick % 6] +
+      (pick % 6 === 0 ? bits : "");
+    return { code: "INVALID_SHAPE", path: `findings[${i}].title` };
+  },
+  (doc, pick) => {
+    doc.briefing.summary = [
+      "Body" + "\u200C\u200D".repeat(50 + (pick % 1000)),
+      "x" + "\uFE0F".repeat(3),
+      "a" + "\u0301\u0301\u0301\u200D".repeat(10),
+    ][pick % 3]!;
+    return { code: "INVALID_SHAPE", path: "briefing.summary" };
   },
 ];
 

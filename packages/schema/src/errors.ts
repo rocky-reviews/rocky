@@ -10,8 +10,10 @@ export type IssueCode =
   | "INVALID_SHAPE"
   /** The raw text is not JSON. */
   | "INVALID_JSON"
-  /** The document nests deeper than the parser can read, or contains a cycle. */
+  /** The document nests deeper than the parser can read. */
   | "TOO_DEEP"
+  /** An object is reached twice (a cycle or a shared subtree): not the output of JSON.parse. */
+  | "SHARED_REFERENCE"
   /** `schemaVersion` is not one this package implements. */
   | "UNSUPPORTED_SCHEMA_VERSION"
   /** The same id appears twice in one collection. */

@@ -442,12 +442,14 @@
               "context": {
                 "description": "The unchanged line immediately before the range, verbatim.",
                 "maxLength": 500,
+                "minLength": 0,
                 "type": "string"
               },
               "lines": {
                 "description": "Replacement for the finding's range. Empty deletes the range.",
                 "items": {
                   "maxLength": 500,
+                  "minLength": 0,
                   "type": "string"
                 },
                 "maxItems": 100,

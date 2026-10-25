@@ -11,6 +11,7 @@ export {
   hasForbiddenNameCharacters,
   hasForbiddenProseCharacters,
   hasForbiddenStrictProseCharacters,
+  MAX_JOINERS,
   Id,
   ID_PATTERN,
   LineNumber,
@@ -20,6 +21,8 @@ export {
   RepositoryPath,
   Score,
   strictProse,
+  textProblem,
+  type TextKind,
 } from "./primitives.js";
 
 export {

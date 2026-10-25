@@ -3,9 +3,11 @@
  * render and show; nothing downstream re-checks it. The function never throws: a model (or
  * an attacker steering one) must not be able to crash the pipeline with a document.
  *
- * Input contract: `parseAnalysisDocument` takes JSON-parsed data (plain objects, arrays and
- * primitives, as `JSON.parse` returns). An object reached twice (a cycle or a shared subtree)
- * is reported as TOO_DEEP in linear time. Untrusted text must go through
+ * Input contract: `parseAnalysisDocument` takes **the output of `JSON.parse`** (plain objects,
+ * arrays and primitives, each object appearing once). A document assembled in code that reuses
+ * one object in two places is not such an input and is refused as SHARED_REFERENCE, in linear
+ * time; serialise and re-parse it first. The pipeline never does this: it hands model text to
+ * `parseAnalysisDocumentJson`. Untrusted text must go through
  * `parseAnalysisDocumentJson`: it is the only entry point with the byte cap, and JSON.parse's
  * duplicate-key rule (last wins) applies there, which is fine because only the returned value
  * is ever stored.
@@ -77,8 +79,9 @@ const attemptParse = (
 
 /**
  * A cheap, iterative look at the raw input before Zod walks it: a cycle or excessive nesting
- * would otherwise exhaust the stack somewhere in the middle of validation, and an own
- * `__proto__` key inside a payload sample would be dropped silently by record parsing.
+ * would otherwise exhaust the stack somewhere in the middle of validation, a shared subtree
+ * would expand exponentially in the integrity pass, and an own `__proto__` key inside a payload
+ * sample would be dropped silently by record parsing.
  * Returns the first problem with its JSON path, or undefined.
  */
 const inspectRawInput = (input: unknown): SchemaIssue | undefined => {
@@ -97,9 +100,10 @@ const inspectRawInput = (input: unknown): SchemaIssue | undefined => {
       return { code: "TOO_DEEP", path, message: `nests deeper than ${MAX_INPUT_DEPTH} levels` };
     if (visited.has(value))
       return {
-        code: "TOO_DEEP",
+        code: "SHARED_REFERENCE",
         path,
-        message: "the document contains a shared or cyclic reference",
+        message:
+          "object reached twice (a cycle or a shared subtree); input must be the output of JSON.parse",
       };
     visited.add(value);
     if (Array.isArray(value)) {

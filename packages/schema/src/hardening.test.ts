@@ -83,6 +83,14 @@ describe("unicode hardening: paths", () => {
     "a/\uD800",
     "a/\uFEFFb",
     ".git/config",
+    "a/.git:x",
+    "a/.git::$INDEX_ALLOCATION/x",
+    "a/.git.:x",
+    "a/.%c0%ae/x",
+    "a/%e0%80%ae/x",
+    "a/\u0701\u0701/x",
+    "a/\u2024/x",
+    "a/\u0589/x",
     "a/\u2024\u2024/b",
     "a/\u2025/b",
     "a/\uFE52\uFE52/b",
@@ -90,7 +98,6 @@ describe("unicode hardening: paths", () => {
     "a/\u3164/b",
     "a/\u2800/b",
     "a/.\u0338/b",
-    "a/\u00B7\u00B7/b",
     "a/.git\u200C/x",
     "a/.git./x",
     "a/.git /x",
@@ -99,7 +106,6 @@ describe("unicode hardening: paths", () => {
     "a/.%2E/b",
     "a/%252e%252e/b",
     "a/%25252e/b",
-    "a/!!!/b",
     "a/.GIT/hooks",
     "C:x",
     "c:/x",
@@ -114,6 +120,20 @@ describe("unicode hardening: paths", () => {
     "a b/c d.txt",
     "é/x.ts",
     "e\u0301/x.ts", // NFD, as macOS git reports it
+    "!",
+    "src/@/x",
+    "a/#",
+    "a/'/x",
+    "a/\u00B7/x",
+    "a/_/x",
+    "a/-/x",
+    "a/!!!/b",
+    "node_modules/.bin/x",
+    "a/...git/x",
+    "a/%25/x",
+    "a/foo%2ebar",
+    "a/.gitignore/x",
+    "a/.git-hooks/x",
     "a/..b",
     "a/b...",
     "日本語/ファイル.md",
@@ -415,7 +435,7 @@ describe("small rules", () => {
       expect(GitRef.safeParse(ok).success, ok).toBe(true);
   });
 
-  it("a cycle in the view tree is TOO_DEEP, not a throw", () => {
+  it("a cycle in the view tree is SHARED_REFERENCE, not a throw", () => {
     const doc = pr847();
     const view: { id: string; title: string; children: unknown[] } = {
       id: "v",
@@ -426,7 +446,7 @@ describe("small rules", () => {
     doc.graph!.views = [view as never];
     const result = parseAnalysisDocument(doc);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+    if (!result.ok) expect(result.error.code).toBe("SHARED_REFERENCE");
   });
 
   it("a shared (DAG) view subtree is refused as a shared reference before it can blow up", () => {
@@ -438,7 +458,7 @@ describe("small rules", () => {
     const result = parseAnalysisDocument(doc);
     expect(Date.now() - started).toBeLessThan(5000);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+    if (!result.ok) expect(result.error.code).toBe("SHARED_REFERENCE");
   });
 
   it("a 100 000-deep array is TOO_DEEP with the path where nesting became excessive", () => {
@@ -458,14 +478,14 @@ describe("small rules", () => {
     }
   });
 
-  it("a cycle outside the view tree is also TOO_DEEP", () => {
+  it("a cycle outside the view tree is also SHARED_REFERENCE", () => {
     const doc = pr847() as unknown as Record<string, unknown>;
     const loop: Record<string, unknown> = {};
     loop.self = loop;
     doc.extra = loop;
     const result = parseAnalysisDocument(doc);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+    if (!result.ok) expect(result.error.code).toBe("SHARED_REFERENCE");
   });
 });
 
@@ -497,14 +517,20 @@ describe("second review round", () => {
     }
   });
 
-  it("ordinary text keeps ZWJ, ZWNJ and VS16; the agent prompt rejects them too", () => {
-    for (const joiner of ["\u200D", "\u200C", "\uFE0F"]) {
+  it("ordinary text keeps placed ZWJ/ZWNJ/VS15/VS16; the agent prompt rejects them all", () => {
+    const placed = [
+      "\u{1F468}\u200D\u{1F469}",
+      "\u0646\u06CC\u200C\u0645",
+      "\u26A0\uFE0F",
+      "\u26A0\uFE0E",
+    ];
+    for (const sample of placed) {
       const ok = pr847();
-      ok.findings[0]!.body = `emoji 👍${joiner} and text`;
-      ok.findings[0]!.title = `emoji 👍${joiner}`;
+      ok.findings[0]!.body = `see ${sample} here`;
+      ok.findings[0]!.title = `Note ${sample}`;
       expectAccepted(ok);
       const prompt = pr847();
-      prompt.findings[0]!.agentPrompt = `Fix it.${joiner} ok`;
+      prompt.findings[0]!.agentPrompt = `Fix ${sample} ok`;
       expectRejected(prompt, "INVALID_SHAPE", "findings[0].agentPrompt");
     }
   });
@@ -530,7 +556,8 @@ describe("second review round", () => {
     const ok = pr847();
     ok.findings[0]!.title = "e\u0301\u0302\u0303\u0304 fine";
     expectAccepted(ok);
-    expect(RepositoryPath.safeParse(`a${"\u0301".repeat(5)}/b`).success).toBe(false);
+    expect(RepositoryPath.safeParse(`a${"\u0301".repeat(7)}/b`).success).toBe(false);
+    expect(RepositoryPath.safeParse(`a${"\u0301".repeat(6)}/b`).success).toBe(true);
     expect(RepositoryPath.safeParse("e\u0301\u0302/b").success).toBe(true);
   });
 
@@ -544,8 +571,8 @@ describe("second review round", () => {
     expect(Date.now() - started).toBeLessThan(500);
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe("TOO_DEEP");
-      expect(result.error.message).toContain("shared or cyclic");
+      expect(result.error.code).toBe("SHARED_REFERENCE");
+      expect(result.error.message).toContain("reached twice");
     }
   });
 
@@ -554,7 +581,7 @@ describe("second review round", () => {
     doc.findings[1]!.range = doc.findings[0]!.range;
     const result = parseAnalysisDocument(doc);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("TOO_DEEP");
+    if (!result.ok) expect(result.error.code).toBe("SHARED_REFERENCE");
   });
 
   it("JSON entry point: leading BOM tolerated, duplicate keys last-wins, exact byte boundary", () => {
@@ -642,5 +669,110 @@ describe("second review round", () => {
       "MEMORY_REF_MISMATCH",
       `findings[${doc.findings.indexOf(finding)}].memory[0]`,
     );
+  });
+});
+
+describe("third review round", () => {
+  const bits = "\u200C\u200D".repeat(200);
+
+  it("joiners cannot carry hidden bits: adjacency, no runs, ratio cap", () => {
+    const title = pr847();
+    title.findings[0]!.title = `Fix${bits.slice(0, 150)}`;
+    expectRejected(title, "INVALID_SHAPE", "findings[0].title");
+    const body = pr847();
+    body.findings[0]!.body = `Body${bits.repeat(5)}`;
+    expectRejected(body, "INVALID_SHAPE", "findings[0].body");
+    const vs = pr847();
+    vs.findings[0]!.title = `x${"\uFE0F".repeat(100)}`;
+    expectRejected(vs, "INVALID_SHAPE", "findings[0].title");
+    const sparse = pr847();
+    sparse.findings[0]!.body = Array.from({ length: 40 }, (_, i) => `w${i}\u200Dx`).join(" "); // 40 joiners, 1 per 3 visible
+    expectRejected(sparse, "INVALID_SHAPE", "findings[0].body");
+    const dense = pr847();
+    dense.findings[0]!.title = "a\u200Db\u200Dc\u200Dd";
+    expectRejected(dense, "INVALID_SHAPE", "findings[0].title");
+    for (const bad of [
+      "a\u200D b",
+      "a \u200Db",
+      "\u200Da",
+      "a\u200D",
+      "a\u200D\u0301b",
+      "1\uFE0F",
+      "a\uFE0F",
+    ]) {
+      const doc = pr847();
+      doc.findings[0]!.title = `${bad} tail`;
+      expectRejected(doc, "INVALID_SHAPE", "findings[0].title");
+    }
+  });
+
+  it("legitimate emoji, Persian, Hebrew and text-presentation symbols pass", () => {
+    for (const ok of [
+      "Team \u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+      "Warning \u26A0\uFE0E",
+      "\u05D1\u05B0\u05BC\u05C1\u0591\u05A3",
+      "\u0646\u06CC\u200C\u0645",
+      "\u00A9\uFE0F 2026",
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+    ]) {
+      const doc = pr847();
+      doc.findings[0]!.title = ok;
+      doc.findings[0]!.body = ok;
+      expectAccepted(doc);
+    }
+  });
+
+  it("zalgo counts marks across joiners; prose allows up to 8, single-line up to 6", () => {
+    const interleaved = pr847();
+    interleaved.findings[0]!.title = `a${"\u0301\u0301\u0301\u0301\u200D".repeat(30)}`;
+    expectRejected(interleaved, "INVALID_SHAPE", "findings[0].title");
+    const body = pr847();
+    body.findings[0]!.body = `a${"\u0301".repeat(3000)}`;
+    expectRejected(body, "INVALID_SHAPE", "findings[0].body");
+    const eight = pr847();
+    eight.findings[0]!.body = `a${"\u0301".repeat(8)}`;
+    expectAccepted(eight);
+    const nine = pr847();
+    nine.findings[0]!.body = `a${"\u0301".repeat(9)}`;
+    expectRejected(nine, "INVALID_SHAPE", "findings[0].body");
+    const seven = pr847();
+    seven.findings[0]!.title = `a${"\u0301".repeat(7)}`;
+    expectRejected(seven, "INVALID_SHAPE", "findings[0].title");
+  });
+
+  it("tag characters and line separators are still rejected in prose and lists", () => {
+    const tag = pr847();
+    tag.findings[0]!.body = "x\u{E0041}";
+    expectRejected(tag, "INVALID_SHAPE", "findings[0].body");
+    const ls = pr847();
+    ls.briefing.checkedOk = ["a\u2028b"];
+    expectAccepted(ls); // checkedOk items are prose; U+2028 is allowed there like \n
+    const lsTitle = pr847();
+    lsTitle.findings[0]!.title = "a\u2028b";
+    expectRejected(lsTitle, "INVALID_SHAPE", "findings[0].title");
+  });
+
+  it("shared references get their own code and message", () => {
+    const doc = pr847();
+    const finding = doc.findings.find((candidate) => candidate.memory!.length > 0)!;
+    finding.memory![0] = doc.briefing.memoryApplied!.find(
+      (m) => m.entryId === finding.memory![0]!.entryId,
+    )!;
+    const result = parseAnalysisDocument(doc);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("SHARED_REFERENCE");
+      expect(result.error.message).toContain("JSON.parse");
+    }
+    const empty = pr847();
+    const shared: never[] = [];
+    empty.findings[0]!.memory = shared;
+    empty.findings[1]!.memory = shared;
+    const second = parseAnalysisDocument(empty);
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.error.code).toBe("SHARED_REFERENCE");
+    const strings = pr847();
+    for (const file of strings.triage.files) file.reason = "same";
+    expectAccepted(strings); // primitives are never "shared"
   });
 });

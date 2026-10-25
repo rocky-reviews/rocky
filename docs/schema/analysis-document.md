@@ -13,8 +13,9 @@ When a pull request arrives, Rocky's AI reads it and writes down what it found a
 structured file: a short briefing, a score and a few notes for every changed file, a list of
 draft comments with suggested fixes, and a diagram of what the change touches. Before Rocky
 keeps or shows any of that, a checker goes through the file with a fixed rulebook: every
-field has the right type and a size limit; nothing in it can hide or spoof text (no invisible
-or direction-changing characters); every file and line it mentions really is in the pull
+field has the right type and a size limit; the text cannot hide or spoof characters (no
+control, hidden or direction-changing characters; the few joiners emoji and some scripts need
+are only allowed where such text uses them); every file and line it mentions really is in the pull
 request's diff; its scores, levels and verdict agree with each other; and the facts about the
 pull request (commits, files, line counts) come from git, never from the AI. If the file
 breaks a rule, Rocky tells the AI exactly which rule and where, lets it try once more, and
@@ -149,33 +150,43 @@ count or a hunk range. Every other section is then checked against those facts.
   URL fragments and comment anchors without escaping.
 - **Paths** are repository-relative POSIX: no leading `/`, no drive letter, no backslash, no
   `.` or `..` segment, no empty segment, no trailing slash, at most 1 024 characters, with no
-  control, invisible or line-separator characters and no runs of combining marks. No segment
-  may, after Unicode compatibility folding, mark stripping and percent-decoding of dots, be
-  only punctuation (`．．`, `‥`, `…`, `۔۔`, `.̸`, `%2e%2e`, `%252e`), only whitespace or
-  blank-looking letters, or a spelling of the `.git` directory (`.git`, `.GIT.`, `.git `,
-  `git~1`). The same type is used for graph file references. This holds for the file list
-  from git too: a PR that adds a file with a newline, a backslash or a hidden character in its
-  name cannot be analysed (fail closed).
+  control, invisible or line-separator characters and no runs of combining marks. A segment is
+  also refused when, after Unicode compatibility folding, removing combining marks and decoding
+  percent-encoded dots (`%2e`, `%252e`, overlong `%c0%ae`), it consists only of dots or the dot
+  look-alikes U+2024–2026, U+3002, U+FF0E, U+FF61, U+06D4, U+0701, U+0702, U+FE52, U+0589
+  (`．．`, `‥`, `…`, `۔۔`, `܁܁`, `.̸`); when it is only whitespace; or when it spells the `.git`
+  directory in any form a filesystem may map onto it: `.git`, `.git.`, `.git ` (Windows
+  trailing dot/space), `.git:stream` (NTFS alternate data streams), `git~1` (8.3 short names).
+  Other punctuation-only names (`!`, `@`, `#`, `'`, `·`) and `.gitignore`, `.github`,
+  `.git-hooks` are ordinary files. The same type is used for graph file references. This
+  holds for the file list from git too: a PR that adds a file with a newline, a backslash or a
+  hidden character in its name cannot be analysed (fail closed).
 - **Normalisation.** Paths are not required to be in NFC: git reports what the filesystem has,
   and macOS repositories legitimately carry NFD names. Instead, a PR whose file list has two
   paths equal under NFC is refused (`DUPLICATE_PATH`), and every model-written path must equal
   a listed path byte for byte (`UNKNOWN_FILE` otherwise).
-- **Text cannot hide, reorder or smuggle anything.** The rules come from Unicode properties,
+- **Text cannot hide, reorder or smuggle characters.** The rules come from Unicode properties,
   not hand lists. Every text field rejects control characters (C0 and C1), lone surrogates and
   every _default-ignorable_ or _format_ character — soft hyphen, zero-width and bidi controls
   (Trojan Source), word joiners, Hangul fillers, variation selectors, interlinear annotation
   marks and the TAG block used for ASCII smuggling — plus the braille blank. Ordinary prose and
-  single-line fields keep three exceptions emoji and some scripts need: ZWJ, ZWNJ and VS16.
-  Single-line fields (labels, titles) also reject tab, newline, the line/paragraph separators
-  and runs of five or more combining marks (zalgo). The **agent prompt** is the strictest field:
-  no invisible character of any kind, so what the reviewer reads is exactly what the coding
-  agent receives. Code lines (suggestions) allow tab, may be empty, and reject every invisible
+  single-line fields keep four of them that real text needs, under placement rules that leave
+  no room for hidden bits: the zero-width joiner and non-joiner only between a visible character
+  and a following visible non-mark character (never two in a row), the emoji variation selectors
+  VS15/VS16 only directly after an emoji or symbol, and at most 32 of them per string and one
+  per two visible characters. Runs of combining marks are capped (6 in single-line fields,
+  paths and ids, which still fits Hebrew with vowel points and cantillation; 8 in prose),
+  counted across interleaved joiners. Single-line fields (labels, titles) also reject tab,
+  newline and the line/paragraph separators. The **agent prompt** is the strictest field: no
+  invisible character of any kind, so what the reviewer reads is exactly what the coding agent
+  receives. Code lines (suggestions) allow tab, may be empty, and reject every invisible
   character. Payload samples are checked recursively, keys included, and may not use the keys
   `__proto__`, `constructor` or `prototype`.
 - **The whole document is capped** at 4 MiB of JSON (`MAX_DOCUMENT_BYTES`), checked on the raw
   text by `parseAnalysisDocumentJson` before anything is parsed; input may nest at most 64
-  levels and every object may appear once (no cycles, no shared subtrees). Flags are capped at
-  2 000 across the document.
+  levels (`TOO_DEEP`) and every object may appear once — a cycle or a shared subtree is
+  `SHARED_REFERENCE`, which tells the caller the input was not `JSON.parse` output. Flags are
+  capped at 2 000 across the document.
 - **Every string has a maximum length and every array a maximum size.** They live in
   `packages/schema/src/limits.ts` with the reason for each. The main ones:
 
@@ -200,28 +211,28 @@ count or a hunk range. Every other section is then checked against those facts.
 
 ### Integrity (beyond types; each has a code and a JSON path)
 
-| Code                            | Guarantee                                                                                                                                                                                                                                            |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DUPLICATE_ID`                  | Ids are unique per collection, compared case-insensitively (lanes, nodes, edges, flows, messages per flow, views across the tree, steps, findings, memory refs).                                                                                     |
-| `DUPLICATE_PATH`                | A path appears once per collection (PR files, unanalysed, triaged files, noise, review path); no two PR files are equal under NFC.                                                                                                                   |
-| `BROKEN_REFERENCE`              | Nodes name declared lanes; edges and flow participants name declared nodes; messages name participants of their flow; view scopes, walkthrough stages and focus name existing elements; focused messages belong to a flow drawn on the step's stage. |
-| `UNKNOWN_FILE`                  | Triage entries, noise entries and findings name files in the PR's file list; review-path steps name triaged files.                                                                                                                                   |
-| `TRIAGE_COVERAGE`               | Every PR file is triaged, noise or (per the facts) unanalysed, exactly once.                                                                                                                                                                         |
-| `FINDING_IN_NOISE_FILE`         | No finding sits in a file triage calls noise.                                                                                                                                                                                                        |
-| `FINDING_IN_UNANALYSED_FILE`    | No finding sits in a file the pipeline lists as unanalysed (`provenance.unanalysed`, written by the overlay, never by the model); such files carry no triage entry, flag or review-path step either.                                                 |
-| `MEMORY_REF_MISMATCH`           | Every memory entry a finding cites appears in `briefing.memoryApplied` with identical id, text and source.                                                                                                                                           |
-| `LINE_OUTSIDE_DIFF`             | Finding and flag ranges sit inside **one** new-side hunk (context lines included) of that file's diff.                                                                                                                                               |
-| `SCORE_LEVEL_MISMATCH`          | Scores match their level: critical 80–100, important 50–79, normal 20–49, low 0–19.                                                                                                                                                                  |
-| `SEVERITY_LEVEL_MISMATCH`       | A critical or high finding cannot sit in a file triaged `low` ("don't matter" in the sidebar).                                                                                                                                                       |
-| `VERDICT_TOO_LOW`               | With a critical finding the verdict is at least `high`; with a high finding at least `medium`.                                                                                                                                                       |
-| `SUGGESTION_CONTEXT_IMPOSSIBLE` | A suggestion with a context line cannot start at line 1.                                                                                                                                                                                             |
-| `SUGGESTION_CONTEXT_MISMATCH`   | With the file's content available, the context line equals the line before the range.                                                                                                                                                                |
-| `SUGGESTION_RANGE_OUTSIDE_FILE` | With content available, the range exists in the file.                                                                                                                                                                                                |
-| `SUGGESTION_NOOP`               | With content available, the replacement differs from the original lines.                                                                                                                                                                             |
-| `LIMIT_EXCEEDED`                | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                  |
-| `UNSUPPORTED_SCHEMA_VERSION`    | Only `1.0.x` is read.                                                                                                                                                                                                                                |
-| `INVALID_JSON`                  | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                         |
-| `TOO_DEEP` / `INTERNAL_ERROR`   | The parser never throws; input nested over 64 levels, or reaching any object twice (a cycle or a shared subtree), is `TOO_DEEP` with the path, found in one linear pass; an unexpected error is `INTERNAL_ERROR` without echoing input.              |
+| Code                                               | Guarantee                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DUPLICATE_ID`                                     | Ids are unique per collection, compared case-insensitively (lanes, nodes, edges, flows, messages per flow, views across the tree, steps, findings, memory refs).                                                                                                                                |
+| `DUPLICATE_PATH`                                   | A path appears once per collection (PR files, unanalysed, triaged files, noise, review path); no two PR files are equal under NFC.                                                                                                                                                              |
+| `BROKEN_REFERENCE`                                 | Nodes name declared lanes; edges and flow participants name declared nodes; messages name participants of their flow; view scopes, walkthrough stages and focus name existing elements; focused messages belong to a flow drawn on the step's stage.                                            |
+| `UNKNOWN_FILE`                                     | Triage entries, noise entries and findings name files in the PR's file list; review-path steps name triaged files.                                                                                                                                                                              |
+| `TRIAGE_COVERAGE`                                  | Every PR file is triaged, noise or (per the facts) unanalysed, exactly once.                                                                                                                                                                                                                    |
+| `FINDING_IN_NOISE_FILE`                            | No finding sits in a file triage calls noise.                                                                                                                                                                                                                                                   |
+| `FINDING_IN_UNANALYSED_FILE`                       | No finding sits in a file the pipeline lists as unanalysed (`provenance.unanalysed`, written by the overlay, never by the model); such files carry no triage entry, flag or review-path step either.                                                                                            |
+| `MEMORY_REF_MISMATCH`                              | Every memory entry a finding cites appears in `briefing.memoryApplied` with identical id, text and source.                                                                                                                                                                                      |
+| `LINE_OUTSIDE_DIFF`                                | Finding and flag ranges sit inside **one** new-side hunk (context lines included) of that file's diff.                                                                                                                                                                                          |
+| `SCORE_LEVEL_MISMATCH`                             | Scores match their level: critical 80–100, important 50–79, normal 20–49, low 0–19.                                                                                                                                                                                                             |
+| `SEVERITY_LEVEL_MISMATCH`                          | A critical or high finding cannot sit in a file triaged `low` ("don't matter" in the sidebar).                                                                                                                                                                                                  |
+| `VERDICT_TOO_LOW`                                  | With a critical finding the verdict is at least `high`; with a high finding at least `medium`.                                                                                                                                                                                                  |
+| `SUGGESTION_CONTEXT_IMPOSSIBLE`                    | A suggestion with a context line cannot start at line 1.                                                                                                                                                                                                                                        |
+| `SUGGESTION_CONTEXT_MISMATCH`                      | With the file's content available, the context line equals the line before the range.                                                                                                                                                                                                           |
+| `SUGGESTION_RANGE_OUTSIDE_FILE`                    | With content available, the range exists in the file.                                                                                                                                                                                                                                           |
+| `SUGGESTION_NOOP`                                  | With content available, the replacement differs from the original lines.                                                                                                                                                                                                                        |
+| `LIMIT_EXCEEDED`                                   | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                                                             |
+| `UNSUPPORTED_SCHEMA_VERSION`                       | Only `1.0.x` is read.                                                                                                                                                                                                                                                                           |
+| `INVALID_JSON`                                     | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                                                                    |
+| `TOO_DEEP` / `SHARED_REFERENCE` / `INTERNAL_ERROR` | The parser never throws; input nested over 64 levels is `TOO_DEEP`; any object reached twice (a cycle or a shared subtree, i.e. not `JSON.parse` output) is `SHARED_REFERENCE`, both with the path and found in one linear pass; an unexpected error is `INTERNAL_ERROR` without echoing input. |
 
 **What suggestions can and cannot be checked without file contents.** The hunk ranges in the
 facts tell us a range is in the diff, and that a context line at line 1 is impossible. Whether
@@ -235,8 +246,9 @@ file contents.
 `parseAnalysisDocumentJson` as text: it is the only entry point with the byte cap, and
 `parseAnalysisDocument` (JSON-parsed data) has none. A leading BOM is tolerated; duplicate JSON
 keys follow `JSON.parse` (last one wins), which is safe because only the returned, validated
-value is ever stored. Shared or cyclic object graphs are not valid input and are reported as
-`TOO_DEEP`.
+value is ever stored. Input must be the output of `JSON.parse`: a document assembled in code
+that reuses one object in two places is refused as `SHARED_REFERENCE` (serialise and re-parse
+it first).
 
 **Design notes on small rules.** Self-loop edges are allowed (a module that calls itself is a
 real thing to draw). A node's `group` is a free label, not a reference: groups have no
@@ -252,7 +264,7 @@ registry to point at. Ids are compared case-insensitively because anchors often 
   `known-fields.test.ts`.
 - Property tests (fast-check, fixed seed): 150 random valid documents (with noise, unanalysed
   files, memory references, graphs, flows and walkthroughs) are accepted and re-parse to
-  themselves; 400 random mutations from 46 mutators (unknown fields, control and Unicode
+  themselves; 400 random mutations from 48 mutators (unknown fields, control and Unicode
   hiding characters in text, code and paths, path traversal and look-alikes, oversized strings
   and arrays, duplicate ids incl. case-only, duplicate paths, broken references, lines outside
   the diff, files outside the PR, missing or doubled triage, findings in noise or unanalysed
