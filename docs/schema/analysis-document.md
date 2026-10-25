@@ -10,8 +10,9 @@ Reading time: about 15 minutes.
 ## In one paragraph (for a non-specialist)
 
 When a pull request arrives, Rocky's AI reads it and writes down what it found as one
-structured file: a short briefing, a score and a few notes for every changed file, a list of
-draft comments with suggested fixes, and a diagram of what the change touches. Before Rocky
+structured file: a short briefing, a score, a time estimate and a few notes for every changed
+file, a list of draft comments with suggested fixes, and a diagram of what the change touches
+(when the diagram fails, the rest still ships and the file says why it is missing). Before Rocky
 keeps or shows any of that, a checker goes through the file with a fixed rulebook: every
 field has the right type and a size limit; the text cannot hide or spoof characters (no
 control, hidden or direction-changing characters; the few joiners emoji and some scripts need
@@ -41,14 +42,14 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 ## What the document contains
 
-| Section         | Written by          | What it holds                                                                                                                                                                                                          |
-| --------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                               |
-| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), timestamp, which model did what. |
-| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes, suggested review path (files + why), "checked, looks fine" list, memory used.                                                              |
-| `triage`        | model               | Per changed file: score 0–100, level, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                            |
-| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                  |
-| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough.                                                                                      |
+| Section         | Written by          | What it holds                                                                                                                                                                                                                                                      |
+| --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                                                                           |
+| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what. |
+| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                               |
+| `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                              |
+| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                                                              |
+| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough. Absent when the graph role failed; `provenance.graphUnavailable` then says why.                                                  |
 
 The `provenance` section is the **known facts**. `applyKnownFields(modelOutput, facts)` writes
 it over whatever the model returned, so a model can never state a SHA, a file list, a line
@@ -76,12 +77,16 @@ count or a hunk range. Every other section is then checked against those facts.
       }
       // … 8 more files, including pnpm-lock.yaml and a generated types file
     ],
+    // Only when the pipeline could not produce a change map (the document then has no `graph`):
+    // "graphUnavailable": { "reason": "analysis-failed", "detail": "…" }
     "generatedAt": "2026-10-25T12:00:00.000Z",
     "generator": { "name": "rocky", "roles": [{ "role": "review", "model": "…" }] }
   },
   "briefing": {
     "summary": "Adds **email invitations to orgs**. An admin creates an invite, …",
-    "verdict": { "level": "high", "reason": "This PR adds a **new way to gain membership** …" },
+    // F1 below is critical, so the verdict must be critical (VERDICT_TOO_LOW otherwise).
+    "verdict": { "level": "critical", "reason": "This PR adds a **new way to gain membership** …" },
+    // At least the sum of the files' reviewMinutes (REVIEW_MINUTES_TOO_LOW otherwise).
     "estimatedReviewMinutes": 7,
     // Each step names a triaged file (never a noise file), each file at most once.
     "reviewPath": [{ "path": "src/auth/invitations.ts", "why": "New path that grants org membership …" }],
@@ -94,6 +99,7 @@ count or a hunk range. Every other section is then checked against those facts.
         "path": "src/auth/invitations.ts",
         "score": 97, // must sit in the band for its level: critical is 80–100
         "level": "critical",
+        "reviewMinutes": 3, // the sidebar's "minutes of high-risk code left" adds these up
         "reason": "New path that grants org membership and sets the member's role.",
         "whatChanged": "New createInvitation() and acceptInvitation(). …",
         "whyThisLevel": "New path that grants org membership …",
@@ -182,6 +188,12 @@ count or a hunk range. Every other section is then checked against those facts.
   receives. Code lines (suggestions) allow tab, may be empty, and reject every invisible
   character. Payload samples are checked recursively, keys included, and may not use the keys
   `__proto__`, `constructor` or `prototype`.
+- **A change map is present or explained, never both.** `graph` is optional. When the pipeline
+  could not produce one it records `provenance.graphUnavailable` (`reason`: `analysis-failed`,
+  `too-large` or `timeout`, plus an optional prose `detail`), which the UI shows as "Change map
+  unavailable" with the reason and a Retry button. The field lives in the facts, like
+  `unanalysed`: `applyKnownFields` overwrites it, so a model can neither write the text the UI
+  shows nor claim a graph failed. A document with both a `graph` and this field is refused.
 - **The whole document is capped** at 4 MiB of JSON (`MAX_DOCUMENT_BYTES`), checked on the raw
   text by `parseAnalysisDocumentJson` before anything is parsed; input may nest at most 64
   levels (`TOO_DEEP`) and every object may appear once — a cycle or a shared subtree is
@@ -202,7 +214,8 @@ count or a hunk range. Every other section is then checked against those facts.
 | Agent prompt                           | 2 000 chars                |
 | Briefing summary                       | 2 000 chars                |
 | Review path / checked-ok / memory used | 50 / 30 / 50 items         |
-| Estimated review minutes               | 1–480                      |
+| Estimated review minutes (PR)          | 1–480                      |
+| Estimated review minutes (per file)    | 0–480                      |
 | Lanes / nodes / edges / flows          | 16 / 256 / 512 / 16        |
 | Messages per flow, participants        | 64, 2–12                   |
 | Payload sample                         | 4 096 bytes, 8 levels deep |
@@ -224,7 +237,8 @@ count or a hunk range. Every other section is then checked against those facts.
 | `LINE_OUTSIDE_DIFF`                                | Finding and flag ranges sit inside **one** new-side hunk (context lines included) of that file's diff.                                                                                                                                                                                          |
 | `SCORE_LEVEL_MISMATCH`                             | Scores match their level: critical 80–100, important 50–79, normal 20–49, low 0–19.                                                                                                                                                                                                             |
 | `SEVERITY_LEVEL_MISMATCH`                          | A critical or high finding cannot sit in a file triaged `low` ("don't matter" in the sidebar).                                                                                                                                                                                                  |
-| `VERDICT_TOO_LOW`                                  | With a critical finding the verdict is at least `high`; with a high finding at least `medium`.                                                                                                                                                                                                  |
+| `VERDICT_TOO_LOW`                                  | With a critical finding the verdict is `critical`; with a high finding at least `medium`. Only severity counts: the document has no accept/dismiss state (those are the human's, outside the document).                                                                                         |
+| `REVIEW_MINUTES_TOO_LOW`                           | `briefing.estimatedReviewMinutes` is at least the sum of `triage.files[].reviewMinutes`. It may exceed it: the briefing and the noise summaries take time too.                                                                                                                                  |
 | `SUGGESTION_CONTEXT_IMPOSSIBLE`                    | A suggestion with a context line cannot start at line 1.                                                                                                                                                                                                                                        |
 | `SUGGESTION_CONTEXT_MISMATCH`                      | With the file's content available, the context line equals the line before the range.                                                                                                                                                                                                           |
 | `SUGGESTION_RANGE_OUTSIDE_FILE`                    | With content available, the range exists in the file.                                                                                                                                                                                                                                           |
@@ -256,20 +270,21 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 
 ## How this is tested
 
-- 270+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
+- 300+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
   rounds' probe inputs (bidi, default-ignorable and blank-looking characters, ASCII smuggling
   via TAG characters, zalgo, look-alike dot paths, `.git` spellings, `__proto__` keys, a file
   named `constructor`, cyclic and shared input, 100 000-deep input, an 80 MB document, a model
-  declaring the critical file unanalysed) are regression tests in `hardening.test.ts` and
-  `known-fields.test.ts`.
+  declaring the critical file unanalysed, a model writing the change-map reason itself) are
+  regression tests in `hardening.test.ts` and `known-fields.test.ts`.
 - Property tests (fast-check, fixed seed): 150 random valid documents (with noise, unanalysed
-  files, memory references, graphs, flows and walkthroughs) are accepted and re-parse to
-  themselves; 400 random mutations from 48 mutators (unknown fields, control and Unicode
-  hiding characters in text, code and paths, path traversal and look-alikes, oversized strings
-  and arrays, duplicate ids incl. case-only, duplicate paths, broken references, lines outside
-  the diff, files outside the PR, missing or doubled triage, findings in noise or unanalysed
-  files, score, verdict and memory inconsistencies, bad suggestions, out-of-order hunks, -0)
-  are each rejected with the expected code at the expected path.
+  files, memory references, graphs or a pipeline reason for their absence, flows and
+  walkthroughs) are accepted and re-parse to themselves; 400 random mutations from 51 mutators
+  (unknown fields, control and Unicode hiding characters in text, code and paths, path
+  traversal and look-alikes, oversized strings and arrays, duplicate ids incl. case-only,
+  duplicate paths, broken references, lines outside the diff, files outside the PR, missing or
+  doubled triage, findings in noise or unanalysed files, score, verdict, review-minute and
+  memory inconsistencies, a graph next to a "graph unavailable" reason, bad suggestions,
+  out-of-order hunks, -0) are each rejected with the expected code at the expected path.
 - Golden fixtures `pr-847.json`, `tiny.json`, `large-60-files.json` validate and are stored in
   canonical form; the large one is regenerated by a deterministic script and compared.
 - The emitted JSON Schema is byte-identical across runs and matches the committed file.
@@ -277,34 +292,46 @@ registry to point at. Ids are compared case-insensitively because anchors often 
   files the model adds are rejected (`UNKNOWN_FILE`), files it drops fail coverage, widened
   hunks do not legitimise lines outside the diff.
 
-## Open questions for the founder
+## Decisions (gate H2)
 
-NFD handling (above) is a decision, not a question: the facts keep git's spelling, collisions
-under NFC are refused, and model paths must match exactly.
+The open questions from the first draft, with the decision taken at the H2 gate and why. The
+schema version stays `1.0.0`: no producer has consumed the contract yet, and H2 is the gate
+that fixes it.
 
-1. **Markdown bodies may still contain `<`.** The schema now guarantees no hidden or
-   direction-changing characters and bounded size, but it does not strip HTML tags (see 6).
-2. **Graph is optional.** If the graph role fails, the rest of the document still ships and the
-   UI shows no change map. Should a missing graph instead block the whole analysis?
-3. **Noise files are a separate record** (path + summary) rather than a triaged file with
-   level `noise`. The UI groups by five levels; the document has four levels plus a noise list.
-   Fine, or should noise carry a score too?
-4. **Score bands** (80/50/20) are a contract now. The POC's numbers fit; do yours?
-5. **Verdict floor** is deliberately mild (critical finding → at least `high`). Should a
-   critical finding force a `critical` verdict?
-6. **Graph file references are not restricted to PR files** (unchanged context nodes point at
-   untouched files). Click-through on such a node (P5-3) has nothing to open; acceptable?
-7. **Markdown bodies are not HTML-filtered here.** The schema guarantees bounded size and no
-   control characters; the UI must render markdown with no raw HTML (P6). Do you want a
-   blocklist (`<script`, `javascript:`) in the schema as well, at the cost of false positives
-   on code like `Array<string>`?
-8. **PR title, author and URL are not in the document.** They come from the PR mirror in the
-   database, and the title is untrusted PR content. OK?
-9. **Per-file review minutes.** The POC derives "about N min left" from additions ÷ 14; the
-   document carries only a PR-level estimate. Should triage carry a per-file estimate?
-10. **The POC's PR header says +214** while its per-file numbers add up to 215. The fixture keeps
-    the per-file numbers; totals are derived, never stored.
-11. **Model-facing schema.** The emitted JSON Schema is the full document. Phase 4 will likely
-    send the model `AnalysisModelOutput` (everything except `provenance` and `schemaVersion`),
-    and may need a variant without `pattern`/`maxLength` for providers whose structured-output
-    mode rejects them. Not decided here.
+NFD handling (above) was never a question: the facts keep git's spelling, collisions under NFC
+are refused, and model paths must match exactly.
+
+1. **Markdown bodies may contain `<`.** Decision: no HTML blocklist in the schema. Reason: the
+   UI renders model text with raw HTML disabled (P6), and a blocklist would reject real code
+   like `Array<string>`.
+2. **Graph is optional.** Decision: it stays optional. A missing or invalid graph never blocks
+   the review. The pipeline records why in `provenance.graphUnavailable`; the UI shows "Change
+   map unavailable", the reason and a Retry button. Reason: the change map is a reading aid; the
+   triage, briefing and findings are the review.
+3. **Noise files are a separate record.** Decision: they stay a separate list, without a score.
+   Reason: a noise file is one the reviewer can trust unread; a score would invite reading it.
+4. **Score bands.** Decision: they stay: critical 80–100, important 50–79, normal 20–49, low
+   0–19. Reason: the POC's numbers fit, and the sidebar sorts by level and shows the score.
+5. **Verdict floor.** Decision: a critical finding forces a `critical` verdict (a high finding
+   still needs at least `medium`). Reason: a PR with a critical finding is a critical PR; a
+   softer verdict would hide it from the reviewer.
+6. **Graph file references are not restricted to PR files.** Decision: unchanged context nodes
+   stay and cannot be clicked. Reason: they show blast radius; there is no diff to open.
+7. **Markdown bodies are not HTML-filtered here.** Decision: same as 1. No blocklist. Reason:
+   the UI disables raw HTML, which catches everything a blocklist would and more.
+8. **PR title, author and URL are not in the document.** Decision: they stay out. They come
+   from Rocky's mirror of the forge. Reason: GitHub is the source of truth, and the title is
+   untrusted PR content the model must not launder.
+9. **Per-file review minutes.** Decision: every triaged file carries `reviewMinutes` (0–480),
+   and the PR estimate must be at least their sum (`REVIEW_MINUTES_TOO_LOW`). Reason: the
+   sidebar's "minutes of high-risk code left" needs a per-file number from the analysis, not
+   additions ÷ 14, and it must agree with the briefing. The PR estimate may exceed the sum
+   because the briefing and the noise summaries take time too; an exact equality would send
+   every arithmetic slip through a repair round.
+10. **The POC's PR header says +214** while its per-file numbers add up to 215. Decision: the
+    fixture keeps the per-file numbers; totals are derived, never stored. Reason: one source
+    for every number.
+11. **Model-facing schema.** Decision: deferred to Phase 4 (P4-2). The emitted JSON Schema
+    stays the full document; Phase 4 may send the model `AnalysisModelOutput` and may need a
+    variant without `pattern`/`maxLength`. Reason: it depends on which providers' structured
+    output modes accept which keywords, which is only known when the adapters are built.
