@@ -1,4 +1,4 @@
-import { APP_ROLE, migrate } from "@rocky-reviews/db";
+import { APP_ROLE, ensureLoginRole, migrate, WORKER_ROLE } from "@rocky-reviews/db";
 import pg from "pg";
 
 /**
@@ -42,7 +42,37 @@ try {
     );
     process.exit(1);
   }
-  console.log(`database ready: extensions ${REQUIRED_EXTENSIONS.join(", ")}, app role ${appUser}`);
+  // The worker's own login (P3-3, ADR 0009). Volumes created before it existed lack it; on a
+  // local database the seed creates it from WORKER_DATABASE_URL (development credentials only).
+  const workerUrl = process.env["WORKER_DATABASE_URL"];
+  if (workerUrl === undefined || workerUrl === "") {
+    console.error("WORKER_DATABASE_URL must be set (see .env.example)");
+    process.exit(1);
+  }
+  const worker = new URL(workerUrl);
+  const workerUser = decodeURIComponent(worker.username);
+  if (["127.0.0.1", "localhost", "[::1]"].includes(worker.hostname)) {
+    await ensureLoginRole(admin, {
+      name: workerUser,
+      password: decodeURIComponent(worker.password),
+      worker: true,
+    });
+  }
+  const workerRole = await admin.query<{ ok: boolean }>(
+    `select (not rolsuper and not rolbypassrls and not rolcreaterole and not rolcreatedb
+             and pg_has_role(rolname, $2, 'MEMBER') and pg_has_role(rolname, $3, 'MEMBER')) as ok
+       from pg_roles where rolname = $1`,
+    [workerUser, APP_ROLE, WORKER_ROLE],
+  );
+  if (workerRole.rows[0]?.ok !== true) {
+    console.error(
+      `role ${workerUser} must exist, be a member of ${APP_ROLE} and ${WORKER_ROLE}, and have no bypass attributes`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `database ready: extensions ${REQUIRED_EXTENSIONS.join(", ")}, app role ${appUser}, worker role ${workerUser}`,
+  );
 } finally {
   await admin.end();
 }

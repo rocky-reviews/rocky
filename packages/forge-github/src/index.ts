@@ -29,3 +29,17 @@ export {
   type GitHubEndpoints,
   type ManifestConversionFailure,
 } from "./app-manifest.js";
+export {
+  APP_JWT_LIFETIME_SECONDS,
+  GitHubAppConfigError,
+  githubAppJwt,
+  MIN_RSA_BITS,
+  parseGitHubAppAuth,
+  type GitHubAppAuth,
+} from "./app-auth.js";
+export {
+  createGitHubInstallationReader,
+  INSTALLATION_READ_TIMEOUT_MS,
+  MAX_INSTALLATION_RESPONSE_BYTES,
+  type GitHubInstallationReaderOptions,
+} from "./installations.js";

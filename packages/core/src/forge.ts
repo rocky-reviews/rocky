@@ -171,6 +171,10 @@ export interface WebhookInbox {
 export interface ForgeInstallation {
   readonly id: ForgeNumericId;
   readonly account: ForgeAccount;
+  /**
+   * Suspended by the account owner (or the forge). Not the same as deleted: the installation and
+   * its org stay, nothing is scheduled for deletion; reads on its behalf fail until unsuspended.
+   */
   readonly suspended: boolean;
 }
 
@@ -193,13 +197,61 @@ export interface ForgeDiff {
   readonly truncated: boolean;
 }
 
+/** Why a read from the forge failed. Fixed codes: safe to log and to store as an inbox error. */
+export type ForgeReadFailure =
+  /** No answer in time. Retry later. */
+  | "timeout"
+  /** Connection-level failure (DNS, TLS, reset). Retry later. */
+  | "network"
+  /** An HTTP status other than the documented ones (`status` set). Retry later. */
+  | "http_status"
+  /** A response that is not what was asked for (shape, size, ids that do not match). */
+  | "invalid_response"
+  /** The installation is on an account kind the domain does not model (e.g. an enterprise). */
+  | "unsupported_account_type";
+
+/**
+ * A failed forge read. Carries a fixed reason and at most an HTTP status: never a body, a token
+ * or a URL. A consumer must not treat it as "not found" (that is `null`), or it would act on an
+ * outage: an uninstall is only believed when the forge positively says 404.
+ */
+export class ForgeReadError extends Error {
+  override readonly name = "ForgeReadError";
+  constructor(
+    readonly reason: ForgeReadFailure,
+    readonly status?: number,
+  ) {
+    super(
+      status === undefined
+        ? `forge read failed: ${reason}`
+        : `forge read failed: ${reason} ${status}`,
+    );
+  }
+
+  /** `forge_<reason>` or `forge_http_<status>`: the inbox's `last_error` and log field. */
+  get code(): string {
+    return this.reason === "http_status" && this.status !== undefined
+      ? `forge_http_${this.status}`
+      : `forge_${this.reason}`;
+  }
+}
+
+/**
+ * The read the installation lifecycle needs (P3-3): authenticated as the app itself, not as an
+ * installation, because it must also work for an installation that no longer exists.
+ */
+export type InstallationReader = Pick<Forge, "kind" | "getInstallation">;
+
 /**
  * Read access to one forge, authenticated per installation by the adapter (short-lived, scoped
  * tokens). Grows with the tasks that need it (posting reviews P3-5, access checks P3-6).
  */
 export interface Forge {
   readonly kind: ForgeKind;
-  /** `null` when the installation no longer exists (uninstalled): consumers verify events here. */
+  /**
+   * `null` only when the forge positively says the installation does not exist (uninstalled);
+   * any other failure throws `ForgeReadError`. Consumers verify events here (ADR 0007 §4).
+   */
   getInstallation(installationId: ForgeNumericId): Promise<ForgeInstallation | null>;
   getPullRequest(ref: PullRequestRef): Promise<ForgePullRequest | null>;
   listOpenPullRequests(ref: RepositoryRef): AsyncIterable<ForgePullRequest>;

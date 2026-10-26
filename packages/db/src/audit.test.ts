@@ -5,6 +5,7 @@ import { createDb, type Db } from "./client.js";
 import { AUDIT_MIN_RETENTION_DAYS, DEFAULT_RETENTION, setRetentionSettings } from "./retention.js";
 import * as schema from "./schema.js";
 import {
+  asWorker,
   CONTAINER_TIMEOUT_MS,
   newOrgId,
   plantAuditEvent,
@@ -37,7 +38,7 @@ beforeAll(async () => {
   pgs = await startPostgres();
   superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
-  org = await seedOrg(db, newOrgId());
+  org = await asWorker(pgs.workerUrl, (w) => seedOrg(w, newOrgId()));
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -280,7 +281,7 @@ describe("retention purge path", () => {
     expect(error.code).toBe("23514"); // check_violation
   });
 
-  it("is owned by a NOLOGIN role that owns only the five retention functions", async () => {
+  it("is owned by a NOLOGIN role that owns only the six retention functions", async () => {
     const role = await pgs.migrator.query<{
       rolcanlogin: boolean;
       rolbypassrls: boolean;
@@ -297,6 +298,8 @@ describe("retention purge path", () => {
     );
     expect(owned.rows).toEqual([
       { kind: "function", name: "delete_org" },
+      // P3-3 (migration 0007): the deletion sweep's list of due orgs.
+      { kind: "function", name: "orgs_due_for_deletion" },
       { kind: "function", name: "purge_analyses" },
       { kind: "function", name: "purge_audit_events" },
       { kind: "function", name: "purge_jobs" },
@@ -328,6 +331,9 @@ describe("retention purge path", () => {
       { table_name: "audit_events", privilege_type: "SELECT" },
       { table_name: "jobs", privilege_type: "DELETE" },
       { table_name: "jobs", privilege_type: "SELECT" },
+      // P3-3: the erasure record, written only by delete_org (append-only trigger).
+      { table_name: "org_deletions", privilege_type: "INSERT" },
+      { table_name: "org_deletions", privilege_type: "SELECT" },
       { table_name: "orgs", privilege_type: "DELETE" },
       { table_name: "orgs", privilege_type: "SELECT" },
       // UPDATE only so delete_org can lock the row (SELECT … FOR UPDATE); never issued otherwise.

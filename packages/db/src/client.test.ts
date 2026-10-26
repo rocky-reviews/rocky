@@ -3,7 +3,13 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, TenantContextError, type Db } from "./client.js";
 import * as schema from "./schema.js";
-import { CONTAINER_TIMEOUT_MS, newOrgId, seedOrg, startPostgres } from "./testing/index.js";
+import {
+  asWorker,
+  CONTAINER_TIMEOUT_MS,
+  newOrgId,
+  seedOrg,
+  startPostgres,
+} from "./testing/index.js";
 
 /** P2-2: the tenant-scoped client. The isolation suite covers the policies table by table. */
 
@@ -20,8 +26,10 @@ beforeAll(async () => {
   db = createDb({ pool });
   orgA = newOrgId();
   orgB = newOrgId();
-  await seedOrg(db, orgA);
-  await seedOrg(db, orgB);
+  await asWorker(pgs.workerUrl, async (w) => {
+    await seedOrg(w, orgA);
+    await seedOrg(w, orgB);
+  });
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {

@@ -3,7 +3,14 @@
  * untrusted content a real payload does (titles, bodies, emails, URLs) so tests can prove it is
  * dropped. Test-only: exported as `@rocky-reviews/forge-github/testing`.
  */
-import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import {
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  verify,
+  type KeyObject,
+} from "node:crypto";
 import { signWebhookBody } from "./signature.js";
 
 /** A throwaway secret for tests (long enough for MIN_WEBHOOK_SECRET_LENGTH). */
@@ -100,3 +107,156 @@ export const webhookRequest = (delivery: SignedDelivery) => ({
   body: delivery.body,
   header: (name: string): string | undefined => delivery.headers[name],
 });
+
+// --- GitHub REST API fake (P3-3) ---------------------------------------------------------------
+
+/** A recorded, sanitised response body from `packages/forge-github/fixtures/`. */
+export const githubFixture = (name: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8")) as Record<
+    string,
+    unknown
+  >;
+
+/** The app id the fixtures carry. */
+export const FIXTURE_APP_ID = 123456;
+
+/**
+ * A throwaway RSA-2048 key pair generated per test run (nothing committed). `privateKeyPem` is
+ * what `GITHUB_APP_PRIVATE_KEY` holds.
+ */
+export const testAppKeys = (): { privateKeyPem: string; publicKey: KeyObject } => {
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  return {
+    privateKeyPem: privateKey.export({ type: "pkcs1", format: "pem" }).toString(),
+    publicKey,
+  };
+};
+
+export interface FakeAccount {
+  readonly id: number;
+  readonly login: string;
+  readonly type: "Organization" | "User" | "Enterprise";
+}
+
+export interface FakeGitHubApi {
+  /** Pass as the reader's `fetch`. */
+  readonly fetch: typeof fetch;
+  /** Every request seen: method, path, and whether its app JWT verified. Never the token. */
+  readonly requests: { method: string; path: string; authorized: boolean }[];
+  /** GitHub reports this installation as existing (optionally suspended). */
+  install(installationId: number, account: FakeAccount, options?: { suspended?: boolean }): void;
+  /** GitHub answers 404 for it from now on. */
+  uninstall(installationId: number): void;
+  /** The next `times` requests get `status` (e.g. 500, 401) instead of the real answer. */
+  failNext(status: number, times?: number): void;
+}
+
+const json = (status: number, body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+
+/**
+ * An in-memory GitHub serving `GET /app/installations/{id}` from the recorded fixtures (ids
+ * substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
+ * the app's public key, `iss` = app id, unexpired, at most 10 minutes long): a bad or missing
+ * token gets 401.
+ */
+export const fakeGitHubApi = (options: {
+  appId: number;
+  publicKey: KeyObject | string;
+  api?: string;
+}): FakeGitHubApi => {
+  const base = new URL(options.api ?? "https://api.github.com/");
+  const publicKey =
+    typeof options.publicKey === "string" ? createPublicKey(options.publicKey) : options.publicKey;
+  const installed = new Map<number, { account: FakeAccount; suspended: boolean }>();
+  const failures: number[] = [];
+  const requests: FakeGitHubApi["requests"] = [];
+
+  const authorized = (header: string | null): boolean => {
+    const match = /^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(
+      header ?? "",
+    );
+    if (match === null) return false;
+    const [, h, p, sig] = match as unknown as [string, string, string, string];
+    try {
+      const head = JSON.parse(Buffer.from(h, "base64url").toString("utf8")) as Record<
+        string,
+        unknown
+      >;
+      const claims = JSON.parse(Buffer.from(p, "base64url").toString("utf8")) as Record<
+        string,
+        unknown
+      >;
+      if (head["alg"] !== "RS256") return false;
+      if (!verify("sha256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(sig, "base64url"))) {
+        return false;
+      }
+      const now = Math.floor(Date.now() / 1000);
+      const iat = Number(claims["iat"]);
+      const exp = Number(claims["exp"]);
+      return claims["iss"] === String(options.appId) && exp > now && iat <= now && exp - iat <= 600;
+    } catch {
+      return false;
+    }
+  };
+
+  const fakeFetch = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    const method = init?.method ?? "GET";
+    const headers = new Headers(init?.headers);
+    const ok = authorized(headers.get("authorization"));
+    requests.push({ method, path: url.pathname, authorized: ok });
+    if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) {
+      throw new TypeError("fetch failed: unexpected host");
+    }
+    if (init?.redirect !== "error")
+      return json(400, { message: "test: redirects must be refused" });
+    const failure = failures.shift();
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    if (!ok) return json(401, { message: "A JSON web token could not be decoded" });
+    const path = url.pathname.slice(base.pathname.length);
+    const match = /^app\/installations\/(\d+)$/.exec(path);
+    if (method !== "GET" || match === null)
+      return json(404, githubFixture("get-installation.not-found"));
+    const id = Number(match[1]);
+    const entry = installed.get(id);
+    if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+    const body = githubFixture(
+      entry.suspended ? "get-installation.user-suspended" : "get-installation.organization",
+    );
+    const account = body["account"] as Record<string, unknown>;
+    return json(200, {
+      ...body,
+      id,
+      app_id: options.appId,
+      target_id: entry.account.id,
+      target_type: entry.account.type,
+      account: {
+        ...account,
+        id: entry.account.id,
+        login: entry.account.login,
+        type: entry.account.type,
+      },
+    });
+  };
+
+  return {
+    fetch: fakeFetch as typeof fetch,
+    requests,
+    install: (installationId, account, opts = {}) => {
+      installed.set(installationId, { account, suspended: opts.suspended === true });
+    },
+    uninstall: (installationId) => {
+      installed.delete(installationId);
+    },
+    failNext: (status, times = 1) => {
+      for (let i = 0; i < times; i++) failures.push(status);
+    },
+  };
+};

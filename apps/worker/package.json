@@ -9,10 +9,14 @@
     "dev": "tsx watch --env-file=../../.env src/main.ts"
   },
   "dependencies": {
+    "@rocky-reviews/core": "workspace:*",
+    "@rocky-reviews/db": "workspace:*",
+    "@rocky-reviews/forge-github": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
     "pg": "8.23.1"
   },
   "devDependencies": {
+    "@rocky-reviews/server": "workspace:*",
     "@types/pg": "8.23.1"
   }
 }

@@ -1,7 +1,9 @@
 # Threat model: data layer (P2-1, P2-2, P2-5, P2-6)
 
 The webhook inbox (`app.webhook_deliveries`, P3-2) has its own threat table (W1–W13) in
-[ADR 0007](../../docs/adr/0007-webhook-inbox.md); its database rows are W4, W5, W11–W13.
+[ADR 0007](../../docs/adr/0007-webhook-inbox.md); its database rows are W4, W5, W11–W13. The
+installation lifecycle (P3-3: worker role, org creation, inbox claim path, erasure sweep) has its
+own table (L1–L20) in [ADR 0009](../../docs/adr/0009-installation-lifecycle.md).
 
 Companion to [ADR 0003 tenancy](../../docs/adr/0003-tenancy.md) and
 [ADR 0005 migrations and roles](../../docs/adr/0005-migrations-and-roles.md). Each row names the
@@ -82,11 +84,11 @@ Rows marked "(review)" were added after the independent security review of the f
 - The audit floor equals the configured audit period (30 days minimum). A compromised app can
   still run the purge early, but it only removes rows already past the period the operator
   chose; shortening the period needs the migrator credential (review #5).
-- `retention.delete_org` is callable by the app for any org whose grace period has elapsed. The
+- `retention.delete_org` is callable (since P3-3, by the worker role only, ADR 0009) for any org whose grace period has elapsed. The
   grace period is enforced by a trigger the app cannot bypass, so the window between "scheduled"
   and "deleted" is always at least `org_deletion_grace` days, long enough for the uninstall to be
   noticed and cancelled (set `delete_after` back to NULL). The deletion itself cannot be audited
-  per tenant (the tenant is gone); the worker logs it. `rocky_retention` holds `UPDATE` on `orgs`
+  per tenant (the tenant is gone); since P3-3 it writes a tombstone to `app.org_deletions` and the worker logs it. `rocky_retention` holds `UPDATE` on `orgs`
   only because `SELECT … FOR UPDATE` requires it (and an UPDATE policy); none of its functions
   issues an UPDATE.
 - The audit `created_at` stamp applies to every role. Tests that need old rows disable the

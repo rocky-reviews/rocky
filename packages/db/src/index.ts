@@ -9,6 +9,27 @@ export {
   type TenantTx,
 } from "./client.js";
 export {
+  completeInTenantTx,
+  decodeClaimedDelivery,
+  isErrorCode,
+  isOutcomeCode,
+  LeaseLostError,
+  WEBHOOK_MAX_ATTEMPTS,
+  type ClaimedDelivery,
+  type ClaimOptions,
+  type DecodedDelivery,
+  type InboxFailure,
+  type InboxLease,
+} from "./inbox.js";
+export {
+  auditLifecycle,
+  bindInstallation,
+  insertInstallationOrg,
+  scheduleOrgDeletion,
+  type InstallationOrg,
+  type NewInstallationOrg,
+} from "./installations.js";
+export {
   appliedMigrations,
   checksumOf,
   loadMigrations,
@@ -33,7 +54,14 @@ export {
   type RetentionConfig,
   type RetentionReport,
 } from "./retention.js";
-export { APP_ROLE, ensureLoginRole, RETENTION_ROLE, scramSha256Verifier } from "./roles.js";
+export {
+  APP_ROLE,
+  ensureLoginRole,
+  LIFECYCLE_ROLE,
+  RETENTION_ROLE,
+  scramSha256Verifier,
+  WORKER_ROLE,
+} from "./roles.js";
 export {
   CIPHERTEXT_PREFIX,
   loadForgeToken,

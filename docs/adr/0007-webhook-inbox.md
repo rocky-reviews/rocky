@@ -4,6 +4,8 @@
 - **Date:** 2026-10-26
 - **Tasks:** P3-7, P3-2
 - **Amends:** [ADR 0005](0005-migrations-and-roles.md) §1 (a third non-tenant table in `app`)
+- **Amended by:** [ADR 0009](0009-installation-lifecycle.md) (P3-3: the inbox's processing state,
+  the worker's claim path, the purge skips unprocessed rows)
 
 ## Context
 
@@ -128,7 +130,14 @@ job: the worker consumes the inbox (P3-3 adds the claim path) and creates tenant
   `rocky_retention`, period from `app.retention_settings` (`webhook_deliveries`, default 30 days,
   CHECK floor 7 days because GitHub redelivers for up to 3; `RETENTION_WEBHOOK_DELIVERIES_DAYS`).
   Same contract as the 0005 purges; not audited per org (a delivery has no org), `runRetention`
-  reports the count. The retention period is also the dedup window.
+  reports the count. The retention period is also the dedup window. Since P3-3 it deletes
+  **processed** rows only: pending, leased and parked rows stay however old (ADR 0009 §3).
+- **Processing state (P3-3, ADR 0009 §3).** `attempts`, `available_at`, `lease_token`/`lease_until`,
+  `processed_at` + `outcome`, `parked_at`, `last_error` (SQLSTATE or reason code). Reset by the stamp
+  trigger on insert. The worker role claims rows with `FOR UPDATE SKIP LOCKED` and a lease through
+  `worker.claim_webhook_deliveries`, finishes them with `worker.complete_webhook_delivery` (inside
+  the tenant transaction that applied the effect) or `worker.fail_webhook_delivery`; after five
+  attempts a row is parked. The app role still holds `INSERT` only.
 - The isolation suite allow-lists the table explicitly, pins the app's privileges on it to
   `INSERT`, and the SECURITY DEFINER allow-list grows to five.
 
@@ -156,7 +165,8 @@ a row planted by a compromised app credential, harmless. Processing is idempoten
 cross-tenant rows that the app role must read and write, which needs its own isolation treatment.
 The inbox is the durable, deduplicated boundary either way; whether the worker drains it directly
 (`FOR UPDATE SKIP LOCKED` through a SECURITY DEFINER claim function) or feeds pg-boss is decided
-with the first consumer (P3-3).
+with the first consumer (P3-3). **Decided in P3-3 (ADR 0009):** the worker drains the inbox
+directly; no pg-boss schema with cross-tenant rows was needed.
 
 ## Threat model
 
@@ -191,8 +201,8 @@ application's database credential.
 - One INSERT per accepted delivery; unknown events cost an HMAC and nothing else.
 - Adding an event type means a core type, an adapter decoder, and a migration extending the
   `event_type` CHECK.
-- The receiver and the worker share one database role; the worker's read path into the inbox is a
-  SECURITY DEFINER function added with it (P3-3), not a table grant.
+- The worker logs in as its own role (`rocky_app` + `rocky_worker`, ADR 0009); its read path into
+  the inbox is the SECURITY DEFINER functions in schema `worker`, not a table grant.
 
 ## Residual risks
 
@@ -206,9 +216,9 @@ application's database credential.
   cannot: only bytes actually received count. During such a flood genuine deliveries get 503 and
   are lost unless redelivered (see the reconcile follow-up). Rate limits come with P7-3;
   Cloudflare sits in front in Cloud.
-- **Installer may be unknown:** `sender` is `null` when GitHub sends no usable actor. P3-3 must
-  handle an org with no recorded installer (no first admin from the webhook; fall back to the
-  installation's account and the first user who signs in with access).
+- **Installer may be unknown:** `sender` is `null` when GitHub sends no usable actor. P3-3 handles
+  it (ADR 0009 §2): the org gets no installer candidate, and P7-1 falls back to the first user who
+  signs in and is verified as an admin.
 - **Existence oracle:** a compromised app credential can learn whether a delivery id or body
   digest exists by attempting an insert. Delivery ids are not secret and digests need the body.
 - `NODE_ENV=production` or `FLY_APP_NAME` makes the secret mandatory; a production deployment

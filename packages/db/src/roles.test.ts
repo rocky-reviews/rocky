@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { APP_ROLE, ensureLoginRole, scramSha256Verifier } from "./roles.js";
+import { APP_ROLE, WORKER_ROLE, ensureLoginRole, scramSha256Verifier } from "./roles.js";
 import { CONTAINER_TIMEOUT_MS, startPostgres } from "./testing/index.js";
 
 /** Review #9: check before changing, and never send a plaintext password to the server. */
@@ -99,5 +99,39 @@ describe("ensureLoginRole", () => {
     const c = new pg.Client({ connectionString: url.toString() });
     await c.connect();
     await c.end();
+  });
+
+  it("makes a worker login a member of rocky_app and rocky_worker, and nothing else (P3-3)", async () => {
+    await ensureLoginRole(pgs.migrator, {
+      name: "worker_login",
+      password: "worker-login-secret",
+      worker: true,
+    });
+    const groupsOf = async (name: string) =>
+      (
+        await superuser.query<{ groups: string[] }>(
+          `select array(select m.roleid::regrole::text from pg_auth_members m where m.member = a.oid
+                         order by 1) as groups
+             from pg_authid a where a.rolname = $1`,
+          [name],
+        )
+      ).rows[0]?.groups;
+    expect(await groupsOf("worker_login")).toEqual([APP_ROLE, WORKER_ROLE]);
+    // Idempotent.
+    await ensureLoginRole(pgs.migrator, {
+      name: "worker_login",
+      password: "worker-login-rotated",
+      worker: true,
+    });
+    expect(await groupsOf("worker_login")).toEqual([APP_ROLE, WORKER_ROLE]);
+    // A server login must never carry the worker role: asking for a plain app login on a role
+    // that has it is refused and changes nothing.
+    await expect(
+      ensureLoginRole(pgs.migrator, { name: "worker_login", password: "worker-login-plain" }),
+    ).rejects.toThrow(/privileges/);
+    expect(await groupsOf("worker_login")).toEqual([APP_ROLE, WORKER_ROLE]);
+    // A plain app login does not get the worker role.
+    await ensureLoginRole(pgs.migrator, { name: "plain_login", password: "plain-login-secret" });
+    expect(await groupsOf("plain_login")).toEqual([APP_ROLE]);
   });
 });

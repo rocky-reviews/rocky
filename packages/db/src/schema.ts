@@ -39,6 +39,9 @@ export const orgs = pgTable("orgs", {
     .default(sql`app.current_org_id()`),
   forge: text("forge").notNull().default("github"),
   installationId: bigint("installation_id", { mode: "number" }).notNull(),
+  /** The forge's immutable account id: orgs bind by it, never by `login` (ADR 0009). */
+  accountId: bigint("account_id", { mode: "number" }).notNull(),
+  /** Display only; the forge can rename and reuse logins. */
   login: text("login").notNull(),
   kind: text("kind", { enum: ["organization", "user"] }).notNull(),
   settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
@@ -47,6 +50,8 @@ export const orgs = pgTable("orgs", {
   llmApiKeyCiphertext: bytea("llm_api_key_ciphertext"),
   llmApiKeyVersion: integer("llm_api_key_version"),
   deleteAfter: timestamp("delete_after", { withTimezone: true }),
+  /** The installer reported by the webhook: a candidate first admin, unverified (ADR 0009). */
+  installerForgeUserId: bigint("installer_forge_user_id", { mode: "number" }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   FORGE_EVENT_TYPES,
+  ForgeReadError,
   isForgeEventType,
   isInstallationEvent,
   type ForgeEvent,
@@ -87,5 +88,19 @@ describe("core forge neutrality (P3-7)", () => {
       .flatMap((k) => Object.keys((manifest[k] as Record<string, string> | undefined) ?? {}))
       .join(" ");
     expect(deps).not.toMatch(/octokit|forge-github|github|gitlab|gitea/i);
+  });
+});
+
+describe("ForgeReadError (P3-3)", () => {
+  it("carries a fixed code and never anything else", () => {
+    expect(new ForgeReadError("timeout").code).toBe("forge_timeout");
+    expect(new ForgeReadError("http_status", 502).code).toBe("forge_http_502");
+    expect(new ForgeReadError("http_status").code).toBe("forge_http_status");
+    expect(new ForgeReadError("unsupported_account_type").code).toBe(
+      "forge_unsupported_account_type",
+    );
+    const error = new ForgeReadError("http_status", 401);
+    expect(error.message).toBe("forge read failed: http_status 401");
+    expect(Object.keys(error).sort()).toEqual(["name", "reason", "status"]);
   });
 });

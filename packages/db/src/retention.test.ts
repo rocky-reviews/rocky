@@ -14,6 +14,7 @@ import {
 } from "./retention.js";
 import * as schema from "./schema.js";
 import {
+  asWorker,
   CONTAINER_TIMEOUT_MS,
   newOrgId,
   plantAuditEvent,
@@ -45,8 +46,10 @@ beforeAll(async () => {
   pgs = await startPostgres();
   superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
-  orgA = await seedOrg(db, newOrgId(), { installationId: 1, createdAt: NOW });
-  orgB = await seedOrg(db, newOrgId(), { installationId: 2, createdAt: NOW });
+  [orgA, orgB] = await asWorker(pgs.workerUrl, async (w) => [
+    await seedOrg(w, newOrgId(), { installationId: 1, createdAt: NOW }),
+    await seedOrg(w, newOrgId(), { installationId: 2, createdAt: NOW }),
+  ]);
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {

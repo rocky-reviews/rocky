@@ -1,5 +1,6 @@
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
+import { isAbort, readCapped } from "./http.js";
 import { checkWebhookSecret } from "./signature.js";
 
 /**
@@ -250,29 +251,6 @@ const slugOf = (slug: unknown, htmlUrl: unknown): string | undefined => {
     return undefined;
   }
 };
-
-const readCapped = async (response: Response, limit: number): Promise<Buffer | undefined> => {
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > limit) return undefined;
-  if (response.body === null) return Buffer.alloc(0);
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) {
-      await reader.cancel().catch(() => undefined);
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-};
-
-const isAbort = (error: unknown): boolean =>
-  error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 
 /**
  * Exchanges a manifest code for the app's credentials. One request to the configured API base

@@ -1,7 +1,15 @@
 export type { Clock, Entitlements, Feature, OrgId } from "./ports.js";
 export { selfHostEntitlements } from "./entitlements.js";
 export {
+  EXTERNAL_TENANT_STORES,
+  nothingStoredYet,
+  type ExternalTenantStore,
+  type OrgDataEraser,
+  type OrgErasers,
+} from "./erasure.js";
+export {
   FORGE_EVENT_TYPES,
+  ForgeReadError,
   INSTALLATION_EVENT_TYPES,
   isForgeEventType,
   isInstallationEvent,
@@ -18,6 +26,8 @@ export {
   type ForgeNumericId,
   type ForgePullRequest,
   type ForgePullRequestState,
+  type ForgeReadFailure,
+  type InstallationReader,
   type InstallationEvent,
   type InstallationEventType,
   type PullRequestEvent,
