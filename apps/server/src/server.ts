@@ -10,15 +10,12 @@ import type { WebhookDeps } from "./webhooks.js";
 type Env = Readonly<Record<string, string | undefined>>;
 
 /**
- * Timeouts for the one pool the server uses (health check and webhook inbox). They bound the
- * webhook request path below GitHub's 10 s delivery timeout: connect 2 s, statement 3 s (both
- * client- and server-side), then the route's own 5 s guard (INBOX_RECORD_TIMEOUT_MS).
+ * The pool bounds only how long a request waits for a connection (2 s). Statement bounds are
+ * set per query where they belong (the inbox insert has 3 s, `packages/db`), so future
+ * `withOrg` routes do not inherit a hidden cap. The route's 6 s guard (INBOX_RECORD_TIMEOUT_MS)
+ * is the backstop; all stay under GitHub's 10 s delivery timeout.
  */
-export const POOL_TIMEOUTS = {
-  connectionTimeoutMillis: 2_000,
-  query_timeout: 3_000,
-  statement_timeout: 3_000,
-} as const;
+export const POOL_TIMEOUTS = { connectionTimeoutMillis: 2_000 } as const;
 
 const errorCode = (error: unknown): string | undefined => {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -85,13 +82,22 @@ export const startServer = async (env: Env, log: Logger): Promise<RunningServer>
   }
   log.info({ host, port, webhooks: webhooks !== undefined }, "server listening");
 
+  // Idempotent: a second signal (or caller) awaits the same shutdown instead of ending the pool
+  // twice, which pg refuses.
+  let closing: Promise<void> | undefined;
   return {
     app,
     pool,
     webhooks: webhooks !== undefined,
-    close: async () => {
-      await app.close();
-      await pool.end();
+    close: () => {
+      closing ??= (async () => {
+        try {
+          await app.close();
+        } finally {
+          await pool.end();
+        }
+      })();
+      return closing;
     },
   };
 };

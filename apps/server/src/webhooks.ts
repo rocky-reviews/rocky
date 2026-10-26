@@ -13,7 +13,10 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
  *
  * The route lives in its own Fastify scope with every content-type parser removed and one
  * catch-all that hands over the raw bytes, so nothing parses the body before the signature over
- * those exact bytes has been checked.
+ * those exact bytes has been checked. Before the body is even read, an `onRequest` hook refuses
+ * requests whose headers cannot be a valid delivery (`WebhookIngress.precheck`) and reserves the
+ * body's size against an in-flight byte budget, so unauthenticated clients cannot make the
+ * server buffer much (ADR 0007, "Memory").
  */
 
 /**
@@ -24,18 +27,38 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 export const WEBHOOK_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 
 /**
- * Longest the route waits for the inbox before answering 503: well inside GitHub's 10 s
- * delivery timeout, so the delivery is marked failed (and can be redelivered) instead of timing
- * out with an unknown outcome. The pool's own timeouts (connect 2 s, statement 3 s) fire first.
+ * Longest the route waits for the inbox before answering 503: inside GitHub's 10 s delivery
+ * timeout, so the delivery is marked failed (and can be redelivered) instead of timing out with
+ * an unknown outcome. Above connect (2 s) + insert (3 s), so those fire first and are logged
+ * with their own code; this guard is the backstop.
  */
-export const INBOX_RECORD_TIMEOUT_MS = 5_000;
+export const INBOX_RECORD_TIMEOUT_MS = 6_000;
+
+/**
+ * Bytes of request bodies the route may hold at once, across requests (declared
+ * `Content-Length`, or the body limit when none is declared). Beyond it → 503. Under a flood this
+ * can refuse genuine deliveries (GitHub does not retry them) in exchange for not running out of
+ * memory; rate limiting (P7-3) narrows that window.
+ */
+export const MAX_IN_FLIGHT_BYTES = 64 * 1024 * 1024;
 
 export interface WebhookDeps {
   ingress: WebhookIngress;
   inbox: WebhookInbox;
   /** Overrides INBOX_RECORD_TIMEOUT_MS (tests). */
   recordTimeoutMs?: number;
+  /** Overrides MAX_IN_FLIGHT_BYTES (tests). */
+  maxInFlightBytes?: number;
 }
+
+/**
+ * The scope's only body parser: hands over the raw bytes. An object so tests can observe that it
+ * never runs for a request refused in `onRequest`.
+ */
+export const rawBodyParser = {
+  parse: (_request: FastifyRequest, body: Buffer, done: (err: null, body: Buffer) => void): void =>
+    done(null, body),
+};
 
 class InboxTimeoutError extends Error {
   override readonly name = "InboxTimeoutError";
@@ -66,13 +89,26 @@ const REJECTION_STATUS: Readonly<Record<WebhookRejection, number>> = {
 const EMPTY = Buffer.alloc(0);
 
 /** Single-valued headers only; Node joins repeated ones, which then fail the format checks. */
-const webhookRequest = (request: FastifyRequest): WebhookRequest => ({
-  body: Buffer.isBuffer(request.body) ? request.body : EMPTY,
-  header: (name) => {
+const headerOf =
+  (request: FastifyRequest): WebhookRequest["header"] =>
+  (name) => {
     const value = request.headers[name];
     return typeof value === "string" ? value : undefined;
-  },
+  };
+
+const webhookRequest = (request: FastifyRequest): WebhookRequest => ({
+  body: Buffer.isBuffer(request.body) ? request.body : EMPTY,
+  header: headerOf(request),
 });
+
+/** Bytes to reserve for a request: its declared length (capped at the limit), else the limit. */
+const declaredBytes = (request: FastifyRequest): number => {
+  const raw = request.headers["content-length"];
+  const declared = typeof raw === "string" && /^\d{1,15}$/.test(raw) ? Number(raw) : NaN;
+  return Number.isSafeInteger(declared)
+    ? Math.min(declared, WEBHOOK_BODY_LIMIT_BYTES)
+    : WEBHOOK_BODY_LIMIT_BYTES;
+};
 
 const errorCode = (error: unknown): string | undefined => {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -82,13 +118,52 @@ const errorCode = (error: unknown): string | undefined => {
 export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void => {
   const forge = deps.ingress.forge;
   const recordTimeoutMs = deps.recordTimeoutMs ?? INBOX_RECORD_TIMEOUT_MS;
+  const maxInFlightBytes = deps.maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES;
+  let inFlightBytes = 0;
+  const releases = new WeakMap<FastifyRequest, () => void>();
+  const release = async (request: FastifyRequest): Promise<void> => releases.get(request)?.();
+
   void app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser(
       "*",
       { parseAs: "buffer", bodyLimit: WEBHOOK_BODY_LIMIT_BYTES },
-      (_request, body, done) => done(null, body),
+      (request, body, done) => rawBodyParser.parse(request, body as Buffer, done),
     );
+
+    // Runs before the body is read: no buffering for requests that cannot be valid deliveries,
+    // and none beyond the in-flight budget.
+    scope.addHook("onRequest", async (request, reply) => {
+      const rejection = deps.ingress.precheck(headerOf(request));
+      if (rejection !== undefined) {
+        request.log.warn(
+          { webhook: { forge, outcome: "rejected", reason: rejection, stage: "precheck" } },
+          "webhook rejected",
+        );
+        return reply.code(REJECTION_STATUS[rejection]).send({ error: rejection });
+      }
+      const reserve = declaredBytes(request);
+      if (inFlightBytes + reserve > maxInFlightBytes) {
+        request.log.warn(
+          { webhook: { forge, outcome: "overloaded", bytes: reserve } },
+          "webhook refused: in-flight byte budget exhausted",
+        );
+        return reply.code(503).send({ error: "overloaded" });
+      }
+      inFlightBytes += reserve;
+      let held = true;
+      const free = (): void => {
+        if (!held) return;
+        held = false;
+        inFlightBytes -= reserve;
+      };
+      releases.set(request, free);
+      // Whichever comes first: response sent, request aborted, connection closed.
+      reply.raw.once("close", free);
+      return undefined;
+    });
+    scope.addHook("onResponse", release);
+    scope.addHook("onRequestAbort", release);
 
     scope.post(
       `/webhooks/${forge}`,

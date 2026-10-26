@@ -67,8 +67,10 @@ export interface InstallationEvent {
   /**
    * Who installed or uninstalled the app. Recorded at receipt because the forge cannot be asked
    * later (P3-3 uses it for the first admin and the audit trail). Untrusted: P3-3 re-checks it.
+   * `null` when the forge sent no usable actor (missing, unexpected shape, a system action): the
+   * installation change itself must never be lost over who made it.
    */
-  readonly sender: ForgeActor;
+  readonly sender: ForgeActor | null;
 }
 
 /** A pull request changed (P3-4 re-reads it from the forge and updates the mirror). */
@@ -145,6 +147,13 @@ export interface WebhookRequest {
  */
 export interface WebhookIngress {
   readonly forge: ForgeKind;
+  /**
+   * Header-shape checks only, run before the body is read so an obviously bad request costs no
+   * buffering: a missing or malformed signature header, malformed delivery or event headers, a
+   * non-accepted media type. No secret is involved. Returns the rejection `receive` would give
+   * for the same headers, or `undefined` to go on. Must not throw.
+   */
+  precheck(header: WebhookRequest["header"]): WebhookRejection | undefined;
   receive(request: WebhookRequest): WebhookReceipt;
 }
 

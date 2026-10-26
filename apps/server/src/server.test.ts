@@ -1,7 +1,9 @@
+import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config.js";
 import { createServerPool, POOL_TIMEOUTS, startServer, type RunningServer } from "./server.js";
+import { INBOX_RECORD_TIMEOUT_MS } from "./webhooks.js";
 
 const GOOD = "0123456789abcdef0123456789abcdef0123456789abcdef";
 // Unroutable on purpose: booting must not need the database.
@@ -28,18 +30,18 @@ afterEach(async () => {
 });
 
 describe("createServerPool (review round 1, items 1 and 2)", () => {
-  it("bounds connect and statement time", async () => {
+  it("bounds connect time only; no pool-wide statement cap (review round 2, N1)", async () => {
     const { log } = capture();
     const pool = createServerPool(BASE_ENV.DATABASE_URL, log);
     try {
-      expect(pool.options).toMatchObject({
-        connectionTimeoutMillis: 2_000,
-        query_timeout: 3_000,
-        statement_timeout: 3_000,
-      });
-      expect(POOL_TIMEOUTS.connectionTimeoutMillis + POOL_TIMEOUTS.statement_timeout).toBeLessThan(
-        10_000,
+      expect(pool.options).toMatchObject({ connectionTimeoutMillis: 2_000 });
+      expect(pool.options).not.toHaveProperty("statement_timeout");
+      expect(pool.options).not.toHaveProperty("query_timeout");
+      // connect + insert bound + margin stay under the route guard, and that under GitHub's 10 s.
+      expect(POOL_TIMEOUTS.connectionTimeoutMillis + WEBHOOK_INBOX_QUERY_TIMEOUT_MS).toBeLessThan(
+        INBOX_RECORD_TIMEOUT_MS,
       );
+      expect(INBOX_RECORD_TIMEOUT_MS).toBeLessThan(10_000);
     } finally {
       await pool.end();
     }
@@ -99,5 +101,22 @@ describe("startServer (review round 1, item 5)", () => {
       ConfigError,
     );
     expect(lines.find((l) => l["msg"] === "server listening")).toBeUndefined();
+  });
+});
+
+describe("shutdown (review round 2, S2)", () => {
+  it("close() ends the pool and is idempotent: a second close does not end it twice", async () => {
+    const { log } = capture();
+    const server = await startServer(BASE_ENV, log);
+    const end = vi.spyOn(server.pool, "end");
+    const first = server.close();
+    const second = server.close();
+    expect(second).toBe(first);
+    await Promise.all([first, second]);
+    await server.close();
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(server.pool.ended).toBe(true);
+    expect(server.pool.totalCount).toBe(0);
+    expect(server.app.server.listening).toBe(false);
   });
 });

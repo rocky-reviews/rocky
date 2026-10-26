@@ -1,4 +1,8 @@
-import { TEST_WEBHOOK_SECRET } from "@rocky-reviews/forge-github/testing";
+import {
+  pullRequestPayload,
+  signedDelivery,
+  TEST_WEBHOOK_SECRET,
+} from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "@rocky-reviews/db/testing";
 import pg from "pg";
@@ -42,12 +46,37 @@ afterAll(async () => {
 });
 
 describe("the server pool", () => {
-  it("runs statements under a 3 s statement_timeout", async () => {
+  it("puts no hidden statement cap on the shared pool (review round 2, N1)", async () => {
     const { rows } = await server.pool.query<{ statement_timeout: string }>(
       "show statement_timeout",
     );
-    expect(rows[0]?.statement_timeout).toBe("3s");
+    expect(rows[0]?.statement_timeout).toBe("0");
   });
+
+  it("bounds the inbox insert itself: a locked inbox gives 503 after ~3 s, before the 6 s guard", async () => {
+    const locker = await superuser.connect();
+    try {
+      await locker.query("begin");
+      await locker.query("lock table app.webhook_deliveries in access exclusive mode");
+      const d = signedDelivery("pull_request", pullRequestPayload("opened", { number: 31 }));
+      const started = Date.now();
+      const res = await server.app.inject({
+        method: "POST",
+        url: "/webhooks/github",
+        headers: d.headers,
+        payload: d.body,
+      });
+      const elapsed = Date.now() - started;
+      expect(res.statusCode).toBe(503);
+      expect(elapsed).toBeGreaterThanOrEqual(2_900);
+      expect(elapsed).toBeLessThan(5_500);
+      const entry = lines.findLast((l) => l["msg"] === "webhook inbox unavailable");
+      expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_error" });
+    } finally {
+      await locker.query("rollback");
+      locker.release();
+    }
+  }, 15_000);
 
   it("survives its idle connections being terminated", async () => {
     expect((await server.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);

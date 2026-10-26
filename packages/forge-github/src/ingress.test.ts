@@ -193,7 +193,7 @@ describe("installation events", () => {
   });
 
   it("acknowledges and ignores an account type the domain does not model, with a reason code", () => {
-    for (const type of ["Enterprise", "Bot", "organization", ""]) {
+    for (const type of ["Enterprise", "Bot", "organization", "", "X".repeat(10_000)]) {
       const d = signedDelivery("installation", installationPayload("created", { type }));
       expect(receive(d), type).toEqual({
         outcome: "ignored",
@@ -204,13 +204,43 @@ describe("installation events", () => {
     }
   });
 
+  it("accepts an installer that is a GitHub App acting as itself (name[bot])", () => {
+    for (const action of ["created", "deleted"]) {
+      const payload = {
+        ...installationPayload(action),
+        sender: { id: 7, login: "rocky-reviews[bot]" },
+      };
+      const r = receive(signedDelivery("installation", payload));
+      expect(r.outcome === "accepted" && r.delivery.event, action).toMatchObject({
+        sender: { id: 7, login: "rocky-reviews[bot]" },
+      });
+    }
+  });
+
+  it("never loses an installation change over an unusable sender: it becomes null (review round 2, B1)", () => {
+    for (const action of ["created", "deleted"]) {
+      for (const sender of [
+        undefined,
+        null,
+        "ghost",
+        { id: 0, login: "alice" },
+        { id: 5, login: "alice smith" },
+        { id: 5, login: "a".repeat(101) },
+        { id: 5, login: "[bot]" },
+        { id: 5, login: "x[bot][bot]" },
+        { login: "staff" },
+      ]) {
+        const payload = { ...installationPayload(action), sender };
+        const r = receive(signedDelivery("installation", payload));
+        expect(r.outcome, `${action} ${JSON.stringify(sender)}`).toBe("accepted");
+        expect(r.outcome === "accepted" && r.delivery.event).toMatchObject({ sender: null });
+      }
+    }
+  });
+
   it("refuses a known action with the wrong shape", () => {
     for (const payload of [
       installationPayload("created", { login: "acme corp" }),
-      { ...installationPayload("created"), sender: undefined },
-      { ...installationPayload("created"), sender: { id: 0, login: "alice" } },
-      { ...installationPayload("created"), sender: { id: 5, login: "alice smith" } },
-      { ...installationPayload("created"), sender: { id: 5, login: "a".repeat(101) } },
       installationPayload("created", { type: 7 as unknown as string }),
       installationPayload("created", { login: "a".repeat(101) }),
       installationPayload("created", { installationId: 0 }),
@@ -345,5 +375,71 @@ describe("pull request events", () => {
     const r = receive(resigned(signedDelivery("pull_request", {}), raw));
     expect(r.outcome).toBe("accepted");
     expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+});
+
+describe("precheck (headers only, before the body is read)", () => {
+  const headerOf = (headers: Record<string, string>) => (name: string) =>
+    Object.hasOwn(headers, name) ? headers[name] : undefined;
+
+  it("refuses a missing or malformed signature header, and bad delivery/event/media headers", () => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const cases: [Record<string, string | undefined>, string | undefined][] = [
+      [{}, undefined],
+      [{ "x-hub-signature-256": undefined }, "unauthenticated"],
+      [{ "x-hub-signature-256": "sha256=xyz" }, "unauthenticated"],
+      [{ "x-hub-signature-256": "sha1=" + "0".repeat(40) }, "unauthenticated"],
+      // Well formed but wrong: precheck holds no secret, so receive() decides.
+      [{ "x-hub-signature-256": "sha256=" + "0".repeat(64) }, undefined],
+      [{ "x-github-delivery": "nope" }, "bad_headers"],
+      [{ "x-github-event": "Bad" }, "bad_headers"],
+      [{ "content-type": "text/plain" }, "unsupported_media_type"],
+    ];
+    for (const [override, expected] of cases) {
+      const headers = withHeaders(d, override).headers;
+      expect(ingress.precheck(headerOf(headers)), JSON.stringify(override)).toBe(expected);
+    }
+  });
+
+  it("treats a throwing header accessor as unauthenticated", () => {
+    expect(
+      ingress.precheck(() => {
+        throw new Error("boom");
+      }),
+    ).toBe("unauthenticated");
+  });
+
+  it("never lets through what receive would refuse: same reason when signed, else unauthenticated", () => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const variants = [
+      undefined,
+      "",
+      "nope",
+      "sha256=" + "0".repeat(64),
+      d.headers["x-hub-signature-256"],
+    ];
+    for (const signature of variants) {
+      for (const delivery of [undefined, "x", d.headers["x-github-delivery"]]) {
+        for (const event of [undefined, "Bad", "pull_request", "issues"]) {
+          for (const type of [undefined, "text/plain", "application/json"]) {
+            const headers = withHeaders(d, {
+              "x-hub-signature-256": signature,
+              "x-github-delivery": delivery,
+              "x-github-event": event,
+              "content-type": type,
+            }).headers;
+            const pre = ingress.precheck(headerOf(headers));
+            if (pre === undefined) continue;
+            // precheck holds no secret: with a genuine signature receive gives the same reason;
+            // with a forged one receive says "unauthenticated". Either way it is refused.
+            const genuine = signature === d.headers["x-hub-signature-256"];
+            expect(receive({ ...d, headers })).toEqual({
+              outcome: "rejected",
+              reason: genuine ? pre : pre === "unauthenticated" ? pre : "unauthenticated",
+            });
+          }
+        }
+      }
+    }
   });
 });

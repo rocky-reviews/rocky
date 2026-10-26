@@ -42,6 +42,8 @@ const FORGES = new Set(["github", "gitlab", "gitea"]);
 const DELIVERY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
+/** Sender logins may also be a GitHub App acting as itself (`name[bot]`). */
+const ACTOR_LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const MAX_PR_NUMBER = 2_147_483_647;
 
@@ -67,17 +69,21 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
     if (!isId(account.id)) return invalid("account id");
     if (typeof account.login !== "string" || !LOGIN.test(account.login)) return invalid("login");
     if (account.kind !== "organization" && account.kind !== "user") return invalid("account kind");
+    // `null` is a valid "no usable actor"; anything else must be a well-formed actor (the
+    // decoder already turned an unusable one into null).
     const sender = event.sender;
-    if (typeof sender !== "object" || sender === null) return invalid("sender");
-    if (!isId(sender.id)) return invalid("sender id");
-    if (typeof sender.login !== "string" || !LOGIN.test(sender.login)) {
-      return invalid("sender login");
+    if (sender !== null) {
+      if (typeof sender !== "object") return invalid("sender");
+      if (!isId(sender.id)) return invalid("sender id");
+      if (typeof sender.login !== "string" || !ACTOR_LOGIN.test(sender.login)) {
+        return invalid("sender login");
+      }
     }
     return {
       type: event.type,
       installationId: event.installationId,
       account: { id: account.id, login: account.login, kind: account.kind },
-      sender: { id: sender.id, login: sender.login },
+      sender: sender === null ? null : { id: sender.id, login: sender.login },
     };
   }
   if (!isId(event.repositoryId)) return invalid("repository id");
@@ -97,6 +103,14 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
     merged: event.merged,
   };
 };
+
+/**
+ * Client-side bound on the inbox insert (pg `query_timeout`): the receiver answers within
+ * GitHub's 10 s delivery timeout even if the table is locked. Per query, not per pool, so other
+ * queries on the same pool keep their own limits. A timed-out client is discarded by the pool;
+ * the insert may still commit server-side, after which a redelivery reads `duplicate`.
+ */
+export const WEBHOOK_INBOX_QUERY_TIMEOUT_MS = 3_000;
 
 export interface InboxRow {
   readonly sql: string;

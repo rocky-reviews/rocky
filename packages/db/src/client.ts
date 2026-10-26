@@ -10,7 +10,7 @@ import {
   type RetentionConfig,
 } from "./retention-sql.js";
 import * as schema from "./schema.js";
-import { inboxDatabaseError, inboxInsert } from "./webhooks.js";
+import { inboxDatabaseError, inboxInsert, WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "./webhooks.js";
 
 /** Thrown before any SQL runs when the tenant context would be wrong (ADR 0003, ADR 0005 §3). */
 export class TenantContextError extends Error {
@@ -386,7 +386,13 @@ export const createDb = (options: DbOptions): Db => {
     const insert = inboxInsert(delivery);
     let inserted: number | null;
     try {
-      ({ rowCount: inserted } = await pool.query(insert.sql, insert.values as unknown[]));
+      // node-pg reads `query_timeout` from the query config (lib/client.js); its typings omit it.
+      const config: pg.QueryConfig<unknown[]> & { query_timeout: number } = {
+        text: insert.sql,
+        values: insert.values as unknown[],
+        query_timeout: WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
+      };
+      ({ rowCount: inserted } = await pool.query(config));
     } catch (error) {
       throw inboxDatabaseError(error);
     }

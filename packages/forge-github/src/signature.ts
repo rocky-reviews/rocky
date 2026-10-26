@@ -43,16 +43,20 @@ export const signWebhookBody = (secret: string, body: Uint8Array): string =>
 export const payloadSha256 = (body: Uint8Array): string =>
   createHash("sha256").update(body).digest("hex");
 
+/** Whether a signature header has the right shape (`sha256=` + 64 hex). Public; no secret. */
+export const isWellFormedSignatureHeader = (header: unknown): header is string =>
+  typeof header === "string" &&
+  header.startsWith(PREFIX) &&
+  HEX_DIGEST.test(header.slice(PREFIX.length));
+
 /** A verifier bound to one secret. The secret is validated once and never leaves the closure. */
 export const webhookVerifier = (
   secret: string,
 ): ((body: Uint8Array, header: unknown) => boolean) => {
   const key = Buffer.from(checkWebhookSecret(secret), "utf8");
   return (body, header) => {
-    if (typeof header !== "string" || !header.startsWith(PREFIX)) return false;
-    const hex = header.slice(PREFIX.length);
-    if (!HEX_DIGEST.test(hex)) return false;
-    const given = Buffer.from(hex, "hex");
+    if (!isWellFormedSignatureHeader(header)) return false;
+    const given = Buffer.from(header.slice(PREFIX.length), "hex");
     const expected = createHmac("sha256", key).update(body).digest();
     return given.length === expected.length && timingSafeEqual(given, expected);
   };

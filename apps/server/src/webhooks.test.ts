@@ -16,7 +16,12 @@ import { createLogger } from "@rocky-reviews/log";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
-import { INBOX_RECORD_TIMEOUT_MS, WEBHOOK_BODY_LIMIT_BYTES } from "./webhooks.js";
+import {
+  INBOX_RECORD_TIMEOUT_MS,
+  MAX_IN_FLIGHT_BYTES,
+  rawBodyParser,
+  WEBHOOK_BODY_LIMIT_BYTES,
+} from "./webhooks.js";
 
 const URL = "/webhooks/github";
 
@@ -350,7 +355,7 @@ describe("POST /webhooks/github under fuzzing (no 5xx)", () => {
 });
 
 describe("review round 1", () => {
-  it("item 2: answers 503 when the inbox never settles, within the 5 s guard (GitHub waits 10 s)", async () => {
+  it("item 2: answers 503 when the inbox never settles, within the 6 s guard (GitHub waits 10 s)", async () => {
     const hanging: WebhookInbox = { record: () => new Promise(() => undefined) };
     const { app, lines } = setup(hanging);
     const started = Date.now();
@@ -358,11 +363,11 @@ describe("review round 1", () => {
     const elapsed = Date.now() - started;
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: "unavailable" });
-    expect(INBOX_RECORD_TIMEOUT_MS).toBe(5_000);
+    expect(INBOX_RECORD_TIMEOUT_MS).toBe(6_000);
     expect(elapsed).toBeGreaterThanOrEqual(INBOX_RECORD_TIMEOUT_MS - 50);
-    expect(elapsed).toBeLessThan(7_000);
+    expect(elapsed).toBeLessThan(8_000);
     const entry = lines.find((l) => l["msg"] === "webhook inbox unavailable");
-    expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_timeout", timeoutMs: 5_000 });
+    expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_timeout", timeoutMs: 6_000 });
   }, 15_000);
 
   it("item 2: the guard is per request and leaves a fast inbox alone", async () => {
@@ -426,6 +431,10 @@ describe("review round 1", () => {
       expect((await post(app, d)).statusCode).toBeLessThan(300);
     }
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    // Positive control (review round 2, N3): the blocks are live, so a connection attempt from
+    // the request path would have thrown and failed the request above.
+    expect(() => net.connect({ port: 1, host: "127.0.0.1" })).toThrow(/network access/);
+    expect(() => http.request("http://127.0.0.1:1/")).toThrow(/network access/);
   });
 
   it("item 7: logs the reason when an unsupported account type is ignored", async () => {
@@ -444,4 +453,150 @@ describe("review round 1", () => {
       reason: "unsupported_account_type",
     });
   });
+});
+
+describe("review round 2, S1: memory exposure to unauthenticated clients", () => {
+  const big = Buffer.alloc(WEBHOOK_BODY_LIMIT_BYTES, 0x7b);
+
+  it("refuses a 25 MiB body with no or a malformed signature before reading it", async () => {
+    const parse = vi.spyOn(rawBodyParser, "parse");
+    const { app, inbox, lines } = setup();
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const unsigned = Object.fromEntries(
+      Object.entries(d.headers).filter(([name]) => name !== "x-hub-signature-256"),
+    );
+    for (const [headers, status, reason] of [
+      [unsigned, 401, "unauthenticated"],
+      [{ ...d.headers, "x-hub-signature-256": "sha256=nothex" }, 401, "unauthenticated"],
+      [{ ...d.headers, "x-hub-signature-256": "sha1=" + "0".repeat(40) }, 401, "unauthenticated"],
+      [{ ...d.headers, "x-github-delivery": "not-a-guid" }, 400, "bad_headers"],
+      [{ ...d.headers, "content-type": "text/plain" }, 415, "unsupported_media_type"],
+    ] as const) {
+      const res = await app.inject({ method: "POST", url: URL, headers, payload: big });
+      expect(res.statusCode, reason).toBe(status);
+      expect(res.json()).toEqual({ error: reason });
+    }
+    expect(parse).not.toHaveBeenCalled();
+    expect(inbox.record).not.toHaveBeenCalled();
+    expect(lines.filter((l) => l["msg"] === "webhook rejected").map((l) => l["webhook"])).toEqual(
+      Array.from({ length: 5 }, () => expect.objectContaining({ stage: "precheck" })),
+    );
+    // Control: a well-formed request does reach the parser.
+    expect((await post(app, d)).statusCode).toBe(202);
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 beyond the in-flight byte budget, and frees the budget afterwards", async () => {
+    expect(MAX_IN_FLIGHT_BYTES).toBe(64 * 1024 * 1024);
+    const first = signedDelivery("pull_request", pullRequestPayload("opened", { number: 1 }));
+    let resolveFirst: (v: "queued") => void = () => undefined;
+    let calls = 0;
+    const inbox: WebhookInbox = {
+      record: () =>
+        ++calls === 1
+          ? new Promise((resolve) => (resolveFirst = resolve))
+          : Promise.resolve("queued"),
+    };
+    const { log, lines } = (() => {
+      const captured: Record<string, unknown>[] = [];
+      return {
+        lines: captured,
+        log: createLogger("server-test", {
+          destination: {
+            write: (c: string) => void captured.push(JSON.parse(c) as Record<string, unknown>),
+          },
+        }),
+      };
+    })();
+    const app = buildApp({
+      checkDatabase: () => Promise.resolve(true),
+      log,
+      webhooks: {
+        ingress: createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET }),
+        inbox,
+        maxInFlightBytes: Math.floor(first.body.length * 1.5),
+      },
+    });
+    const pending = post(app, first);
+    await vi.waitFor(() => expect(calls).toBe(1));
+    const second = await post(
+      app,
+      signedDelivery("pull_request", pullRequestPayload("opened", { number: 2 })),
+    );
+    expect(second.statusCode).toBe(503);
+    expect(second.json()).toEqual({ error: "overloaded" });
+    expect(
+      lines.find((l) => l["msg"]?.toString().startsWith("webhook refused"))?.["webhook"],
+    ).toMatchObject({
+      outcome: "overloaded",
+    });
+    resolveFirst("queued");
+    expect((await pending).statusCode).toBe(202);
+    const third = await post(
+      app,
+      signedDelivery("pull_request", pullRequestPayload("opened", { number: 3 })),
+    );
+    expect(third.statusCode).toBe(202);
+    // Rejections free their reservation too: many in a row never exhaust the budget.
+    for (let i = 0; i < 5; i++) {
+      const bad = signedDelivery("pull_request", pullRequestPayload("opened", { headSha: "zz" }));
+      expect((await post(app, bad)).statusCode).toBe(400);
+    }
+    expect(
+      (await post(app, signedDelivery("pull_request", pullRequestPayload("opened", { number: 4 }))))
+        .statusCode,
+    ).toBe(202);
+  });
+
+  it("cuts off a slow upload at the request timeout", async () => {
+    const app = buildApp({
+      checkDatabase: () => Promise.resolve(true),
+      webhooks: {
+        ingress: createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET }),
+        inbox: memoryInbox(),
+      },
+      requestTimeoutMs: 500,
+      timeoutCheckIntervalMs: 100,
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const { port } = app.server.address() as net.AddressInfo;
+      const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+      const socket = net.connect({ port, host: "127.0.0.1" });
+      const started = Date.now();
+      const received: Buffer[] = [];
+      socket.on("data", (c: Buffer) => received.push(c));
+      // The server resets the connection when it times the request out; a trickle write racing
+      // that reset raises EPIPE/ECONNRESET on this client socket, which is expected here.
+      const socketErrors: string[] = [];
+      socket.on("error", (error: NodeJS.ErrnoException) => socketErrors.push(error.code ?? "?"));
+      socket.write(
+        [
+          `POST ${URL} HTTP/1.1`,
+          "host: 127.0.0.1",
+          ...Object.entries(d.headers).map(([k, v]) => `${k}: ${v}`),
+          "content-length: 1000000",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      // Trickle: one byte every 50 ms, far slower than the 1 MB announced.
+      const trickle = setInterval(() => {
+        if (socket.writable) socket.write("x");
+      }, 50);
+      const closed = new Promise<void>((resolve) =>
+        socket.on("close", () => {
+          clearInterval(trickle);
+          resolve();
+        }),
+      );
+      await closed;
+      for (const code of socketErrors) expect(["EPIPE", "ECONNRESET"]).toContain(code);
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeLessThan(3_000);
+      expect(Buffer.concat(received).toString("latin1")).toMatch(/^HTTP\/1\.1 408/);
+    } finally {
+      await app.close();
+    }
+  }, 10_000);
 });

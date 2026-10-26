@@ -19,6 +19,9 @@ const ForgeId = z.int().min(1).max(MAX_SAFE_ID);
 const PrNumber = z.int().min(1).max(2_147_483_647);
 /** GitHub logins: letters, digits, `-` (and `_` for managed users); bounded. */
 const Login = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/);
+/** Actors can also be GitHub Apps acting as themselves: `name[bot]`. Senders only. */
+const ActorLogin = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/);
+const Sender = z.object({ id: ForgeId, login: ActorLogin });
 /** SHA-1 or SHA-256 object ids, lower-case hex as GitHub sends them. */
 const Sha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
@@ -33,12 +36,11 @@ const InstallationPayload = z.object({
       type: z.enum(["Organization", "User"]),
     }),
   }),
-  sender: z.object({ id: ForgeId, login: Login }),
 });
 
 /** Read first, so an account kind the domain does not model is ignored rather than refused. */
 const AccountType = z.object({
-  installation: z.object({ account: z.object({ type: z.string().max(64) }) }),
+  installation: z.object({ account: z.object({ type: z.string() }) }),
 });
 
 const PullRequestPayload = z.object({
@@ -97,7 +99,10 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
     }
     const parsed = InstallationPayload.safeParse(payload);
     if (!parsed.success) return { kind: "invalid" };
-    const { installation, sender } = parsed.data;
+    const { installation } = parsed.data;
+    // Non-fatal: an uninstall by an app, a deleted ("ghost") user or a staff action must still
+    // be recorded, so an unusable sender becomes null instead of refusing the delivery.
+    const sender = Sender.safeParse((payload as { sender?: unknown }).sender);
     return {
       kind: "event",
       event: {
@@ -108,7 +113,7 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
           login: installation.account.login,
           kind: ACCOUNT_KIND[installation.account.type],
         },
-        sender: { id: sender.id, login: sender.login },
+        sender: sender.success ? { id: sender.data.id, login: sender.data.login } : null,
       },
     };
   }

@@ -48,5 +48,5 @@ export {
   WRAPPED_KEY_PREFIX,
   type StoredSecret,
 } from "./secrets.js";
-export { WebhookInboxError } from "./webhooks.js";
+export { WEBHOOK_INBOX_QUERY_TIMEOUT_MS, WebhookInboxError } from "./webhooks.js";
 export * as schema from "./schema.js";

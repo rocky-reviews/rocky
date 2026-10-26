@@ -174,6 +174,20 @@ describe("recordWebhookDelivery", () => {
     expect((await rows(d.deliveryId))[0]?.event).toEqual(event);
   });
 
+  it("stores a null installer and a GitHub App installer (review round 2, B1)", async () => {
+    for (const sender of [null, { id: 7, login: "rocky-reviews[bot]" }]) {
+      const event: ForgeEvent = {
+        type: "installation.deleted",
+        installationId: 11,
+        account: { id: 12, login: "acme", kind: "organization" },
+        sender,
+      };
+      const d = delivery({ event });
+      expect(await db.recordWebhookDelivery(d)).toBe("queued");
+      expect((await rows(d.deliveryId))[0]?.event).toEqual(event);
+    }
+  });
+
   it("has exactly the expected columns: no raw payload, title, body or email", async () => {
     const { rows: columns } = await superuser.query<{ column_name: string }>(
       `select column_name from information_schema.columns
