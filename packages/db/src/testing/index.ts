@@ -3,6 +3,7 @@ export {
   TEST_ROLES,
   devPostgresImage,
   startPostgres,
+  type DumpOptions,
   type TestPostgres,
 } from "./postgres.js";
 export { newOrgId, plantAuditEvent, seedOrg, type SeededOrg } from "./fixtures.js";

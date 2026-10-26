@@ -54,8 +54,34 @@ export interface TestPostgres {
   /** The application role: RLS enforced, no bypass. */
   readonly appUrl: string;
   readonly migrator: pg.Pool;
+  /**
+   * `pg_dump --format=plain` of the whole database, run inside the container as the superuser
+   * (what a backup or a leaked dump would hold). `inserts` switches COPY blocks for INSERT
+   * statements, which escape text differently. The encryption-at-rest test greps the result.
+   */
+  dump(options?: DumpOptions): Promise<string>;
   stop(): Promise<void>;
 }
+
+export interface DumpOptions {
+  readonly inserts?: boolean;
+}
+
+const dumpDatabase = async (
+  container: StartedPostgreSqlContainer,
+  options: DumpOptions,
+): Promise<string> => {
+  const args = ["pg_dump", "--format=plain", "--no-owner", "--no-privileges"];
+  if (options.inserts === true) args.push("--inserts");
+  args.push("--username", container.getUsername(), container.getDatabase());
+  // Inside the container pg_dump uses the unix socket; the password covers an image that
+  // does not trust local connections. Test-only credentials of a throwaway container.
+  const result = await container.exec(args, { env: { PGPASSWORD: container.getPassword() } });
+  if (result.exitCode !== 0) {
+    throw new Error(`pg_dump exited with ${result.exitCode}: ${result.stderr.trim()}`);
+  }
+  return result.stdout;
+};
 
 const connectionUrl = (
   container: StartedPostgreSqlContainer,
@@ -108,6 +134,7 @@ export const startPostgres = async (options: { migrate?: boolean } = {}): Promis
     migratorUrl,
     appUrl: connectionUrl(container, TEST_ROLES.app, PASSWORDS.app),
     migrator,
+    dump: (options = {}) => dumpDatabase(container, options),
     stop: async () => {
       await migrator.end();
       await container.stop();
