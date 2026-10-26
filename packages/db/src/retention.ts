@@ -21,10 +21,13 @@ export const DEFAULT_RETENTION: RetentionConfig = {
   logsDays: 30,
   auditDays: 365,
   orgDeletionGraceDays: 7,
+  webhookDeliveriesDays: 30,
 };
 
 /** Mirrors the CHECK constraint on app.retention_settings (migration 0005). */
 export const AUDIT_MIN_RETENTION_DAYS = 30;
+/** Mirrors the CHECK in migration 0006: GitHub redelivers for up to 3 days. */
+export const WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS = 7;
 
 const DAY_MS = 86_400_000;
 
@@ -41,6 +44,7 @@ const ENV_KEYS: Record<keyof RetentionConfig, string> = {
   logsDays: "RETENTION_LOGS_DAYS",
   auditDays: "RETENTION_AUDIT_DAYS",
   orgDeletionGraceDays: "ORG_DELETION_GRACE_DAYS",
+  webhookDeliveriesDays: "RETENTION_WEBHOOK_DELIVERIES_DAYS",
 };
 
 const MIN_DAYS: Record<keyof RetentionConfig, number> = {
@@ -48,6 +52,7 @@ const MIN_DAYS: Record<keyof RetentionConfig, number> = {
   logsDays: 1,
   auditDays: AUDIT_MIN_RETENTION_DAYS,
   orgDeletionGraceDays: 1,
+  webhookDeliveriesDays: WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
 };
 
 const SETTING_KEYS = Object.keys(MIN_DAYS) as (keyof RetentionConfig)[];
@@ -77,6 +82,7 @@ export const retentionFromEnv = (env: Record<string, string | undefined>): Reten
     logsDays: read("logsDays"),
     auditDays: read("auditDays"),
     orgDeletionGraceDays: read("orgDeletionGraceDays"),
+    webhookDeliveriesDays: read("webhookDeliveriesDays"),
   };
 };
 
@@ -109,11 +115,13 @@ export const setRetentionSettings = async (
 };
 
 export interface RetentionCategoryReport {
-  category: RetentionCategory;
+  /** A tenant category, or the (non-tenant) webhook inbox. */
+  category: RetentionCategory | "webhook_deliveries";
   table: string;
   /** Cutoff as computed from the injected clock; the database clamps it to its own `now()`. */
   before: Date;
   deleted: number;
+  /** Orgs with deleted rows; always 0 for the webhook inbox, which has no org. */
   orgs: number;
 }
 
@@ -123,8 +131,9 @@ export interface RetentionReport {
 }
 
 /**
- * Purges every category once as of the injected clock. The purge functions write one
- * `retention.purged` audit event per affected org in the same statement as the delete.
+ * Purges every category once as of the injected clock. The tenant purge functions write one
+ * `retention.purged` audit event per affected org in the same statement as the delete; the
+ * webhook inbox purge has no org to audit and only reports its count.
  * Idempotent: a second run at the same instant deletes nothing and writes nothing.
  */
 export const runRetention = async (db: Db, deps: { clock: Clock }): Promise<RetentionReport> => {
@@ -142,5 +151,12 @@ export const runRetention = async (db: Db, deps: { clock: Clock }): Promise<Rete
       orgs: results.length,
     });
   }
+  categories.push({
+    category: "webhook_deliveries",
+    table: "webhook_deliveries",
+    before: expiryCutoff(now, settings.webhookDeliveriesDays),
+    deleted: await db.purgeWebhookDeliveries(now),
+    orgs: 0,
+  });
   return { ranAt: now, categories };
 };

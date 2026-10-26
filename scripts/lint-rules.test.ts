@@ -34,3 +34,32 @@ describe("no-console", () => {
     ).not.toContain("no-console");
   });
 });
+
+describe("core imports no forge SDK or adapter (P3-7)", () => {
+  it.each([
+    'import { Octokit } from "octokit";\n',
+    'import { Octokit } from "@octokit/rest";\n',
+    'import { Webhooks } from "@octokit/webhooks";\n',
+    'import { verify } from "@octokit/webhooks-methods";\n',
+    'export { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";\n',
+    'import { x } from "../../forge-github/src/index.js";\n',
+    'import { createHmac } from "node:crypto";\n',
+  ])("fails on %s", async (code) => {
+    expect(await ruleIds("packages/core/src/planted.ts", code)).toContain("no-restricted-imports");
+  });
+
+  it("fails on a dynamic import of Octokit", async () => {
+    expect(
+      await ruleIds("packages/core/src/planted.ts", 'export const o = import("octokit");\n'),
+    ).toContain("no-restricted-syntax");
+  });
+
+  it("allows the same imports in the GitHub adapter", async () => {
+    expect(
+      await ruleIds(
+        "packages/forge-github/src/planted.ts",
+        'import { createHmac } from "node:crypto";\nexport const h = createHmac;\n',
+      ),
+    ).not.toContain("no-restricted-imports");
+  });
+});

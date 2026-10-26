@@ -1,18 +1,34 @@
 import { createLogger } from "@rocky-reviews/log";
-import pg from "pg";
-import { buildApp } from "./app.js";
+import { ConfigError } from "./config.js";
+import { startServer, type RunningServer } from "./server.js";
 
 const log = createLogger("server");
-const pool = new pg.Pool({ connectionString: process.env["DATABASE_URL"] });
-pool.on("error", (error) => log.error({ err: error.message }, "postgres idle client error"));
 
-const app = buildApp({
-  checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,
-  log,
-});
+let server: RunningServer;
+try {
+  server = await startServer(process.env, log);
+} catch (error) {
+  // Configuration first: a production server without a webhook secret must not start (P3-2).
+  if (error instanceof ConfigError) {
+    log.fatal({ err: error.message }, "invalid configuration");
+  } else {
+    // e.g. EADDRINUSE: the code only (messages can carry addresses or connection strings).
+    const code =
+      typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+    log.fatal({ errorCode: typeof code === "string" ? code : "unknown" }, "server failed to start");
+  }
+  process.exit(1);
+}
 
-// 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
-const host = process.env["HOST"] ?? "0.0.0.0";
-const port = Number(process.env["PORT"] ?? 4310);
-await app.listen({ port, host });
-log.info({ host, port }, "server listening");
+// server.close() is idempotent, so a second SIGTERM/SIGINT awaits the same shutdown.
+const shutdown = async (): Promise<void> => {
+  let code = 0;
+  try {
+    await server.close();
+  } catch {
+    code = 1;
+  }
+  process.exit(code);
+};
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

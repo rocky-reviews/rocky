@@ -231,3 +231,43 @@ export const plantAuditEvent = async (
     client.release();
   }
 };
+
+/**
+ * Inserts a webhook inbox row with an explicit `received_at`, which the stamp trigger (0006)
+ * overrides for every role. Superuser, trigger disabled for one transaction; tests only.
+ */
+export const plantWebhookDelivery = async (
+  superuser: pg.Pool,
+  options: { deliveryId: string; at: Date },
+): Promise<void> => {
+  const client = await superuser.connect();
+  const event = {
+    type: "pull_request.opened",
+    installationId: 1,
+    repositoryId: 1,
+    number: 1,
+    headSha: "a".repeat(40),
+    merged: false,
+  };
+  try {
+    await client.query("begin");
+    await client.query(
+      "alter table app.webhook_deliveries disable trigger webhook_deliveries_stamp",
+    );
+    await client.query(
+      `insert into app.webhook_deliveries
+         (forge, delivery_id, payload_sha256, event_type, installation_id, event, received_at)
+       values ('github', $1, sha256(convert_to($1, 'utf8')), $2, 1, $3::jsonb, $4)`,
+      [options.deliveryId, event.type, JSON.stringify(event), options.at],
+    );
+    await client.query(
+      "alter table app.webhook_deliveries enable trigger webhook_deliveries_stamp",
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+};

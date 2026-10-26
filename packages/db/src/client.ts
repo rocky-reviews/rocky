@@ -1,14 +1,22 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { OrgId } from "@rocky-reviews/core";
+import type { OrgId, WebhookDelivery } from "@rocky-reviews/core";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
   PURGE,
+  PURGE_WEBHOOK_DELIVERIES_SQL,
   SETTING_CATEGORIES,
   type RetentionCategory,
   type RetentionConfig,
 } from "./retention-sql.js";
 import * as schema from "./schema.js";
+import {
+  inboxDatabaseError,
+  inboxInsert,
+  WEBHOOK_INBOX_LOCK_TIMEOUT_MS,
+  WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
+  WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS,
+} from "./webhooks.js";
 
 /** Thrown before any SQL runs when the tenant context would be wrong (ADR 0003, ADR 0005 §3). */
 export class TenantContextError extends Error {
@@ -64,6 +72,16 @@ export interface Db {
   deleteOrg(orgId: OrgId): Promise<OrgDeletion[]>;
   /** The configured periods (read-only for the application role). */
   retentionSettings(): Promise<RetentionConfig>;
+  /**
+   * Records one authenticated webhook delivery in the inbox (`app.webhook_deliveries`, ADR 0007).
+   * Not tenant-scoped: an installation can precede its org. `queued` when this call stored it,
+   * `duplicate` when the same delivery id or the same body was stored before (concurrent calls
+   * included: the database decides). Invalid input throws `WebhookInboxError` before any SQL;
+   * a database failure throws `WebhookInboxError` carrying only the SQLSTATE.
+   */
+  recordWebhookDelivery(delivery: WebhookDelivery): Promise<"queued" | "duplicate">;
+  /** Purges inbox rows past their retention period (retention.purge_webhook_deliveries). */
+  purgeWebhookDeliveries(asOf: Date): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -368,6 +386,54 @@ export const createDb = (options: DbOptions): Db => {
     return rows.map((row) => ({ table: row.table_name, deleted: Number(row.deleted) }));
   };
 
+  const recordWebhookDelivery = async (
+    delivery: WebhookDelivery,
+  ): Promise<"queued" | "duplicate"> => {
+    const insert = inboxInsert(delivery);
+    let client: pg.PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      throw inboxDatabaseError(error);
+    }
+    // Every statement carries the client-side backstop, so a stall on begin/commit can't strand
+    // the checked-out client. node-pg reads `query_timeout` from the query config
+    // (lib/client.js); its typings omit it.
+    const bounded = (text: string, values: unknown[] = []): Promise<pg.QueryResult> => {
+      const config: pg.QueryConfig<unknown[]> & { query_timeout: number } = {
+        text,
+        values,
+        query_timeout: WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
+      };
+      return client.query(config);
+    };
+    let inserted: number | null;
+    try {
+      await bounded("begin");
+      // Integers are milliseconds; constants, not input.
+      await bounded(`set local lock_timeout = ${WEBHOOK_INBOX_LOCK_TIMEOUT_MS}`);
+      await bounded(`set local statement_timeout = ${WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS}`);
+      ({ rowCount: inserted } = await bounded(insert.sql, insert.values as unknown[]));
+      await bounded("commit");
+    } catch (error) {
+      // Any failure discards the connection (release(err)) instead of rolling back on it: after a
+      // client-side timeout its state is unknown; Postgres rolls back the open transaction when
+      // the connection closes.
+      client.release(error instanceof Error ? error : new Error("webhook inbox failure"));
+      throw inboxDatabaseError(error);
+    }
+    client.release();
+    return inserted === 1 ? "queued" : "duplicate";
+  };
+
+  const purgeWebhookDeliveries = async (asOf: Date): Promise<number> => {
+    if (!(asOf instanceof Date) || Number.isNaN(asOf.getTime())) {
+      throw new Error("purgeWebhookDeliveries: asOf must be a valid Date");
+    }
+    const { rows } = await pool.query<{ deleted: string }>(PURGE_WEBHOOK_DELIVERIES_SQL, [asOf]);
+    return Number(rows[0]?.deleted ?? 0);
+  };
+
   const retentionSettings = async (): Promise<RetentionConfig> => {
     const { rows } = await pool.query<{ category: string; days: number }>(
       "select category, days from app.retention_settings",
@@ -385,8 +451,17 @@ export const createDb = (options: DbOptions): Db => {
       logsDays: read("logsDays"),
       auditDays: read("auditDays"),
       orgDeletionGraceDays: read("orgDeletionGraceDays"),
+      webhookDeliveriesDays: read("webhookDeliveriesDays"),
     };
   };
 
-  return { withOrg, purgeExpired, deleteOrg, retentionSettings, close: () => pool.end() };
+  return {
+    withOrg,
+    purgeExpired,
+    deleteOrg,
+    retentionSettings,
+    recordWebhookDelivery,
+    purgeWebhookDeliveries,
+    close: () => pool.end(),
+  };
 };
