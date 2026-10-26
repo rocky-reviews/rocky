@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OrgId } from "@rocky-reviews/core";
+import type pg from "pg";
 import type { Db } from "../client.js";
 import * as schema from "../schema.js";
 
@@ -151,6 +152,7 @@ export const seedOrg = async (
         })
         .returning({ id: schema.jobs.id }),
     );
+    // No createdAt: the stamp trigger (0004) sets it to now() for the application role.
     const audit = first(
       await tx
         .insert(schema.auditEvents)
@@ -160,7 +162,6 @@ export const seedOrg = async (
           action: "fixture.seeded",
           targetType: "org",
           targetId: orgId,
-          createdAt,
         })
         .returning({ id: schema.auditEvents.id }),
     );
@@ -201,3 +202,32 @@ export const seedOrg = async (
 };
 
 export const newOrgId = (): OrgId => randomUUID() as OrgId;
+
+/**
+ * Inserts an audit event with an explicit `created_at`, which the stamp trigger (0004) refuses
+ * for every role. Tests of retention boundaries need old rows, so this runs as the superuser
+ * with the trigger disabled for the duration of one transaction. Never used by product code.
+ */
+export const plantAuditEvent = async (
+  superuser: pg.Pool,
+  orgId: OrgId,
+  options: { action: string; at: Date },
+): Promise<void> => {
+  const client = await superuser.connect();
+  try {
+    await client.query("begin");
+    await client.query("alter table public.audit_events disable trigger audit_events_stamp");
+    await client.query(
+      `insert into public.audit_events (org_id, actor_type, actor_id, action, target_type, target_id, created_at)
+       values ($1::uuid, 'system', 'test', $2, 'org', $1::text, $3)`,
+      [orgId, options.action, options.at],
+    );
+    await client.query("alter table public.audit_events enable trigger audit_events_stamp");
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+};

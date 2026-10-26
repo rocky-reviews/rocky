@@ -1,3 +1,4 @@
+import type { OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
@@ -43,6 +44,25 @@ const rowsOf = async (table: { name: string; tenantColumn: string }, orgId: stri
     [orgId],
   );
   return Number(rows[0]?.n);
+};
+
+/** An org row and nothing else: no fixture rows, no audit rows. */
+const bareOrg = async (installationId: number): Promise<OrgId> => {
+  const orgId = newOrgId();
+  await db.withOrg(orgId, (tx) =>
+    tx.db
+      .insert(schema.orgs)
+      .values({ id: orgId, installationId, login: `bare-${installationId}`, kind: "organization" }),
+  );
+  return orgId;
+};
+
+const waitFor = async (condition: () => boolean | Promise<boolean>, ms = 5_000): Promise<void> => {
+  const deadline = Date.now() + ms;
+  while (!(await condition())) {
+    if (Date.now() > deadline) throw new Error(`condition not met within ${ms} ms`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 };
 
 /** Time travel: move the grace deadline into the past without the trigger pushing it back. */
@@ -163,13 +183,71 @@ describe("retention.delete_org", () => {
     expect(result.events).toEqual([{ action: "org.deletion_scheduled", target: orgId }]);
   });
 
-  it("the app role cannot delete an org row directly, even its own", async () => {
-    const c = await seedOrg(db, newOrgId(), { installationId: 3 });
-    const error = await pgError(db.withOrg(c.orgId, (tx) => tx.query("delete from orgs")));
-    // The cascade into audit_events runs as the table owner and hits the append-only trigger.
-    expect(error.code).toBe(INSUFFICIENT_PRIVILEGE);
-    expect(error.message).toMatch(/append-only/);
-    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, c.orgId)).toBe(1);
+  it("the app role cannot delete an org row directly, even its own (final review #2)", async () => {
+    // An org with no audit rows: nothing but the privilege itself stands in the way of a
+    // cascade through every tenant table, so the privilege must not exist.
+    const orgId = await bareOrg(3);
+    expect(await rowsOf({ name: "audit_events", tenantColumn: "org_id" }, orgId)).toBe(0);
+    for (const sql of ["delete from orgs", "delete from orgs where id = $1"]) {
+      const error = await pgError(
+        db.withOrg(orgId, (tx) => tx.query(sql, sql.includes("$1") ? [orgId] : [])),
+      );
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(error.message, sql).toMatch(/permission denied for table orgs/);
+    }
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(1);
+    // Even if the privilege came back, the restrictive policy refuses every row.
+    const { rows } = await superuser.query<{ n: string }>(
+      `select count(*)::text as n from pg_policies
+        where tablename = 'orgs' and permissive = 'RESTRICTIVE' and cmd = 'DELETE'
+          and 'rocky_app' = any(roles) and qual = 'false'`,
+    );
+    expect(rows[0]?.n).toBe("1");
+  });
+
+  it("waits for an in-flight tenant write instead of failing on its audit row (final review #5)", async () => {
+    // Connection 1 inserts an audit row for the org and keeps its transaction open: the FK
+    // check holds KEY SHARE on the orgs row. Connection 2 runs delete_org, which must block on
+    // its FOR UPDATE until connection 1 commits, then delete the new audit row itself. Without
+    // the lock it would delete audit_events first, then cascade into the freshly committed row
+    // as the table owner, where the append-only trigger aborts the erasure.
+    const orgId = await bareOrg(4);
+    await makeDue(orgId);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let inserted = false;
+    const writer = db.withOrg(orgId, async (tx) => {
+      await tx.db.insert(schema.auditEvents).values({
+        actorType: "system",
+        actorId: "late-writer",
+        action: "late.write",
+        targetType: "org",
+        targetId: orgId,
+      });
+      inserted = true;
+      await gate;
+    });
+    await waitFor(() => inserted);
+    const deleter = db.deleteOrg(orgId);
+    // The deleter is blocked on a row lock held by the writer's transaction.
+    await waitFor(async () => {
+      const { rows } = await superuser.query<{ n: string }>(
+        `select count(*)::text as n from pg_stat_activity
+          where wait_event_type = 'Lock' and query like '%retention.delete_org%'`,
+      );
+      return rows[0]?.n === "1";
+    });
+    release();
+    await writer;
+    const report = await deleter;
+    expect(report).toEqual(
+      expect.arrayContaining([
+        { table: "audit_events", deleted: 1 },
+        { table: "orgs", deleted: 1 },
+      ]),
+    );
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(0);
+    expect(await rowsOf({ name: "audit_events", tenantColumn: "org_id" }, orgId)).toBe(0);
   });
 
   it("deletes every row of a due org from every tenant table and nothing of other orgs", async () => {

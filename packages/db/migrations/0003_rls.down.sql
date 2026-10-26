@@ -4,6 +4,8 @@ BEGIN
 END
 $$;
 
+DROP POLICY IF EXISTS orgs_app_no_delete ON orgs;
+
 REVOKE ALL ON
   orgs, members, repos, pull_requests, pr_revisions, analyses, findings_state,
   comments_pending, memory_entries, embeddings, audit_events, llm_usage, jobs

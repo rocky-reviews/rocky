@@ -32,9 +32,16 @@ CREATE POLICY orgs_tenant ON orgs FOR ALL TO rocky_app
   WITH CHECK (id = app.current_org_id());
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON
-  orgs, members, repos, pull_requests, pr_revisions, analyses, findings_state,
+  members, repos, pull_requests, pr_revisions, analyses, findings_state,
   comments_pending, memory_entries, embeddings, llm_usage, jobs
 TO rocky_app;
+
+-- The tenant root is never deleted by the application: a DELETE here cascades through every
+-- tenant table, skipping the deletion grace period, and leaves no audit trail. Erasure goes
+-- through retention.delete_org (0005). No DELETE privilege, and a restrictive policy on top so
+-- a stray future GRANT still matches no row.
+GRANT SELECT, INSERT, UPDATE ON orgs TO rocky_app;
+CREATE POLICY orgs_app_no_delete ON orgs AS RESTRICTIVE FOR DELETE TO rocky_app USING (false);
 
 -- Append-only for the application (trigger in 0004 adds the same rule for everyone else).
 GRANT SELECT, INSERT ON audit_events TO rocky_app;

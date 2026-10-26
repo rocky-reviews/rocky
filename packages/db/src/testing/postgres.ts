@@ -31,6 +31,21 @@ export const TEST_ROLES = {
 // Test-only credentials for roles inside a throwaway container.
 const PASSWORDS = { migrator: "migrator-test-only", app: "app-test-only" } as const;
 
+/** Superuser-only statements every deployment runs before the first migration (keep in step with deploy/dev/init.sql). */
+export const PROVISIONING_REVOKES: readonly string[] = [
+  "REVOKE USAGE ON LANGUAGE plpgsql FROM PUBLIC",
+  "REVOKE USAGE ON LANGUAGE sql FROM PUBLIC",
+  "REVOKE UPDATE ON pg_catalog.pg_settings FROM PUBLIC",
+  `REVOKE EXECUTE ON FUNCTION
+     pg_catalog.query_to_xml(text, boolean, boolean, text),
+     pg_catalog.query_to_xmlschema(text, boolean, boolean, text),
+     pg_catalog.query_to_xml_and_xmlschema(text, boolean, boolean, text),
+     pg_catalog.ts_stat(text),
+     pg_catalog.ts_stat(text, text),
+     pg_catalog.ts_rewrite(tsquery, text)
+   FROM PUBLIC`,
+];
+
 export interface TestPostgres {
   /** Superuser (`test`): only for provisioning (extensions, the migrator role). */
   readonly superUrl: string;
@@ -72,6 +87,11 @@ export const startPostgres = async (options: { migrate?: boolean } = {}): Promis
     await superuser.query(
       `ALTER DATABASE ${superuser.escapeIdentifier(container.getDatabase())} OWNER TO ${TEST_ROLES.migrator}`,
     );
+    // The same revokes as deploy/dev/init.sql (ADR 0005 §2, "Provisioning"); migration 0001
+    // refuses to run without them. The migrator is not a superuser here, so it gets the two
+    // languages back explicitly (migrations create sql functions and run DO blocks).
+    for (const sql of PROVISIONING_REVOKES) await superuser.query(sql);
+    await superuser.query(`GRANT USAGE ON LANGUAGE plpgsql, sql TO ${TEST_ROLES.migrator}`);
   } finally {
     await superuser.end();
   }

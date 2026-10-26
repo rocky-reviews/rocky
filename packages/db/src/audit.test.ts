@@ -7,8 +7,10 @@ import * as schema from "./schema.js";
 import {
   CONTAINER_TIMEOUT_MS,
   newOrgId,
+  plantAuditEvent,
   seedOrg,
   startPostgres,
+  TEST_ROLES,
   type SeededOrg,
 } from "./testing/index.js";
 
@@ -17,6 +19,7 @@ import {
 const INSUFFICIENT_PRIVILEGE = "42501";
 
 let pgs: Awaited<ReturnType<typeof startPostgres>>;
+let superuser: pg.Pool;
 let db: Db;
 let org: SeededOrg;
 
@@ -32,12 +35,14 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 
 beforeAll(async () => {
   pgs = await startPostgres();
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   org = await seedOrg(db, newOrgId());
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
   await db?.close();
+  await superuser?.end();
   await pgs?.stop();
 });
 
@@ -130,6 +135,55 @@ describe("append-only trigger", () => {
     }
   });
 
+  it("stamps created_at itself, so the app cannot backdate a row into the purge window (final review #3)", async () => {
+    const backdated = new Date("2000-01-01T00:00:00Z");
+    const before = Date.now();
+    const { id } = await db.withOrg(org.orgId, async (tx) => {
+      const [row] = await tx.db
+        .insert(schema.auditEvents)
+        .values({
+          actorType: "system",
+          actorId: "test",
+          action: "backdate.attempt",
+          targetType: "org",
+          targetId: org.orgId,
+          createdAt: backdated,
+        })
+        .returning({ id: schema.auditEvents.id });
+      if (row === undefined) throw new Error("no row");
+      return row;
+    });
+    // The insert itself is allowed; only the timestamp is replaced.
+    const raw = await db.withOrg(org.orgId, (tx) =>
+      tx.query<{ created_at: Date }>(
+        `insert into audit_events (actor_type, actor_id, action, target_type, target_id, created_at)
+         values ('system', 'test', 'backdate.raw', 'org', $1, '2000-01-01') returning created_at`,
+        [org.orgId],
+      ),
+    );
+    expect(raw.rows[0]?.created_at.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    const rows = await db.withOrg(org.orgId, (tx) =>
+      tx.db
+        .select({
+          id: schema.auditEvents.id,
+          action: schema.auditEvents.action,
+          at: schema.auditEvents.createdAt,
+        })
+        .from(schema.auditEvents),
+    );
+    for (const row of rows.filter((r) => r.action.startsWith("backdate."))) {
+      expect(row.at.getTime(), row.action).toBeGreaterThanOrEqual(before - 1000);
+      expect(row.at.getTime(), row.action).toBeLessThanOrEqual(Date.now() + 1000);
+    }
+    expect(rows.some((r) => r.id === id)).toBe(true);
+    // And so a purge right now removes neither.
+    expect(await db.purgeExpired("audit", new Date())).toEqual([]);
+    const left = await db.withOrg(org.orgId, (tx) => tx.db.select().from(schema.auditEvents));
+    expect(left.map((r) => r.action)).toEqual(
+      expect.arrayContaining(["backdate.attempt", "backdate.raw"]),
+    );
+  });
+
   it("gives the app role no UPDATE/DELETE/TRUNCATE privilege on top of the trigger", async () => {
     const { rows } = await pgs.migrator.query<{ privilege_type: string }>(
       `select privilege_type from information_schema.role_table_grants
@@ -141,8 +195,8 @@ describe("append-only trigger", () => {
 
 describe("retention purge path", () => {
   const DAY = 86_400_000;
-  const plant = async (label: string, at: Date) =>
-    db.withOrg(org.orgId, async ({ db: tx }) => {
+  const plant = async (label: string, at: Date) => {
+    await db.withOrg(org.orgId, async ({ db: tx }) => {
       await tx.insert(schema.analyses).values({
         revisionId: org.revisionId,
         status: "failed",
@@ -156,15 +210,10 @@ describe("retention purge path", () => {
         createdAt: at,
         finishedAt: at,
       });
-      await tx.insert(schema.auditEvents).values({
-        actorType: "system",
-        actorId: "test",
-        action: `planted.${label}`,
-        targetType: "org",
-        targetId: org.orgId,
-        createdAt: at,
-      });
     });
+    // Audit rows cannot be backdated by the app (stamp trigger); plant them as the superuser.
+    await plantAuditEvent(superuser, org.orgId, { action: `planted.${label}`, at });
+  };
   const remaining = () =>
     db.withOrg(org.orgId, async ({ db: tx }) => ({
       analyses: (await tx.select({ v: schema.analyses.errorCode }).from(schema.analyses))
@@ -231,7 +280,7 @@ describe("retention purge path", () => {
     expect(error.code).toBe("23514"); // check_violation
   });
 
-  it("is owned by a NOLOGIN role that owns only the retention schema and its functions", async () => {
+  it("is owned by a NOLOGIN role that owns only the four retention functions", async () => {
     const role = await pgs.migrator.query<{
       rolcanlogin: boolean;
       rolbypassrls: boolean;
@@ -251,8 +300,21 @@ describe("retention purge path", () => {
       { kind: "function", name: "purge_analyses" },
       { kind: "function", name: "purge_audit_events" },
       { kind: "function", name: "purge_jobs" },
-      { kind: "schema", name: "retention" },
     ]);
+    // The schema belongs to the migrator like every other schema; the role holds no privilege
+    // on it (the transfer-time CREATE grant is revoked again inside the migration).
+    const schema = await pgs.migrator.query<{ owner: string; create: boolean; usage: boolean }>(
+      `select nspowner::regrole::text as owner,
+              has_schema_privilege('rocky_retention', oid, 'CREATE') as "create",
+              has_schema_privilege('rocky_retention', oid, 'USAGE') as usage
+         from pg_namespace where nspname = 'retention'`,
+    );
+    expect(schema.rows[0]).toEqual({ owner: TEST_ROLES.migrator, create: false, usage: false });
+    const languages = await pgs.migrator.query<{ n: string }>(
+      `select count(*)::text as n from pg_language
+        where lanpltrusted and has_language_privilege('rocky_retention', oid, 'USAGE')`,
+    );
+    expect(languages.rows[0]?.n).toBe("0");
     const grants = await pgs.migrator.query<{ table_name: string; privilege_type: string }>(
       `select table_name, privilege_type from information_schema.role_table_grants
         where grantee = 'rocky_retention' order by 1, 2`,
@@ -267,6 +329,8 @@ describe("retention purge path", () => {
       { table_name: "jobs", privilege_type: "SELECT" },
       { table_name: "orgs", privilege_type: "DELETE" },
       { table_name: "orgs", privilege_type: "SELECT" },
+      // UPDATE only so delete_org can lock the row (SELECT … FOR UPDATE); never issued otherwise.
+      { table_name: "orgs", privilege_type: "UPDATE" },
       { table_name: "retention_settings", privilege_type: "SELECT" },
     ]);
   });

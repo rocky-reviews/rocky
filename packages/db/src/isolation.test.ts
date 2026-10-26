@@ -28,6 +28,46 @@ const ALLOWED_SECURITY_DEFINER = [
   "retention.purge_jobs",
 ];
 
+/**
+ * Every privilege `rocky_app` holds, per relation (final review #2). A stray grant anywhere,
+ * or a new relation without an entry here, fails the matrix test.
+ */
+const DML = ["DELETE", "INSERT", "SELECT", "UPDATE"];
+const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
+  "app.retention_settings": ["SELECT"],
+  "app.schema_migrations": [],
+  "public.analyses": DML,
+  "public.audit_events": ["INSERT", "SELECT"],
+  "public.audit_events_id_seq": [],
+  "public.comments_pending": DML,
+  "public.embeddings": DML,
+  "public.findings_state": DML,
+  "public.jobs": DML,
+  "public.llm_usage": DML,
+  "public.llm_usage_id_seq": [],
+  "public.members": DML,
+  "public.memory_entries": DML,
+  // The tenant root is never deleted by the application; only retention.delete_org removes it.
+  "public.orgs": ["INSERT", "SELECT", "UPDATE"],
+  "public.pr_revisions": DML,
+  "public.pull_requests": DML,
+  "public.repos": DML,
+};
+
+/**
+ * pg_catalog functions that execute caller-supplied SQL text through SPI. A `set_config` hidden
+ * inside their string argument is invisible to the statement guard and would switch tenant for
+ * the rest of the transaction, so provisioning revokes EXECUTE from PUBLIC (final review #1).
+ */
+const SPI_FUNCTIONS = [
+  "pg_catalog.query_to_xml(text, boolean, boolean, text)",
+  "pg_catalog.query_to_xmlschema(text, boolean, boolean, text)",
+  "pg_catalog.query_to_xml_and_xmlschema(text, boolean, boolean, text)",
+  "pg_catalog.ts_stat(text)",
+  "pg_catalog.ts_stat(text, text)",
+  "pg_catalog.ts_rewrite(tsquery, text)",
+];
+
 const INSUFFICIENT_PRIVILEGE = "42501";
 const FOREIGN_KEY_VIOLATION = "23503";
 const INVALID_TEXT_REPRESENTATION = "22P02";
@@ -99,6 +139,12 @@ afterAll(async () => {
   await pgs?.stop();
 });
 
+const table = (name: string): TenantTable => {
+  const found = tables.find((t) => t.name === name);
+  if (found === undefined) throw new Error(`no tenant table ${name}`);
+  return found;
+};
+
 const countAs = async (orgId: OrgId, table: TenantTable, where = ""): Promise<number> =>
   db.withOrg(orgId, async (tx) => {
     const { rows } = await tx.query<{ n: string }>(
@@ -139,15 +185,25 @@ describe("every table in the database", () => {
         [t.qualified],
       );
       expect(rows[0], t.name).toEqual({ rls: true, forced: true, owner: TEST_ROLES.migrator });
-      const policies = await pgs.migrator.query<{ roles: string[]; cmd: string }>(
-        "select roles::text[] as roles, cmd from pg_policies where schemaname = $1 and tablename = $2",
+      const policies = await pgs.migrator.query<{
+        roles: string[];
+        cmd: string;
+        permissive: string;
+      }>(
+        "select roles::text[] as roles, cmd, permissive from pg_policies where schemaname = $1 and tablename = $2",
         [t.schema, t.name],
       );
       const forApp = policies.rows.filter((p) => p.roles.includes(APP_ROLE));
       expect(
-        forApp.map((p) => p.cmd),
+        forApp.filter((p) => p.permissive === "PERMISSIVE").map((p) => p.cmd),
         t.name,
       ).toEqual(["ALL"]);
+      // orgs additionally carries a restrictive "never" DELETE policy for the app role (final
+      // review #2): the tenant root is only removed through retention.delete_org.
+      expect(
+        forApp.filter((p) => p.permissive === "RESTRICTIVE").map((p) => p.cmd),
+        t.name,
+      ).toEqual(t.name === "orgs" ? ["DELETE"] : []);
       // No policy grants the app role anything beyond the tenant policy, and PUBLIC gets none.
       for (const p of policies.rows) expect(p.roles, t.name).not.toContain("public");
     }
@@ -297,6 +353,15 @@ describe("org A against org B's rows, per table", () => {
   it("delete of foreign rows affects nothing", async () => {
     for (const t of tables) {
       if (t.name === "audit_events") continue;
+      if (t.name === "orgs") {
+        // No DELETE privilege at all on the tenant root (final review #2; deletion.test.ts).
+        const error = await pgError(
+          db.withOrg(a.orgId, (tx) => tx.query("delete from orgs where id = $1", [b.orgId])),
+        );
+        expect(error.code).toBe(INSUFFICIENT_PRIVILEGE);
+        expect(await countAs(b.orgId, t), t.name).toBe(1);
+        continue;
+      }
       const affected = await db.withOrg(a.orgId, async (tx) => {
         const r = await tx.query(`delete from ${t.qualified} where "${t.tenantColumn}" = $1`, [
           b.orgId,
@@ -502,6 +567,34 @@ describe("other catalog objects (review #8)", () => {
     expect(rows[0]?.n).toBe("0");
   });
 
+  it("holds exactly the expected privileges on every relation, and PUBLIC holds none (final review #2)", async () => {
+    const { rows } = await pgs.migrator.query<{
+      name: string;
+      kind: string;
+      app: string[];
+      pub: string[];
+      column_acls: string;
+    }>(
+      `select n.nspname || '.' || c.relname as name, c.relkind as kind,
+              array(select privilege_type from aclexplode(c.relacl) where grantee = $1::regrole order by 1) as app,
+              array(select privilege_type from aclexplode(c.relacl) where grantee = 0 order by 1) as pub,
+              (select count(*) from pg_attribute a where a.attrelid = c.oid and a.attacl is not null)::text as column_acls
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f')
+          and n.nspname not in ('pg_catalog', 'information_schema')
+          and n.nspname not like 'pg_toast%'
+        order by 1`,
+      [APP_ROLE],
+    );
+    const actual = Object.fromEntries(rows.map((r) => [r.name, r.app]));
+    expect(actual).toEqual(APP_TABLE_PRIVILEGES);
+    for (const r of rows) {
+      expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
+      // The matrix above is the whole story: no column-level grants widen or narrow it.
+      expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
+    }
+  });
+
   it("lets the app role read but not change the retention settings", async () => {
     const settings = await appPool.query<{ category: string; days: number }>(
       "select category, days from app.retention_settings order by 1",
@@ -519,6 +612,160 @@ describe("other catalog objects (review #8)", () => {
     ]) {
       const error = await pgError(appPool.query(sql));
       expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+  });
+});
+
+describe("procedural code and indirect set_config (final review #1)", () => {
+  /** Runs `sql` as the app role inside a transaction that is already scoped to org A. */
+  const inTenantTransaction = async (sql: string, params: unknown[] = []) => {
+    const client = await appPool.connect();
+    try {
+      await client.query("begin");
+      await client.query("select set_config('app.org_id', $1, true)", [a.orgId]);
+      return await pgError(client.query(sql, params));
+    } finally {
+      await client.query("rollback");
+      client.release();
+    }
+  };
+
+  it("a DO block that switches tenant, writes, and switches back is refused and plants nothing", async () => {
+    const error = await inTenantTransaction(
+      `do $x$ begin
+         perform set_config('app.org_id', '${b.orgId}', true);
+         insert into repos (forge_repo_id, full_name) values (999, 'planted-by-A');
+         perform set_config('app.org_id', '${a.orgId}', true);
+       end $x$`,
+    );
+    expect(error.code).toBe(INSUFFICIENT_PRIVILEGE);
+    expect(error.message).toMatch(/language plpgsql/);
+    expect(await countAs(b.orgId, table("repos"), "where full_name = 'planted-by-A'")).toBe(0);
+    expect(await countAs(b.orgId, table("repos"))).toBe(1);
+  });
+
+  it("cannot change app.org_id through pg_settings", async () => {
+    const error = await inTenantTransaction(
+      "update pg_catalog.pg_settings set setting = $1 where name = 'app.org_id'",
+      [b.orgId],
+    );
+    expect(error.code).toBe(INSUFFICIENT_PRIVILEGE);
+    expect(error.message).toMatch(/pg_settings/);
+  });
+
+  it("cannot run SQL text through catalog functions that execute it (ts_stat, ts_rewrite, query_to_xml…)", async () => {
+    const hidden = `select set_config(''app.org_id'', ''${b.orgId}'', true)`;
+    for (const sql of [
+      `select ts_stat('${hidden}::tsvector')`,
+      `select ts_stat('${hidden}::tsvector', 'x')`,
+      `select ts_rewrite('a'::tsquery, '${hidden}::tsquery')`,
+      `select query_to_xml('${hidden}', false, false, '')`,
+      `select query_to_xmlschema('${hidden}', false, false, '')`,
+      `select query_to_xml_and_xmlschema('${hidden}', false, false, '')`,
+    ]) {
+      const error = await inTenantTransaction(sql);
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+      expect(error.message, sql).toMatch(/permission denied for function/);
+    }
+    // The harmless three-argument ts_rewrite is untouched.
+    const ok = await appPool.query<{ v: string }>(
+      "select ts_rewrite('a & b'::tsquery, 'a'::tsquery, 'c'::tsquery)::text as v",
+    );
+    expect(ok.rows[0]?.v).toBe("'b' & 'c'");
+  });
+
+  it("cannot create functions, procedures, triggers, rules, operators, casts, aggregates or extensions, or COPY from the server", async () => {
+    for (const sql of [
+      "create function public.f() returns int language sql as 'select 1'",
+      "create function app.f() returns int language sql as 'select 1'",
+      "create function retention.f() returns int language sql as 'select 1'",
+      "create function public.f() returns int language plpgsql as 'begin return 1; end'",
+      "create function pg_temp.f() returns int language sql as 'select 1'",
+      "create procedure public.p() language sql as 'select 1'",
+      "create procedure public.p() language plpgsql as 'begin null; end'",
+      "create trigger t before insert on repos execute function pg_catalog.suppress_redundant_updates_trigger()",
+      "create rule r as on insert to repos do instead nothing",
+      "create operator public.=== (leftarg = int, rightarg = int, function = int4eq)",
+      "create cast (int as text) with inout",
+      "create aggregate public.agg(int) (sfunc = int4pl, stype = int)",
+      "create extension if not exists pgcrypto",
+      "create extension pg_trgm",
+      "copy repos from program 'id'",
+      "copy repos from '/etc/passwd'",
+      "alter role current_user set app.org_id = 'x'",
+      "do $$ begin null; end $$",
+      "do language sql $$ select 1 $$",
+    ]) {
+      const error = await pgError(appPool.query(sql));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+  });
+
+  it("catalog: no USAGE on any trusted language, no CREATE on any schema, no UPDATE on pg_settings, no EXECUTE on SPI functions", async () => {
+    const languages = await pgs.migrator.query<{
+      name: string;
+      trusted: boolean;
+      app: boolean;
+      pub: boolean;
+    }>(
+      `select lanname as name, lanpltrusted as trusted,
+              has_language_privilege($1, oid, 'USAGE') as app,
+              has_language_privilege(0, oid, 'USAGE') as pub
+         from pg_language order by 1`,
+      [APP_ROLE],
+    );
+    const names = languages.rows.map((l) => l.name);
+    expect(names).toContain("plpgsql");
+    expect(names).toContain("sql");
+    for (const l of languages.rows) {
+      // Untrusted languages (c, internal) are superuser-only regardless of their ACL; for
+      // every trusted one, neither the app role nor PUBLIC may use it.
+      if (!l.trusted) continue;
+      expect(l.app, `${l.name} usable by ${APP_ROLE}`).toBe(false);
+      expect(l.pub, `${l.name} usable by PUBLIC`).toBe(false);
+    }
+    // The migrator keeps its grant (migrations create functions and run DO blocks).
+    expect(
+      (
+        await pgs.migrator.query<{ ok: boolean }>(
+          "select has_language_privilege('plpgsql', 'USAGE') and has_language_privilege('sql', 'USAGE') as ok",
+        )
+      ).rows[0]?.ok,
+    ).toBe(true);
+
+    const schemas = await pgs.migrator.query<{ name: string; app: boolean; pub: boolean }>(
+      `select nspname as name, has_schema_privilege($1, oid, 'CREATE') as app,
+              has_schema_privilege(0, oid, 'CREATE') as pub
+         from pg_namespace order by 1`,
+      [APP_ROLE],
+    );
+    expect(schemas.rows.map((s) => s.name)).toEqual(
+      expect.arrayContaining(["public", "app", "retention"]),
+    );
+    for (const s of schemas.rows) {
+      expect(s.app, `CREATE on ${s.name} for ${APP_ROLE}`).toBe(false);
+      expect(s.pub, `CREATE on ${s.name} for PUBLIC`).toBe(false);
+    }
+
+    const settings = await pgs.migrator.query<{
+      app_update: boolean;
+      pub_update: boolean;
+      app_select: boolean;
+    }>(
+      `select has_table_privilege($1, 'pg_catalog.pg_settings', 'UPDATE') as app_update,
+              has_table_privilege(0, 'pg_catalog.pg_settings', 'UPDATE') as pub_update,
+              has_table_privilege($1, 'pg_catalog.pg_settings', 'SELECT') as app_select`,
+      [APP_ROLE],
+    );
+    expect(settings.rows[0]).toEqual({ app_update: false, pub_update: false, app_select: true });
+
+    for (const fn of SPI_FUNCTIONS) {
+      const { rows } = await pgs.migrator.query<{ app: boolean; pub: boolean }>(
+        `select has_function_privilege($1, $2::regprocedure, 'EXECUTE') as app,
+                has_function_privilege(0, $2::regprocedure, 'EXECUTE') as pub`,
+        [APP_ROLE, fn],
+      );
+      expect(rows[0], fn).toEqual({ app: false, pub: false });
     }
   });
 });

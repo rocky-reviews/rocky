@@ -41,6 +41,32 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- Provisioning preconditions (ADR 0005 §2, "Provisioning"). Tenant isolation against crafted
+  -- SQL rests on the application role being unable to run procedural code or reach set_config
+  -- indirectly. Only a superuser can revoke these (deploy/dev/init.sql, the test harness, the
+  -- production DBA), so the migration verifies them and fails closed instead.
+  IF has_language_privilege('rocky_app', 'plpgsql', 'USAGE')
+     OR has_language_privilege('rocky_app', 'sql', 'USAGE') THEN
+    RAISE EXCEPTION 'rocky_app must not have USAGE on plpgsql or sql: REVOKE USAGE ON LANGUAGE plpgsql, sql FROM PUBLIC as a superuser (ADR 0005)';
+  END IF;
+  IF has_table_privilege('rocky_app', 'pg_catalog.pg_settings', 'UPDATE') THEN
+    RAISE EXCEPTION 'rocky_app must not have UPDATE on pg_settings: REVOKE UPDATE ON pg_catalog.pg_settings FROM PUBLIC as a superuser (ADR 0005)';
+  END IF;
+  FOR r IN
+    SELECT unnest(ARRAY[
+      'pg_catalog.query_to_xml(text, boolean, boolean, text)',
+      'pg_catalog.query_to_xmlschema(text, boolean, boolean, text)',
+      'pg_catalog.query_to_xml_and_xmlschema(text, boolean, boolean, text)',
+      'pg_catalog.ts_stat(text)',
+      'pg_catalog.ts_stat(text, text)',
+      'pg_catalog.ts_rewrite(tsquery, text)'
+    ]) AS fn
+  LOOP
+    IF has_function_privilege('rocky_app', r.fn::regprocedure, 'EXECUTE') THEN
+      RAISE EXCEPTION 'rocky_app must not execute % (it runs SQL text): REVOKE EXECUTE ON FUNCTION % FROM PUBLIC as a superuser (ADR 0005)', r.fn, r.fn;
+    END IF;
+  END LOOP;
+
   -- The migrator must be able to SET ROLE rocky_retention to create objects it owns (0005).
   -- A superuser can already; a CREATEROLE migrator holds ADMIN on the role it created and
   -- grants itself SET (not INHERIT: the migrator must not pick up retention privileges).

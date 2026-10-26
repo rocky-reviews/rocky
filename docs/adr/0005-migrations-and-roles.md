@@ -31,11 +31,11 @@ deletion. The schema holds encrypted secrets (wrapped keys, forge tokens) writte
 
 ### 2. Three roles, one owner
 
-| Role                      | Logs in | Owns                             | May do                                                                                                                                                                   |
-| ------------------------- | ------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| migrator (e.g. `rocky`)   | yes     | database, schemas, tables        | run migrations; DDL; write `app.retention_settings`. Not superuser in production; `CREATEROLE` so it can create the two below.                                           |
-| `rocky_app` (group)       | no      | nothing                          | `SELECT/INSERT/UPDATE/DELETE` on tenant tables (only `SELECT/INSERT` on `audit_events`), `SELECT` on `app.retention_settings`, `EXECUTE` on the four retention functions |
-| `rocky_retention` (group) | no      | schema `retention` + 4 functions | `SELECT/DELETE` on `analyses`, `jobs`, `orgs`, `audit_events` and `INSERT` on `audit_events`, through `USING (true)` policies; `SELECT` on the settings                  |
+| Role                      | Logs in | Owns                           | May do                                                                                                                                                                                                                                        |
+| ------------------------- | ------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| migrator (e.g. `rocky`)   | yes     | database, schemas, tables      | run migrations; DDL; write `app.retention_settings`. Not superuser in production; `CREATEROLE` so it can create the two below; the only non-superuser with USAGE on `plpgsql` and `sql`.                                                      |
+| `rocky_app` (group)       | no      | nothing                        | `SELECT/INSERT/UPDATE/DELETE` on tenant tables, except `SELECT/INSERT/UPDATE` on `orgs` and `SELECT/INSERT` on `audit_events`; `SELECT` on `app.retention_settings`; `EXECUTE` on the four retention functions. No language, no schema CREATE |
+| `rocky_retention` (group) | no      | the 4 functions in `retention` | `SELECT/DELETE` on `analyses`, `jobs`, `orgs`, `audit_events`, `INSERT` on `audit_events` and `UPDATE` on `orgs` (only so `delete_org` can lock the row), through `USING (true)` policies; `SELECT` on the settings                           |
 
 - The application connects as a LOGIN role that is a member of `rocky_app` and nothing else
   (`ensureLoginRole` creates it for dev/tests; platforms provision it in production). It is not
@@ -54,7 +54,42 @@ deletion. The schema holds encrypted secrets (wrapped keys, forge tokens) writte
   SASLprep).
 - The isolation suite also pins what else the app role can reach: views must be
   `security_invoker` or ungranted, the SECURITY DEFINER functions it may execute are exactly the
-  four in `retention`, and `pg_default_acl` is empty.
+  four in `retention`, `pg_default_acl` is empty, and the privileges it holds on every relation
+  match an explicit matrix (no column ACLs, nothing for PUBLIC).
+- The application never deletes an `orgs` row: the cascade would erase a tenant in one statement,
+  skipping the deletion grace period and the audit trail. It has no `DELETE` on `orgs` and a
+  restrictive `FOR DELETE … USING (false)` policy on top; erasure is `retention.delete_org` only.
+
+**Provisioning (superuser, once per cluster, before the first migration).** Tenant isolation
+against crafted SQL rests on the application role being unable to run procedural code or reach
+`set_config` indirectly (§3). Only a superuser can take these away, so they are not in a
+migration; migration 0001 verifies them and refuses to run otherwise. `deploy/dev/init.sql` and
+the Testcontainers harness run exactly this; a production DBA runs it by hand:
+
+```sql
+REVOKE USAGE ON LANGUAGE plpgsql FROM PUBLIC;
+REVOKE USAGE ON LANGUAGE sql FROM PUBLIC;
+GRANT USAGE ON LANGUAGE plpgsql, sql TO <migrator>;   -- not needed when the migrator is a superuser
+REVOKE UPDATE ON pg_catalog.pg_settings FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION
+  pg_catalog.query_to_xml(text, boolean, boolean, text),
+  pg_catalog.query_to_xmlschema(text, boolean, boolean, text),
+  pg_catalog.query_to_xml_and_xmlschema(text, boolean, boolean, text),
+  pg_catalog.ts_stat(text),
+  pg_catalog.ts_stat(text, text),
+  pg_catalog.ts_rewrite(tsquery, text)
+FROM PUBLIC;
+```
+
+Why each: a `DO` block (or any function the role could create, in `sql` as much as `plpgsql`)
+can call `set_config('app.org_id', …)` twice around a write, out of sight of the statement guard
+and of the commit-time recheck; `UPDATE pg_settings` is `set_config` by another name; the six
+functions execute SQL passed as a string literal, which the guard blanks. Language USAGE is
+checked when a function is created and when `DO` runs, not when an existing function is called,
+so triggers, `app.current_org_id()` and the retention functions keep working. `rocky_retention`
+needs no language either: migration 0005 creates its functions as the migrator and transfers
+them with `ALTER FUNCTION … OWNER TO`. A dev volume provisioned before this rule must be
+recreated (`pnpm dev:down -v`).
 
 ### 3. Tenant context
 
@@ -63,17 +98,30 @@ deletion. The schema holds encrypted secrets (wrapped keys, forge tokens) writte
 local, pool-safe), runs `fn`, waits for any nested work, re-reads the setting and refuses to
 commit if it changed, then commits or rolls back.
 
-- The `tx` handle (raw `query` and the Drizzle `db`) talks to the connection through a proxy
-  that exposes exactly one member, `query`; every other property of the pg client (`release`,
-  `connection`, `end`, …) throws, so nothing inside `fn` can return a mid-transaction connection
-  to the pool. `query` refuses every statement once the transaction has ended, and (best effort,
-  after normalising comments, literals including `E'…'` escapes and `$tag$` quotes, quoting and
-  case; `u&` escape syntax is refused outright) statements that would alter the
-  transaction or the tenant context: `BEGIN/COMMIT/ROLLBACK/END/ABORT/SAVEPOINT/RELEASE/PREPARE/
-DISCARD/RESET`, `SET [LOCAL|SESSION] ROLE | SESSION AUTHORIZATION | TRANSACTION | app.*`, any
-  `set_config(` and real multi-statement text (`;` inside a literal or one trailing `;` is fine).
-  Drizzle's `db.transaction()` is therefore refused as well. The commit-time recheck of
-  `app.org_id` remains the actual guarantee.
+- Three layers keep code inside `withOrg(A)` from acting as another tenant, in this order:
+  1. **The database (the layer isolation rests on).** The application role cannot run
+     procedural code or arbitrary `set_config`: no USAGE on any trusted language, no CREATE on
+     any schema, no `UPDATE` on `pg_settings`, no EXECUTE on the catalog functions that run SQL
+     text, no rights to create triggers, rules, casts, operators or extensions (§2,
+     "Provisioning"). Every statement it can send is therefore a plain statement the guard can
+     read; `SET app.org_id` / `set_config` themselves cannot be revoked from a role, which is
+     what the next two layers are for.
+  2. **The statement guard (second layer).** The `tx` handle (raw `query` and the Drizzle `db`)
+     talks to the connection through a proxy that exposes exactly one member, `query`; every
+     other property of the pg client (`release`, `connection`, `end`, …) throws, so nothing
+     inside `fn` can return a mid-transaction connection to the pool. `query` refuses every
+     statement once the transaction has ended, and (after normalising comments, literals
+     including `E'…'` escapes and `$tag$` quotes, quoting and case; `u&` escape syntax is
+     refused outright) statements that would alter the transaction or the tenant context:
+     `BEGIN`, `COMMIT`, `ROLLBACK`, `END`, `ABORT`, `SAVEPOINT`, `RELEASE`, `PREPARE`,
+     `DISCARD`, `RESET`, `DO`, `CALL`, `CREATE`, `ALTER ROLE|USER|SYSTEM`,
+     `UPDATE pg_settings`, `SET [LOCAL|SESSION] ROLE`, `SET SESSION AUTHORIZATION`,
+     `SET TRANSACTION`, `SET app.*`, any `set_config(`, `ts_stat`, `ts_rewrite` and
+     `query_to_xml*` by name, and real multi-statement text (`;` inside a literal or one
+     trailing `;` is fine). Drizzle's `db.transaction()` is therefore refused as well.
+  3. **The commit-time recheck.** `withOrg` re-reads `app.org_id` before `COMMIT` and rolls
+     back if it differs: it detects a change that persists to commit. It cannot see a switch
+     that was switched back inside the transaction, which is why layer 1 exists.
 - Nested calls for the same org **join the open transaction** (REQUIRED propagation): the
   nested `fn` runs with the same guarded handle; there are no savepoints, no queues and no
   serialisation of nested calls (node-pg already serialises concurrent queries on one client, so
@@ -113,20 +161,27 @@ parent (org_id, id)`; parents carry `UNIQUE (org_id, id)`. Nullable references u
   (`pnpm db:migrate` applies `RETENTION_*_DAYS` / `ORG_DELETION_GRACE_DAYS` from the environment
   through `setRetentionSettings`); the application can only read it. A CHECK keeps the audit period
   at 30 days or more.
-- `rocky_retention` cannot log in and owns only the `retention` schema and four
-  `SECURITY DEFINER` functions. `purge_analyses(as_of)`, `purge_jobs(as_of)` and
+- `rocky_retention` cannot log in and owns only four `SECURITY DEFINER` functions in the
+  migrator-owned `retention` schema. `purge_analyses(as_of)`, `purge_jobs(as_of)` and
   `purge_audit_events(as_of)` compute `before = least(as_of, now()) - period` from the settings
   table, delete rows strictly older than `before`, and insert one `retention.purged` audit event
   per affected org in the same statement. The caller can only move `as_of` into the past; the
   configured period is therefore also the floor. **Boundary:** a row created exactly `period`
   ago is kept.
-- `delete_org(org)` erases one org once `delete_after <= now()`: it deletes the org's
-  `audit_events` as `rocky_retention` (foreign-key cascades run as the table owner, which the
-  trigger blocks) and then the `orgs` row, which cascades through every other tenant table. A
-  BEFORE trigger on `orgs` pushes any `delete_after` the application sets to at least
-  `now() + grace`, so scheduling and executing a deletion can never happen in one go; an AFTER
-  trigger writes the `org.deletion_scheduled` / `org.deletion_cancelled` audit row with the
-  application's own INSERT right (no extra privilege), after the org row exists.
+- `delete_org(org)` erases one org once `delete_after <= now()`: it locks the `orgs` row with
+  `SELECT … FOR UPDATE` (a tenant transaction inserting a child row holds KEY SHARE on it
+  through the foreign key, so the lock waits for that write to finish instead of racing it),
+  deletes the org's `audit_events` as `rocky_retention` (foreign-key cascades run as the table
+  owner, which the trigger blocks) and then the `orgs` row, which cascades through every other
+  tenant table. The lock is why `rocky_retention` holds `UPDATE` on `orgs` and an UPDATE
+  policy; without the policy the lock would silently match no row. A BEFORE trigger on `orgs`
+  pushes any `delete_after` the application sets to at least `now() + grace`, so scheduling and
+  executing a deletion can never happen in one go; an AFTER trigger writes the
+  `org.deletion_scheduled` / `org.deletion_cancelled` audit row with the application's own
+  INSERT right (no extra privilege), after the org row exists.
+- `audit_events.created_at` is set by a `BEFORE INSERT` trigger to `now()` for every role: the
+  retention purge keys on it, so a caller-supplied value could date a row straight into the next
+  purge. Tests that need old rows disable the trigger as the superuser for one transaction.
 - `runRetention(db, { clock })` runs the three purges as of the injected clock and returns a
   report; it writes no audit rows itself. Application (Pino) logs are not in the database; their
   retention is a hosting concern.

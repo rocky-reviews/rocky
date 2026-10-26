@@ -25,3 +25,20 @@ CREATE TRIGGER audit_events_no_update_delete
 CREATE TRIGGER audit_events_no_truncate
   BEFORE TRUNCATE ON audit_events
   FOR EACH STATEMENT EXECUTE FUNCTION app.audit_events_append_only();
+
+-- created_at is the database's clock, never the caller's: a backdated row would fall into the
+-- next retention purge and vanish from the trail. Applies to every role (the purge functions
+-- do not set it either); tests that need old rows disable the trigger as a superuser.
+CREATE FUNCTION app.audit_events_stamp() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog
+AS $$
+BEGIN
+  NEW.created_at := now();
+  RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER audit_events_stamp
+  BEFORE INSERT ON audit_events
+  FOR EACH ROW EXECUTE FUNCTION app.audit_events_stamp();

@@ -83,7 +83,11 @@ CREATE TRIGGER orgs_deletion_audit
 
 -- --- Retention role: grants and policies ------------------------------------------------------
 
-GRANT SELECT, DELETE ON analyses, jobs, orgs TO rocky_retention;
+GRANT SELECT, DELETE ON analyses, jobs TO rocky_retention;
+-- UPDATE on orgs only so delete_org can take the row lock (SELECT … FOR UPDATE needs the
+-- privilege and an UPDATE policy; without the policy the lock silently matches no row).
+-- The role never issues an UPDATE.
+GRANT SELECT, UPDATE, DELETE ON orgs TO rocky_retention;
 GRANT SELECT, INSERT, DELETE ON audit_events TO rocky_retention;
 
 CREATE POLICY analyses_retention_select ON analyses FOR SELECT TO rocky_retention USING (true);
@@ -91,6 +95,7 @@ CREATE POLICY analyses_retention_delete ON analyses FOR DELETE TO rocky_retentio
 CREATE POLICY jobs_retention_select ON jobs FOR SELECT TO rocky_retention USING (true);
 CREATE POLICY jobs_retention_delete ON jobs FOR DELETE TO rocky_retention USING (true);
 CREATE POLICY orgs_retention_select ON orgs FOR SELECT TO rocky_retention USING (true);
+CREATE POLICY orgs_retention_update ON orgs FOR UPDATE TO rocky_retention USING (true);
 CREATE POLICY orgs_retention_delete ON orgs FOR DELETE TO rocky_retention USING (true);
 CREATE POLICY audit_events_retention_select ON audit_events FOR SELECT TO rocky_retention USING (true);
 CREATE POLICY audit_events_retention_delete ON audit_events FOR DELETE TO rocky_retention USING (true);
@@ -99,11 +104,11 @@ CREATE POLICY audit_events_retention_insert ON audit_events FOR INSERT TO rocky_
 
 -- --- Retention role: schema and functions ------------------------------------------------------
 
--- Creating a schema needs CREATE on the database, which only the migrator has; everything
--- inside it is then created as rocky_retention (the migrator holds SET on it, see 0001).
-CREATE SCHEMA retention AUTHORIZATION rocky_retention;
-
-SET LOCAL ROLE rocky_retention;
+-- The schema is owned by the migrator like everything else. The functions are created by the
+-- migrator (the only non-superuser with USAGE on a language, see ADR 0005 §2 "Provisioning")
+-- and then handed to rocky_retention with ALTER FUNCTION … OWNER TO, which needs no language
+-- privilege for the new owner; the migrator can do so because it holds SET on the role (0001).
+CREATE SCHEMA retention;
 
 -- Boundary: a row is expired when created_at < before (strictly older), where
 -- before = least(as_of, now()) - period. A row created exactly `period` ago is kept.
@@ -188,7 +193,12 @@ $$;
 -- Erases one org (uninstall grace elapsed, GDPR). Foreign-key cascades run as the table owner,
 -- which the append-only trigger blocks, so audit_events is deleted here first as rocky_retention;
 -- deleting the orgs row then cascades through every other tenant table (RI ignores RLS).
--- Nothing is audited: the tenant that would own the event no longer exists; the caller logs it.
+-- The orgs row is locked FOR UPDATE first: a concurrent tenant transaction inserting a child
+-- row (an audit event, say) holds KEY SHARE on it through its foreign key, so the lock waits
+-- for that transaction to finish and the audit delete below then sees its rows. Without the
+-- lock, a row committed between the two deletes would be cascaded as the owner and abort the
+-- erasure. Nothing is audited: the tenant that would own the event no longer exists; the
+-- caller logs it.
 CREATE FUNCTION retention.delete_org(org uuid)
   RETURNS TABLE (table_name text, deleted bigint)
   LANGUAGE plpgsql SECURITY DEFINER
@@ -198,7 +208,7 @@ DECLARE
   due timestamptz;
   n bigint;
 BEGIN
-  SELECT o.delete_after INTO due FROM public.orgs o WHERE o.id = org;
+  SELECT o.delete_after INTO due FROM public.orgs o WHERE o.id = org FOR UPDATE;
   IF NOT FOUND OR due IS NULL THEN
     RAISE EXCEPTION 'org % is not scheduled for deletion', org
       USING ERRCODE = 'invalid_parameter_value';
@@ -230,4 +240,11 @@ GRANT EXECUTE ON FUNCTION retention.purge_jobs(timestamptz) TO rocky_app;
 GRANT EXECUTE ON FUNCTION retention.purge_audit_events(timestamptz) TO rocky_app;
 GRANT EXECUTE ON FUNCTION retention.delete_org(uuid) TO rocky_app;
 
-RESET ROLE;
+-- Hand the functions to rocky_retention (SECURITY DEFINER runs as the owner). The new owner
+-- must hold CREATE on the schema for the transfer; it is taken away again right after.
+GRANT CREATE ON SCHEMA retention TO rocky_retention;
+ALTER FUNCTION retention.purge_analyses(timestamptz) OWNER TO rocky_retention;
+ALTER FUNCTION retention.purge_jobs(timestamptz) OWNER TO rocky_retention;
+ALTER FUNCTION retention.purge_audit_events(timestamptz) OWNER TO rocky_retention;
+ALTER FUNCTION retention.delete_org(uuid) OWNER TO rocky_retention;
+REVOKE CREATE ON SCHEMA retention FROM rocky_retention;

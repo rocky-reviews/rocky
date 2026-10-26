@@ -5,4 +5,4 @@ export {
   startPostgres,
   type TestPostgres,
 } from "./postgres.js";
-export { newOrgId, seedOrg, type SeededOrg } from "./fixtures.js";
+export { newOrgId, plantAuditEvent, seedOrg, type SeededOrg } from "./fixtures.js";

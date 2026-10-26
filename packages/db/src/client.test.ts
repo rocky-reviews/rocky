@@ -414,6 +414,22 @@ describe("withOrg", () => {
       expect((await tx.query<Record<string, number>>("select 1 as a$x$")).rows[0]?.["a$x$"]).toBe(
         1,
       );
+      // Final review: `do`, `create`, `call` and pg_settings only matter at the statement head.
+      expect((await tx.query<{ do: number }>(`select 1 as "do"`)).rows[0]?.do).toBe(1);
+      expect(
+        (
+          await tx.query(
+            "insert into memory_entries (kind, content) values ('note', 'conflict') on conflict do nothing",
+          )
+        ).rowCount,
+      ).toBe(1);
+      expect(
+        (await tx.query<{ n: string }>("select count(*)::text as n from pg_catalog.pg_settings"))
+          .rows[0]?.n,
+      ).toMatch(/^\d+$/);
+      expect((await tx.query<{ v: string }>("select 'create table x' as v")).rows[0]?.v).toBe(
+        "create table x",
+      );
     });
   });
 
@@ -461,6 +477,26 @@ describe("withOrg", () => {
       `select u&"set_conf\\0069g"('app.org_id', $1, true)`,
       "select u&'x' as v; commit",
       "select 1 as a$x$; commit; select 'a$x$' as b",
+      // Final review: procedural code and indirect set_config. The database refuses these too
+      // (isolation.test.ts); the guard is the second layer.
+      "do $x$ begin perform set_config('app.org_id', 'x', true); end $x$",
+      "DO LANGUAGE plpgsql $$ begin null; end $$",
+      "/* c */ do $$ begin null; end $$",
+      "call public.p()",
+      "create function public.f() returns int language sql as 'select 1'",
+      "create or replace procedure public.p() language sql as 'select 1'",
+      "create temp table t (id int)",
+      "update pg_catalog.pg_settings set setting = 'x' where name = 'app.org_id'",
+      "update pg_settings set setting = 'x' where name = 'app.org_id'",
+      `update "pg_catalog" . "pg_settings" set setting = 'x'`,
+      "alter role current_user set app.org_id = 'x'",
+      "alter user current_user set search_path = public",
+      "select ts_stat('select set_config(''app.org_id'', ''x'', true)::tsvector')",
+      "select ts_stat /* x */ ('select 1', 'x')",
+      "select ts_rewrite('a'::tsquery, 'select set_config(''app.org_id'', ''x'', true)::tsquery')",
+      "select query_to_xml('select 1', false, false, '')",
+      "select query_to_xmlschema('select 1', false, false, '')",
+      "select pg_catalog.query_to_xml_and_xmlschema('select 1', false, false, '')",
     ];
     for (const sql of forbidden) {
       const params = (sql.match(/\$\d/g) ?? []).map(() => "x");

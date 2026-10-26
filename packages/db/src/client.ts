@@ -88,16 +88,28 @@ interface Scope {
 // --- Statement guard ------------------------------------------------------------------------
 
 /**
- * Best-effort denylist for statements that would alter the transaction or the tenant context
- * from inside `withOrg` (the commit-time recheck of `app.org_id` is the real guarantee). The
- * text is normalised first: comments removed, string literals blanked, quoted identifiers
- * unquoted, lower-cased, whitespace collapsed. The library itself never issues savepoints, so
- * those are refused along with everything else that moves the transaction.
+ * Second-layer denylist for statements that would alter the transaction or the tenant context
+ * from inside `withOrg`. The first layer is the database: the application role cannot run
+ * procedural code (no USAGE on any trusted language, no CREATE on any schema), cannot write
+ * `pg_settings` and cannot execute the catalog functions that run SQL text (ADR 0005 §2, §3),
+ * so every statement it sends is one the guard can read. The commit-time recheck of
+ * `app.org_id` then detects a change that persisted to commit. The text is normalised first:
+ * comments removed, string literals blanked, quoted identifiers unquoted, lower-cased,
+ * whitespace collapsed. The library itself never issues savepoints, so those are refused along
+ * with everything else that moves the transaction. `DO`, `CALL` and `CREATE` have no place in
+ * a tenant transaction (and the role could not run them anyway); `ALTER ROLE … SET` would
+ * persist session defaults; `UPDATE pg_settings` is `set_config` by another name.
  */
 const FORBIDDEN_HEAD =
-  /^(?:begin|start|commit|end|rollback|abort|savepoint|release|prepare|discard|reset|set (?:local |session )?(?:role|session authorization|transaction|app ?\.))\b/;
+  /^(?:begin|start|commit|end|rollback|abort|savepoint|release|prepare|discard|reset|do|call|create|alter (?:role|user|system)|update (?:pg_catalog ?\. ?)?pg_settings|set (?:local |session )?(?:role|session authorization|transaction|app ?\.))\b/;
 /** Any set_config call: the only legitimate one is withOrg's own. */
 const SET_CONFIG = /\bset_config ?\(/;
+/**
+ * pg_catalog functions that execute their text argument through SPI; a `set_config` inside that
+ * literal is invisible after blanking. EXECUTE on them is revoked from PUBLIC at provisioning;
+ * this refuses them by name as well (isolation.test.ts proves the revoke).
+ */
+const SPI_FUNCTION = /\b(?:query_to_xml(?:schema|_and_xmlschema)?|ts_stat|ts_rewrite) ?\(/;
 /** Unicode-escape syntax (`u&'…'`, `u&"…"`) can spell anything; refused outright. */
 const UNICODE_ESCAPE = /(?:^|[^a-z0-9_$])u&["']/i;
 const DOLLAR_TAG = /^\$([a-z_][a-z0-9_]*)?\$/i;
@@ -191,6 +203,11 @@ const checkStatement = (sql: string): void => {
   }
   if (SET_CONFIG.test(text)) {
     throw new TenantContextError("withOrg: set_config is not allowed inside a tenant transaction");
+  }
+  if (SPI_FUNCTION.test(text)) {
+    throw new TenantContextError(
+      "withOrg: functions that execute SQL text are not allowed inside a tenant transaction",
+    );
   }
   if (FORBIDDEN_HEAD.test(text.replace(/^[( ]+/, ""))) {
     throw new TenantContextError(

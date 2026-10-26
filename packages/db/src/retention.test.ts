@@ -1,4 +1,5 @@
 import type { Clock } from "@rocky-reviews/core";
+import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import {
@@ -13,6 +14,7 @@ import * as schema from "./schema.js";
 import {
   CONTAINER_TIMEOUT_MS,
   newOrgId,
+  plantAuditEvent,
   seedOrg,
   startPostgres,
   type SeededOrg,
@@ -29,6 +31,7 @@ const DAY = 86_400_000;
 const fixedClock = (at: Date): Clock => ({ now: () => at });
 
 let pgs: Awaited<ReturnType<typeof startPostgres>>;
+let superuser: pg.Pool;
 let db: Db;
 let orgA: SeededOrg;
 let orgB: SeededOrg;
@@ -37,6 +40,7 @@ const NOW = new Date(Date.now() - DAY);
 
 beforeAll(async () => {
   pgs = await startPostgres();
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   orgA = await seedOrg(db, newOrgId(), { installationId: 1, createdAt: NOW });
   orgB = await seedOrg(db, newOrgId(), { installationId: 2, createdAt: NOW });
@@ -44,6 +48,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await db?.close();
+  await superuser?.end();
   await pgs?.stop();
 });
 
@@ -64,15 +69,9 @@ const plant = async (org: SeededOrg, label: string, at: Date): Promise<void> => 
       createdAt: at,
       finishedAt: at,
     });
-    await tx.insert(schema.auditEvents).values({
-      actorType: "system",
-      actorId: "test",
-      action: `planted.${label}`,
-      targetType: "org",
-      targetId: org.orgId,
-      createdAt: at,
-    });
   });
+  // Audit rows cannot be backdated by the app (stamp trigger); plant them as the superuser.
+  await plantAuditEvent(superuser, org.orgId, { action: `planted.${label}`, at });
 };
 
 const remaining = async (org: SeededOrg) =>
