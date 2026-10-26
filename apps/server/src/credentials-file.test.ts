@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rm,
@@ -143,9 +144,14 @@ describe("writeCredentialsOnce", () => {
     const file = join(dir, "nested", "github-app.env");
     const text = credentialsEnvText(secrets());
     await writeCredentialsOnce(file, text);
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    // One handle for the mode and the contents, so both describe the same file.
+    const handle = await open(file, "r");
+    const [st, written] = await Promise.all([handle.stat(), handle.readFile("utf8")]).finally(() =>
+      handle.close(),
+    );
+    expect(st.mode & 0o777).toBe(0o600);
     expect((await stat(join(dir, "nested"))).mode & 0o777).toBe(0o700);
-    expect(await readFile(file, "utf8")).toBe(text);
+    expect(written).toBe(text);
     // No temporary file left behind.
     expect(await readdir(join(dir, "nested"))).toStrictEqual(["github-app.env"]);
   });

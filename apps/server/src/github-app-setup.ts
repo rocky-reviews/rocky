@@ -39,6 +39,8 @@ export const SETUP_SESSION_TTL_MS = 60 * 60 * 1000;
 export const SETUP_STATE_TTL_MS = 30 * 60 * 1000;
 /** Outstanding states per session; older ones are dropped. */
 const MAX_STATES = 10;
+/** Wrong setup tokens tolerated before token redemption locks until the server restarts. */
+export const MAX_TOKEN_FAILURES = 20;
 
 export interface GitHubAppSetupConfig {
   publicUrl: URL;
@@ -140,6 +142,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
   const now = deps.now ?? Date.now;
   const tokenHash = sha256(deps.token);
   let tokenUsed = false;
+  let tokenFailures = 0;
   let done = false;
   let exchanging = false;
   /** Keyed by sha256(session id) hex; the cookie value is never stored. */
@@ -209,9 +212,14 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
 
       if (token !== undefined) {
         // Hash both sides to a fixed length, then compare in constant time.
-        const ok = token !== null && !tokenUsed && timingSafeEqual(sha256(token), tokenHash);
+        // The token is 256-bit, so guessing is hopeless; the lockout still bounds attempts (a
+        // rate limit for a route that has no other client to serve).
+        const locked = tokenFailures >= MAX_TOKEN_FAILURES;
+        const ok =
+          token !== null && !tokenUsed && !locked && timingSafeEqual(sha256(token), tokenHash);
         if (!ok) {
-          log(request, "warn", "bad_token");
+          if (!locked) tokenFailures += 1;
+          log(request, "warn", locked ? "token_locked" : "bad_token");
           return forbidden(reply);
         }
         tokenUsed = true;

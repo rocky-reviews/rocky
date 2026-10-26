@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
 import { createHash } from "node:crypto";
 import {
+  MAX_TOKEN_FAILURES,
   STYLE,
   SETUP_COOKIE,
   SETUP_SESSION_TTL_MS,
@@ -204,6 +205,26 @@ describe("setup token (one-time, from the server terminal)", () => {
     }
   });
 
+  it("locks token redemption after too many wrong tokens, even for the right one", async () => {
+    for (let i = 0; i < MAX_TOKEN_FAILURES; i++) {
+      const wrong = randomBytes(32).toString("base64url");
+      const res = await h.app.inject({ method: "GET", url: `/setup/github-app?token=${wrong}` });
+      expect(res.statusCode).toBe(403);
+    }
+    const res = await h.app.inject({ method: "GET", url: `/setup/github-app?token=${h.token}` });
+    expect(res.statusCode).toBe(403);
+    expect(setCookieOf(res)).toBeUndefined();
+  });
+
+  it("still accepts the right token after fewer wrong ones than the limit", async () => {
+    for (let i = 0; i < MAX_TOKEN_FAILURES - 1; i++) {
+      const wrong = randomBytes(32).toString("base64url");
+      await h.app.inject({ method: "GET", url: `/setup/github-app?token=${wrong}` });
+    }
+    const res = await h.app.inject({ method: "GET", url: `/setup/github-app?token=${h.token}` });
+    expect(res.statusCode).toBe(303);
+  });
+
   it("exchanges the token once for an HttpOnly, SameSite=Lax session and redirects to a fixed path", async () => {
     const res = await h.app.inject({ method: "GET", url: `/setup/github-app?token=${h.token}` });
     expect(res.statusCode).toBe(303);
@@ -371,9 +392,13 @@ describe("callback", () => {
     expect(res.statusCode).toBe(200);
     expect(h.calls).toStrictEqual([`https://api.github.com/app-manifests/${CODE}/conversions`]);
 
-    const st = await stat(h.file);
+    // One handle for the mode and the contents, so both describe the same file.
+    const handle = await open(h.file, "r");
+    const [st, text] = await Promise.all([handle.stat(), handle.readFile("utf8")]).finally(() =>
+      handle.close(),
+    );
     expect(st.mode & 0o777).toBe(0o600);
-    const env = parseEnv(await readFile(h.file, "utf8"));
+    const env = parseEnv(text);
     expect(env["GITHUB_APP_ID"]).toBe("98765");
     expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(PEM);
     expect(env["GITHUB_APP_CLIENT_SECRET"]).toBe(body.client_secret);
