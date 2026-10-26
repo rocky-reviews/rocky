@@ -9,12 +9,16 @@ export const MAX_STRING_LENGTH = 8192;
  * cut is still recognised. Covers every pattern below except a JWT with 4 KiB segments.
  */
 export const SCAN_MARGIN = 4096;
+/** Longest object or Map key emitted. */
+export const MAX_KEY_LENGTH = 256;
 /** Nesting limit for the deep scrub. */
 export const MAX_DEPTH = 8;
 /** Object entries and array items visited per log call. */
 export const MAX_NODES = 1000;
-/** String characters scanned per log call; further strings are replaced by a marker. */
+/** String characters (values and keys) scanned per log call; further strings become a marker. */
 export const MAX_CHARS_PER_CALL = 65_536;
+
+const UNREADABLE = "[unreadable]";
 
 interface Pattern {
   readonly kind: string;
@@ -58,6 +62,11 @@ const PATTERNS: readonly Pattern[] = [
     // The TLD must be alphabetic so package specifiers (`pino@10.4.0`) are left alone.
     regex: /[A-Za-z0-9._%+-]{1,64}@(?:[A-Za-z0-9-]{1,63}\.){1,8}[A-Za-z]{2,63}\b/g,
   },
+  {
+    kind: "email",
+    // URL-encoded form (`jane%40example.com`, dots possibly as `%2E`), as found in query strings.
+    regex: /[A-Za-z0-9._%+-]{1,64}%40(?:[A-Za-z0-9-]{1,63}(?:\.|%2[Ee])){1,8}[A-Za-z]{2,63}\b/g,
+  },
 ];
 
 const PEM_BEGIN = /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----/g;
@@ -90,7 +99,7 @@ export const scrubSecrets = (text: string): string => {
   return out;
 };
 
-/** Per-log-call accounting shared by every string and object the call touches. */
+/** Per-log-call accounting shared by every string, key and object the call touches. */
 export interface ScrubBudget {
   nodes: number;
   chars: number;
@@ -117,6 +126,10 @@ export const scrubString = (text: string, budget?: ScrubBudget): string => {
   return `${scrubbed.slice(0, MAX_STRING_LENGTH)}…[truncated ${text.length - MAX_STRING_LENGTH} chars]`;
 };
 
+/** Keys are text too: a token used as a key is scrubbed, and a huge key is cut and budgeted. */
+const scrubKey = (key: string, budget: ScrubBudget): string =>
+  scrubString(key.length > MAX_KEY_LENGTH ? `${key.slice(0, MAX_KEY_LENGTH)}…` : key, budget);
+
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   if (typeof value !== "object" || value === null) return false;
   const proto: unknown = Object.getPrototypeOf(value);
@@ -124,8 +137,32 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
 };
 
 const typeName = (value: object): string => {
-  const name = (value as { constructor?: { name?: unknown } }).constructor?.name;
-  return typeof name === "string" && name !== "" ? name : "Object";
+  try {
+    const name = (value as { constructor?: { name?: unknown } }).constructor?.name;
+    return typeof name === "string" && name !== "" ? name : "Object";
+  } catch {
+    return "Object";
+  }
+};
+
+/**
+ * Own enumerable entries, read one property at a time: a throwing getter marks that property
+ * `[unreadable]` instead of failing the whole log call (and leaking through the thrown error).
+ */
+const readEntries = (value: object): [string, unknown][] | undefined => {
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return undefined;
+  }
+  return keys.map((key) => {
+    try {
+      return [key, (value as Record<string, unknown>)[key]];
+    } catch {
+      return [key, UNREADABLE];
+    }
+  });
 };
 
 const walkEntry = (
@@ -142,6 +179,24 @@ const walkEntry = (
   return walk(value, depth + 1, budget);
 };
 
+/**
+ * Assigning `out["__proto__"]` would replace the prototype (and turn the payload into
+ * `[object Object]`); an own `__proto__` key from JSON input is defined as an ordinary property.
+ * Pino needs real `Object.prototype` objects (`hasOwnProperty`), so a null prototype is not an option.
+ */
+export const setKey = (out: Record<string, unknown>, key: string, value: unknown): void => {
+  if (key === "__proto__") {
+    Object.defineProperty(out, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  } else {
+    out[key] = value;
+  }
+};
+
 const walkObject = (
   entries: Iterable<[string, unknown]>,
   depth: number,
@@ -154,7 +209,7 @@ const walkObject = (
       out["…"] = "[truncated]";
       break;
     }
-    out[key] = walkEntry(key, item, depth, budget, ofError);
+    setKey(out, scrubKey(key, budget), walkEntry(key, item, depth, budget, ofError));
   }
   return out;
 };
@@ -178,7 +233,12 @@ const walkError = (error: Error, depth: number, budget: ScrubBudget): Record<str
   };
   if (typeof error.stack === "string") out["stack"] = scrubString(error.stack, budget);
   // Own enumerable properties such as `code`, `statusCode`, `config` or `response`.
-  Object.assign(out, walkObject(Object.entries(error), depth, budget, true));
+  const entries = readEntries(error);
+  if (entries === undefined) out["props"] = UNREADABLE;
+  else {
+    const props = walkObject(entries, depth, budget, true);
+    for (const key of Object.keys(props)) setKey(out, key, props[key]);
+  }
   if (error.cause !== undefined) out["cause"] = walk(error.cause, depth + 1, budget);
   return out;
 };
@@ -190,32 +250,33 @@ const sanitiseUrl = (url: URL, budget: ScrubBudget): string =>
 /**
  * Class instances are never passed through (their getters and `toJSON` would run inside pino,
  * and their fields would escape redaction): known shapes are converted to plain data and
- * walked, everything else becomes an opaque `[object Name]`.
+ * walked, everything else becomes an opaque `[object Name]`. Every property read happens inside
+ * the try, so a throwing getter also ends as the opaque form.
  */
 const walkInstance = (value: object, depth: number, budget: ScrubBudget): unknown => {
-  if (value instanceof URL) return sanitiseUrl(value, budget);
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer)
-    return `[object ${typeName(value)}]`;
-  if (value instanceof Map) {
-    return walkObject(
-      [...value].map(([k, v]): [string, unknown] => [String(k), v]),
-      depth,
-      budget,
-    );
-  }
-  if (value instanceof Set) return walkArray(value, depth, budget);
-  if (typeof Headers !== "undefined" && value instanceof Headers) {
-    return walkObject(value.entries(), depth, budget);
-  }
-  const toJSON = (value as { toJSON?: unknown }).toJSON;
-  if (typeof toJSON === "function") {
-    try {
-      return walk((toJSON as () => unknown).call(value), depth + 1, budget);
-    } catch {
-      return `[object ${typeName(value)}]`;
+  const opaque = `[object ${typeName(value)}]`;
+  try {
+    if (value instanceof URL) return sanitiseUrl(value, budget);
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return opaque;
+    if (value instanceof Map) {
+      return walkObject(
+        [...value].map(([k, v]): [string, unknown] => [String(k), v]),
+        depth,
+        budget,
+      );
     }
+    if (value instanceof Set) return walkArray(value, depth, budget);
+    if (typeof Headers !== "undefined" && value instanceof Headers) {
+      return walkObject(value.entries(), depth, budget);
+    }
+    const toJSON = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJSON === "function") {
+      return walk((toJSON as () => unknown).call(value), depth + 1, budget);
+    }
+    return opaque;
+  } catch {
+    return opaque;
   }
-  return `[object ${typeName(value)}]`;
 };
 
 const walk = (value: unknown, depth: number, budget: ScrubBudget): unknown => {
@@ -226,14 +287,18 @@ const walk = (value: unknown, depth: number, budget: ScrubBudget): unknown => {
   budget.seen.add(value);
   if (value instanceof Error) return walkError(value, depth, budget);
   if (Array.isArray(value)) return walkArray(value, depth, budget);
-  if (isPlainObject(value)) return walkObject(Object.entries(value), depth, budget);
+  if (isPlainObject(value)) {
+    const entries = readEntries(value);
+    return entries === undefined ? UNREADABLE : walkObject(entries, depth, budget);
+  }
   return walkInstance(value, depth, budget);
 };
 
 /**
  * Deep copy of a log payload with sensitive keys redacted at any depth, secrets scrubbed from
- * every string, Error instances serialised, class instances normalised, and depth/size/cycle
- * limits applied against one budget per log call. Primitives are returned as they are.
+ * every string and key, Error instances serialised, class instances normalised, and
+ * depth/size/cycle limits applied against one budget per log call. Primitives are returned as
+ * they are. Never throws on reading the input.
  */
 export const scrubValue = (value: unknown, budget: ScrubBudget = newScrubBudget()): unknown =>
   walk(value, 0, budget);

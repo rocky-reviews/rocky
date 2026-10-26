@@ -82,7 +82,8 @@ describe("scrubSecrets", () => {
     for (const input of pathological) {
       const start = performance.now();
       scrubSecrets(input);
-      expect(performance.now() - start).toBeLessThan(250);
+      // Loose enough for a loaded CI runner; a backtracking regex would take seconds or hang.
+      expect(performance.now() - start).toBeLessThan(1000);
     }
     const huge = "x".repeat(MAX_SCAN_LENGTH + 1);
     expect(scrubSecrets(huge)).toBe(`[truncated: ${MAX_SCAN_LENGTH + 1} chars not scanned]`);

@@ -10,7 +10,7 @@ import {
 } from "pino";
 import { traceContextMixin } from "./otel.js";
 import { REDACTED, REDACT_PATHS, isErrorCodeIdentifier } from "./redact-paths.js";
-import { newScrubBudget, scrubString, scrubValue, type ScrubBudget } from "./scrub.js";
+import { newScrubBudget, scrubString, scrubValue, setKey, type ScrubBudget } from "./scrub.js";
 
 export interface CreateLoggerOptions {
   /** Defaults to `LOG_LEVEL`, then `info`. */
@@ -48,21 +48,22 @@ const applySerializers = (
     const serializer = serializers[key];
     if (typeof serializer === "function" && typeof value === "object" && value !== null) {
       try {
-        out[key] = serializer(value);
+        setKey(out, key, serializer(value));
         continue;
       } catch {
         // fall through: the walker renders the instance opaquely
       }
     }
-    out[key] = value;
+    setKey(out, key, value); // never `out[key] =`: an own `__proto__` key would replace the prototype
   }
   return out;
 };
 
 /**
- * Runs before pino touches the arguments: deep-scrubs the merging object (sensitive keys at any
- * depth, secrets inside strings, Error and class instances), scrubs the message and the
- * interpolation values, all against one budget. Pino's own `redact` paths then run as a second,
+ * Runs before pino touches the arguments: scrubs the message and interpolation values first
+ * (so a huge payload cannot spend the budget the message needs), then deep-scrubs the merging
+ * object (sensitive keys at any depth, secrets inside strings and keys, Error and class
+ * instances), all against one budget. Pino's own `redact` paths then run as a second,
  * independent layer.
  */
 function scrubLogMethod(this: Logger, args: Parameters<LogFn>, method: LogFn): void {
@@ -73,13 +74,14 @@ function scrubLogMethod(this: Logger, args: Parameters<LogFn>, method: LogFn): v
   const [first, ...rest] = list;
   let out: unknown[];
   if (first instanceof Error) {
-    const tail = rest.length === 0 ? [first.message] : rest;
-    out = [{ err: scrubValue(first, budget) }, ...tail.map((a) => scrubArg(a, budget))];
+    const tail = (rest.length === 0 ? [first.message] : rest).map((a) => scrubArg(a, budget));
+    out = [{ err: scrubValue(first, budget) }, ...tail];
   } else if (isPlainObject(first)) {
-    const merge = scrubValue(applySerializers(first, serializers), budget);
-    out = [merge, ...rest.map((a) => scrubArg(a, budget))];
+    const tail = rest.map((a) => scrubArg(a, budget));
+    out = [scrubValue(applySerializers(first, serializers), budget), ...tail];
   } else if (typeof first === "object" && first !== null) {
-    out = [scrubValue(first, budget), ...rest.map((a) => scrubArg(a, budget))];
+    const tail = rest.map((a) => scrubArg(a, budget));
+    out = [scrubValue(first, budget), ...tail];
   } else {
     out = list.map((a) => scrubArg(a, budget));
   }
@@ -93,7 +95,8 @@ const censor = (value: unknown, path: string[]): unknown =>
 /**
  * The project logger. Every line is JSON; sensitive keys are redacted, secrets are scrubbed
  * from text, class instances are normalised, and OpenTelemetry trace ids are attached when a
- * span is active. Child bindings go through the same scrub, so `log.child({...})` is always safe.
+ * span is active. Child bindings go through the same scrub, so `log.child({...})` and
+ * `log.setBindings({...})` are always safe.
  */
 export const createLogger = (name: string, options: CreateLoggerOptions = {}): Logger => {
   const loggerOptions: LoggerOptions = {
@@ -116,18 +119,24 @@ export const createLogger = (name: string, options: CreateLoggerOptions = {}): L
 };
 
 /**
- * Child bindings are serialised once, at `child()` time, and pino applies `formatters.bindings`
- * to the root only, so the hook never sees them. Wrapping `child` on the root instance scrubs
- * them first; children are created with `Object.create(parent)`, so grandchildren inherit the
- * wrapper too.
+ * Bindings are serialised once, when `child()` or `setBindings()` runs, and pino applies
+ * `formatters.bindings` to the root only, so the hook never sees them. Wrapping both methods on
+ * the root instance scrubs them first; children are created with `Object.create(parent)`, so
+ * grandchildren inherit the wrappers too.
  */
 const withScrubbedBindings = (logger: Logger): Logger => {
   type Child = (this: Logger, bindings: Bindings, options?: ChildLoggerOptions) => Logger;
+  type SetBindings = (this: Logger, bindings: Bindings) => void;
   const originalChild = logger.child as unknown as Child;
+  const originalSetBindings = logger.setBindings as unknown as SetBindings;
   const scrubbedChild: Child = function (bindings, options) {
     return originalChild.call(this, scrubValue(bindings) as Bindings, options);
   };
+  const scrubbedSetBindings: SetBindings = function (bindings) {
+    originalSetBindings.call(this, scrubValue(bindings) as Bindings);
+  };
   (logger as { child: unknown }).child = scrubbedChild;
+  (logger as { setBindings: unknown }).setBindings = scrubbedSetBindings;
   return logger;
 };
 

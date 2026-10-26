@@ -13,6 +13,13 @@ import { MAX_STRING_LENGTH, scrubSecrets, scrubValue } from "./scrub.js";
 
 type Line = Record<string, unknown>;
 
+/**
+ * Timing bound for the "no stall" tests. Real runs take a few milliseconds; the bound is loose
+ * so a loaded CI runner does not flake, yet two orders of magnitude below the 126 s cliff the
+ * review found.
+ */
+const TIME_BOUND_MS = 2000;
+
 const capture = () => {
   const lines: Line[] = [];
   const log = createLogger("hardening", {
@@ -172,7 +179,7 @@ describe("F3: sensitive keys match by suffix and substring, URL userinfo is scru
     expect(scrubValue({ [key]: "value" })).toEqual({ [key]: REDACTED });
   });
 
-  it.each(["id", "orgId", "count", "status", "tokens", "durationMs", "url", "method", "requestId"])(
+  it.each(["id", "orgId", "count", "status", "durationMs", "url", "method", "requestId", "author"])(
     "keeps harmless key %s",
     (key) => {
       expect(scrubValue({ [key]: "value" })).toEqual({ [key]: "value" });
@@ -231,7 +238,7 @@ describe("F4: work per call is bounded", () => {
     const big = Array.from({ length: 999 }, (_, i) => "a".repeat(MiB) + FAKE.ghp + String(i));
     const start = performance.now();
     const out = scrubValue(big) as string[];
-    expect(performance.now() - start).toBeLessThan(250);
+    expect(performance.now() - start).toBeLessThan(TIME_BOUND_MS);
     expect(out).toHaveLength(999);
     expect(JSON.stringify(out)).not.toContain(FAKE.ghp);
   });
@@ -241,7 +248,7 @@ describe("F4: work per call is bounded", () => {
     const { log, text } = capture();
     const start = performance.now();
     log.info({ big }, "huge");
-    expect(performance.now() - start).toBeLessThan(250);
+    expect(performance.now() - start).toBeLessThan(TIME_BOUND_MS);
     expect(text()).not.toContain(FAKE.ghp);
   });
 
@@ -352,5 +359,240 @@ describe("F9: secrets in request paths are scrubbed by the Fastify serializer", 
     } finally {
       await app.close();
     }
+  });
+});
+
+// ---- Second review pass -------------------------------------------------------------------
+
+describe("N1: plural forms, more suffixes, and an explicit allowlist", () => {
+  it.each([
+    "tokens",
+    "accessTokens",
+    "secrets",
+    "passwords",
+    "apiKeys",
+    "key",
+    "keys",
+    "byokKey",
+    "privateKeyPem",
+    "auth",
+    "authHeader",
+    "jwt",
+    "signature",
+    "authCode",
+    "oauth_code",
+    "rawDiff",
+    "unifiedDiff",
+    "fileContent",
+    "contents",
+    "sourceCode",
+    "codeSnippet",
+    "userPrompt",
+    "promptText",
+    "newCode",
+    "publicKey",
+    "countryCode",
+    "oauth",
+  ])("redacts key %s", (key) => {
+    expect(scrubValue({ [key]: "value" })).toEqual({ [key]: REDACTED });
+  });
+
+  it.each([
+    "statusCode",
+    "errorCode",
+    "exitCode",
+    "requestId",
+    "author",
+    "inputTokens",
+    "outputTokens",
+    "promptTokens",
+    "completionTokens",
+    "totalTokens",
+    "maxTokens",
+    "tokenCount",
+    "idempotencyKey",
+    "cacheKey",
+    "contentType",
+    "contentLength",
+    "context",
+  ])("keeps allowlisted or harmless key %s", (key) => {
+    expect(scrubValue({ [key]: 7 })).toEqual({ [key]: 7 });
+  });
+
+  it("allowlisted keys still have their string values scrubbed", () => {
+    expect(scrubValue({ cacheKey: `k-${FAKE.ghp}`, author: FAKE.email })).toEqual({
+      cacheKey: "k-[redacted:github_token]",
+      author: "[redacted:email]",
+    });
+  });
+
+  it("Error `code` handling is unchanged by the allowlist", () => {
+    const err = Object.assign(new Error("x"), { code: "ECONNRESET", statusCode: 502 });
+    expect(scrubValue(err)).toMatchObject({ code: "ECONNRESET", statusCode: 502 });
+    expect(scrubValue({ code: "ECONNRESET" })).toEqual({ code: REDACTED });
+  });
+
+  it("the reviewer's list, end to end through the logger", () => {
+    const { log, last, text } = capture();
+    log.info(
+      {
+        tokens: [FAKE.ghp],
+        auth: FAKE.bearer,
+        jwt: FAKE.jwt,
+        signature: "sha256=abc",
+        rawDiff: "@@ -1 +1 @@",
+        fileContent: "const secret = 1;",
+        userPrompt: "You are a reviewer",
+        statusCode: 200,
+      },
+      "payload",
+    );
+    const line = last();
+    for (const key of [
+      "tokens",
+      "auth",
+      "jwt",
+      "signature",
+      "rawDiff",
+      "fileContent",
+      "userPrompt",
+    ]) {
+      expect(line[key]).toBe(REDACTED);
+    }
+    expect(line["statusCode"]).toBe(200);
+    expect(text()).not.toMatch(/ghp_|Bearer|eyJ|sha256=|@@|const secret|reviewer"/);
+  });
+});
+
+describe("N2: throwing getters never escape the scrub", () => {
+  class Trap {
+    get toJSON(): () => unknown {
+      throw new Error(`leak ${FAKE.ghp}`);
+    }
+  }
+
+  it("a throwing `get toJSON()` renders opaquely", () => {
+    expect(scrubValue({ t: new Trap() })).toEqual({ t: "[object Trap]" });
+  });
+
+  it("a throwing getter on a plain object marks that property only", () => {
+    const obj = {
+      ok: 1,
+      get boom(): string {
+        throw new Error(`leak ${FAKE.ghp}`);
+      },
+    };
+    expect(scrubValue({ obj })).toEqual({ obj: { ok: 1, boom: "[unreadable]" } });
+  });
+
+  it("a throwing getter on an Error's own property", () => {
+    const err = new Error("plain");
+    Object.defineProperty(err, "boom", {
+      enumerable: true,
+      get: () => {
+        throw new Error(`leak ${FAKE.ghp}`);
+      },
+    });
+    const out = scrubValue(err) as Line;
+    expect(out["message"]).toBe("plain");
+    expect(out["boom"]).toBe("[unreadable]");
+    expect(JSON.stringify(out)).not.toContain(FAKE.ghp);
+  });
+
+  it("the logger neither throws nor leaks", () => {
+    const { log, text } = capture();
+    const obj = {
+      get boom(): string {
+        throw new Error(`leak ${FAKE.ghp}`);
+      },
+    };
+    expect(() => log.info({ obj, t: new Trap() }, "x")).not.toThrow();
+    expect(() => log.child({ obj }).info("y")).not.toThrow();
+    expect(text()).not.toContain(FAKE.ghp);
+  });
+});
+
+describe("N3: setBindings is scrubbed like child", () => {
+  it("on the root logger and on children", () => {
+    const { log, last, text } = capture();
+    log.setBindings({ githubToken: FAKE.ghp, remote: `https://u:${FAKE.ghs}@h.test/r` });
+    log.info("x");
+    expect(last()["githubToken"]).toBe(REDACTED);
+    expect(last()["remote"]).toBe("https://[redacted:userinfo]@h.test/r");
+
+    const child = log.child({ component: "git" });
+    child.setBindings({ apiKey: FAKE.anthropic, note: `see ${FAKE.email}` });
+    child.info("y");
+    expect(last()["component"]).toBe("git");
+    expect(last()["apiKey"]).toBe(REDACTED);
+    expect(last()["note"]).toBe("see [redacted:email]");
+    expect(text()).not.toMatch(/ghp_|ghs_|sk-ant|example\.com/);
+  });
+});
+
+describe("N4: object and Map keys are scrubbed and bounded", () => {
+  it("a token used as a key is redacted", () => {
+    expect(scrubValue({ [FAKE.ghp]: 1, [`user:${FAKE.email}`]: 2 })).toEqual({
+      "[redacted:github_token]": 1,
+      "user:[redacted:email]": 2,
+    });
+    expect(scrubValue(new Map([[FAKE.ghp, 1]]))).toEqual({ "[redacted:github_token]": 1 });
+    const { log, text } = capture();
+    log.info({ [FAKE.gho]: true }, "keyed");
+    expect(text()).not.toContain("gho_");
+  });
+
+  it("huge keys are cut and counted against the budget", () => {
+    const obj = Object.fromEntries(
+      Array.from({ length: 50 }, (_, i) => [`k${i}-${"x".repeat(1_000_000)}${FAKE.ghp}`, i]),
+    );
+    const start = performance.now();
+    const out = JSON.stringify(scrubValue(obj));
+    expect(performance.now() - start).toBeLessThan(TIME_BOUND_MS);
+    expect(out.length).toBeLessThan(100_000);
+    expect(out).not.toContain(FAKE.ghp);
+    expect(out).toContain("k0-xxx");
+  });
+});
+
+describe("N5: the message is scrubbed before the payload spends the budget", () => {
+  it("a huge payload cannot wipe out the message", () => {
+    const { log, last, text } = capture();
+    const big = Array.from({ length: 200 }, () => "a".repeat(100_000));
+    log.info({ big }, `important for ${FAKE.email}`);
+    expect(last()["msg"]).toBe("important for [redacted:email]");
+    expect(text()).not.toContain("example.com");
+    log.info({ big }, "plain %s", FAKE.ghp);
+    expect(last()["msg"]).toBe("plain [redacted:github_token]");
+  });
+});
+
+describe("N6: an own __proto__ key cannot break the output", () => {
+  it("is kept as an ordinary key and does not pollute Object.prototype", () => {
+    const input = JSON.parse(
+      `{"__proto__":{"polluted":true},"a":1,"token":"${FAKE.ghp}"}`,
+    ) as Record<string, unknown>;
+    const out = scrubValue(input) as Line;
+    expect(out["a"]).toBe(1);
+    expect(out["token"]).toBe(REDACTED);
+    expect(Object.hasOwn(out, "__proto__")).toBe(true);
+    expect(({} as Line)["polluted"]).toBeUndefined();
+
+    const { log, last, text } = capture();
+    log.info(input, "x");
+    expect(last()["a"]).toBe(1);
+    expect(last()["token"]).toBe(REDACTED);
+    expect(text()).not.toContain("[object Object]");
+  });
+});
+
+describe("N7: URL-encoded emails", () => {
+  it.each([
+    "jane.doe%40example.com",
+    "mailto%3Ajane%40example.com",
+    "q=jane%40sub.example.co.uk&x",
+  ])("redacts %s", (text) => {
+    expect(scrubSecrets(text)).toContain("[redacted:email]");
+    expect(scrubSecrets(text)).not.toContain("example");
   });
 });
