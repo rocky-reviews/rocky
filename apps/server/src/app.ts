@@ -1,6 +1,7 @@
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
 
@@ -8,6 +9,8 @@ export interface AppDeps {
   checkDatabase: HealthCheck;
   /** Request logging through the project logger (P2-4). Omit for silent tests. */
   log?: Logger;
+  /** Forge webhook receiver (P3-2). Omitted when no webhook secret is configured (development). */
+  webhooks?: WebhookDeps;
 }
 
 /** Builds the HTTP app. Dependencies are passed in so tests can run it without a database. */
@@ -21,6 +24,8 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     const database = await deps.checkDatabase().catch(() => false);
     return reply.code(database ? 200 : 503).send({ ok: database, database });
   });
+
+  if (deps.webhooks !== undefined) registerWebhooks(app, deps.webhooks);
 
   return app;
 };

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Clock } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -9,12 +10,14 @@ import {
   retentionFromEnv,
   runRetention,
   setRetentionSettings,
+  WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
 } from "./retention.js";
 import * as schema from "./schema.js";
 import {
   CONTAINER_TIMEOUT_MS,
   newOrgId,
   plantAuditEvent,
+  plantWebhookDelivery,
   seedOrg,
   startPostgres,
   type SeededOrg,
@@ -104,6 +107,7 @@ describe("retentionFromEnv", () => {
       logsDays: 30,
       auditDays: 365,
       orgDeletionGraceDays: 7,
+      webhookDeliveriesDays: 30,
     });
     expect(
       retentionFromEnv({
@@ -111,8 +115,15 @@ describe("retentionFromEnv", () => {
         RETENTION_LOGS_DAYS: "14",
         RETENTION_AUDIT_DAYS: "730",
         ORG_DELETION_GRACE_DAYS: "30",
+        RETENTION_WEBHOOK_DELIVERIES_DAYS: "60",
       }),
-    ).toEqual({ analysesDays: 7, logsDays: 14, auditDays: 730, orgDeletionGraceDays: 30 });
+    ).toEqual({
+      analysesDays: 7,
+      logsDays: 14,
+      auditDays: 730,
+      orgDeletionGraceDays: 30,
+      webhookDeliveriesDays: 60,
+    });
   });
 
   it("rejects non-integers, non-positive values and an audit period under the floor", () => {
@@ -130,6 +141,11 @@ describe("retentionFromEnv", () => {
     expect(
       retentionFromEnv({ RETENTION_AUDIT_DAYS: String(AUDIT_MIN_RETENTION_DAYS) }).auditDays,
     ).toBe(AUDIT_MIN_RETENTION_DAYS);
+    expect(() =>
+      retentionFromEnv({
+        RETENTION_WEBHOOK_DELIVERIES_DAYS: String(WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS - 1),
+      }),
+    ).toThrow(/RETENTION_WEBHOOK_DELIVERIES_DAYS/);
   });
 });
 
@@ -164,15 +180,29 @@ describe("runRetention", () => {
       await plant(org, "age-29d", ageDays(29));
       await plant(org, "age-0d", NOW);
     }
+    // The webhook inbox has no org: one row per age, 30-day period.
+    for (const days of [400, 31, 30, 29, 0]) {
+      await plantWebhookDelivery(superuser, { deliveryId: randomUUID(), at: ageDays(days) });
+    }
 
     const report = await runRetention(db, { clock: fixedClock(NOW) });
 
     expect(report.ranAt).toEqual(NOW);
-    expect(report.categories.map((c) => c.category)).toEqual(["analyses", "logs", "audit"]);
+    expect(report.categories.map((c) => c.category)).toEqual([
+      "analyses",
+      "logs",
+      "audit",
+      "webhook_deliveries",
+    ]);
     const byCategory = Object.fromEntries(report.categories.map((c) => [c.category, c]));
     expect(byCategory["analyses"]).toMatchObject({ before: ageDays(90), deleted: 8, orgs: 2 });
     expect(byCategory["logs"]).toMatchObject({ before: ageDays(30), deleted: 14, orgs: 2 });
     expect(byCategory["audit"]).toMatchObject({ before: ageDays(365), deleted: 4, orgs: 2 });
+    expect(byCategory["webhook_deliveries"]).toMatchObject({
+      before: ageDays(30),
+      deleted: 2, // 400 and 31 days; the 30-day row is the kept boundary
+      orgs: 0,
+    });
 
     for (const org of [orgA, orgB]) {
       const left = await remaining(org);
@@ -222,7 +252,7 @@ describe("runRetention", () => {
 
   it("is idempotent: a second run at the same instant deletes nothing and audits nothing", async () => {
     const report = await runRetention(db, { clock: fixedClock(NOW) });
-    expect(report.categories.map((c) => c.deleted)).toEqual([0, 0, 0]);
+    expect(report.categories.map((c) => c.deleted)).toEqual([0, 0, 0, 0]);
     const events = await db.withOrg(orgA.orgId, ({ db: tx }) =>
       tx.select().from(schema.auditEvents),
     );
@@ -235,12 +265,18 @@ describe("runRetention", () => {
     expect(byCategory["analyses"]?.deleted).toBe(2); // age-90d in both orgs
     expect(byCategory["logs"]?.deleted).toBe(2); // age-30d in both orgs
     expect(byCategory["audit"]?.deleted).toBe(2); // planted.age-365d in both orgs
+    expect(byCategory["webhook_deliveries"]?.deleted).toBe(1); // the 30-day row
   });
 
   it("cannot be pushed forward: a clock in the future is clamped to the database clock", async () => {
     for (const org of [orgA, orgB]) {
       await plant(org, "clamp-fresh", NOW);
       await plant(org, "clamp-old", ageDays(400));
+    }
+    const fresh = randomUUID();
+    await plantWebhookDelivery(superuser, { deliveryId: fresh, at: NOW });
+    for (const days of [400, 401]) {
+      await plantWebhookDelivery(superuser, { deliveryId: randomUUID(), at: ageDays(days) });
     }
     const report = await runRetention(db, {
       clock: fixedClock(new Date(Date.now() + 365 * DAY)),
@@ -255,5 +291,10 @@ describe("runRetention", () => {
       expect(left.audit).toContain("planted.clamp-fresh");
       expect(left.audit).not.toContain("planted.clamp-old");
     }
+    const { rows } = await superuser.query(
+      "select 1 from app.webhook_deliveries where delivery_id = $1",
+      [fresh],
+    );
+    expect(rows).toHaveLength(1);
   });
 });

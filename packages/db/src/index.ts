@@ -27,6 +27,7 @@ export {
   runRetention,
   setRetentionSettings,
   validateRetention,
+  WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
   type RetentionCategory,
   type RetentionCategoryReport,
   type RetentionConfig,
@@ -47,4 +48,5 @@ export {
   WRAPPED_KEY_PREFIX,
   type StoredSecret,
 } from "./secrets.js";
+export { WebhookInboxError } from "./webhooks.js";
 export * as schema from "./schema.js";

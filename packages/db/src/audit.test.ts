@@ -280,7 +280,7 @@ describe("retention purge path", () => {
     expect(error.code).toBe("23514"); // check_violation
   });
 
-  it("is owned by a NOLOGIN role that owns only the four retention functions", async () => {
+  it("is owned by a NOLOGIN role that owns only the five retention functions", async () => {
     const role = await pgs.migrator.query<{
       rolcanlogin: boolean;
       rolbypassrls: boolean;
@@ -300,6 +300,7 @@ describe("retention purge path", () => {
       { kind: "function", name: "purge_analyses" },
       { kind: "function", name: "purge_audit_events" },
       { kind: "function", name: "purge_jobs" },
+      { kind: "function", name: "purge_webhook_deliveries" },
     ]);
     // The schema belongs to the migrator like every other schema; the role holds no privilege
     // on it (the transfer-time CREATE grant is revoked again inside the migration).
@@ -332,6 +333,8 @@ describe("retention purge path", () => {
       // UPDATE only so delete_org can lock the row (SELECT … FOR UPDATE); never issued otherwise.
       { table_name: "orgs", privilege_type: "UPDATE" },
       { table_name: "retention_settings", privilege_type: "SELECT" },
+      { table_name: "webhook_deliveries", privilege_type: "DELETE" },
+      { table_name: "webhook_deliveries", privilege_type: "SELECT" },
     ]);
   });
 });

@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-25
 - **Tasks:** P2-1, P2-2, P2-5, P2-6
+- **Amended by:** [ADR 0007](0007-webhook-inbox.md) (the webhook inbox is a third non-tenant
+  table in `app`; a fifth `SECURITY DEFINER` purge function)
 
 ## Context
 

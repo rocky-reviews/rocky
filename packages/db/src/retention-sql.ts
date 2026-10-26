@@ -17,6 +17,8 @@ export interface RetentionConfig {
   auditDays: number;
   /** Minimum delay between scheduling an org deletion and executing it. */
   orgDeletionGraceDays: number;
+  /** Webhook inbox rows (not tenant data). Also the delivery dedup window; at least 7 days. */
+  webhookDeliveriesDays: number;
 }
 
 /** `category` column value for each setting. */
@@ -25,7 +27,12 @@ export const SETTING_CATEGORIES: Readonly<Record<keyof RetentionConfig, string>>
   logsDays: "logs",
   auditDays: "audit",
   orgDeletionGraceDays: "org_deletion_grace",
+  webhookDeliveriesDays: "webhook_deliveries",
 };
+
+/** The webhook inbox purge (migration 0006): not per org, returns a count. `$1` is `as_of`. */
+export const PURGE_WEBHOOK_DELIVERIES_SQL =
+  "select retention.purge_webhook_deliveries($1)::text as deleted";
 
 export interface PurgeTarget {
   /** The table the category purges (for reports). */

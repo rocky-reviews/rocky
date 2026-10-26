@@ -1,0 +1,176 @@
+/**
+ * Forge port (P3-7): what the domain needs from a code host, in forge-neutral terms. GitHub is
+ * the first adapter (`packages/forge-github`); GitLab and Gitea implement the same interfaces.
+ * Nothing here names a vendor SDK, a vendor header or a vendor payload shape.
+ *
+ * Two halves:
+ * - inbound: `WebhookIngress` authenticates and decodes one webhook delivery into a minimal
+ *   `ForgeEvent`; `WebhookInbox` stores it durably, once per delivery (ADR 0007);
+ * - outbound: `Forge` reads installations and pull requests (implemented in P3-3/P3-4).
+ *
+ * Event content is untrusted. Consumers treat a `ForgeEvent` as a hint to re-read state from the
+ * forge (the source of truth), never as proof of that state.
+ */
+
+export type ForgeKind = "github" | "gitlab" | "gitea";
+
+/** A forge-side numeric id (installation, account, repository). Positive safe integer. */
+export type ForgeNumericId = number;
+
+export type ForgeAccountKind = "organization" | "user";
+
+export interface ForgeAccount {
+  readonly id: ForgeNumericId;
+  readonly login: string;
+  readonly kind: ForgeAccountKind;
+}
+
+export interface RepositoryRef {
+  readonly installationId: ForgeNumericId;
+  readonly repositoryId: ForgeNumericId;
+}
+
+export interface PullRequestRef extends RepositoryRef {
+  readonly number: number;
+}
+
+// --- Webhook events ----------------------------------------------------------------------------
+
+export const INSTALLATION_EVENT_TYPES = ["installation.created", "installation.deleted"] as const;
+export const PULL_REQUEST_EVENT_TYPES = [
+  "pull_request.opened",
+  "pull_request.synchronize",
+  "pull_request.closed",
+  "pull_request.reopened",
+] as const;
+/** Every event the domain consumes. Anything else a forge sends is acknowledged and ignored. */
+export const FORGE_EVENT_TYPES = [
+  ...INSTALLATION_EVENT_TYPES,
+  ...PULL_REQUEST_EVENT_TYPES,
+] as const;
+
+export type InstallationEventType = (typeof INSTALLATION_EVENT_TYPES)[number];
+export type PullRequestEventType = (typeof PULL_REQUEST_EVENT_TYPES)[number];
+export type ForgeEventType = (typeof FORGE_EVENT_TYPES)[number];
+
+/** App installed on / removed from an account (P3-3 creates or schedules deletion of the org). */
+export interface InstallationEvent {
+  readonly type: InstallationEventType;
+  readonly installationId: ForgeNumericId;
+  readonly account: ForgeAccount;
+}
+
+/** A pull request changed (P3-4 re-reads it from the forge and updates the mirror). */
+export interface PullRequestEvent extends PullRequestRef {
+  readonly type: PullRequestEventType;
+  /** Head commit at the time of the event: lets a consumer skip a stale delivery. */
+  readonly headSha: string;
+  /** Only meaningful for `pull_request.closed`; false otherwise. */
+  readonly merged: boolean;
+}
+
+export type ForgeEvent = InstallationEvent | PullRequestEvent;
+
+const EVENT_TYPES: ReadonlySet<string> = new Set(FORGE_EVENT_TYPES);
+
+export const isForgeEventType = (value: unknown): value is ForgeEventType =>
+  typeof value === "string" && EVENT_TYPES.has(value);
+
+export const isInstallationEvent = (event: ForgeEvent): event is InstallationEvent =>
+  event.type === "installation.created" || event.type === "installation.deleted";
+
+// --- Inbound: webhook deliveries ---------------------------------------------------------------
+
+/** One authenticated delivery, reduced to what the domain needs. */
+export interface WebhookDelivery {
+  readonly forge: ForgeKind;
+  /** The forge's delivery id (a uuid), lower-cased. The idempotency key of the delivery. */
+  readonly deliveryId: string;
+  /** sha256 of the raw body, lower-case hex: the same signed body is one delivery (replay). */
+  readonly payloadSha256: string;
+  readonly event: ForgeEvent;
+}
+
+/** Why a delivery was not accepted. Fixed codes: safe to log and to return. */
+export type WebhookRejection =
+  /** Missing, malformed or wrong signature / token. Nothing else about the request is trusted. */
+  | "unauthenticated"
+  /** Authenticated, but a required header (delivery id, event name) is missing or malformed. */
+  | "bad_headers"
+  /** Authenticated, but the body is not the media type the receiver accepts. */
+  | "unsupported_media_type"
+  /** Authenticated, but the body is not JSON or does not have the shape of the event. */
+  | "bad_payload";
+
+export type WebhookReceipt =
+  | { readonly outcome: "rejected"; readonly reason: WebhookRejection }
+  /** The forge's connectivity check. */
+  | { readonly outcome: "ping"; readonly deliveryId: string }
+  /** Authenticated, but not an event or action the domain consumes. */
+  | { readonly outcome: "ignored"; readonly deliveryId: string; readonly eventName: string }
+  | { readonly outcome: "accepted"; readonly delivery: WebhookDelivery };
+
+export interface WebhookRequest {
+  /** Header lookup by lower-case name; a repeated header must come back as `undefined`. */
+  header(name: string): string | undefined;
+  /** The raw body bytes exactly as received: authentication covers these, not a re-encoding. */
+  readonly body: Uint8Array;
+}
+
+/**
+ * Authenticates and decodes one webhook request. Must authenticate the raw body before parsing
+ * it, must not throw on any input, and must not do I/O (it runs in the request path).
+ */
+export interface WebhookIngress {
+  readonly forge: ForgeKind;
+  receive(request: WebhookRequest): WebhookReceipt;
+}
+
+/**
+ * Durable, deduplicated hand-off from the receiver to the worker (ADR 0007). `queued` means this
+ * call stored the delivery; `duplicate` means the same delivery id, or the same body, was stored
+ * before. Exactly one concurrent call for a delivery gets `queued`.
+ */
+export interface WebhookInbox {
+  record(delivery: WebhookDelivery): Promise<"queued" | "duplicate">;
+}
+
+// --- Outbound: reading from the forge (implemented in P3-3 / P3-4) ----------------------------
+
+export interface ForgeInstallation {
+  readonly id: ForgeNumericId;
+  readonly account: ForgeAccount;
+  readonly suspended: boolean;
+}
+
+export type ForgePullRequestState = "open" | "closed" | "merged";
+
+export interface ForgePullRequest {
+  readonly ref: PullRequestRef;
+  readonly title: string;
+  readonly authorLogin: string | null;
+  readonly state: ForgePullRequestState;
+  readonly headSha: string;
+  readonly baseSha: string;
+  readonly openedAt: Date;
+  readonly closedAt: Date | null;
+}
+
+export interface ForgeDiff {
+  /** Unified diff text, cut at `maxBytes`. Untrusted content. */
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/**
+ * Read access to one forge, authenticated per installation by the adapter (short-lived, scoped
+ * tokens). Grows with the tasks that need it (posting reviews P3-5, access checks P3-6).
+ */
+export interface Forge {
+  readonly kind: ForgeKind;
+  /** `null` when the installation no longer exists (uninstalled): consumers verify events here. */
+  getInstallation(installationId: ForgeNumericId): Promise<ForgeInstallation | null>;
+  getPullRequest(ref: PullRequestRef): Promise<ForgePullRequest | null>;
+  listOpenPullRequests(ref: RepositoryRef): AsyncIterable<ForgePullRequest>;
+  getPullRequestDiff(ref: PullRequestRef, options: { maxBytes: number }): Promise<ForgeDiff>;
+}

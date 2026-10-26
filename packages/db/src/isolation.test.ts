@@ -17,8 +17,15 @@ import {
  * new table that lacks RLS, org_id, the cascade FK or a fixture row fails here.
  */
 
-/** The only non-tenant tables allowed to exist (migrator-owned, in `app`). Everything else is a tenant table. */
-const ALLOWED_NON_TENANT_TABLES = ["app.schema_migrations", "app.retention_settings"];
+/**
+ * The only non-tenant tables allowed to exist (migrator-owned, in `app`). Everything else is a
+ * tenant table. The webhook inbox precedes orgs (ADR 0007); webhooks.test.ts covers it.
+ */
+const ALLOWED_NON_TENANT_TABLES = [
+  "app.schema_migrations",
+  "app.retention_settings",
+  "app.webhook_deliveries",
+];
 
 /** SECURITY DEFINER functions the application role may execute (ADR 0005 §5). */
 const ALLOWED_SECURITY_DEFINER = [
@@ -26,6 +33,7 @@ const ALLOWED_SECURITY_DEFINER = [
   "retention.purge_analyses",
   "retention.purge_audit_events",
   "retention.purge_jobs",
+  "retention.purge_webhook_deliveries",
 ];
 
 /**
@@ -36,6 +44,8 @@ const DML = ["DELETE", "INSERT", "SELECT", "UPDATE"];
 const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "app.retention_settings": ["SELECT"],
   "app.schema_migrations": [],
+  // Insert-only: the receiver records deliveries; it can neither read nor remove them (ADR 0007).
+  "app.webhook_deliveries": ["INSERT"],
   "public.analyses": DML,
   "public.audit_events": ["INSERT", "SELECT"],
   "public.audit_events_id_seq": [],
@@ -154,7 +164,7 @@ const countAs = async (orgId: OrgId, table: TenantTable, where = ""): Promise<nu
   });
 
 describe("every table in the database", () => {
-  it("is a tenant table in public (only the ledger and retention settings are exempt)", () => {
+  it("is a tenant table in public (only the ledger, retention settings and webhook inbox are exempt)", () => {
     expect(tables.length).toBeGreaterThanOrEqual(13);
     for (const t of tables) expect(t.schema).toBe("public");
     const names = tables.map((t) => t.name);
@@ -604,6 +614,7 @@ describe("other catalog objects (review #8)", () => {
       "audit",
       "logs",
       "org_deletion_grace",
+      "webhook_deliveries",
     ]);
     for (const sql of [
       "update app.retention_settings set days = 1 where category = 'audit'",
