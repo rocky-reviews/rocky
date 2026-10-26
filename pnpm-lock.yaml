@@ -122,6 +122,9 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
+      '@rocky-reviews/crypto':
+        specifier: workspace:*
+        version: link:../crypto
       '@testcontainers/postgresql':
         specifier: 12.2.1
         version: 12.2.1

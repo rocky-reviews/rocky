@@ -33,4 +33,18 @@ export {
   type RetentionReport,
 } from "./retention.js";
 export { APP_ROLE, ensureLoginRole, RETENTION_ROLE, scramSha256Verifier } from "./roles.js";
+export {
+  CIPHERTEXT_PREFIX,
+  loadForgeToken,
+  loadOrgDataKey,
+  loadOrgLlmApiKey,
+  MIN_CIPHERTEXT_BYTES,
+  replaceOrgDataKey,
+  SecretStoreError,
+  storeForgeToken,
+  storeOrgDataKey,
+  storeOrgLlmApiKey,
+  WRAPPED_KEY_PREFIX,
+  type StoredSecret,
+} from "./secrets.js";
 export * as schema from "./schema.js";

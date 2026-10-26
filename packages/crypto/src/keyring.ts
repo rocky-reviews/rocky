@@ -42,7 +42,8 @@ export const CIPHERTEXT_PREFIX = `${FORMAT}:`;
 const FORMAT_PATTERN = /^rk([0-9]{1,3}):/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const VERSION_BYTES = 4;
-const MIN_PAYLOAD = VERSION_BYTES + NONCE_LENGTH + TAG_LENGTH;
+/** Smallest `rk1:` payload: the header of an empty-body ciphertext (mirrored by packages/db). */
+export const MIN_CIPHERTEXT_BYTES = VERSION_BYTES + NONCE_LENGTH + TAG_LENGTH;
 const MAX_VERSION = 0xffff_ffff;
 
 const WRAPPED_FORMAT = "rkw1";
@@ -83,7 +84,7 @@ const parseCiphertext = (text: string): { version: number; sealed: Sealed } => {
   if (match === null) throw new CryptoError("malformed_ciphertext");
   if (match[1] !== "1") throw new CryptoError("unsupported_format");
   const bytes = decodeBase64UrlStrict(text.slice(match[0].length));
-  if (bytes.length < MIN_PAYLOAD) throw new CryptoError("malformed_ciphertext");
+  if (bytes.length < MIN_CIPHERTEXT_BYTES) throw new CryptoError("malformed_ciphertext");
   const nonceEnd = VERSION_BYTES + NONCE_LENGTH;
   return {
     version: bytes.readUInt32BE(0),
