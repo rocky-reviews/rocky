@@ -19,6 +19,11 @@ import { minimalEvent, WebhookInboxError } from "./webhooks.js";
  * constant in migration 0007). Transient failures do not strike.
  */
 export const WEBHOOK_MAX_STRIKES = 5;
+/**
+ * A claim gives up after this long, waiting for the claim lock included (review round 3): a slow
+ * claim must not hand out leases that are already short.
+ */
+export const CLAIM_STATEMENT_TIMEOUT_MS = 5_000;
 /** A row that only ever failed transiently is parked once it is this old (migration 0007). */
 export const WEBHOOK_TRANSIENT_PARK_HOURS = 72;
 

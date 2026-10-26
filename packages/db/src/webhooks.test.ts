@@ -205,6 +205,7 @@ describe("recordWebhookDelivery", () => {
       "last_error",
       "lease_token",
       "lease_until",
+      "leased_at",
       "outcome",
       "parked_at",
       "payload_sha256",

@@ -72,13 +72,20 @@ DROP FUNCTION IF EXISTS app.org_deletions_stamp();
 DROP FUNCTION IF EXISTS app.org_deletions_append_only();
 
 -- --- 3. Inbox processing state ------------------------------------------------------------
+-- The queue triggers belong to the table (the migrator drops them); their functions and the
+-- worker functions to rocky_lifecycle.
+DROP TRIGGER IF EXISTS webhook_queue_after_update ON app.webhook_deliveries;
+DROP TRIGGER IF EXISTS webhook_queue_after_insert ON app.webhook_deliveries;
 GRANT USAGE ON SCHEMA worker TO rocky_lifecycle;
 SET LOCAL ROLE rocky_lifecycle;
 DROP FUNCTION IF EXISTS worker.installation_orgs(text, bigint, bigint);
 DROP FUNCTION IF EXISTS worker.fail_webhook_delivery(text, text, uuid, text, integer, text);
 DROP FUNCTION IF EXISTS worker.complete_webhook_delivery(text, text, uuid, text);
 DROP FUNCTION IF EXISTS worker.claim_webhook_deliveries(text, text[], integer, integer);
+DROP FUNCTION IF EXISTS worker.webhook_queue_on_update();
+DROP FUNCTION IF EXISTS worker.webhook_queue_on_insert();
 RESET ROLE;
+DROP TABLE IF EXISTS app.webhook_queue;
 DROP SCHEMA IF EXISTS worker;
 
 DROP POLICY IF EXISTS orgs_lifecycle_select ON orgs;
@@ -98,8 +105,10 @@ END
 $$;
 
 DROP INDEX IF EXISTS app.webhook_deliveries_pending_idx;
+DROP INDEX IF EXISTS app.webhook_deliveries_leased_idx;
 ALTER TABLE app.webhook_deliveries
   DROP CONSTRAINT IF EXISTS webhook_deliveries_installation_shape,
+  DROP CONSTRAINT IF EXISTS webhook_deliveries_installation_id_number,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_processed_or_parked,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_outcome_when_processed,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_lease_pair,
@@ -108,6 +117,7 @@ ALTER TABLE app.webhook_deliveries
   DROP COLUMN IF EXISTS outcome,
   DROP COLUMN IF EXISTS processed_at,
   DROP COLUMN IF EXISTS lease_until,
+  DROP COLUMN IF EXISTS leased_at,
   DROP COLUMN IF EXISTS lease_token,
   DROP COLUMN IF EXISTS available_at,
   DROP COLUMN IF EXISTS strikes,

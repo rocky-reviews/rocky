@@ -7,7 +7,7 @@
 - **Amended by:** [ADR 0009](0009-installation-lifecycle.md) (P3-3: the inbox's processing state,
   the worker's claim path, the purge skips unprocessed rows; review round 1: claims per forge, one
   live lease per installation, transient vs. strike failures; review round 2: no superseding, a
-  shape CHECK on installation rows)
+  shape CHECK on installation rows; review round 3: a bounded claim, collapse on completion)
 
 ## Context
 
@@ -138,8 +138,10 @@ job: the worker consumes the inbox (P3-3 adds the claim path) and creates tenant
   `lease_token`/`lease_until`, `processed_at` + `outcome`, `parked_at`, `last_error` (SQLSTATE or
   reason code). Reset by the stamp trigger on insert. The worker role claims rows of **its forge**
   with a lease through `worker.claim_webhook_deliveries`: at most one live lease per
-  `(forge, installation_id)`, the oldest pending row first; no row is ever finished except by its
-  own lease holder (duplicates are processed one by one). Installation rows must have the shape
+  `(forge, installation_id)`, the oldest pending row first; no row is finished at claim or on
+  failure; a lease holder's verified completion of an installation row marks earlier pending
+  same-type rows of its installation `superseded` (ADR 0009 §3). A ready queue
+  (`app.webhook_queue`) keeps the claim's cost independent of the backlog. Installation rows must have the shape
   `minimalEvent` produces (CHECK `webhook_deliveries_installation_shape`, for every role). It
   finishes them with `worker.complete_webhook_delivery`
   (inside the tenant transaction that applied the effect) or `worker.fail_webhook_delivery` with a

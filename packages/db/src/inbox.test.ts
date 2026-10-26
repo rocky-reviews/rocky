@@ -6,6 +6,7 @@ import { createDb, type Db } from "./client.js";
 import {
   completeInTenantTx,
   decodeClaimedDelivery,
+  CLAIM_STATEMENT_TIMEOUT_MS,
   LeaseLostError,
   WEBHOOK_MAX_STRIKES,
   WEBHOOK_TRANSIENT_PARK_HOURS,
@@ -603,7 +604,7 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
     expect(await state(deleted.deliveryId)).toMatchObject({ attempts: 0 });
   });
 
-  it("never marks a row processed on another row's account: duplicates are each claimed, oldest first (review round 2, A)", async () => {
+  it("never marks a row processed on another row's account at claim or failure; only a completed, verified row collapses earlier duplicates (review rounds 2 A and 3)", async () => {
     await drain();
     const installationId = nextInstallation++;
     const copies = Array.from({ length: 4 }, () =>
@@ -618,16 +619,92 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
         [c.deliveryId, 100 - i],
       );
     }
-    // A planted newer copy (same installation and type, the receiver's role) changes nothing.
-    for (const c of copies) {
-      const claimed = await claimOne(c.deliveryId);
-      expect(claimed).toMatchObject({ deliveryId: c.deliveryId, attempts: 1 });
+    const pendingOthers = async (except: string) => {
       for (const other of copies) {
-        if (other !== c) expect((await state(other.deliveryId))?.outcome).not.toBe("superseded");
+        if (other.deliveryId !== except) {
+          expect(await state(other.deliveryId), other.deliveryId).toMatchObject({
+            processed: false,
+            parked: false,
+          });
+        }
       }
-      expect(await worker.completeWebhookDelivery(claimed!, "deletion_scheduled")).toBe(true);
+    };
+    // Claimed: nothing else changes. Failed (a strike, then parked): nothing else changes.
+    const first = await claimOne(copies[0]!.deliveryId);
+    await pendingOthers(copies[0]!.deliveryId);
+    expect(
+      await worker.failWebhookDelivery(first!, {
+        error: "invalid_event",
+        retryAfterSeconds: 0,
+        kind: "permanent",
+      }),
+    ).toBe("parked");
+    await pendingOthers(copies[0]!.deliveryId);
+    // The next one is claimed, and a copy arrives after its claim (GitHub's answer read for the
+    // claimed row may predate that event).
+    const second = await claimOne(copies[1]!.deliveryId);
+    const late = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(late);
+    const created = installationDelivery({ installationId, type: "installation.created" });
+    await server.recordWebhookDelivery(created);
+    await superuser.query(
+      "update app.webhook_deliveries set received_at = now() - interval '50 seconds' where delivery_id = $1",
+      [created.deliveryId],
+    );
+    expect(await worker.completeWebhookDelivery(second!, "deletion_scheduled")).toBe(true);
+    // Completed after a GitHub-verified decision: the same-type rows received before its claim
+    // are answered by that decision; the parked row, the later copy and other types are not.
+    for (const c of copies.slice(2)) {
+      expect(await state(c.deliveryId)).toMatchObject({
+        processed: true,
+        outcome: "superseded",
+        attempts: 0,
+      });
     }
-    expect(await claimOne(copies[0]!.deliveryId)).toBeUndefined();
+    expect(await state(copies[0]!.deliveryId)).toMatchObject({ parked: true, processed: false });
+    expect(await state(late.deliveryId)).toMatchObject({ processed: false });
+    expect(await state(created.deliveryId)).toMatchObject({ processed: false });
+    for (const id of [created.deliveryId, late.deliveryId]) {
+      const next = await claimOne(id);
+      expect(next?.deliveryId).toBe(id);
+      await worker.completeWebhookDelivery(next!, "test");
+    }
+  });
+
+  it("a stale lease holder's completion collapses nothing; pull request rows never collapse", async () => {
+    await drain();
+    const installationId = nextInstallation++;
+    const a = installationDelivery({ installationId, type: "installation.deleted" });
+    const b = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(a);
+    await server.recordWebhookDelivery(b);
+    await superuser.query(
+      "update app.webhook_deliveries set received_at = received_at - interval '1 second' where delivery_id = $1",
+      [a.deliveryId],
+    );
+    const held = await claimOne(a.deliveryId);
+    expect(await worker.completeWebhookDelivery({ ...held!, leaseToken: randomUUID() }, "x")).toBe(
+      false,
+    );
+    expect(await state(b.deliveryId)).toMatchObject({ processed: false });
+    await worker.completeWebhookDelivery(held!, "test");
+    // Two pull request events of one installation (different PRs) are both kept.
+    const prs = [pullRequestDelivery(), pullRequestDelivery()].map((d) => ({
+      ...d,
+      event: { ...d.event, installationId },
+    }));
+    for (const d of prs) await server.recordWebhookDelivery(d as WebhookDelivery);
+    const [pr] = await worker.claimWebhookDeliveries({
+      forge: "github",
+      eventTypes: ["pull_request.opened"],
+      limit: 1,
+      leaseSeconds: 60,
+    });
+    expect(pr).toBeDefined();
+    expect(await worker.completeWebhookDelivery(pr!, "test")).toBe(true);
+    const other = prs.find((d) => d.deliveryId !== pr!.deliveryId)!;
+    expect(await state(other.deliveryId)).toMatchObject({ processed: false });
+    await drain();
   });
 
   it("a duplicate waits while another row of its installation is leased (its holder finishes it)", async () => {
@@ -692,6 +769,7 @@ describe("installation rows must have minimalEvent's shape (review round 2, A)",
       ["sender id string", { ...base, sender: { id: "9", login: "owner" } }],
       ["sender login bad", { ...base, sender: { id: 9, login: "a b" } }],
       ["created, no account", { type: "installation.created", installationId: 4321, sender: null }],
+      ["installation id string", { ...base, installationId: "4321" }],
     ] as const) {
       expect(await insertAsApp(event), label).toBe("23514");
     }
@@ -784,6 +862,121 @@ describe("installation lookup", () => {
     expect(await worker.installationOrgs("gitlab", 880, 88_088)).toEqual([]);
     await expect(worker.installationOrgs("github", 0, null)).rejects.toThrow(/positive/);
   });
+});
+
+describe("claim cost and timing (review round 3)", () => {
+  it("a 20k-row backlog for one installation does not slow a claim for another", async () => {
+    await drain();
+    const flooded = nextInstallation++;
+    const genuine = installationDelivery({ type: "installation.deleted" });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    try {
+      // One INSERT … SELECT as the receiver's role, like a compromised server would.
+      await app.query(
+        `insert into app.webhook_deliveries
+           (forge, delivery_id, payload_sha256, event_type, installation_id, event)
+         select 'github',
+                (substr(h,1,8)||'-'||substr(h,9,4)||'-4'||substr(h,14,3)||'-8'||substr(h,18,3)||'-'||substr(h,21,12)),
+                sha256(convert_to('flood-' || i::text, 'utf8')), 'installation.created', $1::bigint,
+                jsonb_build_object('type', 'installation.created', 'installationId', $1::bigint,
+                  'account', jsonb_build_object('id', 5, 'login', 'a', 'kind', 'user'), 'sender', null)
+           from generate_series(1, 20000) i, lateral (select md5('flood-' || i::text) h) x`,
+        [flooded],
+      );
+    } finally {
+      await app.end();
+    }
+    await server.recordWebhookDelivery(genuine);
+    const timings: number[] = [];
+    const seen: string[] = [];
+    for (let k = 0; k < 3; k++) {
+      const started = performance.now();
+      const rows = await worker.claimWebhookDeliveries({
+        forge: "github",
+        eventTypes: [...INSTALLATION_TYPES],
+        limit: 10,
+        leaseSeconds: 60,
+      });
+      timings.push(performance.now() - started);
+      seen.push(...rows.map((r) => r.deliveryId));
+      for (const r of rows) {
+        await worker.failWebhookDelivery(r, {
+          error: "test_release",
+          retryAfterSeconds: 3600,
+          kind: "transient",
+        });
+      }
+    }
+    expect(seen).toContain(genuine.deliveryId);
+    // Bounded per claim whatever the backlog (the old claim took seconds here). Generous for CI.
+    expect(Math.max(...timings), timings.map((t) => t.toFixed(0)).join(",")).toBeLessThan(300);
+    // Clean up: the flood is finished so later tests see only their own rows.
+    await superuser.query(
+      "update app.webhook_deliveries set processed_at = now(), outcome = 'test', lease_token = null, lease_until = null where installation_id = $1 and processed_at is null and parked_at is null",
+      [flooded],
+    );
+    await superuser.query(
+      "update app.webhook_deliveries set processed_at = now(), outcome = 'test' where delivery_id = $1 and processed_at is null and parked_at is null",
+      [genuine.deliveryId],
+    );
+  }, 120_000);
+
+  it("a claim waiting on the claim lock gives up after its statement timeout", async () => {
+    const holder = await superuser.connect();
+    try {
+      await holder.query("begin");
+      await holder.query(
+        "select pg_advisory_xact_lock(hashtextextended('rocky.worker.claim_webhook_deliveries', 0))",
+      );
+      const started = Date.now();
+      const error = await worker
+        .claimWebhookDeliveries({
+          forge: "github",
+          eventTypes: [...INSTALLATION_TYPES],
+          limit: 1,
+          leaseSeconds: 60,
+        })
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      expect(error).toBeInstanceOf(WebhookInboxError);
+      expect((error as WebhookInboxError).code).toBe("57014");
+      expect(Date.now() - started).toBeLessThan(CLAIM_STATEMENT_TIMEOUT_MS + 2_000);
+    } finally {
+      await holder.query("rollback");
+      holder.release();
+    }
+  }, 20_000);
+
+  it("leases from the moment of the claim (clock_timestamp), not from when the claim started waiting", async () => {
+    await drain();
+    const d = installationDelivery();
+    await server.recordWebhookDelivery(d);
+    const holder = await superuser.connect();
+    let claimed: ClaimedDelivery[];
+    try {
+      await holder.query("begin");
+      await holder.query(
+        "select pg_advisory_xact_lock(hashtextextended('rocky.worker.claim_webhook_deliveries', 0))",
+      );
+      const pending = worker.claimWebhookDeliveries({
+        forge: "github",
+        eventTypes: [...INSTALLATION_TYPES],
+        limit: 10,
+        leaseSeconds: 60,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      await holder.query("rollback");
+      claimed = await pending;
+    } finally {
+      holder.release();
+    }
+    const row = claimed.find((r) => r.deliveryId === d.deliveryId);
+    expect(row).toBeDefined();
+    expect(+row!.leaseUntil - Date.now()).toBeGreaterThan(59_000);
+    for (const r of claimed) await worker.completeWebhookDelivery(r, "test");
+  }, 20_000);
 });
 
 describe("inbox retention skips unprocessed rows", () => {

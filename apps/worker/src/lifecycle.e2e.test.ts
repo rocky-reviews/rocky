@@ -689,12 +689,13 @@ describe("negative cases", () => {
       `select outcome, count(*)::int as n from app.webhook_deliveries
         where installation_id between 8000 and 8011 group by 1 order by 1`,
     );
-    // Each delivery is processed on its own (review round 2 A removed claim-time superseding):
-    // the second one for an installation finds the org and changes nothing.
+    // Review round 3: the second delivery for an installation, received before the first one's
+    // claim, is collapsed into the first one's GitHub-verified outcome when it completes (never at
+    // claim time, review round 2 A).
     // GitHub (review round 1, L5); before, it was claimed and found "already_installed".
     expect(rows).toEqual([
-      { outcome: "already_installed", n: 4 },
       { outcome: "org_created", n: 12 },
+      { outcome: "superseded", n: 4 },
     ]);
   });
 
@@ -1173,8 +1174,15 @@ describe("review round 2", () => {
         outcome: "deletion_scheduled",
       });
       expect(await inboxRow(genuineCreated.deliveryId)).toMatchObject({ outcome: "org_created" });
+      // The planted rows were received before the genuine rows were claimed: they are answered
+      // by the genuine rows' GitHub-verified outcomes (collapse on completion, review round 3)
+      // and never decided anything themselves.
       for (const id of planted) {
-        expect(await inboxRow(id)).toMatchObject({ parked: true, last_error: "invalid_event" });
+        expect(await inboxRow(id)).toMatchObject({
+          processed: true,
+          outcome: "superseded",
+          attempts: 0,
+        });
       }
     }, planted);
     expect((await orgOf(9120))?.delete_after).not.toBeNull();
@@ -1297,6 +1305,57 @@ describe("review round 2", () => {
     const { rows } = await superuser.query("select 1 from orgs where id = $1", [gitlabOrg]);
     expect(rows).toHaveLength(1);
     await workerDb.deleteOrg(gitlabOrg);
+  });
+});
+
+describe("review round 3", () => {
+  it("N planted created rows ahead of a genuine uninstall cost O(1) GitHub decisions, not N", async () => {
+    github.install(9160, { id: 19160, login: "flooded", type: "Organization" });
+    await install(9160, 19160, "flooded");
+    await drain();
+    github.uninstall(9160);
+    const N = 40;
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    try {
+      // Decodable (the shape CHECK holds), older than the genuine uninstall.
+      await app.query(
+        `insert into app.webhook_deliveries
+           (forge, delivery_id, payload_sha256, event_type, installation_id, event)
+         select 'github', gen_random_uuid()::text, sha256(convert_to('planted-9160-' || i, 'utf8')),
+                'installation.created', 9160,
+                jsonb_build_object('type', 'installation.created', 'installationId', 9160,
+                  'account', jsonb_build_object('id', 19160, 'login', 'flooded', 'kind', 'organization'),
+                  'sender', jsonb_build_object('id', 666, 'login', 'attacker'))
+           from generate_series(1, $1::int) i`,
+        [N],
+      );
+    } finally {
+      await app.end();
+    }
+    await superuser.query(
+      "update app.webhook_deliveries set received_at = received_at - interval '1 minute' where installation_id = 9160 and processed_at is null",
+    );
+    const { deliveryId } = await uninstall(9160, 19160, "flooded");
+    const asked = github.requests.length;
+    for (let round = 0; round < 8; round++) {
+      await drain();
+      await makeRetriesDue();
+      if ((await inboxRow(deliveryId))?.processed) break;
+    }
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "deletion_scheduled" });
+    const reads = github.requests.slice(asked).filter((r) => r.path === "/app/installations/9160");
+    // One created row decides for all of them (three contradictions, then believed), then the
+    // uninstall: a handful of reads, independent of N.
+    expect(reads.length).toBeLessThanOrEqual(CONTRADICTION_ATTEMPTS + 2);
+    const { rows } = await superuser.query<{ outcome: string; n: number }>(
+      `select outcome, count(*)::int as n from app.webhook_deliveries
+        where installation_id = 9160 and event_type = 'installation.created' and outcome <> 'org_created'
+        group by 1 order by 1`,
+    );
+    expect(rows).toEqual([
+      { outcome: "installation_not_found", n: 1 },
+      { outcome: "superseded", n: N - 1 },
+    ]);
   });
 });
 

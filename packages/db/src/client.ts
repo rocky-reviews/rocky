@@ -11,6 +11,7 @@ import {
 } from "./retention-sql.js";
 import {
   claimedFromRow,
+  CLAIM_STATEMENT_TIMEOUT_MS,
   claimSql,
   completeSql,
   failSql,
@@ -492,8 +493,29 @@ export const createDb = (options: DbOptions): Db => {
     }
   };
 
-  const claimWebhookDeliveries = async (options: ClaimOptions): Promise<ClaimedDelivery[]> =>
-    (await inboxQuery<ClaimRow>(claimSql(options))).map(claimedFromRow);
+  /**
+   * The claim runs in its own transaction with `SET LOCAL statement_timeout`, so a claim stuck
+   * behind the claim lock (or a pathological backlog) gives up instead of handing out leases that
+   * are already short (review round 3). A function-level SET would not bound the calling
+   * statement, which is why it is set here.
+   */
+  const claimWebhookDeliveries = async (options: ClaimOptions): Promise<ClaimedDelivery[]> => {
+    const statement = claimSql(options);
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await pool.connect();
+      await client.query("begin");
+      await client.query(`set local statement_timeout = ${CLAIM_STATEMENT_TIMEOUT_MS}`);
+      const { rows } = await client.query<ClaimRow>(statement.text, statement.values);
+      await client.query("commit");
+      return rows.map(claimedFromRow);
+    } catch (error) {
+      await client?.query("rollback").catch(() => undefined);
+      throw inboxDatabaseError(error);
+    } finally {
+      client?.release();
+    }
+  };
 
   const completeWebhookDelivery = async (lease: InboxLease, outcome: string): Promise<boolean> =>
     (await inboxQuery<{ ok: boolean }>(completeSql(lease, outcome)))[0]?.ok === true;

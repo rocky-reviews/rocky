@@ -17,8 +17,10 @@
 --   3. The inbox gets a processing state (lease, attempts, strikes, outcome, parked, last error
 --      code), installation rows must have the decodable shape (CHECK), and a claim path per
 --      forge: one claim at a time (advisory lock), one live lease per installation, oldest first,
---      no row finished by anyone but its lease holder, transient errors that do not exhaust the
---      budget; the purge skips unprocessed rows.
+--      a cost per claim bounded by a ready queue (app.webhook_queue) and index probes, no row
+--      finished at claim or failure (a verified completion collapses its earlier same-type
+--      duplicates), transient errors that do not exhaust the budget; the purge skips unprocessed
+--      rows.
 --   4. The deletion sweep: list due orgs, erase each through retention.delete_org, which now also
 --      removes the erased installation's inbox rows (or scrubs the ones still pending), the
 --      account's finished rows under installations no live org holds, and leaves a tombstone in
@@ -181,6 +183,7 @@ ALTER TABLE app.webhook_deliveries
   ADD COLUMN available_at  timestamptz NOT NULL DEFAULT now(),
   ADD COLUMN lease_token   uuid,
   ADD COLUMN lease_until   timestamptz,
+  ADD COLUMN leased_at     timestamptz,
   ADD COLUMN processed_at  timestamptz,
   ADD COLUMN outcome       text CHECK (outcome ~ '^[a-z][a-z0-9_]{0,63}$'),
   ADD COLUMN parked_at     timestamptz,
@@ -214,8 +217,18 @@ ALTER TABLE app.webhook_deliveries ADD CONSTRAINT webhook_deliveries_installatio
     ELSE (event #>> '{sender,login}') ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(\[bot\])?$'
   END);
 
-CREATE INDEX webhook_deliveries_pending_idx ON app.webhook_deliveries (forge, installation_id, received_at)
+-- Review round 3: `installationId` is a JSON number for every event type (0006 only compares its
+-- text with the column, so "77" passed and then failed `minimalEvent`).
+ALTER TABLE app.webhook_deliveries ADD CONSTRAINT webhook_deliveries_installation_id_number
+  CHECK (coalesce(jsonb_typeof(event -> 'installationId') = 'number', false));
+
+-- The head of an installation's lane (installation events, pull request events: the part of the
+-- event type before the dot) is one index probe; so is "is anything of it leased" (review round 3).
+CREATE INDEX webhook_deliveries_pending_idx ON app.webhook_deliveries
+  (forge, installation_id, (split_part(event_type, '.', 1)), received_at, delivery_id)
   WHERE processed_at IS NULL AND parked_at IS NULL;
+CREATE INDEX webhook_deliveries_leased_idx ON app.webhook_deliveries (forge, installation_id)
+  WHERE lease_token IS NOT NULL AND processed_at IS NULL AND parked_at IS NULL;
 
 -- The receiver (INSERT only) cannot pre-set any processing state: a row always starts pending.
 CREATE OR REPLACE FUNCTION app.webhook_deliveries_stamp() RETURNS trigger
@@ -229,6 +242,7 @@ BEGIN
   NEW.strikes := 0;
   NEW.lease_token := NULL;
   NEW.lease_until := NULL;
+  NEW.leased_at := NULL;
   NEW.processed_at := NULL;
   NEW.outcome := NULL;
   NEW.parked_at := NULL;
@@ -248,16 +262,106 @@ CREATE POLICY orgs_lifecycle_select ON orgs FOR SELECT TO rocky_lifecycle USING 
 
 CREATE SCHEMA worker;
 
+-- The claim queue (review round 3): one row per (forge, installation, lane) with pending work,
+-- and the earliest moment its head may be claimable (`ready_at`). The claim reads a bounded
+-- number of these, oldest `ready_at` first, so its cost depends on the batch size, never on the
+-- backlog: 200 000 rows planted for one installation are one queue row, and an installation
+-- whose head waits (leased, backing off) leaves the ready range instead of being rescanned.
+--
+-- `ready_at` is a hint that may be early, never (for long) late: the statement triggers below
+-- only ever move it earlier (an insert does not move it: a new row is never ahead of the head);
+-- the claim, which reads the real head, moves it later, guarded by `rseq` so a concurrent change
+-- wins. An early hint costs the claim one probe. Rows are never lost from the queue: only the
+-- claim deletes a queue row, after finding no pending row, and only if no insert touched it
+-- meanwhile (`seq`). Not readable by the application.
+CREATE TABLE app.webhook_queue (
+  forge            text        NOT NULL,
+  installation_id  bigint      NOT NULL,
+  lane             text        NOT NULL,
+  ready_at         timestamptz NOT NULL,
+  seq              bigint      NOT NULL DEFAULT 0,
+  rseq             bigint      NOT NULL DEFAULT 0,
+  CONSTRAINT webhook_queue_pkey PRIMARY KEY (forge, installation_id, lane)
+);
+CREATE INDEX webhook_queue_ready_idx ON app.webhook_queue (forge, lane, ready_at);
+INSERT INTO app.webhook_queue (forge, installation_id, lane, ready_at)
+  SELECT d.forge, d.installation_id, split_part(d.event_type, '.', 1), min(d.available_at)
+    FROM app.webhook_deliveries d
+   WHERE d.processed_at IS NULL AND d.parked_at IS NULL
+   GROUP BY 1, 2, 3;
+ALTER TABLE app.webhook_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.webhook_queue FORCE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON app.webhook_queue TO rocky_lifecycle;
+CREATE POLICY webhook_queue_lifecycle ON app.webhook_queue
+  FOR ALL TO rocky_lifecycle USING (true) WITH CHECK (true);
+
+-- New rows: make sure their lane has a queue row (a new row is never ahead of an existing head,
+-- so an existing row's `ready_at` stays; `seq` tells the claim not to drop it).
+CREATE FUNCTION worker.webhook_queue_on_insert() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog
+AS $$
+BEGIN
+  INSERT INTO app.webhook_queue AS q (forge, installation_id, lane, ready_at)
+  SELECT n.forge, n.installation_id, split_part(n.event_type, '.', 1), min(n.available_at)
+    FROM new_rows n
+   WHERE n.processed_at IS NULL AND n.parked_at IS NULL
+   GROUP BY 1, 2, 3
+   ORDER BY 1, 2, 3
+  ON CONFLICT (forge, installation_id, lane) DO UPDATE SET seq = q.seq + 1;
+  RETURN NULL;
+END
+$$;
+
+-- Changed rows (claimed, released, retried later, finished, parked, scrubbed): move the hint
+-- earlier to what the row now allows; a row that stopped being pending may have freed its lane.
+CREATE FUNCTION worker.webhook_queue_on_update() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER
+  SET search_path = pg_catalog
+AS $$
+BEGIN
+  INSERT INTO app.webhook_queue AS q (forge, installation_id, lane, ready_at)
+  SELECT n.forge, n.installation_id, split_part(n.event_type, '.', 1),
+         min(CASE
+               WHEN n.processed_at IS NOT NULL OR n.parked_at IS NOT NULL THEN clock_timestamp()
+               WHEN n.lease_token IS NOT NULL THEN n.lease_until
+               ELSE n.available_at
+             END)
+    FROM new_rows n
+    JOIN old_rows o ON o.forge = n.forge AND o.delivery_id = n.delivery_id
+   WHERE (o.processed_at IS NULL AND o.parked_at IS NULL)
+      OR (n.processed_at IS NULL AND n.parked_at IS NULL)
+   GROUP BY 1, 2, 3
+   ORDER BY 1, 2, 3
+  ON CONFLICT (forge, installation_id, lane) DO UPDATE
+    SET ready_at = least(q.ready_at, EXCLUDED.ready_at), seq = q.seq + 1, rseq = q.rseq + 1;
+  RETURN NULL;
+END
+$$;
+
+CREATE TRIGGER webhook_queue_after_insert
+  AFTER INSERT ON app.webhook_deliveries
+  REFERENCING NEW TABLE AS new_rows
+  FOR EACH STATEMENT EXECUTE FUNCTION worker.webhook_queue_on_insert();
+CREATE TRIGGER webhook_queue_after_update
+  AFTER UPDATE ON app.webhook_deliveries
+  REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+  FOR EACH STATEMENT EXECUTE FUNCTION worker.webhook_queue_on_update();
+
 -- Claims up to p_limit pending rows of one forge and the given event types, for p_lease_seconds
--- (clamped to 1..100 rows and 5..3600 s). In order:
+-- (clamped to 1..100 rows and 5..3600 s). Bounded work per call (review round 3): it reads at
+-- most 3 × p_limit + 10 queue rows per lane, oldest `ready_at` first, and for each does a few
+-- index probes. In order:
 --   * one claim at a time across workers (transaction advisory lock), so the per-installation
---     rule below cannot race;
---   * nothing is marked processed here: a row is only ever finished by its own lease holder
---     (review round 2: superseding one row because of another let a planted row swallow a
---     genuine uninstall; duplicates are cheap, they are processed one at a time);
---   * expired leases (the holder crashed) are released with a strike; the fifth parks the row;
---   * per installation only the oldest pending row is a candidate, and only when nothing of that
---     installation is leased: events of one installation are processed one at a time, in order.
+--     rule below cannot race; the caller bounds the wait with a statement timeout;
+--   * nothing is marked processed here (review round 2: superseding at claim time let a planted
+--     row swallow a genuine uninstall); only a verified completion collapses duplicates (below);
+--   * per installation lane only the oldest pending row (the head) is a candidate, and only when
+--     nothing of that lane holds a live lease: events of one installation are processed one at a
+--     time, in order. A head whose lease expired (the holder crashed) is released with a strike
+--     and handed out again; the fifth strike parks it;
+--   * the lease runs from clock_timestamp(), the moment of the claim, not from the start of a
+--     claim that waited for the lock.
 CREATE FUNCTION worker.claim_webhook_deliveries(
     p_forge text, p_event_types text[], p_limit integer, p_lease_seconds integer)
   RETURNS TABLE (forge text, delivery_id text, event_type text, installation_id bigint,
@@ -265,78 +369,188 @@ CREATE FUNCTION worker.claim_webhook_deliveries(
                  lease_until timestamptz)
   LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog
+  -- Every statement here has an index that bounds it; never let stale statistics (a flood that
+  -- autovacuum has not analysed yet) turn the queue read into a scan and sort of every row.
+  SET enable_seqscan = off
 AS $$
 #variable_conflict use_column
+DECLARE
+  v_limit integer := least(greatest(coalesce(p_limit, 1), 1), 100);
+  v_lease interval := make_interval(
+    secs => least(greatest(coalesce(p_lease_seconds, 300), 5), 3600));
+  v_claimed integer := 0;
+  v_start timestamptz;
+  v_now timestamptz;
+  v_until timestamptz;
+  v_parked timestamptz;
+  v_rseq bigint;
+  q record;
+  h record;
+  r record;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('rocky.worker.claim_webhook_deliveries', 0));
+  -- After the lock: a value (not clock_timestamp() in the WHERE) so it is an index condition.
+  v_start := clock_timestamp();
 
-  UPDATE app.webhook_deliveries d
-     SET strikes = d.strikes + 1,
-         last_error = 'lease_expired',
-         lease_token = NULL,
-         lease_until = NULL,
-         parked_at = CASE WHEN d.strikes + 1 >= 5 THEN now() END
-   WHERE d.forge = p_forge AND d.event_type = ANY (p_event_types)
-     AND d.processed_at IS NULL AND d.parked_at IS NULL
-     AND d.lease_token IS NOT NULL AND d.lease_until <= now();
+  FOR q IN
+    SELECT c.forge AS q_forge, c.installation_id AS q_inst, c.lane AS q_lane,
+           c.seq AS q_seq, c.rseq AS q_rseq
+      FROM (SELECT DISTINCT split_part(t, '.', 1) AS lane FROM unnest(p_event_types) AS t) l
+      CROSS JOIN LATERAL (
+        SELECT w.forge, w.installation_id, w.lane, w.seq, w.rseq
+          FROM app.webhook_queue w
+         WHERE w.forge = p_forge AND w.lane = l.lane AND w.ready_at <= v_start
+         ORDER BY w.ready_at
+         LIMIT v_limit * 3 + 10) c
+     ORDER BY c.installation_id, c.lane
+  LOOP
+    EXIT WHEN v_claimed >= v_limit;
+    v_now := clock_timestamp();
 
-  RETURN QUERY
-  WITH pending AS (
-    SELECT d.delivery_id, d.installation_id, d.received_at, d.available_at, d.lease_token
+    SELECT d.delivery_id AS h_id, d.event_type AS h_type, d.available_at AS h_available,
+           d.lease_token AS h_token, d.lease_until AS h_until
+      INTO h
       FROM app.webhook_deliveries d
-     WHERE d.forge = p_forge AND d.event_type = ANY (p_event_types)
+     WHERE d.forge = q.q_forge AND d.installation_id = q.q_inst
+       AND split_part(d.event_type, '.', 1) = q.q_lane
        AND d.processed_at IS NULL AND d.parked_at IS NULL
-  ),
-  heads AS (
-    SELECT DISTINCT ON (p.installation_id) p.delivery_id, p.received_at, p.available_at
-      FROM pending p
-     WHERE NOT EXISTS (SELECT 1 FROM pending l
-                        WHERE l.installation_id = p.installation_id AND l.lease_token IS NOT NULL)
-     ORDER BY p.installation_id, p.received_at, p.delivery_id
-  ),
-  picked AS (
-    SELECT d.delivery_id
-      FROM app.webhook_deliveries d JOIN heads h ON h.delivery_id = d.delivery_id
-     WHERE d.forge = p_forge AND h.available_at <= now()
-     ORDER BY h.received_at, h.delivery_id
-     LIMIT least(greatest(coalesce(p_limit, 1), 1), 100)
-       FOR UPDATE OF d SKIP LOCKED
-  ),
-  claimed AS (
+     ORDER BY d.received_at, d.delivery_id
+     LIMIT 1;
+    IF NOT FOUND THEN
+      DELETE FROM app.webhook_queue w
+       WHERE w.forge = q.q_forge AND w.installation_id = q.q_inst AND w.lane = q.q_lane
+         AND w.seq = q.q_seq;
+      CONTINUE;
+    END IF;
+
+    -- A live lease anywhere in the lane holds it (leases only go to heads; defence in depth).
+    SELECT max(l.lease_until) INTO v_until
+      FROM app.webhook_deliveries l
+     WHERE l.forge = q.q_forge AND l.installation_id = q.q_inst
+       AND l.lease_token IS NOT NULL AND l.processed_at IS NULL AND l.parked_at IS NULL
+       AND split_part(l.event_type, '.', 1) = q.q_lane AND l.lease_until > v_now;
+    IF v_until IS NOT NULL THEN
+      UPDATE app.webhook_queue w SET ready_at = v_until
+       WHERE w.forge = q.q_forge AND w.installation_id = q.q_inst AND w.lane = q.q_lane
+         AND w.rseq = q.q_rseq;
+      CONTINUE;
+    END IF;
+
+    IF h.h_token IS NOT NULL THEN
+      -- Its holder crashed: a strike; the fifth parks the row.
+      v_parked := NULL;
+      UPDATE app.webhook_deliveries d
+         SET strikes = d.strikes + 1,
+             last_error = 'lease_expired',
+             lease_token = NULL,
+             lease_until = NULL,
+             parked_at = CASE WHEN d.strikes + 1 >= 5 THEN clock_timestamp() END
+       WHERE d.forge = q.q_forge AND d.installation_id = q.q_inst AND d.delivery_id = h.h_id AND d.lease_token = h.h_token
+      RETURNING d.parked_at INTO v_parked;
+      IF v_parked IS NOT NULL THEN
+        CONTINUE;
+      END IF;
+    ELSIF h.h_available > v_now THEN
+      UPDATE app.webhook_queue w SET ready_at = h.h_available
+       WHERE w.forge = q.q_forge AND w.installation_id = q.q_inst AND w.lane = q.q_lane
+         AND w.rseq = q.q_rseq;
+      CONTINUE;
+    END IF;
+
+    IF NOT (h.h_type = ANY (p_event_types)) THEN
+      CONTINUE;
+    END IF;
+    -- Exactly the head, or nothing (never the next row behind a locked head).
+    PERFORM 1 FROM app.webhook_deliveries d
+      WHERE d.forge = q.q_forge AND d.installation_id = q.q_inst AND d.delivery_id = h.h_id
+      FOR UPDATE SKIP LOCKED;
+    IF NOT FOUND THEN
+      CONTINUE;
+    END IF;
+    v_now := clock_timestamp();
     UPDATE app.webhook_deliveries d
        SET attempts = d.attempts + 1,
            lease_token = gen_random_uuid(),
-           lease_until = now() + make_interval(
-             secs => least(greatest(coalesce(p_lease_seconds, 300), 5), 3600))
-      FROM picked p
-     WHERE d.forge = p_forge AND d.delivery_id = p.delivery_id
-    RETURNING d.forge, d.delivery_id, d.event_type, d.installation_id, d.event, d.attempts,
-              d.strikes, d.lease_token, d.lease_until, d.received_at
-  )
-  SELECT c.forge, c.delivery_id, c.event_type, c.installation_id, c.event, c.attempts,
-         c.strikes, c.lease_token, c.lease_until
-    FROM claimed c ORDER BY c.received_at, c.delivery_id;
+           leased_at = v_now,
+           lease_until = v_now + v_lease
+     WHERE d.forge = q.q_forge AND d.installation_id = q.q_inst AND d.delivery_id = h.h_id
+       AND d.processed_at IS NULL AND d.parked_at IS NULL AND d.lease_token IS NULL
+    RETURNING d.forge AS r_forge, d.delivery_id AS r_id, d.event_type AS r_type,
+              d.installation_id AS r_inst, d.event AS r_event, d.attempts AS r_attempts,
+              d.strikes AS r_strikes, d.lease_token AS r_token, d.lease_until AS r_until
+      INTO r;
+    IF NOT FOUND THEN
+      CONTINUE;
+    END IF;
+    -- Not ready again before the lease ends (unless something changes meanwhile).
+    SELECT w.rseq INTO v_rseq FROM app.webhook_queue w
+     WHERE w.forge = q.q_forge AND w.installation_id = q.q_inst AND w.lane = q.q_lane;
+    UPDATE app.webhook_queue w SET ready_at = r.r_until
+     WHERE w.forge = q.q_forge AND w.installation_id = q.q_inst AND w.lane = q.q_lane
+       AND w.rseq = v_rseq;
+
+    forge := r.r_forge;
+    delivery_id := r.r_id;
+    event_type := r.r_type;
+    installation_id := r.r_inst;
+    event := r.r_event;
+    attempts := r.r_attempts;
+    strikes := r.r_strikes;
+    lease_token := r.r_token;
+    lease_until := r.r_until;
+    RETURN NEXT;
+    v_claimed := v_claimed + 1;
+  END LOOP;
 END
 $$;
 
 -- Marks a claimed row processed with a fixed outcome code. Only the current lease holder can:
 -- after a lease expired the old token matches nothing and this returns false. Called inside the
 -- tenant transaction that applied the effect, so effect and mark commit together or not at all.
+--
+-- Collapse (review round 3): completing an installation event means the worker acted on what
+-- GitHub said about that installation, read after this row was claimed. Every other pending,
+-- unleased row of the same installation and event type received up to that claim asks GitHub the
+-- same question and would get the same answer, so they are marked `superseded` with it. Only a
+-- completion does this (never a failure or a parked row), only the lease holder can complete,
+-- only the same type (a `created` never answers a `deleted`), and never pull request events
+-- (two events of one type there are about different pull requests). The shape CHECK guarantees
+-- the collapsed rows were decodable. This bounds a planted backlog in front of a genuine event to
+-- one GitHub decision per event type instead of one per row.
 CREATE FUNCTION worker.complete_webhook_delivery(
     p_forge text, p_delivery_id text, p_lease_token uuid, p_outcome text)
   RETURNS boolean
-  LANGUAGE sql SECURITY DEFINER
+  LANGUAGE plpgsql SECURITY DEFINER
   SET search_path = pg_catalog
 AS $$
-  WITH done AS (
-    UPDATE app.webhook_deliveries d
-       SET processed_at = now(), outcome = p_outcome, lease_token = NULL, lease_until = NULL
-     WHERE d.forge = p_forge AND d.delivery_id = p_delivery_id
-       AND d.lease_token = p_lease_token
-       AND d.processed_at IS NULL AND d.parked_at IS NULL
-    RETURNING 1
-  )
-  SELECT count(*) = 1 FROM done
+DECLARE
+  v_installation bigint;
+  v_type text;
+  v_leased_at timestamptz;
+BEGIN
+  UPDATE app.webhook_deliveries d
+     SET processed_at = now(), outcome = p_outcome, lease_token = NULL, lease_until = NULL
+   WHERE d.forge = p_forge AND d.delivery_id = p_delivery_id
+     AND d.lease_token = p_lease_token
+     AND d.processed_at IS NULL AND d.parked_at IS NULL
+  RETURNING d.installation_id, d.event_type, d.leased_at
+    INTO v_installation, v_type, v_leased_at;
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+  IF v_type LIKE 'installation.%' AND v_leased_at IS NOT NULL THEN
+    -- One index range: this installation's pending installation events up to the claim.
+    UPDATE app.webhook_deliveries s
+       SET processed_at = now(), outcome = 'superseded'
+     WHERE s.forge = p_forge AND s.installation_id = v_installation
+       AND split_part(s.event_type, '.', 1) = 'installation'
+       AND s.processed_at IS NULL AND s.parked_at IS NULL
+       AND s.received_at <= v_leased_at
+       AND s.event_type = v_type AND s.delivery_id <> p_delivery_id
+       AND s.lease_token IS NULL;
+  END IF;
+  RETURN true;
+END
 $$;
 
 -- Records a failed attempt (an error code, never a message), releases the lease and sets the
@@ -396,6 +610,9 @@ REVOKE ALL ON FUNCTION worker.claim_webhook_deliveries(text, text[], integer, in
 REVOKE ALL ON FUNCTION worker.complete_webhook_delivery(text, text, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION worker.fail_webhook_delivery(text, text, uuid, text, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION worker.installation_orgs(text, bigint, bigint) FROM PUBLIC;
+-- Trigger functions: fired by inserts and updates of any role, called by nobody.
+REVOKE ALL ON FUNCTION worker.webhook_queue_on_insert() FROM PUBLIC;
+REVOKE ALL ON FUNCTION worker.webhook_queue_on_update() FROM PUBLIC;
 
 GRANT USAGE ON SCHEMA worker TO rocky_worker;
 GRANT EXECUTE ON FUNCTION worker.claim_webhook_deliveries(text, text[], integer, integer) TO rocky_worker;
@@ -408,6 +625,8 @@ ALTER FUNCTION worker.claim_webhook_deliveries(text, text[], integer, integer) O
 ALTER FUNCTION worker.complete_webhook_delivery(text, text, uuid, text) OWNER TO rocky_lifecycle;
 ALTER FUNCTION worker.fail_webhook_delivery(text, text, uuid, text, integer, text) OWNER TO rocky_lifecycle;
 ALTER FUNCTION worker.installation_orgs(text, bigint, bigint) OWNER TO rocky_lifecycle;
+ALTER FUNCTION worker.webhook_queue_on_insert() OWNER TO rocky_lifecycle;
+ALTER FUNCTION worker.webhook_queue_on_update() OWNER TO rocky_lifecycle;
 REVOKE CREATE ON SCHEMA worker FROM rocky_lifecycle;
 
 -- --- 4. Retention: purge only processed rows; the deletion sweep -----------------------------

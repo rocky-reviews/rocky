@@ -525,9 +525,12 @@ describe("the deletion sweep's database side (P3-3)", () => {
           and c.table_schema not in ('public', 'pg_catalog', 'information_schema')
         order by 1`,
     );
+    // app.webhook_queue holds only (forge, installation id, lane) and a time: no personal data;
+    // a stale row (no pending delivery left) is dropped by the next claim (review round 3).
     expect(keyedByForgeIds.map((r) => r.table)).toEqual([
       "app.org_deletions",
       "app.webhook_deliveries",
+      "app.webhook_queue",
     ]);
 
     await makeDue(c.orgId);

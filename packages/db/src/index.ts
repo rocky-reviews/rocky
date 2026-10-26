@@ -17,6 +17,7 @@ export {
   LeaseLostError,
   WEBHOOK_MAX_STRIKES,
   WEBHOOK_TRANSIENT_PARK_HOURS,
+  CLAIM_STATEMENT_TIMEOUT_MS,
   type ClaimedDelivery,
   type ClaimOptions,
   type DecodedDelivery,

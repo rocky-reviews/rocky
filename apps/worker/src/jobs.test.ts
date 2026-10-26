@@ -116,6 +116,53 @@ describe("startJobs", () => {
   });
 });
 
+describe("the inbox re-loop rule (review round 3)", () => {
+  const fullBatch = () =>
+    Array.from({ length: 10 }, (_, i) => ({
+      forge: "github" as const,
+      deliveryId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+      eventType: "installation.created" as const,
+      installationId: i + 1,
+      event: null,
+      attempts: 1,
+      strikes: 0,
+      leaseToken: "00000000-0000-4000-8000-000000000000",
+      leaseUntil: new Date(Date.now() + 3_600_000),
+    }));
+
+  const run = async (failResult: "retry" | "parked") => {
+    let claims = 0;
+    const { db } = stubDb({
+      claimWebhookDeliveries: () => {
+        claims++;
+        return Promise.resolve(fullBatch());
+      },
+      // Every row is undecodable (event null) and fails; the stub decides what the database said.
+      failWebhookDelivery: () => Promise.resolve(failResult),
+    } as Partial<Db>);
+    const { log } = capture();
+    const jobs = startJobs({
+      ...base,
+      intervals: { inboxMs: 400, sweepMs: 60_000, retentionMs: 60_000 },
+      db,
+      log,
+      forge,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await jobs.stop();
+    return claims;
+  };
+
+  it("loops at once only after a full batch that all went through", async () => {
+    // All parked (progress): the next batch is claimed right away.
+    expect(await run("parked")).toBeGreaterThan(3);
+  });
+
+  it("a full batch with released or retried rows waits for the next tick (no hot loop)", async () => {
+    expect(await run("retry")).toBe(1);
+  });
+});
+
 describe("the app check gate (review round 1, M2)", () => {
   it("claims nothing and erases nothing until GET /app proves the configured app, then starts", async () => {
     const { db, calls } = stubDb();

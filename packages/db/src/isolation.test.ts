@@ -28,6 +28,8 @@ const ALLOWED_NON_TENANT_TABLES = [
   "app.retention_settings",
   "app.schema_migrations",
   "app.webhook_deliveries",
+  // The claim queue (review round 3): one row per installation lane with pending work; ids only.
+  "app.webhook_queue",
 ];
 
 /**
@@ -64,6 +66,8 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "app.schema_migrations": [],
   // Insert-only: the receiver records deliveries; it can neither read nor remove them (ADR 0007).
   "app.webhook_deliveries": ["INSERT"],
+  // The claim queue is the worker functions' alone (its triggers run as rocky_lifecycle).
+  "app.webhook_queue": [],
   "public.analyses": DML,
   "public.audit_events": ["INSERT", "SELECT"],
   "public.audit_events_id_seq": [],
@@ -114,6 +118,7 @@ const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
   [WORKER_ROLE]: { "public.orgs": ["INSERT"] },
   [LIFECYCLE_ROLE]: {
     "app.webhook_deliveries": ["SELECT", "UPDATE"],
+    "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
     "public.orgs": ["SELECT"],
   },
 };
