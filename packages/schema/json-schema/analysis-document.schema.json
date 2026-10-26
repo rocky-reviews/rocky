@@ -219,6 +219,7 @@
           "type": "array"
         },
         "estimatedReviewMinutes": {
+          "description": "Minutes for the whole PR; at least the sum of triage.files[].reviewMinutes, plus the briefing and noise.",
           "maximum": 480,
           "minimum": 1,
           "type": "integer"
@@ -1622,6 +1623,30 @@
           ],
           "type": "object"
         },
+        "graphUnavailable": {
+          "additionalProperties": false,
+          "description": "Present only when the pipeline could not produce the change map; the document then has no graph.",
+          "properties": {
+            "detail": {
+              "description": "Fixed, pipeline-written detail, if any. Never a raw error message, prompt or model output.",
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "reason": {
+              "enum": [
+                "analysis-failed",
+                "too-large",
+                "timeout"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        },
         "head": {
           "additionalProperties": false,
           "properties": {
@@ -1819,6 +1844,12 @@
                 "minLength": 1,
                 "type": "string"
               },
+              "reviewMinutes": {
+                "description": "Estimated minutes a careful reviewer needs for this file. Zero for a glance.",
+                "maximum": 480,
+                "minimum": 0,
+                "type": "integer"
+              },
               "score": {
                 "description": "Triage score: how much of the reviewer's attention this file deserves.",
                 "maximum": 100,
@@ -1842,6 +1873,7 @@
               "path",
               "score",
               "level",
+              "reviewMinutes",
               "reason",
               "whatChanged",
               "whyThisLevel"

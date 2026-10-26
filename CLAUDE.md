@@ -45,6 +45,8 @@ decisions, hosting costs): reference task IDs only.
 - Visual reference: `design-poc/index.html` and `docs/design/poc/`. Do not copy the defects
   listed in `docs/design/poc-parity.md`.
 - Commit messages: `<TASK-ID>: <summary>`; never commit `.env` or secrets.
+- Never pass request bodies, diffs, file contents, prompts or model output to the logger; log
+  ids, sizes and hashes instead. Redaction in `packages/log` is a safety net, not the control.
 
 ## Local commands
 

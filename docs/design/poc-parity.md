@@ -37,6 +37,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [ ] Risk verdict box (level + why)
 - [ ] Risk table: Critical "need your attention", Important "worth a careful look", Normal "to skim", Ignore "don't matter" (low + noise), with clickable file names
 - [ ] Change map (P5-1/P5-3): lanes, cards coloured by delta, hero edges animated, edge labels, finding-count badges by worst severity, click card → file, legend
+- [ ] Change map unavailable (H2 #2, not in the POC): when the document has no `graph`, the rest of the briefing still renders and the map area shows "Change map unavailable", the reason from `provenance.graphUnavailable` (none when the field is absent) and a Retry button
 - [ ] Suggested review path: numbered, file + why + score, clickable
 - [ ] "Project memory applied" list with source PR
 - [ ] "AI checked, looks fine" list
@@ -118,7 +119,7 @@ Found while capturing the P0-8 screenshots.
 3. **Change-map edge labels overlap cards** ("POST /accept", "read token", "grant role"). P5-1 must place labels in free space.
 4. **Ambiguous file names** in the risk table: two files show as `invitations.ts`. Show the parent folder when names collide.
 5. **No way to reach Ask or the drafts list below 1180 px**. Add a drawer or tab.
-6. **Coverage minutes** are computed from additions only; the real estimate should come from the analysis.
+6. **Coverage minutes** are computed from additions only; the real estimate comes from the analysis (`triage.files[].reviewMinutes`, H2 #9).
 
 ## Intentional differences
 

@@ -6,9 +6,22 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fastify": "./src/fastify.ts"
   },
   "dependencies": {
+    "@opentelemetry/api": "1.9.1",
     "pino": "10.4.0"
+  },
+  "peerDependencies": {
+    "fastify": "5.12.7"
+  },
+  "peerDependenciesMeta": {
+    "fastify": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "fastify": "5.12.7"
   }
 }

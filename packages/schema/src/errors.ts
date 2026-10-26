@@ -38,8 +38,10 @@ export type IssueCode =
   | "SCORE_LEVEL_MISMATCH"
   /** A critical or high finding sits in a file triaged `low`. */
   | "SEVERITY_LEVEL_MISMATCH"
-  /** The PR verdict is lower than its findings allow. */
+  /** The PR verdict is lower than its findings allow (a critical finding means a critical verdict). */
   | "VERDICT_TOO_LOW"
+  /** The PR's estimated review minutes are below the sum of the per-file estimates. */
+  | "REVIEW_MINUTES_TOO_LOW"
   /** A suggestion names a context line but its range starts at line 1. */
   | "SUGGESTION_CONTEXT_IMPOSSIBLE"
   /** A suggestion's context line differs from the file. */

@@ -55,6 +55,13 @@ export type AnalysisModelOutputInput = z.input<typeof AnalysisModelOutput>;
 export const AnalysisDocument = AnalysisModelOutput.safeExtend({
   schemaVersion: SchemaVersionField,
   provenance: Provenance,
-}).describe("A Rocky Reviews analysis document: one PR revision, fully analysed.");
+})
+  // The pipeline records why the change map is missing only when it is missing; a document
+  // that carries both a graph and that reason would leave the UI two stories to choose from.
+  .refine((doc) => doc.graph === undefined || doc.provenance.graphUnavailable === undefined, {
+    message: "a document with a graph cannot also say the change map is unavailable",
+    path: ["provenance", "graphUnavailable"],
+  })
+  .describe("A Rocky Reviews analysis document: one PR revision, fully analysed.");
 export type AnalysisDocument = z.infer<typeof AnalysisDocument>;
 export type AnalysisDocumentInput = z.input<typeof AnalysisDocument>;

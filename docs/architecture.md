@@ -3,7 +3,8 @@
 Decisions behind this page:
 [ADR 0002 modular monolith](adr/0002-architecture.md), [ADR 0003 tenancy](adr/0003-tenancy.md),
 [ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md),
-[ADR 0005 migrations and roles](adr/0005-migrations-and-roles.md).
+[ADR 0005 migrations and roles](adr/0005-migrations-and-roles.md),
+[ADR 0006 envelope encryption](adr/0006-envelope-encryption.md).
 
 ## Runtime
 
@@ -46,7 +47,7 @@ packages/schema (analysis document; shared contract)
 | `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                         |
 | `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                      |
 | `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                          |
-| `packages/log`               | Pino with redaction                                                                                           |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                            |
 | `packages/config`            | Config loading and validation                                                                                 |
 | `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                    |
 | `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                |
