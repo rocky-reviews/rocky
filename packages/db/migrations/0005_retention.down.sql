@@ -18,7 +18,9 @@ DROP POLICY IF EXISTS analyses_retention_select ON analyses;
 
 REVOKE ALL ON analyses, jobs, orgs, audit_events FROM rocky_retention;
 
+DROP TRIGGER IF EXISTS orgs_deletion_audit ON orgs;
 DROP TRIGGER IF EXISTS orgs_deletion_grace ON orgs;
+DROP FUNCTION IF EXISTS app.orgs_audit_deletion_schedule();
 DROP FUNCTION IF EXISTS app.orgs_enforce_deletion_grace();
 
 DROP TABLE IF EXISTS app.retention_settings;

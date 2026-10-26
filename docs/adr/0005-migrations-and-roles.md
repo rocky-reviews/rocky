@@ -67,21 +67,28 @@ commit if it changed, then commits or rolls back.
   that exposes exactly one member, `query`; every other property of the pg client (`release`,
   `connection`, `end`, …) throws, so nothing inside `fn` can return a mid-transaction connection
   to the pool. `query` refuses every statement once the transaction has ended, and (best effort,
-  after normalising comments, literals, quoting and case) statements that would alter the
+  after normalising comments, literals including `E'…'` escapes and `$tag$` quotes, quoting and
+  case; `u&` escape syntax is refused outright) statements that would alter the
   transaction or the tenant context: `BEGIN/COMMIT/ROLLBACK/END/ABORT/SAVEPOINT/RELEASE/PREPARE/
 DISCARD/RESET`, `SET [LOCAL|SESSION] ROLE | SESSION AUTHORIZATION | TRANSACTION | app.*`, any
   `set_config(` and real multi-statement text (`;` inside a literal or one trailing `;` is fine).
   Drizzle's `db.transaction()` is therefore refused as well. The commit-time recheck of
   `app.org_id` remains the actual guarantee.
-- Nested calls for the same org join the transaction through a savepoint. Each nesting level is
-  its own async scope sharing the connection, the closed flag and the savepoint counter but with
-  its own queue: sibling calls are serialised so savepoints never interleave, while a call nested
-  inside a nested call runs immediately (queueing it behind its awaiting parent would deadlock).
-  Every level awaits its children before releasing its savepoint. A nested call for a different
-  org throws.
+- Nested calls for the same org **join the open transaction** (REQUIRED propagation): the
+  nested `fn` runs with the same guarded handle; there are no savepoints, no queues and no
+  serialisation of nested calls (node-pg already serialises concurrent queries on one client, so
+  `Promise.all` is safe at any depth). The library issues nothing but `begin`, `set_config`,
+  `commit` and `rollback` on the connection. **Trade-off:** a failing nested call is not rolled
+  back on its own. The error propagates and the whole transaction rolls back unless the caller
+  catches it; if the caller catches it, the outer work commits together with whatever the nested
+  call had already written. Code that needs an all-or-nothing sub-unit must run it in its own
+  `withOrg` from outside the enclosing one. Partial rollback (savepoints) was built twice and
+  produced a new tenant-isolation edge case each time; nothing in Phase 2 needs it. A nested
+  call for a different org throws.
 - A `withOrg` call made from work that outlived its enclosing transaction (a timer, an event
   listener created inside `fn`) finds a _closed_ scope and throws `TenantContextError` rather than
-  starting a new transaction: that scope's connection now belongs to someone else, and detached
+  starting a new transaction. The scope closes the moment the root `fn` settles, before commit, so
+  no orphaned query at any depth reaches the connection: that scope's connection now belongs to someone else, and detached
   work should be scheduled from outside `withOrg` on purpose.
 - The raw pool is never exported: outside `withOrg` the package offers only `purgeExpired`,
   `deleteOrg` and `retentionSettings`.
@@ -116,10 +123,10 @@ parent (org_id, id)`; parents carry `UNIQUE (org_id, id)`. Nullable references u
 - `delete_org(org)` erases one org once `delete_after <= now()`: it deletes the org's
   `audit_events` as `rocky_retention` (foreign-key cascades run as the table owner, which the
   trigger blocks) and then the `orgs` row, which cascades through every other tenant table. A
-  trigger on `orgs` pushes any `delete_after` the application sets to at least `now() + grace`,
-  so scheduling and executing a deletion can never happen in one go, and writes an
-  `org.deletion_scheduled` / `org.deletion_cancelled` audit row with the application's own
-  INSERT right (no extra privilege).
+  BEFORE trigger on `orgs` pushes any `delete_after` the application sets to at least
+  `now() + grace`, so scheduling and executing a deletion can never happen in one go; an AFTER
+  trigger writes the `org.deletion_scheduled` / `org.deletion_cancelled` audit row with the
+  application's own INSERT right (no extra privilege), after the org row exists.
 - `runRetention(db, { clock })` runs the three purges as of the injected clock and returns a
   report; it writes no audit rows itself. Application (Pino) logs are not in the database; their
   retention is a hosting concern.

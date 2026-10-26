@@ -43,10 +43,15 @@ export interface Db {
    * Runs `fn` in one transaction scoped to `orgId`: `set_config('app.org_id', orgId, true)` is
    * transaction-local, so it is safe with connection pooling. Commits when `fn` resolves, rolls
    * back when it rejects, and refuses to commit if the tenant setting changed underneath it.
-   * Nested calls for the same org join the transaction (savepoint; siblings are serialised); a
-   * different org throws; a call made from work that outlived its enclosing transaction (a
-   * timer, an event listener) throws too, so detached work must start its own `withOrg` from
-   * outside.
+   *
+   * Nesting (REQUIRED propagation): a `withOrg` for the same org inside `fn` joins the open
+   * transaction and runs with the same handle; there are no savepoints. A nested failure is not
+   * rolled back on its own: the error propagates and the whole transaction rolls back unless the
+   * caller catches it, in which case the outer work commits together with whatever the nested
+   * call had already written. A nested call for a different org throws. Once the root `fn` has
+   * settled the scope is closed: any later query from work that outlived it (a timer, an event
+   * listener, a saved handle), at any depth, throws `TenantContextError` and never reaches the
+   * connection, so detached work must start its own `withOrg` from outside.
    */
   withOrg<T>(orgId: OrgId, fn: (tx: TenantTx) => Promise<T>): Promise<T>;
   /**
@@ -71,24 +76,13 @@ export type DbOptions =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** One tenant transaction: shared by the outer `withOrg` and every nested call inside it. */
-interface Shared {
+/** One tenant transaction, shared by the root `withOrg` and every nested call inside it. */
+interface Scope {
   orgId: OrgId;
   client: pg.PoolClient;
   tx: TenantTx;
-  savepoints: number;
-  /** Set in `finally`, before the connection goes back to the pool. */
+  /** Set as soon as the root `fn` settles, before commit/rollback and before release. */
   closed: boolean;
-}
-
-/**
- * One nesting level. Nested calls made at the same level queue on their parent's `chain` so
- * savepoints never interleave; each nested `fn` runs in its own scope, so deeper calls only
- * queue behind their siblings, never behind the call that is awaiting them.
- */
-interface Scope {
-  shared: Shared;
-  chain: Promise<unknown>;
 }
 
 // --- Statement guard ------------------------------------------------------------------------
@@ -97,13 +91,20 @@ interface Scope {
  * Best-effort denylist for statements that would alter the transaction or the tenant context
  * from inside `withOrg` (the commit-time recheck of `app.org_id` is the real guarantee). The
  * text is normalised first: comments removed, string literals blanked, quoted identifiers
- * unquoted, lower-cased, whitespace collapsed.
+ * unquoted, lower-cased, whitespace collapsed. The library itself never issues savepoints, so
+ * those are refused along with everything else that moves the transaction.
  */
 const FORBIDDEN_HEAD =
   /^(?:begin|start|commit|end|rollback|abort|savepoint|release|prepare|discard|reset|set (?:local |session )?(?:role|session authorization|transaction|app ?\.))\b/;
 /** Any set_config call: the only legitimate one is withOrg's own. */
 const SET_CONFIG = /\bset_config ?\(/;
+/** Unicode-escape syntax (`u&'…'`, `u&"…"`) can spell anything; refused outright. */
+const UNICODE_ESCAPE = /(?:^|[^a-z0-9_$])u&["']/i;
 const DOLLAR_TAG = /^\$([a-z_][a-z0-9_]*)?\$/i;
+const IDENTIFIER_CHAR = /[a-z0-9_$]/i;
+
+const isIdentifierChar = (c: string | undefined): boolean =>
+  c !== undefined && IDENTIFIER_CHAR.test(c);
 
 const normaliseSql = (sql: string): string => {
   let out = "";
@@ -121,8 +122,16 @@ const normaliseSql = (sql: string): string => {
       i = end === -1 ? n : end + 2;
       out += " ";
     } else if (c === "'") {
+      // E'…' literals (an `e`/`E` right before the quote that is not part of an identifier)
+      // honour backslash escapes; ordinary literals only double the quote.
+      const prev = sql[i - 1];
+      const escapes = (prev === "e" || prev === "E") && !isIdentifierChar(sql[i - 2]);
       let j = i + 1;
       while (j < n) {
+        if (escapes && sql[j] === "\\") {
+          j += 2;
+          continue;
+        }
         if (sql[j] === "'") {
           if (sql[j + 1] === "'") {
             j += 2;
@@ -151,7 +160,12 @@ const normaliseSql = (sql: string): string => {
       }
       out += identifier.replace(/;/g, "");
       i = j + 1;
-    } else if (c === "$" && DOLLAR_TAG.test(sql.slice(i, i + 64))) {
+    } else if (
+      c === "$" &&
+      !isIdentifierChar(sql[i - 1]) &&
+      DOLLAR_TAG.test(sql.slice(i, i + 64))
+    ) {
+      // A dollar quote, unless the `$` continues an identifier such as `a$x$`.
       const tag = DOLLAR_TAG.exec(sql.slice(i, i + 64))?.[0] ?? "$$";
       const end = sql.indexOf(tag, i + tag.length);
       out += "''";
@@ -165,6 +179,11 @@ const normaliseSql = (sql: string): string => {
 };
 
 const checkStatement = (sql: string): void => {
+  if (UNICODE_ESCAPE.test(sql)) {
+    throw new TenantContextError(
+      "withOrg: unicode-escaped strings and identifiers are not allowed",
+    );
+  }
   let text = normaliseSql(sql);
   if (text.endsWith(";")) text = text.slice(0, -1).trim();
   if (text.includes(";")) {
@@ -191,8 +210,8 @@ const textOf = (query: unknown): string => {
 
 // --- Tenant transaction ---------------------------------------------------------------------
 
-const assertOpen = (shared: Shared): void => {
-  if (shared.closed) {
+const assertOpen = (scope: Scope): void => {
+  if (scope.closed) {
     throw new TenantContextError(
       "withOrg: this tenant transaction has finished; start a new withOrg from outside it",
     );
@@ -205,12 +224,12 @@ const assertOpen = (shared: Shared): void => {
  * the tenant setting. Everything else on the real client (`release`, `connection`, `end`, …)
  * throws, so nothing inside `fn` can hand a mid-transaction connection back to the pool.
  */
-const guardedClient = (shared: Shared): pg.PoolClient => {
+const guardedClient = (scope: Scope): pg.PoolClient => {
   // Async so a refusal is always a rejection, whichever way the caller consumes the result.
   const query = async (...args: unknown[]): Promise<unknown> => {
-    assertOpen(shared);
+    assertOpen(scope);
     checkStatement(textOf(args[0]));
-    return (shared.client.query as (...a: unknown[]) => Promise<unknown>)(...args);
+    return (scope.client.query as (...a: unknown[]) => Promise<unknown>)(...args);
   };
   const surface = Object.freeze({ query });
   return new Proxy(surface, {
@@ -226,10 +245,10 @@ const guardedClient = (shared: Shared): pg.PoolClient => {
   }) as unknown as pg.PoolClient;
 };
 
-const makeTx = (shared: Shared): TenantTx => {
-  const client = guardedClient(shared);
+const makeTx = (scope: Scope): TenantTx => {
+  const client = guardedClient(scope);
   return {
-    orgId: shared.orgId,
+    orgId: scope.orgId,
     db: drizzle(client, { schema }),
     query: (text, values) => client.query(text, values as unknown[] | undefined),
   };
@@ -243,33 +262,6 @@ export const createDb = (options: DbOptions): Db => {
   // One store per Db, so two Db instances in one process never see each other's scope.
   const scopes = new AsyncLocalStorage<Scope>();
 
-  const nested = <T>(parent: Scope, fn: (tx: TenantTx) => Promise<T>): Promise<T> => {
-    const { shared } = parent;
-    const run = async (): Promise<T> => {
-      assertOpen(shared);
-      const savepoint = `withorg_${++shared.savepoints}`;
-      await shared.client.query(`savepoint ${savepoint}`);
-      const child: Scope = { shared, chain: Promise.resolve() };
-      try {
-        const result = await scopes.run(child, () => fn(shared.tx));
-        // Deeper calls that `fn` did not await must settle before this savepoint is released.
-        await child.chain;
-        await shared.client.query(`release savepoint ${savepoint}`);
-        return result;
-      } catch (error) {
-        await child.chain;
-        await shared.client.query(`rollback to savepoint ${savepoint}`);
-        throw error;
-      }
-    };
-    const result = parent.chain.then(run, run);
-    parent.chain = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
-
   const withOrg = async <T>(orgId: OrgId, fn: (tx: TenantTx) => Promise<T>): Promise<T> => {
     if (typeof orgId !== "string" || !UUID.test(orgId)) {
       throw new TenantContextError("withOrg: orgId must be a uuid");
@@ -278,25 +270,25 @@ export const createDb = (options: DbOptions): Db => {
     if (current !== undefined) {
       // A finished scope is still visible to timers and listeners created inside it; its
       // connection now belongs to someone else, so this is refused rather than re-run.
-      assertOpen(current.shared);
-      if (current.shared.orgId !== orgId) {
+      assertOpen(current);
+      if (current.orgId !== orgId) {
         throw new TenantContextError(
           "withOrg: nested call for a different org inside an open tenant transaction",
         );
       }
-      return nested(current, fn);
+      // REQUIRED propagation: join the open transaction with the same guarded handle. node-pg
+      // queues concurrent queries on one client, so parallel nested calls are safe.
+      return fn(current.tx);
     }
 
     const client = await pool.connect();
-    const shared: Shared = {
+    const scope: Scope = {
       orgId,
       client,
       tx: undefined as unknown as TenantTx,
-      savepoints: 0,
       closed: false,
     };
-    shared.tx = makeTx(shared);
-    const root: Scope = { shared, chain: Promise.resolve() };
+    scope.tx = makeTx(scope);
     let broken: Error | undefined;
     try {
       // A pooled connection may carry a session-level app.org_id left by misbehaving code;
@@ -305,9 +297,13 @@ export const createDb = (options: DbOptions): Db => {
       await client.query("select set_config('app.org_id', '', false)");
       await client.query("begin");
       await client.query("select set_config('app.org_id', $1, true)", [orgId]);
-      const result = await scopes.run(root, () => fn(shared.tx));
-      // Nested work that `fn` did not await must finish (or fail) before we decide to commit.
-      await root.chain;
+      let result: T;
+      try {
+        result = await scopes.run(scope, () => fn(scope.tx));
+      } finally {
+        // From here on nothing that came out of `fn` may reach the connection again.
+        scope.closed = true;
+      }
       const check = await client.query<{ org_id: string | null }>(
         "select current_setting('app.org_id', true) as org_id",
       );
@@ -325,7 +321,7 @@ export const createDb = (options: DbOptions): Db => {
       }
       throw error;
     } finally {
-      shared.closed = true;
+      scope.closed = true;
       client.release(broken);
     }
   };

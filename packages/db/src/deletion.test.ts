@@ -47,14 +47,15 @@ const rowsOf = async (table: { name: string; tenantColumn: string }, orgId: stri
 
 /** Time travel: move the grace deadline into the past without the trigger pushing it back. */
 const makeDue = async (orgId: string): Promise<void> => {
-  await superuser.query("alter table orgs disable trigger orgs_deletion_grace");
+  // Both the clamp (BEFORE) and the audit (AFTER) trigger stay out of the way.
+  await superuser.query("alter table orgs disable trigger user");
   try {
     await superuser.query(
       "update orgs set delete_after = now() - interval '1 second' where id = $1",
       [orgId],
     );
   } finally {
-    await superuser.query("alter table orgs enable trigger orgs_deletion_grace");
+    await superuser.query("alter table orgs enable trigger user");
   }
 };
 
@@ -137,6 +138,29 @@ describe("retention.delete_org", () => {
     // Schedule again so the deletion test below has something to execute.
     await db.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: new Date() }));
     expect((await actions()).at(-1)?.action).toBe("org.deletion_scheduled");
+  });
+
+  it("can insert an org with delete_after already set: clamp before, audit after (re-review H)", async () => {
+    const orgId = newOrgId();
+    const result = await db.withOrg(orgId, async (tx) => {
+      const [inserted] = await tx.db
+        .insert(schema.orgs)
+        .values({
+          id: orgId,
+          installationId: 99,
+          login: "org-99",
+          kind: "organization",
+          deleteAfter: new Date(),
+        })
+        .returning({ deleteAfter: schema.orgs.deleteAfter });
+      const events = await tx.db.select().from(schema.auditEvents);
+      return {
+        deleteAfter: inserted?.deleteAfter ?? null,
+        events: events.map((e) => ({ action: e.action, target: e.targetId })),
+      };
+    });
+    expect(result.deleteAfter!.getTime()).toBeGreaterThan(Date.now() + 6.9 * DAY);
+    expect(result.events).toEqual([{ action: "org.deletion_scheduled", target: orgId }]);
   });
 
   it("the app role cannot delete an org row directly, even its own", async () => {

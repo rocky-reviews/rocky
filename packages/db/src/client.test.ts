@@ -33,6 +33,24 @@ const repoOrgIds = async (orgId: OrgId): Promise<string[]> =>
   db.withOrg(orgId, async (tx) => (await tx.db.select().from(schema.repos)).map((r) => r.orgId));
 
 describe("withOrg", () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** A regression here would hold the connection forever; fail fast instead of hanging the suite. */
+  const withTimeout = <T>(promise: Promise<T>, ms = 5_000): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out after ${ms} ms (deadlock?)`)), ms),
+      ),
+    ]);
+
+  const contentsOf = async (orgId: OrgId): Promise<string[]> =>
+    db.withOrg(orgId, async (tx) =>
+      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
+        (r) => r.c,
+      ),
+    );
+
   it("scopes Drizzle and raw queries to the org", async () => {
     expect(await repoOrgIds(orgA)).toEqual([orgA]);
     await db.withOrg(orgB, async (tx) => {
@@ -114,30 +132,70 @@ describe("withOrg", () => {
     expect(seen).toEqual([orgA]);
   });
 
-  it("joins a nested withOrg for the same org (savepoint), rolling back only the inner part", async () => {
-    await db.withOrg(orgA, async (outer) => {
-      await outer.db.insert(schema.memoryEntries).values({ kind: "note", content: "outer" });
-      await db.withOrg(orgA, async (inner) => {
-        expect(inner.orgId).toBe(orgA);
-        const rows = await inner.db.select().from(schema.memoryEntries);
-        expect(rows.map((r) => r.content)).toContain("outer");
-      });
-      await expect(
-        db.withOrg(orgA, async (inner) => {
-          await inner.db
-            .insert(schema.memoryEntries)
-            .values({ kind: "note", content: "inner-fail" });
-          throw new Error("inner boom");
-        }),
-      ).rejects.toThrow("inner boom");
-    });
-    const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+  it("joins a nested withOrg for the same org: one transaction, same tenant handle (re-review F)", async () => {
+    await withTimeout(
+      db.withOrg(orgA, async (outer) => {
+        await outer.db.insert(schema.memoryEntries).values({ kind: "note", content: "outer" });
+        await db.withOrg(orgA, async (inner) => {
+          expect(inner.orgId).toBe(orgA);
+          const rows = await inner.db.select().from(schema.memoryEntries);
+          expect(rows.map((r) => r.content)).toContain("outer");
+          await inner.db.insert(schema.memoryEntries).values({ kind: "note", content: "inner" });
+        });
+      }),
     );
-    expect(contents).toContain("outer");
-    expect(contents).not.toContain("inner-fail");
+    expect(await contentsOf(orgA)).toEqual(expect.arrayContaining(["outer", "inner"]));
+  });
+
+  it("rolls back the whole transaction when a nested failure is not caught", async () => {
+    await expect(
+      withTimeout(
+        db.withOrg(orgA, async (outer) => {
+          await outer.db
+            .insert(schema.memoryEntries)
+            .values({ kind: "note", content: "uncaught-outer" });
+          await db.withOrg(orgA, async (inner) => {
+            await inner.db
+              .insert(schema.memoryEntries)
+              .values({ kind: "note", content: "uncaught-inner" });
+            throw new Error("inner boom");
+          });
+        }),
+      ),
+    ).rejects.toThrow("inner boom");
+    const contents = await contentsOf(orgA);
+    expect(contents).not.toContain("uncaught-outer");
+    expect(contents).not.toContain("uncaught-inner");
+  });
+
+  it("leaves the outer transaction usable when the caller catches a nested failure; the nested writes stay (re-review F)", async () => {
+    await withTimeout(
+      db.withOrg(orgA, async (outer) => {
+        await outer.db
+          .insert(schema.memoryEntries)
+          .values({ kind: "note", content: "caught-outer" });
+        await expect(
+          db.withOrg(orgA, async (inner) => {
+            await inner.db
+              .insert(schema.memoryEntries)
+              .values({ kind: "note", content: "caught-inner" });
+            throw new Error("inner boom");
+          }),
+        ).rejects.toThrow("inner boom");
+        // REQUIRED propagation: no savepoint, so what the nested call wrote is still in this
+        // transaction, and the transaction itself is fine.
+        await outer.db
+          .insert(schema.memoryEntries)
+          .values({ kind: "note", content: "after-catch" });
+        const rows = await outer.db
+          .select({ c: schema.memoryEntries.content })
+          .from(schema.memoryEntries);
+        expect(rows.map((r) => r.c)).toContain("caught-inner");
+      }),
+    );
+    expect(await contentsOf(orgA)).toEqual(
+      expect.arrayContaining(["caught-outer", "caught-inner", "after-catch"]),
+    );
   });
 
   it("can be created from a connection string and closed", async () => {
@@ -146,8 +204,6 @@ describe("withOrg", () => {
     expect(rows.map((r) => r.id)).toEqual([orgB]);
     await own.close();
   });
-
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   it("refuses a detached nested withOrg whose enclosing transaction has finished (review #1)", async () => {
     // A timer scheduled inside withOrg(A) inherits A's async scope and fires after A committed,
@@ -187,46 +243,23 @@ describe("withOrg", () => {
     expect(await repoOrgIds(orgA)).toEqual([orgA]);
   });
 
-  it("serialises concurrent nested calls so savepoints never interleave (review #6)", async () => {
-    await db.withOrg(orgA, async () => {
-      await Promise.all(
-        [1, 2, 3].map((n) =>
-          db.withOrg(orgA, async (tx) => {
-            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: `par-${n}` });
-            await sleep(5);
-          }),
-        ),
-      );
-      await expect(
-        Promise.all([
-          db.withOrg(orgA, async (tx) => {
-            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "par-keep" });
-            await sleep(5);
-          }),
-          db.withOrg(orgA, async (tx) => {
-            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "par-lost" });
-            throw new Error("par boom");
-          }),
-        ]),
-      ).rejects.toThrow("par boom");
-    });
-    const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+  it("runs concurrent nested calls at the root on the shared transaction (review #6, re-review F)", async () => {
+    await withTimeout(
+      db.withOrg(orgA, async () => {
+        await Promise.all(
+          [1, 2, 3].map((n) =>
+            db.withOrg(orgA, async (tx) => {
+              await tx.db
+                .insert(schema.memoryEntries)
+                .values({ kind: "note", content: `par-${n}` });
+              await sleep(5);
+            }),
+          ),
+        );
+      }),
     );
-    expect(contents).toEqual(expect.arrayContaining(["par-1", "par-2", "par-3", "par-keep"]));
-    expect(contents).not.toContain("par-lost");
+    expect(await contentsOf(orgA)).toEqual(expect.arrayContaining(["par-1", "par-2", "par-3"]));
   });
-
-  /** A regression here would hold the connection forever; fail fast instead of hanging the suite. */
-  const withTimeout = <T>(promise: Promise<T>, ms = 5_000): Promise<T> =>
-    Promise.race([
-      promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`timed out after ${ms} ms (deadlock?)`)), ms),
-      ),
-    ]);
 
   it("nests three levels deep without deadlocking (re-review A)", async () => {
     const result = await withTimeout(
@@ -243,29 +276,71 @@ describe("withOrg", () => {
       ),
     );
     expect(result).toBe(3);
-    // A failure three levels down rolls back only its own savepoint.
-    await withTimeout(
-      db.withOrg(orgA, async (l1) => {
-        await l1.db.insert(schema.memoryEntries).values({ kind: "note", content: "depth-1-kept" });
-        await expect(
-          db.withOrg(orgA, () =>
+    // An uncaught failure three levels down rolls back the whole transaction.
+    await expect(
+      withTimeout(
+        db.withOrg(orgA, async (l1) => {
+          await l1.db
+            .insert(schema.memoryEntries)
+            .values({ kind: "note", content: "depth-1-lost" });
+          await db.withOrg(orgA, () =>
             db.withOrg(orgA, async (l3) => {
               await l3.db
                 .insert(schema.memoryEntries)
                 .values({ kind: "note", content: "depth-3-lost" });
               throw new Error("depth-3 boom");
             }),
-          ),
-        ).rejects.toThrow("depth-3 boom");
-      }),
-    );
-    const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
+          );
+        }),
+      ),
+    ).rejects.toThrow("depth-3 boom");
+    const contents = await contentsOf(orgA);
+    expect(contents).toContain("depth-3");
+    expect(contents).not.toContain("depth-1-lost");
+    expect(contents).not.toContain("depth-3-lost");
+  });
+
+  it("refuses an orphan from a timer at depth and never touches the next tenant's transaction (re-review F)", async () => {
+    // pool max=1 (beforeAll). A setTimeout(0) inside a level-2 withOrg outlives the root
+    // transaction; by the time it fires, withOrg(B) owns the connection and is nesting too.
+    const noop = () => undefined;
+    let orphanCall: Promise<unknown> = Promise.resolve();
+    let orphanQuery: Promise<unknown> = Promise.resolve();
+    await withTimeout(
+      db.withOrg(orgA, () =>
+        db.withOrg(orgA, async (l2) => {
+          orphanCall = new Promise((resolve, reject) => {
+            setTimeout(() => {
+              db.withOrg(orgA, (tx) => tx.query("select org_id from repos")).then(resolve, reject);
+            }, 20);
+          });
+          orphanQuery = new Promise((resolve, reject) => {
+            setTimeout(() => {
+              l2.query("select org_id from repos").then(resolve, reject);
+            }, 20);
+          });
+          orphanCall.catch(noop);
+          orphanQuery.catch(noop);
+        }),
       ),
     );
-    expect(contents).toEqual(expect.arrayContaining(["depth-3", "depth-1-kept"]));
-    expect(contents).not.toContain("depth-3-lost");
+    const seenByB = await withTimeout(
+      db.withOrg(orgB, async (outer) => {
+        await db.withOrg(orgB, async (inner) => {
+          await inner.db.insert(schema.memoryEntries).values({ kind: "note", content: "b-nested" });
+        });
+        await sleep(80);
+        return (
+          await outer.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)
+        ).map((r) => r.c);
+      }),
+    );
+    expect(seenByB).toContain("b-nested");
+    await expect(orphanCall).rejects.toThrow(TenantContextError);
+    await expect(orphanQuery).rejects.toThrow(TenantContextError);
+    expect(await contentsOf(orgB)).toContain("b-nested");
+    expect(await repoOrgIds(orgA)).toEqual([orgA]);
+    expect(await repoOrgIds(orgB)).toEqual([orgB]);
   });
 
   it("nests inside one branch of a Promise.all without deadlocking (re-review A)", async () => {
@@ -333,6 +408,12 @@ describe("withOrg", () => {
         "--not a comment",
       );
       expect((await tx.query<{ v: string }>(`select 'commit' as "v"`)).rows[0]?.v).toBe("commit");
+      expect((await tx.query<{ v: string }>("select E'it\\'s; ok' as v")).rows[0]?.v).toBe(
+        "it's; ok",
+      );
+      expect((await tx.query<Record<string, number>>("select 1 as a$x$")).rows[0]?.["a$x$"]).toBe(
+        1,
+      );
     });
   });
 
@@ -375,6 +456,11 @@ describe("withOrg", () => {
       "select 1; commit; select 2",
       "select 'a'; commit",
       "(commit)",
+      // Re-review G: E'' backslash escapes, u& escapes, identifiers that end in $tag$.
+      "select E'\\'' as v; commit",
+      `select u&"set_conf\\0069g"('app.org_id', $1, true)`,
+      "select u&'x' as v; commit",
+      "select 1 as a$x$; commit; select 'a$x$' as b",
     ];
     for (const sql of forbidden) {
       const params = (sql.match(/\$\d/g) ?? []).map(() => "x");
