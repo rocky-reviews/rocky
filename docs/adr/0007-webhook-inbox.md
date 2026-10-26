@@ -5,7 +5,8 @@
 - **Tasks:** P3-7, P3-2
 - **Amends:** [ADR 0005](0005-migrations-and-roles.md) §1 (a third non-tenant table in `app`)
 - **Amended by:** [ADR 0009](0009-installation-lifecycle.md) (P3-3: the inbox's processing state,
-  the worker's claim path, the purge skips unprocessed rows)
+  the worker's claim path, the purge skips unprocessed rows; review round 1: claims per forge, one
+  live lease per installation, superseded duplicates, transient vs. strike failures)
 
 ## Context
 
@@ -132,12 +133,16 @@ job: the worker consumes the inbox (P3-3 adds the claim path) and creates tenant
   Same contract as the 0005 purges; not audited per org (a delivery has no org), `runRetention`
   reports the count. The retention period is also the dedup window. Since P3-3 it deletes
   **processed** rows only: pending, leased and parked rows stay however old (ADR 0009 §3).
-- **Processing state (P3-3, ADR 0009 §3).** `attempts`, `available_at`, `lease_token`/`lease_until`,
-  `processed_at` + `outcome`, `parked_at`, `last_error` (SQLSTATE or reason code). Reset by the stamp
-  trigger on insert. The worker role claims rows with `FOR UPDATE SKIP LOCKED` and a lease through
-  `worker.claim_webhook_deliveries`, finishes them with `worker.complete_webhook_delivery` (inside
-  the tenant transaction that applied the effect) or `worker.fail_webhook_delivery`; after five
-  attempts a row is parked. The app role still holds `INSERT` only.
+- **Processing state (P3-3, ADR 0009 §3).** `attempts`, `strikes`, `available_at`,
+  `lease_token`/`lease_until`, `processed_at` + `outcome`, `parked_at`, `last_error` (SQLSTATE or
+  reason code). Reset by the stamp trigger on insert. The worker role claims rows of **its forge**
+  with a lease through `worker.claim_webhook_deliveries`: at most one live lease per
+  `(forge, installation_id)`, the oldest pending row first, older pending duplicates of the same
+  event marked `superseded` unclaimed. It finishes them with `worker.complete_webhook_delivery`
+  (inside the tenant transaction that applied the effect) or `worker.fail_webhook_delivery` with a
+  kind: `transient` failures never park a row before it is 72 h old, `strike`s park it at five
+  (a lost lease is a strike), `permanent` parks it now. The app role still holds `INSERT` only.
+  The erasure of an org deletes or scrubs the rows of its installation and account (ADR 0009 §6).
 - The isolation suite allow-lists the table explicitly, pins the app's privileges on it to
   `INSERT`, and the SECURITY DEFINER allow-list grows to five.
 

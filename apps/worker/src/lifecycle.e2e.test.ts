@@ -5,7 +5,7 @@ import {
   type OrgErasers,
   type OrgId,
 } from "@rocky-reviews/core";
-import { createDb, schema, WEBHOOK_MAX_ATTEMPTS, type Db } from "@rocky-reviews/db";
+import { createDb, schema, WEBHOOK_MAX_STRIKES, type Db } from "@rocky-reviews/db";
 import {
   CONTAINER_TIMEOUT_MS,
   seedOrg,
@@ -32,8 +32,10 @@ import { createLogger } from "@rocky-reviews/log";
 import { buildApp } from "@rocky-reviews/server/app";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createAppCheck, type AppCheck } from "./app-check.js";
 import { sweepOrgDeletions } from "./deletion-sweep.js";
-import { drainInstallationEvents } from "./inbox.js";
+import { drainInstallationEvents, ROW_BUDGET_SECONDS } from "./inbox.js";
+import { CONTRADICTION_ATTEMPTS } from "./installations.js";
 
 /**
  * P3-3 end to end: a signed webhook into `POST /webhooks/github` → the inbox (server login) →
@@ -51,6 +53,7 @@ let workerDb: Db;
 let app: ReturnType<typeof buildApp>;
 let github: FakeGitHubApi;
 let reader: ReturnType<typeof createGitHubInstallationReader>;
+let appCheck: AppCheck;
 const keys = testAppKeys();
 const logLines: string[] = [];
 const log = createLogger("worker-e2e", {
@@ -71,9 +74,22 @@ const erasers: OrgErasers = {
 };
 
 const newOrgId = () => randomUUID() as OrgId;
+const clock = { now: () => new Date() };
 const drain = (db: Db = workerDb) =>
-  drainInstallationEvents({ db, forge: reader, log, newOrgId, batchSize: 10 });
-const sweep = () => sweepOrgDeletions({ db: workerDb, erasers, log });
+  drainInstallationEvents({ db, forge: reader, appCheck, log, newOrgId, batchSize: 10 });
+const sweep = (db: Db = workerDb, with_: OrgErasers = erasers) =>
+  sweepOrgDeletions({ db, forge: reader, appCheck, erasers: with_, log });
+
+/**
+ * Drains, then makes every waiting retry due, `rounds` times: enough for a contradiction to be
+ * retried CONTRADICTION_ATTEMPTS times before GitHub's answer is final (review round 1, S1).
+ */
+const drainSettled = async (rounds = CONTRADICTION_ATTEMPTS + 1) => {
+  for (let i = 0; i < rounds; i++) {
+    await drain();
+    await makeRetriesDue();
+  }
+};
 
 const post = async (event: string, payload: unknown) => {
   const d = signedDelivery(event, payload);
@@ -122,10 +138,11 @@ const inboxRow = async (deliveryId: string) =>
       processed: boolean;
       parked: boolean;
       attempts: number;
+      strikes: number;
       last_error: string | null;
     }>(
       `select outcome, processed_at is not null as processed, parked_at is not null as parked,
-              attempts, last_error
+              attempts, strikes, last_error
          from app.webhook_deliveries where delivery_id = $1`,
       [deliveryId],
     )
@@ -208,6 +225,7 @@ beforeAll(async () => {
     clock: { now: () => new Date() },
     fetch: github.fetch,
   });
+  appCheck = createAppCheck({ forge: reader, clock, log });
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -317,7 +335,14 @@ describe("uninstall → scheduled → grace elapses → sweep → erased everywh
     // Past seven days the sweep erases it, external stores first.
     await advanceGrace(org!.id, 1.01);
     erased.length = 0;
-    expect(await sweep()).toEqual({ due: 1, deleted: 1, skipped: 0, failed: 0 });
+    expect(await sweep()).toEqual({
+      due: 1,
+      deleted: 1,
+      cancelled: 0,
+      deferred: 0,
+      skipped: 0,
+      failed: 0,
+    });
     expect(erased).toEqual([
       { store: "object_storage", orgId: org!.id },
       { store: "embeddings", orgId: org!.id },
@@ -334,7 +359,14 @@ describe("uninstall → scheduled → grace elapses → sweep → erased everywh
     expect(tombstone.rows).toEqual([{ installation_id: "5000" }]);
     expect(await inboxRow(deliveryId)).toBeUndefined();
     // A second sweep finds nothing.
-    expect(await sweep()).toEqual({ due: 0, deleted: 0, skipped: 0, failed: 0 });
+    expect(await sweep()).toEqual({
+      due: 0,
+      deleted: 0,
+      cancelled: 0,
+      deferred: 0,
+      skipped: 0,
+      failed: 0,
+    });
   });
 
   it("keeps the org when an external store fails, and erases it on the next sweep", async () => {
@@ -354,15 +386,18 @@ describe("uninstall → scheduled → grace elapses → sweep → erased everywh
         eraseOrg: () => (fail ? Promise.reject(new Error("r2 down")) : Promise.resolve()),
       },
     };
-    expect(await sweepOrgDeletions({ db: workerDb, erasers: failing, log })).toMatchObject({
-      failed: 1,
-      deleted: 0,
-    });
+    expect(await sweep(workerDb, failing)).toMatchObject({ failed: 1, deleted: 0 });
     expect(await orgOf(5100)).toBeDefined();
+    // Marked erasing before the stores were touched (S6): the next sweep resumes, no re-check.
+    const erasing = await superuser.query<{ erasing: boolean }>(
+      "select erasing_at is not null as erasing from orgs where id = $1",
+      [org!.id],
+    );
+    expect(erasing.rows[0]?.erasing).toBe(true);
     fail = false;
-    expect(await sweepOrgDeletions({ db: workerDb, erasers: failing, log })).toMatchObject({
-      deleted: 1,
-    });
+    const asked = github.requests.length;
+    expect(await sweep(workerDb, failing)).toMatchObject({ deleted: 1 });
+    expect(github.requests.slice(asked).filter((r) => r.path !== "/app")).toEqual([]);
     expect(await orgOf(5100)).toBeUndefined();
   });
 
@@ -385,7 +420,7 @@ describe("uninstall → scheduled → grace elapses → sweep → erased everywh
     }
     const other = createDb({ connectionString: pgs.workerUrl, max: 2 });
     try {
-      const reports = await Promise.all([sweep(), sweepOrgDeletions({ db: other, erasers, log })]);
+      const reports = await Promise.all([sweep(), sweep(other)]);
       expect(reports.reduce((n, r) => n + r.deleted, 0)).toBe(4);
       expect(reports.reduce((n, r) => n + r.failed, 0)).toBe(0);
     } finally {
@@ -422,7 +457,7 @@ describe("reinstall", () => {
       expect.arrayContaining(["org.deletion_cancelled", "org.reinstalled"]),
     );
     // Nothing is due any more, and the data is still there.
-    expect(await workerDb.orgsDueForDeletion(100)).not.toContain(org!.id);
+    expect((await workerDb.orgsDueForDeletion(100)).map((o) => o.orgId)).not.toContain(org!.id);
     expect((await rowsFor(org!.id))["public.repos"]).toBe(1);
   });
 
@@ -494,10 +529,11 @@ describe("negative cases", () => {
       },
     };
     expect(await serverDb.recordWebhookDelivery(planted)).toBe("queued");
-    await drain();
+    await drainSettled();
     expect(await inboxRow(planted.deliveryId)).toMatchObject({
       outcome: "installation_not_found",
       processed: true,
+      attempts: CONTRADICTION_ATTEMPTS,
     });
     expect(await orgOf(7001)).toBeUndefined();
     expect(await workerDb.installationOrgs("github", 7001, 9700)).toEqual([]);
@@ -508,8 +544,11 @@ describe("negative cases", () => {
     await install(7100, 9710, "stays");
     await drain();
     const { deliveryId } = await uninstall(7100, 9710, "stays");
-    await drain();
-    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "installation_exists" });
+    await drainSettled();
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      outcome: "installation_exists",
+      attempts: CONTRADICTION_ATTEMPTS,
+    });
     expect((await orgOf(7100))?.delete_after).toBeNull();
 
     // Suspended is not deleted.
@@ -518,7 +557,7 @@ describe("negative cases", () => {
       ...installationPayload("deleted", { installationId: 7100, accountId: 9710, login: "stays" }),
       sender: { id: 8, login: "suspender" },
     });
-    await drain();
+    await drainSettled();
     expect(await inboxRow(suspended.deliveryId)).toMatchObject({ outcome: "installation_exists" });
     expect((await orgOf(7100))?.delete_after).toBeNull();
     const org = await orgOf(7100);
@@ -541,7 +580,8 @@ describe("negative cases", () => {
     });
     expect((await orgOf(7200))?.delete_after).toBeNull();
 
-    // A worker with a key GitHub does not accept gets 401 every time: still nothing deleted.
+    // A worker with a key GitHub does not accept fails the app check (401) and claims nothing
+    // (review round 1, M2): still nothing deleted, and the row is not even touched.
     const wrongKey = testAppKeys();
     const badReader = createGitHubInstallationReader({
       auth: parseGitHubAppAuth({
@@ -549,13 +589,23 @@ describe("negative cases", () => {
         privateKey: wrongKey.privateKeyPem,
       }),
       api: githubEndpoints({}).api,
-      clock: { now: () => new Date() },
+      clock,
       fetch: github.fetch,
     });
     await makeRetriesDue();
-    await drainInstallationEvents({ db: workerDb, forge: badReader, log, newOrgId });
+    expect(
+      await drainInstallationEvents({
+        db: workerDb,
+        forge: badReader,
+        appCheck: createAppCheck({ forge: badReader, clock, log }),
+        log,
+        newOrgId,
+      }),
+    ).toMatchObject({ claimed: 0 });
     expect(await inboxRow(deliveryId)).toMatchObject({
-      last_error: "forge_http_401",
+      last_error: "forge_http_503",
+      attempts: 1,
+      strikes: 0,
       processed: false,
     });
     expect((await orgOf(7200))?.delete_after).toBeNull();
@@ -565,7 +615,7 @@ describe("negative cases", () => {
     await drain();
     expect(await inboxRow(deliveryId)).toMatchObject({
       outcome: "deletion_scheduled",
-      attempts: 3,
+      attempts: 2,
     });
   });
 
@@ -602,9 +652,11 @@ describe("negative cases", () => {
       `select outcome, count(*)::int as n from app.webhook_deliveries
         where installation_id between 8000 and 8011 group by 1 order by 1`,
     );
+    // The older of two pending deliveries for the same event is superseded without asking
+    // GitHub (review round 1, L5); before, it was claimed and found "already_installed".
     expect(rows).toEqual([
-      { outcome: "already_installed", n: 4 },
       { outcome: "org_created", n: 12 },
+      { outcome: "superseded", n: 4 },
     ]);
   });
 
@@ -613,6 +665,7 @@ describe("negative cases", () => {
     const { deliveryId } = await install(8100, 9810, "crash");
     // A worker claims the row and dies before finishing.
     const [claimed] = await workerDb.claimWebhookDeliveries({
+      forge: "github",
       eventTypes: ["installation.created", "installation.deleted"],
       limit: 10,
       leaseSeconds: 300,
@@ -635,21 +688,25 @@ describe("negative cases", () => {
     expect(await workerDb.completeWebhookDelivery(claimed!, "late")).toBe(false);
   });
 
-  it("parks poison rows: bounded attempts on repeated failures, at once when a row cannot succeed", async () => {
-    // GitHub fails for this installation every time.
+  it("parks poison rows: bounded strikes on repeated bad answers, at once when a row cannot succeed", async () => {
+    // GitHub answers this installation with something that is not GitHub's JSON every time (an
+    // outage would be transient and never park, review round 1 S3; see the outage test below).
     github.install(8200, { id: 9820, login: "poison", type: "Organization" });
     const poison = await install(8200, 9820, "poison");
-    for (let i = 0; i < WEBHOOK_MAX_ATTEMPTS + 2; i++) {
+    for (let i = 0; i < WEBHOOK_MAX_STRIKES + 2; i++) {
       // Fail every attempt; once parked, further drains must not even ask GitHub.
-      if ((await inboxRow(poison.deliveryId))?.parked !== true) github.failNext(500);
+      if ((await inboxRow(poison.deliveryId))?.parked !== true) {
+        github.failNext(200, 1, { body: "<html>maintenance</html>", contentType: "text/html" });
+      }
       await makeRetriesDue();
       await drain();
     }
     expect(await inboxRow(poison.deliveryId)).toMatchObject({
       parked: true,
       processed: false,
-      attempts: WEBHOOK_MAX_ATTEMPTS,
-      last_error: "forge_http_500",
+      attempts: WEBHOOK_MAX_STRIKES,
+      strikes: WEBHOOK_MAX_STRIKES,
+      last_error: "forge_invalid_response",
     });
     expect(await orgOf(8200)).toBeUndefined();
 
@@ -702,6 +759,322 @@ describe("negative cases", () => {
       code: "42501",
     });
     await expect(serverDb.deleteOrg(b)).rejects.toMatchObject({ code: "42501" });
+  });
+});
+
+describe("review round 1", () => {
+  const isErasing = async (orgId: string) =>
+    (
+      await superuser.query<{ erasing: boolean }>(
+        "select erasing_at is not null as erasing from orgs where id = $1",
+        [orgId],
+      )
+    ).rows[0]?.erasing;
+
+  const installAndUninstall = async (installationId: number, accountId: number, login: string) => {
+    github.install(installationId, { id: accountId, login, type: "Organization" });
+    await install(installationId, accountId, login);
+    await drain();
+    github.uninstall(installationId);
+    await uninstall(installationId, accountId, login);
+    await drain();
+    return (await orgOf(installationId))!;
+  };
+
+  it("S1: a created that GitHub's API does not show yet is retried, then creates the org", async () => {
+    const { deliveryId } = await install(9000, 9900, "lagging");
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      processed: false,
+      parked: false,
+      attempts: 1,
+      strikes: 1,
+      last_error: "forge_contradiction",
+    });
+    github.install(9000, { id: 9900, login: "lagging", type: "Organization" });
+    await makeRetriesDue();
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "org_created", attempts: 2 });
+  });
+
+  it("S1: a deleted that GitHub still answers 200 for is retried, then schedules the deletion", async () => {
+    github.install(9010, { id: 9910, login: "slow-uninstall", type: "Organization" });
+    await install(9010, 9910, "slow-uninstall");
+    await drain();
+    const { deliveryId } = await uninstall(9010, 9910, "slow-uninstall");
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      processed: false,
+      last_error: "forge_contradiction",
+    });
+    expect((await orgOf(9010))?.delete_after).toBeNull();
+    github.uninstall(9010);
+    await makeRetriesDue();
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "deletion_scheduled" });
+  });
+
+  it("S2/N6: created and deleted for one installation, out of order and drained concurrently, end consistent", async () => {
+    // GitHub delivered the uninstall before the install; by now the installation is gone.
+    const deleted = await uninstall(9020, 9920, "flapping");
+    const created = await install(9020, 9920, "flapping");
+    await superuser.query(
+      "update app.webhook_deliveries set received_at = received_at - interval '1 second' where delivery_id = $1",
+      [deleted.deliveryId],
+    );
+    // Every claim and every finish of this installation's rows, in order. A claim is recorded
+    // when it returned and a finish when it started, so a recorded overlap is a real one.
+    const timeline: string[] = [];
+    const ours = (r: { installationId: number }) => r.installationId === 9020;
+    const traced = (db: Db): Db => ({
+      ...db,
+      claimWebhookDeliveries: async (options) => {
+        const rows = await db.claimWebhookDeliveries(options);
+        for (const r of rows.filter(ours)) timeline.push(`claim:${r.deliveryId}`);
+        return rows;
+      },
+      completeWebhookDelivery: (lease, outcome) => {
+        timeline.push(`done:${lease.deliveryId}`);
+        return db.completeWebhookDelivery(lease, outcome);
+      },
+      failWebhookDelivery: (lease, failure) => {
+        timeline.push(`done:${lease.deliveryId}`);
+        return db.failWebhookDelivery(lease, failure);
+      },
+    });
+    const pools = Array.from({ length: 4 }, () =>
+      createDb({ connectionString: pgs.workerUrl, max: 1 }),
+    );
+    try {
+      for (let round = 0; round < CONTRADICTION_ATTEMPTS + 2; round++) {
+        await Promise.all(pools.map((w) => drain(traced(w))));
+        await makeRetriesDue();
+      }
+    } finally {
+      await Promise.all(pools.map((w) => w.close()));
+    }
+    expect(await inboxRow(deleted.deliveryId)).toMatchObject({ outcome: "no_org", attempts: 1 });
+    expect(await inboxRow(created.deliveryId)).toMatchObject({
+      outcome: "installation_not_found",
+      attempts: CONTRADICTION_ATTEMPTS,
+    });
+    expect(await orgOf(9020)).toBeUndefined();
+    // Strictly one at a time, oldest first: the uninstall, then the install's three attempts.
+    const fromTimeline = timeline.filter((e) => e.startsWith("claim:")).map((e) => e.slice(6));
+    expect(fromTimeline).toEqual([
+      deleted.deliveryId,
+      ...Array<string>(CONTRADICTION_ATTEMPTS).fill(created.deliveryId),
+    ]);
+    for (let i = 0; i < timeline.length; i++) {
+      expect(timeline[i]!.split(":")[0], String(i)).toBe(i % 2 === 0 ? "claim" : "done");
+    }
+  });
+
+  it("S3: a long GitHub outage never parks a row; backoff is capped at an hour; it goes through after", async () => {
+    github.install(9030, { id: 9930, login: "outage-long", type: "Organization" });
+    await install(9030, 9930, "outage-long");
+    await drain();
+    github.uninstall(9030);
+    const { deliveryId } = await uninstall(9030, 9930, "outage-long");
+    const attempts = WEBHOOK_MAX_STRIKES * 2;
+    for (let i = 0; i < attempts; i++) {
+      github.failNext([503, 502, 429, 403][i % 4]!);
+      await makeRetriesDue();
+      expect(await drain()).toMatchObject({ claimed: 1, retried: 1, parked: 0 });
+    }
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      parked: false,
+      attempts,
+      strikes: 0,
+    });
+    const { rows } = await superuser.query<{ wait: number }>(
+      "select extract(epoch from available_at - now())::int as wait from app.webhook_deliveries where delivery_id = $1",
+      [deliveryId],
+    );
+    expect(rows[0]!.wait).toBeLessThanOrEqual(3600);
+    expect(rows[0]!.wait).toBeGreaterThan(1800);
+    await makeRetriesDue();
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "deletion_scheduled" });
+  });
+
+  it("S4: the lease covers a batch's worst case, and a row whose lease ran short is released unstarted", async () => {
+    github.install(9040, { id: 9940, login: "late-row", type: "Organization" });
+    const { deliveryId } = await install(9040, 9940, "late-row");
+    const asked = github.requests.length;
+    // The worker's clock says the lease is nearly over (a slow batch, a paused process).
+    const report = await drainInstallationEvents({
+      db: workerDb,
+      forge: reader,
+      appCheck,
+      clock: { now: () => new Date(Date.now() + 10 * ROW_BUDGET_SECONDS * 1000) },
+      log,
+      newOrgId,
+      batchSize: 10,
+    });
+    expect(report).toMatchObject({ claimed: 1, processed: 0, retried: 1 });
+    expect(github.requests.slice(asked).filter((r) => r.path !== "/app")).toEqual([]);
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      processed: false,
+      strikes: 0,
+      last_error: "lease_budget",
+    });
+    expect(await orgOf(9040)).toBeUndefined();
+    // Claimed with a lease of at least batch × budget (here the batch is 10).
+    const [claimed] = await workerDb.claimWebhookDeliveries({
+      forge: "github",
+      eventTypes: ["installation.created"],
+      limit: 1,
+      leaseSeconds: 10 * ROW_BUDGET_SECONDS,
+    });
+    expect(claimed?.deliveryId).toBe(deliveryId);
+    expect(+claimed!.leaseUntil - Date.now()).toBeGreaterThan((10 * ROW_BUDGET_SECONDS - 5) * 1000);
+    await workerDb.completeWebhookDelivery(claimed!, "test");
+  });
+
+  it("S1c: the sweep re-verifies: GitHub still has it → cancelled and audited; no answer → deferred", async () => {
+    const org = await installAndUninstall(9050, 9950, "resurrected");
+    await advanceGrace(org.id, 8);
+    // GitHub does not answer: nothing happens, the org stays due.
+    github.failNext(503);
+    expect(await sweep()).toMatchObject({ due: 1, deferred: 1, deleted: 0 });
+    expect(await isErasing(org.id)).toBe(false);
+    // GitHub has the installation again (or never lost it): the deletion is cancelled.
+    github.install(
+      9050,
+      { id: 9950, login: "resurrected", type: "Organization" },
+      { suspended: true },
+    );
+    erased.length = 0;
+    expect(await sweep()).toMatchObject({ due: 1, cancelled: 1, deleted: 0 });
+    expect(erased).toEqual([]);
+    expect(await orgOf(9050)).toMatchObject({ delete_after: null });
+    const audit = await superuser.query<{ action: string; actor: string; metadata: unknown }>(
+      `select action, actor_type || ':' || actor_id as actor, metadata from audit_events
+        where org_id = $1 and action in ('org.erasure_cancelled', 'org.deletion_cancelled')
+        order by id`,
+      [org.id],
+    );
+    expect(audit.rows.map((r) => r.action)).toEqual(
+      expect.arrayContaining(["org.erasure_cancelled", "org.deletion_cancelled"]),
+    );
+    expect(audit.rows.find((r) => r.action === "org.erasure_cancelled")).toMatchObject({
+      actor: "system:org_deletion_sweep",
+      metadata: { installation_id: 9050, reason: "installation_exists", suspended: true },
+    });
+  });
+
+  it("S1c/H1: a deadline that reached the database without an uninstall cannot erase a live org", async () => {
+    github.install(9060, { id: 9960, login: "planted-deadline", type: "Organization" });
+    await install(9060, 9960, "planted-deadline");
+    await drain();
+    const org = (await orgOf(9060))!;
+    await superuser.query("alter table orgs disable trigger user");
+    try {
+      await superuser.query(
+        "update orgs set delete_after = now() - interval '1 day' where id = $1",
+        [org.id],
+      );
+    } finally {
+      await superuser.query("alter table orgs enable trigger user");
+    }
+    expect(await sweep()).toMatchObject({ cancelled: 1, deleted: 0 });
+    expect(await orgOf(9060)).toMatchObject({ id: org.id, delete_after: null });
+  });
+
+  it("S6: a reinstall after erasing started gets a fresh org; the old one is still erased", async () => {
+    const old = await installAndUninstall(9070, 9970, "erasing");
+    await advanceGrace(old.id, 8);
+    const failing: OrgErasers = {
+      ...erasers,
+      embeddings: { store: "embeddings", eraseOrg: () => Promise.reject(new Error("down")) },
+    };
+    expect(await sweep(workerDb, failing)).toMatchObject({ failed: 1 });
+    expect(await isErasing(old.id)).toBe(true);
+
+    // The account installs the app again (GitHub issues a new installation id).
+    github.install(9071, { id: 9970, login: "erasing", type: "Organization" });
+    const { deliveryId } = await install(9071, 9970, "erasing");
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "org_created" });
+    const fresh = (await orgOf(9071))!;
+    expect(fresh.id).not.toBe(old.id);
+    expect(fresh.delete_after).toBeNull();
+    expect(await isErasing(old.id)).toBe(true);
+
+    expect(await sweep()).toMatchObject({ deleted: 1 });
+    expect(await orgOf(9070)).toBeUndefined();
+    expect(await orgOf(9071)).toMatchObject({ id: fresh.id, delete_after: null });
+  });
+
+  it("M2: a key for another app claims nothing and erases nothing, and says so in the log", async () => {
+    const due = await installAndUninstall(9080, 9980, "wrong-app");
+    await advanceGrace(due.id, 8);
+    github.install(9081, { id: 9981, login: "waiting", type: "Organization" });
+    const { deliveryId } = await install(9081, 9981, "waiting");
+    github.reportAppId(FIXTURE_APP_ID + 7);
+    const before = logLines.length;
+    try {
+      const check = createAppCheck({ forge: reader, clock, log });
+      expect(
+        await drainInstallationEvents({
+          db: workerDb,
+          forge: reader,
+          appCheck: check,
+          log,
+          newOrgId,
+        }),
+      ).toMatchObject({ claimed: 0 });
+      expect(
+        await sweepOrgDeletions({ db: workerDb, forge: reader, appCheck: check, erasers, log }),
+      ).toMatchObject({ due: 0, deleted: 0 });
+    } finally {
+      github.reportAppId(FIXTURE_APP_ID);
+    }
+    expect(await inboxRow(deliveryId)).toMatchObject({ attempts: 0, processed: false });
+    expect(await orgOf(9080)).toMatchObject({ id: due.id });
+    const failure = logLines
+      .slice(before)
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => String(l["msg"]).startsWith("forge app check failed"));
+    expect(failure).toMatchObject({ level: 50, errorCode: "forge_app_mismatch" });
+    // With the right app, both go ahead.
+    await drain();
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "org_created" });
+    expect(await sweep()).toMatchObject({ deleted: 1 });
+  });
+
+  it("M3: a worker claims only its forge's rows, and refuses a foreign row without asking GitHub", async () => {
+    const gitlab = {
+      forge: "gitlab" as const,
+      deliveryId: randomUUID(),
+      payloadSha256: "cd".repeat(32),
+      event: {
+        type: "installation.created" as const,
+        installationId: 9090,
+        account: { id: 9990, login: "elsewhere", kind: "organization" as const },
+        sender: null,
+      },
+    };
+    expect(await serverDb.recordWebhookDelivery(gitlab)).toBe("queued");
+    expect((await drain()).claimed).toBe(0);
+    expect(await inboxRow(gitlab.deliveryId)).toMatchObject({ attempts: 0 });
+
+    // Even if a claim returned one (a bug, a replaced function), it is refused before GitHub.
+    github.install(9091, { id: 9991, login: "relabelled", type: "Organization" });
+    const { deliveryId } = await install(9091, 9991, "relabelled");
+    const relabelling: Db = {
+      ...workerDb,
+      claimWebhookDeliveries: async (options) =>
+        (await workerDb.claimWebhookDeliveries(options)).map((r) => ({ ...r, forge: "gitlab" })),
+    };
+    const asked = github.requests.length;
+    expect(await drain(relabelling)).toMatchObject({ claimed: 1, processed: 0 });
+    expect(github.requests.slice(asked).filter((r) => r.path !== "/app")).toEqual([]);
+    expect(await orgOf(9091)).toBeUndefined();
+    // The relabelled lease matches no stored row, so nothing was recorded against the real one;
+    // it is retried once its lease expires.
+    expect(await inboxRow(deliveryId)).toMatchObject({ processed: false, parked: false });
   });
 });
 

@@ -85,3 +85,20 @@ export const workerConfigFromEnv = (env: Env): WorkerConfig => {
   }
   return { databaseUrl, githubApp: githubAppFromEnv(env) };
 };
+
+/**
+ * `workerConfigFromEnv` for the real process: once the key parsed, `GITHUB_APP_PRIVATE_KEY` is
+ * removed from `env` (review round 1, L6) so no child process, diagnostic dump or later
+ * `process.env` read sees it; the parsed key lives on only in a KeyObject.
+ */
+export const loadWorkerConfig = (env: Record<string, string | undefined>): WorkerConfig => {
+  const config = workerConfigFromEnv(env);
+  delete env["GITHUB_APP_PRIVATE_KEY"];
+  return config;
+};
+
+/** An actionable hint for a refused database login (review round 1, N4); nothing else. */
+export const databaseLoginHint = (code: string): string | undefined =>
+  code === "28P01" || code === "28000"
+    ? "the database refused the worker's login: run `pnpm seed` (creates rocky_worker_dev) and check WORKER_DATABASE_URL"
+    : undefined;

@@ -81,28 +81,37 @@ export const insertInstallationOrg = async (
 };
 
 /**
- * Schedules the deletion of `tx.orgId` if it is still bound to `installationId` and not already
- * scheduled. The database pushes the date to at least `now() + grace` and audits it (0005).
- * Returns the deadline, or null when nothing changed (already scheduled, rebound meanwhile).
+ * Schedules the deletion of `tx.orgId` while it is still bound to `installationId` and not being
+ * erased. The database pushes the date to at least `now() + grace` and audits it (0005/0007). An
+ * existing schedule is kept, unless it lies beyond the grace window (a date written before the
+ * window was enforced, or by hand): then it is rescheduled, never treated as "already scheduled".
  */
 export const scheduleOrgDeletion = async (
   tx: TenantTx,
   installationId: number,
-): Promise<Date | null> => {
-  const { rows } = await tx.query<{ delete_after: Date }>(
+): Promise<"scheduled" | "already_scheduled" | "stale"> => {
+  const { rowCount } = await tx.query(
     `update orgs set delete_after = now(), updated_at = now()
-      where id = $1 and installation_id = $2 and delete_after is null
-      returning delete_after`,
+      where id = $1 and installation_id = $2 and erasing_at is null
+        and (delete_after is null
+             or delete_after > now() + interval '1 hour' + make_interval(days => (
+                  select s.days from app.retention_settings s
+                   where s.category = 'org_deletion_grace')))`,
     [tx.orgId, installationId],
   );
-  return rows[0]?.delete_after ?? null;
+  if (rowCount === 1) return "scheduled";
+  const { rows } = await tx.query<{ bound: boolean }>(
+    "select installation_id = $2 and erasing_at is null as bound from orgs where id = $1",
+    [tx.orgId, installationId],
+  );
+  return rows[0]?.bound === true ? "already_scheduled" : "stale";
 };
 
 /**
  * Binds `tx.orgId` to `installationId` (same id: a no-op rebind) and cancels any scheduled
  * deletion; refreshes the display fields from the forge. Only applies while the org is still
- * bound to `expectedInstallationId` (a concurrent rebind or erasure makes it return false).
- * Changing the installation id needs the worker login (trigger `orgs_guard_identity`).
+ * bound to `expectedInstallationId` and not being erased (a concurrent rebind or erasure makes it
+ * return false). Worker login only (column grants and trigger `orgs_guard_identity`).
  */
 export const bindInstallation = async (
   tx: TenantTx,
@@ -123,17 +132,52 @@ export const bindInstallation = async (
   const { rowCount } = await tx.query(
     `update orgs set installation_id = $3, login = $4, kind = $5, delete_after = null,
                      updated_at = now()
-      where id = $1 and installation_id = $2`,
+      where id = $1 and installation_id = $2 and erasing_at is null`,
     [tx.orgId, options.expectedInstallationId, options.installationId, options.login, options.kind],
   );
   return rowCount === 1;
+};
+
+/** Cancels a scheduled deletion that has not started erasing. False when there was none. */
+export const cancelOrgDeletion = async (tx: TenantTx): Promise<boolean> => {
+  const { rowCount } = await tx.query(
+    `update orgs set delete_after = null, updated_at = now()
+      where id = $1 and delete_after is not null and erasing_at is null`,
+    [tx.orgId],
+  );
+  return rowCount === 1;
+};
+
+/**
+ * Marks `tx.orgId` as being erased (the point of no return) under its row lock, once its grace
+ * period is over. `started` the first time, `resumed` when an earlier sweep already started (it
+ * crashed or an external store failed), `not_due` when it is no longer scheduled or not yet due.
+ */
+export const beginOrgErasure = async (tx: TenantTx): Promise<"started" | "resumed" | "not_due"> => {
+  const { rowCount } = await tx.query(
+    `update orgs set erasing_at = now(), updated_at = now()
+      where id = $1 and erasing_at is null and delete_after is not null and delete_after <= now()`,
+    [tx.orgId],
+  );
+  if (rowCount === 1) return "started";
+  const { rows } = await tx.query<{ erasing: boolean }>(
+    "select erasing_at is not null as erasing from orgs where id = $1",
+    [tx.orgId],
+  );
+  return rows[0]?.erasing === true ? "resumed" : "not_due";
 };
 
 /** Appends a lifecycle audit event for `tx.orgId`: ids only (ADR 0005 §5). */
 export const auditLifecycle = async (
   tx: TenantTx,
   actor: AuditActor,
-  action: "org.installed" | "org.uninstalled" | "org.reinstalled" | "org.uninstall_ignored",
+  action:
+    | "org.installed"
+    | "org.uninstalled"
+    | "org.reinstalled"
+    | "org.uninstall_ignored"
+    | "org.erasure_cancelled"
+    | "org.erasure_started",
   metadata: Record<string, number | boolean | string | null>,
 ): Promise<void> => {
   await audit(tx, actor, action, { type: "org", id: tx.orgId }, metadata);

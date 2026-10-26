@@ -103,4 +103,34 @@ describe("ForgeReadError (P3-3)", () => {
     expect(error.message).toBe("forge read failed: http_status 401");
     expect(Object.keys(error).sort()).toEqual(["name", "reason", "status"]);
   });
+
+  it("tells an outage from a bad answer (review round 1, S3)", () => {
+    // Transient: the forge or the path to it is unavailable, or our credentials are (a rotated
+    // or revoked key is an operator problem, not a property of the event).
+    for (const error of [
+      new ForgeReadError("timeout"),
+      new ForgeReadError("network"),
+      new ForgeReadError("http_status", 401),
+      new ForgeReadError("http_status", 403),
+      new ForgeReadError("http_status", 429),
+      new ForgeReadError("http_status", 500),
+      new ForgeReadError("http_status", 502),
+      new ForgeReadError("http_status", 503),
+      new ForgeReadError("app_mismatch"),
+    ]) {
+      expect(error.transient, error.code).toBe(true);
+    }
+    // Not transient: the answer itself is wrong or unusable; retrying it forever would not help.
+    for (const error of [
+      new ForgeReadError("invalid_response"),
+      new ForgeReadError("unsupported_account_type"),
+      new ForgeReadError("http_status", 302),
+      new ForgeReadError("http_status", 410),
+      new ForgeReadError("http_status", 422),
+      new ForgeReadError("http_status"),
+    ]) {
+      expect(error.transient, error.code).toBe(false);
+    }
+    expect(new ForgeReadError("app_mismatch").code).toBe("forge_app_mismatch");
+  });
 });

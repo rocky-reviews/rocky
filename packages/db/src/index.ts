@@ -4,6 +4,7 @@ export {
   TenantContextError,
   type Db,
   type DbOptions,
+  type DueOrg,
   type OrgDeletion,
   type PurgeResult,
   type TenantTx,
@@ -14,7 +15,8 @@ export {
   isErrorCode,
   isOutcomeCode,
   LeaseLostError,
-  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_MAX_STRIKES,
+  WEBHOOK_TRANSIENT_PARK_HOURS,
   type ClaimedDelivery,
   type ClaimOptions,
   type DecodedDelivery,
@@ -23,7 +25,9 @@ export {
 } from "./inbox.js";
 export {
   auditLifecycle,
+  beginOrgErasure,
   bindInstallation,
+  cancelOrgDeletion,
   insertInstallationOrg,
   scheduleOrgDeletion,
   type InstallationOrg,

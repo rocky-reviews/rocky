@@ -147,8 +147,18 @@ export interface FakeGitHubApi {
   install(installationId: number, account: FakeAccount, options?: { suspended?: boolean }): void;
   /** GitHub answers 404 for it from now on. */
   uninstall(installationId: number): void;
-  /** The next `times` requests get `status` (e.g. 500, 401) instead of the real answer. */
-  failNext(status: number, times?: number): void;
+  /**
+   * The next `times` installation reads get `status` (e.g. 500, 401) instead of the real answer,
+   * with a JSON message body unless `body` (and its `contentType`) is given, e.g. a proxy's HTML
+   * 404. `GET /app` is not affected (use `reportAppId` for the app check).
+   */
+  failNext(
+    status: number,
+    times?: number,
+    response?: { readonly body: string; readonly contentType: string },
+  ): void;
+  /** `GET /app` reports this app id from now on (default: the configured one). */
+  reportAppId(appId: number): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -158,8 +168,8 @@ const json = (status: number, body: unknown): Response =>
   });
 
 /**
- * An in-memory GitHub serving `GET /app/installations/{id}` from the recorded fixtures (ids
- * substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
+ * An in-memory GitHub serving `GET /app/installations/{id}` and `GET /app` from the recorded
+ * fixtures (ids substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
  * the app's public key, `iss` = app id, unexpired, at most 10 minutes long): a bad or missing
  * token gets 401.
  */
@@ -172,7 +182,8 @@ export const fakeGitHubApi = (options: {
   const publicKey =
     typeof options.publicKey === "string" ? createPublicKey(options.publicKey) : options.publicKey;
   const installed = new Map<number, { account: FakeAccount; suspended: boolean }>();
-  const failures: number[] = [];
+  const failures: { status: number; body?: string; contentType?: string }[] = [];
+  let reportedAppId = options.appId;
   const requests: FakeGitHubApi["requests"] = [];
 
   const authorized = (header: string | null): boolean => {
@@ -217,16 +228,36 @@ export const fakeGitHubApi = (options: {
     }
     if (init?.redirect !== "error")
       return json(400, { message: "test: redirects must be refused" });
-    const failure = failures.shift();
-    if (failure !== undefined) return json(failure, { message: "Injected failure" });
-    if (!ok) return json(401, { message: "A JSON web token could not be decoded" });
     const path = url.pathname.slice(base.pathname.length);
+    const failure = path === "app" ? undefined : failures.shift();
+    if (failure !== undefined) {
+      return failure.body === undefined
+        ? json(failure.status, { message: "Injected failure" })
+        : new Response(failure.body, {
+            status: failure.status,
+            headers: { "content-type": failure.contentType ?? "text/plain" },
+          });
+    }
+    if (!ok) return json(401, { message: "A JSON web token could not be decoded" });
+    if (method === "GET" && path === "app") {
+      return json(200, { ...githubFixture("get-app"), id: reportedAppId });
+    }
     const match = /^app\/installations\/(\d+)$/.exec(path);
     if (method !== "GET" || match === null)
       return json(404, githubFixture("get-installation.not-found"));
     const id = Number(match[1]);
     const entry = installed.get(id);
     if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+    if (entry.account.type === "Enterprise") {
+      const body = githubFixture("get-installation.enterprise");
+      return json(200, {
+        ...body,
+        id,
+        app_id: options.appId,
+        target_id: entry.account.id,
+        account: { ...(body["account"] as Record<string, unknown>), id: entry.account.id },
+      });
+    }
     const body = githubFixture(
       entry.suspended ? "get-installation.user-suspended" : "get-installation.organization",
     );
@@ -255,8 +286,13 @@ export const fakeGitHubApi = (options: {
     uninstall: (installationId) => {
       installed.delete(installationId);
     },
-    failNext: (status, times = 1) => {
-      for (let i = 0; i < times; i++) failures.push(status);
+    failNext: (status, times = 1, response) => {
+      for (let i = 0; i < times; i++) {
+        failures.push(response === undefined ? { status } : { status, ...response });
+      }
+    },
+    reportAppId: (appId) => {
+      reportedAppId = appId;
     },
   };
 };

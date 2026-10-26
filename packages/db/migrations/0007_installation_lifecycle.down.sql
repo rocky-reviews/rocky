@@ -64,6 +64,9 @@ ALTER FUNCTION retention.purge_webhook_deliveries(timestamptz) OWNER TO rocky_re
 ALTER FUNCTION retention.delete_org(uuid) OWNER TO rocky_retention;
 REVOKE CREATE ON SCHEMA retention FROM rocky_retention;
 
+DROP POLICY IF EXISTS webhook_deliveries_retention_update ON app.webhook_deliveries;
+REVOKE UPDATE ON app.webhook_deliveries FROM rocky_retention;
+
 DROP TABLE IF EXISTS app.org_deletions;
 DROP FUNCTION IF EXISTS app.org_deletions_stamp();
 DROP FUNCTION IF EXISTS app.org_deletions_append_only();
@@ -72,9 +75,9 @@ DROP FUNCTION IF EXISTS app.org_deletions_append_only();
 GRANT USAGE ON SCHEMA worker TO rocky_lifecycle;
 SET LOCAL ROLE rocky_lifecycle;
 DROP FUNCTION IF EXISTS worker.installation_orgs(text, bigint, bigint);
-DROP FUNCTION IF EXISTS worker.fail_webhook_delivery(text, text, uuid, text, integer, boolean);
+DROP FUNCTION IF EXISTS worker.fail_webhook_delivery(text, text, uuid, text, integer, text);
 DROP FUNCTION IF EXISTS worker.complete_webhook_delivery(text, text, uuid, text);
-DROP FUNCTION IF EXISTS worker.claim_webhook_deliveries(text[], integer, integer);
+DROP FUNCTION IF EXISTS worker.claim_webhook_deliveries(text, text[], integer, integer);
 RESET ROLE;
 DROP SCHEMA IF EXISTS worker;
 
@@ -106,17 +109,44 @@ ALTER TABLE app.webhook_deliveries
   DROP COLUMN IF EXISTS lease_until,
   DROP COLUMN IF EXISTS lease_token,
   DROP COLUMN IF EXISTS available_at,
+  DROP COLUMN IF EXISTS strikes,
   DROP COLUMN IF EXISTS attempts;
 
 -- --- 2. Orgs ----------------------------------------------------------------------------------
 DROP POLICY IF EXISTS orgs_worker_insert ON orgs;
+REVOKE UPDATE (installation_id, login, kind, delete_after, installer_forge_user_id, erasing_at,
+               updated_at) ON orgs FROM rocky_worker;
 REVOKE ALL ON orgs FROM rocky_worker;
-GRANT INSERT ON orgs TO rocky_app;
+REVOKE UPDATE (settings, data_key_ciphertext, data_key_version, llm_api_key_ciphertext,
+               llm_api_key_version, updated_at) ON orgs FROM rocky_app;
+GRANT INSERT, UPDATE ON orgs TO rocky_app;
+
+-- The 0005 clamp (lower bound only).
+CREATE OR REPLACE FUNCTION app.orgs_enforce_deletion_grace() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog
+AS $$
+DECLARE
+  grace integer;
+BEGIN
+  IF NEW.delete_after IS NOT NULL
+     AND (TG_OP = 'INSERT' OR OLD.delete_after IS DISTINCT FROM NEW.delete_after) THEN
+    SELECT s.days INTO STRICT grace FROM app.retention_settings s WHERE s.category = 'org_deletion_grace';
+    NEW.delete_after := greatest(NEW.delete_after, now() + make_interval(days => grace));
+  END IF;
+  RETURN NEW;
+END
+$$;
 
 DROP TRIGGER IF EXISTS orgs_guard_identity ON orgs;
 DROP FUNCTION IF EXISTS app.orgs_guard_identity();
+DROP INDEX IF EXISTS orgs_forge_account_live_unique;
+DROP INDEX IF EXISTS orgs_forge_installation_live_unique;
+ALTER TABLE orgs ADD CONSTRAINT orgs_forge_installation_unique UNIQUE (forge, installation_id);
+ALTER TABLE orgs DROP CONSTRAINT IF EXISTS orgs_erasing_when_scheduled;
+ALTER TABLE orgs DROP CONSTRAINT IF EXISTS orgs_delete_after_finite;
 ALTER TABLE orgs DROP CONSTRAINT IF EXISTS orgs_installation_id_positive;
-ALTER TABLE orgs DROP CONSTRAINT IF EXISTS orgs_forge_account_unique;
+ALTER TABLE orgs DROP COLUMN IF EXISTS erasing_at;
 ALTER TABLE orgs DROP COLUMN IF EXISTS installer_forge_user_id;
 ALTER TABLE orgs DROP COLUMN IF EXISTS account_id;
 

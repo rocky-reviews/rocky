@@ -76,12 +76,34 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.members": DML,
   "public.memory_entries": DML,
   // The tenant root is never deleted by the application; only retention.delete_org removes it.
-  // Only the worker creates it (rocky_worker, below; ADR 0009).
-  "public.orgs": ["SELECT", "UPDATE"],
+  // Only the worker creates it (rocky_worker, below; ADR 0009). Since review round 1 (H1) the
+  // app updates only the columns in ORGS_COLUMN_PRIVILEGES, never the identity or the schedule.
+  "public.orgs": ["SELECT"],
   "public.pr_revisions": DML,
   "public.pull_requests": DML,
   "public.repos": DML,
 };
+
+/**
+ * The only column-level grants in the database (review round 1, H1): who may UPDATE which
+ * columns of `orgs`. The server writes settings and its encrypted keys; the deletion schedule,
+ * the installation binding, the installer and the display fields are the worker's.
+ */
+const ORGS_COLUMN_PRIVILEGES = [
+  "rocky_app:UPDATE:data_key_ciphertext",
+  "rocky_app:UPDATE:data_key_version",
+  "rocky_app:UPDATE:llm_api_key_ciphertext",
+  "rocky_app:UPDATE:llm_api_key_version",
+  "rocky_app:UPDATE:settings",
+  "rocky_app:UPDATE:updated_at",
+  "rocky_worker:UPDATE:delete_after",
+  "rocky_worker:UPDATE:erasing_at",
+  "rocky_worker:UPDATE:installation_id",
+  "rocky_worker:UPDATE:installer_forge_user_id",
+  "rocky_worker:UPDATE:kind",
+  "rocky_worker:UPDATE:login",
+  "rocky_worker:UPDATE:updated_at",
+];
 
 /**
  * Privileges held directly by the two P3-3 roles (ADR 0009); every relation not listed holds
@@ -344,18 +366,19 @@ describe("org A against org B's rows, per table", () => {
   it("update of foreign rows affects nothing and leaves them unchanged", async () => {
     for (const t of tables) {
       if (t.name === "audit_events") continue; // append-only: covered in audit.test.ts
+      // The app may not update orgs.id at all (column grants, review round 1 H1): touch a column
+      // it may write instead, so this still proves RLS hides the foreign row.
+      const set = t.name === "orgs" ? "settings" : t.tenantColumn;
       const affected = await db.withOrg(a.orgId, async (tx) => {
         const r = await tx.query(
-          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}" where "${t.tenantColumn}" = $1`,
+          `update ${t.qualified} set "${set}" = "${set}" where "${t.tenantColumn}" = $1`,
           [b.orgId],
         );
         return r.rowCount;
       });
       expect(affected, t.name).toBe(0);
       const unconditional = await db.withOrg(a.orgId, async (tx) => {
-        const r = await tx.query(
-          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}"`,
-        );
+        const r = await tx.query(`update ${t.qualified} set "${set}" = "${set}"`);
         return r.rowCount;
       });
       expect(unconditional, t.name).toBe(1);
@@ -711,9 +734,17 @@ describe("other catalog objects (review #8)", () => {
     expect(actual).toEqual(APP_TABLE_PRIVILEGES);
     for (const r of rows) {
       expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
-      // The matrix above is the whole story: no column-level grants widen or narrow it.
-      expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
+      // The matrix above is the whole story: no column-level grants widen or narrow it, except
+      // the orgs UPDATE columns pinned exactly below.
+      if (r.name !== "public.orgs") expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
     }
+    const columnGrants = await pgs.migrator.query<{ g: string }>(
+      `select format('%s:%s:%s', x.grantee::regrole, x.privilege_type, a.attname) as g
+         from pg_attribute a, aclexplode(a.attacl) x
+        where a.attrelid = 'public.orgs'::regclass and a.attacl is not null
+        order by 1`,
+    );
+    expect(columnGrants.rows.map((r) => r.g)).toEqual(ORGS_COLUMN_PRIVILEGES);
   });
 
   it("lets the app role read but not change the retention settings", async () => {

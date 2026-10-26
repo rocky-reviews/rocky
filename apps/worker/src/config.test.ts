@@ -3,7 +3,13 @@ import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { describe, expect, it } from "vitest";
-import { ConfigError, githubAppFromEnv, workerConfigFromEnv } from "./config.js";
+import {
+  ConfigError,
+  databaseLoginHint,
+  githubAppFromEnv,
+  loadWorkerConfig,
+  workerConfigFromEnv,
+} from "./config.js";
 
 /** P3-3: the worker validates its app credentials before it opens anything, and fails closed. */
 
@@ -78,6 +84,42 @@ describe("workerConfigFromEnv", () => {
       databaseUrl: DB,
       githubApp: undefined,
     });
+  });
+});
+
+describe("loadWorkerConfig (review round 1, L6)", () => {
+  it("removes the private key from the environment once it is parsed", () => {
+    const env: Record<string, string | undefined> = {
+      WORKER_DATABASE_URL: DB,
+      GITHUB_APP_ID: "42",
+      GITHUB_APP_PRIVATE_KEY: keys.privateKeyPem,
+    };
+    const config = loadWorkerConfig(env);
+    expect(config.githubApp?.auth.appId).toBe(42);
+    expect("GITHUB_APP_PRIVATE_KEY" in env).toBe(false);
+    expect(env["GITHUB_APP_ID"]).toBe("42");
+    // The parsed key still signs (it lives in a KeyObject, not in the environment).
+    expect(config.githubApp?.auth.privateKey.type).toBe("private");
+  });
+
+  it("leaves the environment alone when parsing fails (the process exits anyway)", () => {
+    const env: Record<string, string | undefined> = {
+      GITHUB_APP_ID: "42",
+      GITHUB_APP_PRIVATE_KEY: keys.privateKeyPem,
+    };
+    expect(() => loadWorkerConfig(env)).toThrow(ConfigError);
+    expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(keys.privateKeyPem);
+  });
+});
+
+describe("databaseLoginHint (review round 1, N4)", () => {
+  it("points at pnpm seed for a refused login, and says nothing otherwise", () => {
+    for (const code of ["28P01", "28000"]) {
+      expect(databaseLoginHint(code)).toMatch(/pnpm seed.*rocky_worker_dev/);
+    }
+    for (const code of ["ECONNREFUSED", "3D000", "unknown"]) {
+      expect(databaseLoginHint(code)).toBeUndefined();
+    }
   });
 });
 

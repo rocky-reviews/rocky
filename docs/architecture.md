@@ -69,15 +69,20 @@ packages/schema (analysis document; shared contract)
   before parsing, decodes the few fields the domain needs and inserts one row into
   `app.webhook_deliveries`, a non-tenant inbox (installations precede orgs) that the app role can
   only `INSERT` into, deduplicated by delivery id and body sha256 in the database. The worker
-  claims rows with a lease (`FOR UPDATE SKIP LOCKED`), re-validates them and re-reads state from
-  the forge before acting.
-- Installation lifecycle (ADR 0009): `installation.created` creates an org only if
+  claims rows of its forge with a lease, one live lease per installation (oldest first, older
+  duplicates superseded), re-validates them and re-reads state from the forge before acting.
+  Outages back off and wait; rows that keep failing for their own reasons are parked.
+- Installation lifecycle (ADR 0009): nothing is claimed or erased until `GET /app` proves the
+  key belongs to `GITHUB_APP_ID`. `installation.created` creates an org only if
   `GET /app/installations/{id}` (app JWT, RS256 via `node:crypto`) says it exists; orgs bind by
   installation id and the immutable account id, never by login. `installation.deleted` schedules
-  deletion only on a 404; the database enforces the 7-day grace. A reinstall within the grace
-  period rebinds the org and cancels the deletion. The worker's sweep erases due orgs: external
-  stores first (`OrgErasers`: object storage, embeddings), then `retention.delete_org`, which
-  cascades through every tenant table and leaves a tombstone in `app.org_deletions`.
+  deletion only on GitHub's own JSON 404; contradictions are retried before they are believed.
+  Only the worker can write the deadline, which the database bounds to the 7-day grace (+1 h). A
+  reinstall within the grace period rebinds the org and cancels the deletion. The worker's sweep
+  asks GitHub again (still installed → cancel), marks the org erasing (a reinstall from then on
+  gets a fresh org), erases external stores (`OrgErasers`: object storage, embeddings), then
+  `retention.delete_org`, which cascades through every tenant table, deletes or scrubs the
+  installation's inbox rows and leaves a tombstone in `app.org_deletions`.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); four permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event

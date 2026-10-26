@@ -208,7 +208,9 @@ export type ForgeReadFailure =
   /** A response that is not what was asked for (shape, size, ids that do not match). */
   | "invalid_response"
   /** The installation is on an account kind the domain does not model (e.g. an enterprise). */
-  | "unsupported_account_type";
+  | "unsupported_account_type"
+  /** The configured credentials authenticate a different app than the configured app id. */
+  | "app_mismatch";
 
 /**
  * A failed forge read. Carries a fixed reason and at most an HTTP status: never a body, a token
@@ -228,6 +230,19 @@ export class ForgeReadError extends Error {
     );
   }
 
+  /**
+   * An outage rather than a bad answer (review round 1, S3): no answer, a server error, rate
+   * limiting, or credentials GitHub does not accept right now (401/403, a key for another app).
+   * Retried without counting against the row; everything else is a property of the answer.
+   */
+  get transient(): boolean {
+    if (this.reason === "timeout" || this.reason === "network" || this.reason === "app_mismatch") {
+      return true;
+    }
+    if (this.reason !== "http_status" || this.status === undefined) return false;
+    return this.status === 401 || this.status === 403 || this.status === 429 || this.status >= 500;
+  }
+
   /** `forge_<reason>` or `forge_http_<status>`: the inbox's `last_error` and log field. */
   get code(): string {
     return this.reason === "http_status" && this.status !== undefined
@@ -240,7 +255,15 @@ export class ForgeReadError extends Error {
  * The read the installation lifecycle needs (P3-3): authenticated as the app itself, not as an
  * installation, because it must also work for an installation that no longer exists.
  */
-export type InstallationReader = Pick<Forge, "kind" | "getInstallation">;
+export type InstallationReader = Pick<Forge, "kind" | "getInstallation"> & {
+  /**
+   * Proves the configured credentials belong to the configured app (review round 1, M2). Throws
+   * `ForgeReadError` (`app_mismatch`, or any read failure) otherwise. A worker must not act on
+   * installation answers until this passed: another app's key would make every one of this
+   * app's installations look uninstalled.
+   */
+  verifyApp(): Promise<void>;
+};
 
 /**
  * Read access to one forge, authenticated per installation by the adapter (short-lived, scoped

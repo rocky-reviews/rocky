@@ -3,6 +3,13 @@ import type { OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
+import {
+  beginOrgErasure,
+  bindInstallation,
+  cancelOrgDeletion,
+  insertInstallationOrg,
+  scheduleOrgDeletion,
+} from "./installations.js";
 import * as schema from "./schema.js";
 import {
   CONTAINER_TIMEOUT_MS,
@@ -119,8 +126,10 @@ describe("retention.delete_org", () => {
   });
 
   it("refuses an org still inside its grace period, which the app cannot shorten", async () => {
-    // The app schedules deletion "now"; the trigger enforces the configured grace (7 days).
-    const deleteAfter = await db.withOrg(a.orgId, async (tx) => {
+    // The worker schedules deletion "now" (since review round 1, H1, only the worker may write
+    // delete_after; the server's refusal is in the H1 suite below); the trigger enforces the
+    // configured grace (7 days).
+    const deleteAfter = await worker.withOrg(a.orgId, async (tx) => {
       await tx.db.update(schema.orgs).set({ deleteAfter: new Date() });
       const [row] = await tx.db.select({ d: schema.orgs.deleteAfter }).from(schema.orgs);
       return row?.d ?? null;
@@ -130,7 +139,7 @@ describe("retention.delete_org", () => {
     const error = await pgError(worker.deleteOrg(a.orgId));
     expect(error.message).toMatch(/grace/);
     // Backdating directly is refused the same way: the trigger moves it forward again.
-    const backdated = await db.withOrg(a.orgId, async (tx) => {
+    const backdated = await worker.withOrg(a.orgId, async (tx) => {
       await tx.db.update(schema.orgs).set({ deleteAfter: new Date(Date.now() - DAY) });
       const [row] = await tx.db.select({ d: schema.orgs.deleteAfter }).from(schema.orgs);
       return row?.d ?? null;
@@ -157,19 +166,21 @@ describe("retention.delete_org", () => {
         Date.now() + 6.9 * DAY,
       );
     }
-    await db.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: null }));
+    await worker.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: null }));
     expect((await actions()).map((e) => e.action)).toEqual([
       "org.deletion_scheduled",
       "org.deletion_scheduled",
       "org.deletion_cancelled",
     ]);
     // Touching other columns, or re-saving the same value, writes nothing.
-    await db.withOrg(a.orgId, (tx) =>
+    await worker.withOrg(a.orgId, (tx) =>
       tx.db.update(schema.orgs).set({ settings: { theme: "slate" }, deleteAfter: null }),
     );
     expect(await actions()).toHaveLength(3);
     // Schedule again so the deletion test below has something to execute.
-    await db.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: new Date() }));
+    await worker.withOrg(a.orgId, (tx) =>
+      tx.db.update(schema.orgs).set({ deleteAfter: new Date() }),
+    );
     expect((await actions()).at(-1)?.action).toBe("org.deletion_scheduled");
   });
 
@@ -395,20 +406,30 @@ describe("the deletion sweep's database side (P3-3)", () => {
     await worker.withOrg(graced, (tx) =>
       tx.db.update(schema.orgs).set({ deleteAfter: new Date() }),
     );
-    const listed = await worker.orgsDueForDeletion(100);
+    const rows = await worker.orgsDueForDeletion(100);
+    const listed = rows.map((r) => r.orgId);
     expect(listed).toContain(due);
     expect(listed).not.toContain(graced);
     expect(listed).not.toContain(idle);
+    // What the sweep needs to re-verify with the forge (review round 1, S1c) and to resume.
+    expect(rows.find((r) => r.orgId === due)).toEqual({
+      orgId: due,
+      forge: "github",
+      installationId: 51,
+      erasing: false,
+    });
     await expect(worker.orgsDueForDeletion(1.5)).rejects.toThrow(/integer/);
     await worker.deleteOrg(due);
-    expect(await worker.orgsDueForDeletion(100)).not.toContain(due);
+    expect((await worker.orgsDueForDeletion(100)).map((r) => r.orgId)).not.toContain(due);
   });
 
   it("is structural: every column that holds an org id, in any schema, is emptied for the erased org", async () => {
     const c = await seedOrg(worker, newOrgId(), { installationId: 60, accountId: 60_060 });
     const d = await seedOrg(worker, newOrgId(), { installationId: 61, accountId: 61_061 });
     // Inbox rows: finished ones for c (by installation, and by account after a rebind), one
-    // pending reinstall for c's account (must survive: it is work not yet done), one for d.
+    // pending reinstall for c's account (must survive: it is work not yet done, but loses the
+    // sender and the login, review round 1 L4), a pending pull request of c's installation
+    // (deleted: nobody will process it for an erased org, L4), one finished for d.
     const delivery = (installationId: number, accountId: number) => ({
       forge: "github" as const,
       deliveryId: randomUUID(),
@@ -424,7 +445,20 @@ describe("the deletion sweep's database side (P3-3)", () => {
     const finishedCOld = delivery(59, 60_060);
     const pendingC = delivery(62, 60_060);
     const finishedD = delivery(61, 61_061);
-    for (const row of [finishedC, finishedCOld, pendingC, finishedD]) {
+    const pendingPrC = {
+      forge: "github" as const,
+      deliveryId: randomUUID(),
+      payloadSha256: randomBytes(32).toString("hex"),
+      event: {
+        type: "pull_request.opened" as const,
+        installationId: 60,
+        repositoryId: 9,
+        number: 3,
+        headSha: "b".repeat(40),
+        merged: false,
+      },
+    };
+    for (const row of [finishedC, finishedCOld, pendingC, finishedD, pendingPrC]) {
       expect(await db.recordWebhookDelivery(row)).toBe("queued");
     }
     await superuser.query(
@@ -462,18 +496,31 @@ describe("the deletion sweep's database side (P3-3)", () => {
       );
       return Number(rows[0]?.n);
     };
+    // Review round 1 (N1): every holder has a row for c before, so "0 after" proves something.
     for (const h of holders) {
-      if (h.column === "org_id" || h.table === "public.orgs") {
-        expect(await count(h, c.orgId), `${h.table}.${h.column} before`).toBeGreaterThan(0);
-      }
+      expect(await count(h, c.orgId), `${h.table}.${h.column} before`).toBeGreaterThan(0);
     }
+    // Outside public, rows are tied to an org through its installation or account id instead of
+    // an org id. Pin the tables that do so: a new one must be added to delete_org and here.
+    const { rows: keyedByForgeIds } = await superuser.query<{ table: string }>(
+      `select distinct format('%I.%I', c.table_schema, c.table_name) as "table"
+         from information_schema.columns c join information_schema.tables t
+           on t.table_schema = c.table_schema and t.table_name = c.table_name
+        where c.column_name in ('installation_id', 'account_id') and t.table_type = 'BASE TABLE'
+          and c.table_schema not in ('public', 'pg_catalog', 'information_schema')
+        order by 1`,
+    );
+    expect(keyedByForgeIds.map((r) => r.table)).toEqual([
+      "app.org_deletions",
+      "app.webhook_deliveries",
+    ]);
 
     await makeDue(c.orgId);
     const report = await worker.deleteOrg(c.orgId);
     expect(report).toEqual(
       expect.arrayContaining([
         { table: "orgs", deleted: 1 },
-        { table: "webhook_deliveries", deleted: 2 },
+        { table: "webhook_deliveries", deleted: 3 },
       ]),
     );
 
@@ -485,14 +532,34 @@ describe("the deletion sweep's database side (P3-3)", () => {
     }
     const inbox = await superuser.query<{ delivery_id: string }>(
       "select delivery_id from app.webhook_deliveries where delivery_id = any($1) order by 1",
-      [[finishedC.deliveryId, finishedCOld.deliveryId, pendingC.deliveryId, finishedD.deliveryId]],
+      [
+        [
+          finishedC.deliveryId,
+          finishedCOld.deliveryId,
+          pendingC.deliveryId,
+          finishedD.deliveryId,
+          pendingPrC.deliveryId,
+        ],
+      ],
     );
     expect(inbox.rows.map((r) => r.delivery_id)).toEqual(
       [pendingC.deliveryId, finishedD.deliveryId].sort(),
     );
+    // The surviving row of the erased account keeps ids only; d's row is untouched.
+    const events = await superuser.query<{ delivery_id: string; event: unknown }>(
+      "select delivery_id, event from app.webhook_deliveries where delivery_id = any($1)",
+      [[pendingC.deliveryId, finishedD.deliveryId]],
+    );
+    const eventOf = (id: string) => events.rows.find((r) => r.delivery_id === id)?.event;
+    expect(eventOf(pendingC.deliveryId)).toEqual({
+      ...pendingC.event,
+      account: { ...pendingC.event.account, login: "erased" },
+      sender: null,
+    });
+    expect(eventOf(finishedD.deliveryId)).toEqual(finishedD.event);
     const tombstone = await superuser.query(
       `select forge, installation_id::text, audit_events_deleted > 0 as audited,
-              inbox_rows_deleted::text, deleted_at <= now() as stamped
+              inbox_rows_deleted::text, inbox_rows_scrubbed::text, deleted_at <= now() as stamped
          from app.org_deletions where org_id = $1`,
       [c.orgId],
     );
@@ -501,7 +568,8 @@ describe("the deletion sweep's database side (P3-3)", () => {
         forge: "github",
         installation_id: "60",
         audited: true,
-        inbox_rows_deleted: "2",
+        inbox_rows_deleted: "3",
+        inbox_rows_scrubbed: "1",
         stamped: true,
       },
     ]);
@@ -531,5 +599,212 @@ describe("the deletion sweep's database side (P3-3)", () => {
     } finally {
       await appPool.end();
     }
+  });
+});
+
+describe("the deletion schedule belongs to the worker (review round 1, H1)", () => {
+  const CHECK_VIOLATION = "23514";
+
+  it("the server login cannot set, push out, clear or re-target a deletion, or change the installer", async () => {
+    const orgId = await bareOrg(80);
+    for (const sql of [
+      "update orgs set delete_after = now()",
+      "update orgs set delete_after = 'infinity'",
+      "update orgs set installer_forge_user_id = 1",
+      "update orgs set login = 'renamed'",
+      "update orgs set kind = 'user'",
+    ]) {
+      const error = await pgError(db.withOrg(orgId, (tx) => tx.query(sql)));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+    // Scheduled by the worker; the server can neither clear it nor move it.
+    await worker.withOrg(orgId, (tx) => tx.query("update orgs set delete_after = now()"));
+    for (const sql of [
+      "update orgs set delete_after = null",
+      "update orgs set delete_after = 'infinity'",
+      "update orgs set delete_after = delete_after + interval '1 year'",
+    ]) {
+      const error = await pgError(db.withOrg(orgId, (tx) => tx.query(sql)));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+    const { rows } = await superuser.query<{ due: boolean }>(
+      "select delete_after < now() + interval '7 days 1 hour' as due from orgs where id = $1",
+      [orgId],
+    );
+    expect(rows[0]?.due).toBe(true);
+    // What the server may still change: settings and the encrypted key columns.
+    await db.withOrg(orgId, (tx) =>
+      tx.query(`update orgs set settings = '{"a":1}', updated_at = now()`),
+    );
+  });
+
+  it("refuses infinity, or a date beyond the grace window, for every role", async () => {
+    const orgId = await bareOrg(81);
+    for (const value of ["infinity", "-infinity"]) {
+      const error = await pgError(
+        worker.withOrg(orgId, (tx) => tx.query("update orgs set delete_after = $1", [value])),
+      );
+      expect(error.code, value).toBe(CHECK_VIOLATION);
+    }
+    const far = await pgError(
+      worker.withOrg(orgId, (tx) =>
+        tx.query("update orgs set delete_after = now() + interval '30 days'"),
+      ),
+    );
+    expect(far.code).toBe(CHECK_VIOLATION);
+    // Even the superuser (bypassing RLS, with the triggers on) cannot store infinity.
+    const su = await pgError(
+      superuser.query("update orgs set delete_after = 'infinity' where id = $1", [orgId]),
+    );
+    expect(su.code).toBe(CHECK_VIOLATION);
+    const { rows } = await superuser.query("select delete_after from orgs where id = $1", [orgId]);
+    expect(rows).toEqual([{ delete_after: null }]);
+  });
+
+  it("the server holds UPDATE on exactly the columns it writes", async () => {
+    const columns = async (grantee: string) =>
+      (
+        await superuser.query<{ column_name: string }>(
+          `select column_name from information_schema.column_privileges
+            where table_schema = 'public' and table_name = 'orgs' and grantee = $1
+              and privilege_type = 'UPDATE' order by 1`,
+          [grantee],
+        )
+      ).rows.map((r) => r.column_name);
+    expect(await columns("rocky_app")).toEqual([
+      "data_key_ciphertext",
+      "data_key_version",
+      "llm_api_key_ciphertext",
+      "llm_api_key_version",
+      "settings",
+      "updated_at",
+    ]);
+    expect(await columns("rocky_worker")).toEqual([
+      "delete_after",
+      "erasing_at",
+      "installation_id",
+      "installer_forge_user_id",
+      "kind",
+      "login",
+      "updated_at",
+    ]);
+  });
+});
+
+describe("rescheduling and erasing (review round 1, H1 and S6)", () => {
+  const OBJECT_IN_USE = "55000";
+
+  const deleteAfterOf = async (orgId: string) =>
+    (
+      await superuser.query<{ d: Date | null }>(
+        "select delete_after as d from orgs where id = $1",
+        [orgId],
+      )
+    ).rows[0]?.d ?? null;
+
+  it("reschedules a deadline beyond the grace window instead of keeping it (H1)", async () => {
+    const orgId = await bareOrg(90);
+    // A date the window forbids today (written before 0007, or by hand with the triggers off).
+    await superuser.query("alter table orgs disable trigger user");
+    try {
+      await superuser.query(
+        "update orgs set delete_after = now() + interval '5 years' where id = $1",
+        [orgId],
+      );
+    } finally {
+      await superuser.query("alter table orgs enable trigger user");
+    }
+    expect(await worker.withOrg(orgId, (tx) => scheduleOrgDeletion(tx, 90))).toBe("scheduled");
+    const due = await deleteAfterOf(orgId);
+    expect(+due! - Date.now()).toBeGreaterThan(6.9 * DAY);
+    expect(+due! - Date.now()).toBeLessThan(7 * DAY + 3_600_000);
+    // An in-window schedule is kept (a duplicate uninstall does not push it out).
+    expect(await worker.withOrg(orgId, (tx) => scheduleOrgDeletion(tx, 90))).toBe(
+      "already_scheduled",
+    );
+    expect(await deleteAfterOf(orgId)).toEqual(due);
+    // Bound to another installation meanwhile: nothing happens.
+    expect(await worker.withOrg(orgId, (tx) => scheduleOrgDeletion(tx, 91))).toBe("stale");
+  });
+
+  it("marks an org erasing only once it is due; erasing is final and frees its binding (S6)", async () => {
+    const orgId = await bareOrg(92);
+    await worker.withOrg(orgId, (tx) => scheduleOrgDeletion(tx, 92));
+    expect(await worker.withOrg(orgId, (tx) => beginOrgErasure(tx))).toBe("not_due");
+    // The trigger refuses it too, not only the helper's WHERE clause.
+    const early = await pgError(
+      worker.withOrg(orgId, (tx) => tx.query("update orgs set erasing_at = now()")),
+    );
+    expect(early.code).toBe(OBJECT_IN_USE);
+    // The server may not start an erasure at all.
+    const byServer = await pgError(
+      db.withOrg(orgId, (tx) => tx.query("update orgs set erasing_at = now()")),
+    );
+    expect(byServer.code).toBe(INSUFFICIENT_PRIVILEGE);
+
+    await makeDue(orgId);
+    expect(await worker.withOrg(orgId, (tx) => beginOrgErasure(tx))).toBe("started");
+    expect(await worker.withOrg(orgId, (tx) => beginOrgErasure(tx))).toBe("resumed");
+    expect((await worker.orgsDueForDeletion(100)).find((r) => r.orgId === orgId)).toMatchObject({
+      erasing: true,
+    });
+
+    // Past the point of no return: no cancel, no rebind, no new deadline, no un-erasing.
+    expect(await worker.withOrg(orgId, (tx) => cancelOrgDeletion(tx))).toBe(false);
+    expect(
+      await worker.withOrg(orgId, (tx) =>
+        bindInstallation(tx, {
+          expectedInstallationId: 92,
+          installationId: 92,
+          login: "back",
+          kind: "organization",
+        }),
+      ),
+    ).toBe(false);
+    for (const sql of [
+      "update orgs set delete_after = null",
+      "update orgs set erasing_at = null",
+      "update orgs set installation_id = 93",
+    ]) {
+      const error = await pgError(worker.withOrg(orgId, (tx) => tx.query(sql)));
+      expect(error.code, sql).toBe(OBJECT_IN_USE);
+    }
+
+    // The lookup no longer returns it, and a reinstall gets a fresh org with the same ids.
+    expect(await worker.installationOrgs("github", 92, 500_092)).toEqual([]);
+    const fresh = newOrgId();
+    await worker.withOrg(fresh, (tx) =>
+      insertInstallationOrg(tx, {
+        forge: "github",
+        installationId: 92,
+        accountId: 500_092,
+        login: "bare-92",
+        kind: "organization",
+        installerForgeUserId: null,
+      }),
+    );
+    expect((await worker.installationOrgs("github", 92, 500_092)).map((o) => o.orgId)).toEqual([
+      fresh,
+    ]);
+    // A second live org for the same installation is still refused.
+    const twin = newOrgId();
+    const dup = await pgError(
+      worker.withOrg(twin, (tx) =>
+        insertInstallationOrg(tx, {
+          forge: "github",
+          installationId: 92,
+          accountId: 500_092,
+          login: "bare-92",
+          kind: "organization",
+          installerForgeUserId: null,
+        }),
+      ),
+    );
+    expect(dup.code).toBe("23505");
+
+    // Finishing the erasure removes the old org only.
+    await worker.deleteOrg(orgId);
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(0);
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, fresh)).toBe(1);
   });
 });

@@ -341,6 +341,9 @@ describe("retention purge path", () => {
       { table_name: "retention_settings", privilege_type: "SELECT" },
       { table_name: "webhook_deliveries", privilege_type: "DELETE" },
       { table_name: "webhook_deliveries", privilege_type: "SELECT" },
+      // Review round 1 (L4): delete_org scrubs the sender and login of the erased installation's
+      // remaining rows. rocky_retention is NOLOGIN: only its own functions ever act as it.
+      { table_name: "webhook_deliveries", privilege_type: "UPDATE" },
     ]);
   });
 });

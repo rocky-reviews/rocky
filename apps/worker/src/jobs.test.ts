@@ -1,8 +1,10 @@
-import { nothingStoredYet, type OrgId } from "@rocky-reviews/core";
+import { ForgeReadError, nothingStoredYet, type OrgId } from "@rocky-reviews/core";
 import type { Db } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
 import { describe, expect, it } from "vitest";
-import { retryDelaySeconds } from "./inbox.js";
+import { createAppCheck } from "./app-check.js";
+import { failureKindOf, leaseSecondsFor, retryDelaySeconds, ROW_BUDGET_SECONDS } from "./inbox.js";
+import { ContradictionError, ParkDeliveryError, StaleOrgError } from "./installations.js";
 import { startJobs } from "./jobs.js";
 
 /** P3-3: the worker's timers. The jobs themselves run against Postgres in lifecycle.e2e.test.ts. */
@@ -60,16 +62,22 @@ const base = {
   intervals: { inboxMs: 5, sweepMs: 5, retentionMs: 5 },
 };
 
-const forge = { kind: "github" as const, getInstallation: () => Promise.resolve(null) };
+const forge = {
+  kind: "github" as const,
+  getInstallation: () => Promise.resolve(null),
+  verifyApp: () => Promise.resolve(),
+};
 
 describe("startJobs", () => {
-  it("never touches installation events without app credentials (fail closed), but still sweeps and purges", async () => {
+  it("never touches installation events or erases orgs without app credentials (fail closed), but still purges", async () => {
     const { db, calls } = stubDb();
     const { log, lines } = capture();
     const jobs = startJobs({ ...base, db, log, forge: undefined });
-    await expect.poll(() => calls.includes("due") && calls.includes("purge_inbox")).toBe(true);
+    await expect.poll(() => calls.filter((c) => c === "purge_inbox").length).toBeGreaterThan(2);
     await jobs.stop();
     expect(calls).not.toContain("claim");
+    // The sweep re-verifies every uninstall with GitHub first (review round 1, S1c).
+    expect(calls).not.toContain("due");
     expect(
       lines.some((l) => String(l["msg"]).includes("installation events stay in the inbox")),
     ).toBe(true);
@@ -99,12 +107,97 @@ describe("startJobs", () => {
       },
     });
     const { log, lines } = capture();
-    const jobs = startJobs({ ...base, db, log, forge: undefined });
+    const jobs = startJobs({ ...base, db, log, forge });
     await expect.poll(() => failures).toBeGreaterThan(2);
     await jobs.stop();
     const failed = lines.filter((l) => l["msg"] === "job failed");
     expect(failed[0]).toMatchObject({ job: "org_deletion_sweep", errorCode: "internal_error" });
     expect(JSON.stringify(lines)).not.toContain("10.0.0.5");
+  });
+});
+
+describe("the app check gate (review round 1, M2)", () => {
+  it("claims nothing and erases nothing until GET /app proves the configured app, then starts", async () => {
+    const { db, calls } = stubDb();
+    const { log, lines } = capture();
+    let mismatch = true;
+    let checks = 0;
+    const gated = {
+      ...forge,
+      verifyApp: () => {
+        checks++;
+        return mismatch ? Promise.reject(new ForgeReadError("app_mismatch")) : Promise.resolve();
+      },
+    };
+    const jobs = startJobs({ ...base, db, log, forge: gated });
+    await expect.poll(() => checks).toBeGreaterThan(3);
+    expect(calls).not.toContain("claim");
+    expect(calls).not.toContain("due");
+    const failed = lines.filter((l) => String(l["msg"]).startsWith("forge app check failed"));
+    expect(failed[0]).toMatchObject({ level: 50, errorCode: "forge_app_mismatch" });
+    // Logged once while the same failure persists, not on every poll.
+    expect(failed).toHaveLength(1);
+    mismatch = false;
+    await expect.poll(() => calls.includes("claim") && calls.includes("due")).toBe(true);
+    await jobs.stop();
+  });
+
+  it("trusts a pass for the recheck period, then asks again", async () => {
+    let now = 0;
+    let checks = 0;
+    const { log } = capture();
+    const check = createAppCheck({
+      forge: { ...forge, verifyApp: () => (checks++, Promise.resolve()) },
+      clock: { now: () => new Date(now) },
+      log,
+      recheckMs: 1000,
+    });
+    expect(await check.ready()).toBe(true);
+    now = 999;
+    expect(await check.ready()).toBe(true);
+    expect(checks).toBe(1);
+    now = 1000;
+    expect(await check.ready()).toBe(true);
+    expect(checks).toBe(2);
+  });
+});
+
+describe("failure classification (review round 1, S3)", () => {
+  it("does not count outages against a row; does count bad answers; parks the impossible", () => {
+    for (const error of [
+      new ForgeReadError("timeout"),
+      new ForgeReadError("network"),
+      new ForgeReadError("http_status", 503),
+      new ForgeReadError("http_status", 429),
+      new ForgeReadError("http_status", 401),
+      new ForgeReadError("http_status", 403),
+      new ForgeReadError("app_mismatch"),
+      Object.assign(new Error("terminating connection"), { code: "57P01" }),
+      Object.assign(new Error("could not serialize"), { code: "40001" }),
+      Object.assign(new Error("connection failure"), { code: "08006" }),
+    ]) {
+      expect(failureKindOf(error), String((error as { code?: string }).code)).toBe("transient");
+    }
+    for (const error of [
+      new ForgeReadError("invalid_response"),
+      new ForgeReadError("http_status", 422),
+      new ContradictionError(),
+      new StaleOrgError(),
+      Object.assign(new Error("duplicate key"), { code: "23505" }),
+      new Error("no code"),
+    ]) {
+      expect(failureKindOf(error), error.name).toBe("strike");
+    }
+    expect(failureKindOf(new ParkDeliveryError("account_mismatch"))).toBe("permanent");
+  });
+});
+
+describe("lease sizing (review round 1, S4)", () => {
+  it("covers every row's worst case: two forge reads at the timeout, plus slack", () => {
+    expect(ROW_BUDGET_SECONDS).toBeGreaterThanOrEqual(2 * 10 + 5);
+    expect(leaseSecondsFor(10)).toBe(10 * ROW_BUDGET_SECONDS);
+    expect(leaseSecondsFor(10, 60)).toBe(10 * ROW_BUDGET_SECONDS);
+    expect(leaseSecondsFor(1, 900)).toBe(900);
   });
 });
 

@@ -7,7 +7,8 @@ import {
   completeInTenantTx,
   decodeClaimedDelivery,
   LeaseLostError,
-  WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_MAX_STRIKES,
+  WEBHOOK_TRANSIENT_PARK_HOURS,
   type ClaimedDelivery,
 } from "./inbox.js";
 import * as schema from "./schema.js";
@@ -25,7 +26,9 @@ import { WebhookInboxError } from "./webhooks.js";
  * P3-3: the worker's claim path into the webhook inbox (migration 0007, ADR 0009). Rows are
  * claimed with a lease through SECURITY DEFINER functions only the worker role may execute;
  * concurrent workers never share a row; a crash lets the lease expire and the row is retried; a
- * row that keeps failing is parked after WEBHOOK_MAX_ATTEMPTS; only processed rows are purged.
+ * row that keeps striking is parked after WEBHOOK_MAX_STRIKES, one that only fails transiently
+ * after WEBHOOK_TRANSIENT_PARK_HOURS; only processed rows are purged. Review round 1: claims are
+ * per forge (M3), at most one live lease per installation (S2), duplicates are superseded (L5).
  */
 
 const INSUFFICIENT_PRIVILEGE = "42501";
@@ -86,13 +89,14 @@ const state = async (deliveryId: string) =>
   (
     await superuser.query<{
       attempts: number;
+      strikes: number;
       leased: boolean;
       processed: boolean;
       parked: boolean;
       outcome: string | null;
       last_error: string | null;
     }>(
-      `select attempts, lease_token is not null as leased, processed_at is not null as processed,
+      `select attempts, strikes, lease_token is not null as leased, processed_at is not null as processed,
               parked_at is not null as parked, outcome, last_error
          from app.webhook_deliveries where delivery_id = $1`,
       [deliveryId],
@@ -103,6 +107,7 @@ const state = async (deliveryId: string) =>
 const drain = async (): Promise<void> => {
   for (;;) {
     const rows = await worker.claimWebhookDeliveries({
+      forge: "github",
       eventTypes: [...INSTALLATION_TYPES, "pull_request.opened"],
       limit: 100,
       leaseSeconds: 60,
@@ -122,6 +127,7 @@ const expireLease = async (deliveryId: string): Promise<void> => {
 
 const claimOne = async (deliveryId: string): Promise<ClaimedDelivery | undefined> => {
   const rows = await worker.claimWebhookDeliveries({
+    forge: "github",
     eventTypes: [...INSTALLATION_TYPES],
     limit: 100,
     leaseSeconds: 60,
@@ -132,7 +138,7 @@ const claimOne = async (deliveryId: string): Promise<ClaimedDelivery | undefined
       await worker.failWebhookDelivery(r, {
         error: "test_release",
         retryAfterSeconds: 0,
-        permanent: false,
+        kind: "transient",
       });
     }
   }
@@ -161,13 +167,14 @@ describe("who may touch the inbox", () => {
     for (const attempt of [
       () =>
         server.claimWebhookDeliveries({
+          forge: "github",
           eventTypes: [...INSTALLATION_TYPES],
           limit: 1,
           leaseSeconds: 60,
         }),
       () => server.completeWebhookDelivery(lease, "done"),
       () =>
-        server.failWebhookDelivery(lease, { error: "x", retryAfterSeconds: 0, permanent: false }),
+        server.failWebhookDelivery(lease, { error: "x", retryAfterSeconds: 0, kind: "transient" }),
     ]) {
       const error = await attempt().then(
         () => undefined,
@@ -214,6 +221,7 @@ describe("who may touch the inbox", () => {
     }
     expect(await state(deliveryId)).toEqual({
       attempts: 0,
+      strikes: 0,
       leased: false,
       processed: false,
       parked: false,
@@ -240,6 +248,10 @@ describe("claim, complete, fail", () => {
       attempts: 1,
     });
     expect(claimed!.leaseToken).toMatch(/^[0-9a-f-]{36}$/);
+    expect(claimed!.strikes).toBe(0);
+    const leaseMs = +claimed!.leaseUntil - Date.now();
+    expect(leaseMs).toBeGreaterThan(50_000);
+    expect(leaseMs).toBeLessThanOrEqual(61_000);
     // Leased: nobody else gets it.
     expect(await claimOne(d.deliveryId)).toBeUndefined();
     // A forged token finishes nothing.
@@ -261,6 +273,7 @@ describe("claim, complete, fail", () => {
     const pr = pullRequestDelivery();
     await server.recordWebhookDelivery(pr);
     const rows = await worker.claimWebhookDeliveries({
+      forge: "github",
       eventTypes: [...INSTALLATION_TYPES],
       limit: 100,
       leaseSeconds: 60,
@@ -276,7 +289,7 @@ describe("claim, complete, fail", () => {
       worker.failWebhookDelivery(lease, {
         error: "connection refused at 10.0.0.1",
         retryAfterSeconds: 0,
-        permanent: false,
+        kind: "transient",
       }),
     ).rejects.toThrow(/error code/);
     await expect(
@@ -284,13 +297,19 @@ describe("claim, complete, fail", () => {
     ).rejects.toThrow(/lease/);
     await expect(
       worker.claimWebhookDeliveries({
+        forge: "github",
         eventTypes: ["installation.suspend" as never],
         limit: 1,
         leaseSeconds: 60,
       }),
     ).rejects.toThrow(/event types/);
     await expect(
-      worker.claimWebhookDeliveries({ eventTypes: [], limit: 1, leaseSeconds: 60 }),
+      worker.claimWebhookDeliveries({
+        forge: "github",
+        eventTypes: [],
+        limit: 1,
+        leaseSeconds: 60,
+      }),
     ).rejects.toThrow(/event types/);
   });
 
@@ -307,6 +326,7 @@ describe("claim, complete, fail", () => {
         pools.map(async (w) => {
           for (;;) {
             const rows = await w.claimWebhookDeliveries({
+              forge: "github",
               eventTypes: [...INSTALLATION_TYPES],
               limit: 3,
               leaseSeconds: 60,
@@ -335,7 +355,7 @@ describe("claim, complete, fail", () => {
     // The worker dies here: no complete, no fail.
     await expireLease(d.deliveryId);
     const second = await claimOne(d.deliveryId);
-    expect(second).toMatchObject({ deliveryId: d.deliveryId, attempts: 2 });
+    expect(second).toMatchObject({ deliveryId: d.deliveryId, attempts: 2, strikes: 1 });
     expect(second!.leaseToken).not.toBe(first!.leaseToken);
     expect(await state(d.deliveryId)).toMatchObject({ last_error: "lease_expired" });
     // The crashed worker comes back: its lease is gone.
@@ -344,51 +364,111 @@ describe("claim, complete, fail", () => {
       await worker.failWebhookDelivery(first!, {
         error: "late",
         retryAfterSeconds: 0,
-        permanent: false,
+        kind: "transient",
       }),
     ).toBe("stale");
     expect(await worker.completeWebhookDelivery(second!, "deletion_scheduled")).toBe(true);
   });
 
-  it("parks a poison row after WEBHOOK_MAX_ATTEMPTS failures, keeping the last error code", async () => {
+  it("parks a poison row after WEBHOOK_MAX_STRIKES strikes, keeping the last error code", async () => {
     await drain();
     const d = installationDelivery();
     await server.recordWebhookDelivery(d);
     const results: string[] = [];
-    for (let i = 0; i < WEBHOOK_MAX_ATTEMPTS + 2; i++) {
+    for (let i = 0; i < WEBHOOK_MAX_STRIKES + 2; i++) {
       const claimed = await claimOne(d.deliveryId);
       if (claimed === undefined) break;
+      expect(claimed.strikes).toBe(i);
       results.push(
         await worker.failWebhookDelivery(claimed, {
-          error: i % 2 === 0 ? "forge_http_500" : "40001",
+          error: i % 2 === 0 ? "forge_contradiction" : "invalid_response",
           retryAfterSeconds: 0,
-          permanent: false,
+          kind: "strike",
         }),
       );
     }
-    expect(results).toEqual([...Array(WEBHOOK_MAX_ATTEMPTS - 1).fill("retry"), "parked"]);
+    expect(results).toEqual([...Array(WEBHOOK_MAX_STRIKES - 1).fill("retry"), "parked"]);
     expect(await state(d.deliveryId)).toEqual({
-      attempts: WEBHOOK_MAX_ATTEMPTS,
+      attempts: WEBHOOK_MAX_STRIKES,
+      strikes: WEBHOOK_MAX_STRIKES,
       leased: false,
       processed: false,
       parked: true,
       outcome: null,
-      last_error: "forge_http_500",
+      last_error: "forge_contradiction",
     });
     expect(await claimOne(d.deliveryId)).toBeUndefined();
+  });
+
+  it("never parks a row for transient failures (an outage) until it is 72 h old (S3)", async () => {
+    await drain();
+    const d = installationDelivery();
+    await server.recordWebhookDelivery(d);
+    for (let i = 0; i < WEBHOOK_MAX_STRIKES * 3; i++) {
+      const claimed = await claimOne(d.deliveryId);
+      expect(claimed?.attempts).toBe(i + 1);
+      expect(
+        await worker.failWebhookDelivery(claimed!, {
+          error: ["forge_timeout", "forge_http_503", "forge_http_429", "forge_http_401"][i % 4]!,
+          retryAfterSeconds: 0,
+          kind: "transient",
+        }),
+      ).toBe("retry");
+    }
+    expect(await state(d.deliveryId)).toMatchObject({ strikes: 0, parked: false });
+    // Still failing after WEBHOOK_TRANSIENT_PARK_HOURS: parked for a human.
+    await superuser.query(
+      `update app.webhook_deliveries set received_at = now() - make_interval(hours => $2 + 1)
+        where delivery_id = $1`,
+      [d.deliveryId, WEBHOOK_TRANSIENT_PARK_HOURS],
+    );
+    const last = await claimOne(d.deliveryId);
+    expect(
+      await worker.failWebhookDelivery(last!, {
+        error: "forge_timeout",
+        retryAfterSeconds: 0,
+        kind: "transient",
+      }),
+    ).toBe("parked");
+    expect(await state(d.deliveryId)).toMatchObject({ strikes: 0, parked: true });
+  });
+
+  it("parks on an unknown failure kind (fail closed in the database too)", async () => {
+    await drain();
+    const d = installationDelivery();
+    await server.recordWebhookDelivery(d);
+    const claimed = await claimOne(d.deliveryId);
+    await expect(
+      worker.failWebhookDelivery(claimed!, {
+        error: "x",
+        retryAfterSeconds: 0,
+        kind: "maybe" as never,
+      }),
+    ).rejects.toThrow(/invalid failure/);
+    const raw = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 });
+    try {
+      const { rows } = await raw.query<{ r: string }>(
+        "select worker.fail_webhook_delivery('github', $1, $2::uuid, 'x', 0, 'maybe') as r",
+        [d.deliveryId, claimed!.leaseToken],
+      );
+      expect(rows[0]?.r).toBe("parked");
+    } finally {
+      await raw.end();
+    }
   });
 
   it("parks a row that crashes its worker every time (the lease keeps expiring)", async () => {
     await drain();
     const d = installationDelivery();
     await server.recordWebhookDelivery(d);
-    for (let i = 0; i < WEBHOOK_MAX_ATTEMPTS; i++) {
+    for (let i = 0; i < WEBHOOK_MAX_STRIKES; i++) {
       expect((await claimOne(d.deliveryId))?.attempts).toBe(i + 1);
       await expireLease(d.deliveryId);
     }
     expect(await claimOne(d.deliveryId)).toBeUndefined();
     expect(await state(d.deliveryId)).toMatchObject({
-      attempts: WEBHOOK_MAX_ATTEMPTS,
+      attempts: WEBHOOK_MAX_STRIKES,
+      strikes: WEBHOOK_MAX_STRIKES,
       parked: true,
       last_error: "lease_expired",
     });
@@ -405,7 +485,7 @@ describe("claim, complete, fail", () => {
       await worker.failWebhookDelivery(p!, {
         error: "invalid_event",
         retryAfterSeconds: 0,
-        permanent: true,
+        kind: "permanent",
       }),
     ).toBe("parked");
     expect(await state(permanent.deliveryId)).toMatchObject({ attempts: 1, parked: true });
@@ -414,7 +494,7 @@ describe("claim, complete, fail", () => {
       await worker.failWebhookDelivery(q!, {
         error: "forge_timeout",
         retryAfterSeconds: 3600,
-        permanent: false,
+        kind: "transient",
       }),
     ).toBe("retry");
     expect(await claimOne(delayed.deliveryId)).toBeUndefined();
@@ -423,6 +503,148 @@ describe("claim, complete, fail", () => {
       [delayed.deliveryId],
     );
     expect((await claimOne(delayed.deliveryId))?.attempts).toBe(q!.attempts + 1);
+  });
+});
+
+describe("claim ordering (review round 1: M3, S2, L5)", () => {
+  it("claims only rows of the worker's forge; another forge's rows wait untouched (M3)", async () => {
+    await drain();
+    const gitlab = { ...installationDelivery(), forge: "gitlab" as const };
+    await server.recordWebhookDelivery(gitlab);
+    const rows = await worker.claimWebhookDeliveries({
+      forge: "github",
+      eventTypes: [...INSTALLATION_TYPES],
+      limit: 100,
+      leaseSeconds: 60,
+    });
+    expect(rows.map((r) => r.deliveryId)).not.toContain(gitlab.deliveryId);
+    expect(await state(gitlab.deliveryId)).toMatchObject({ attempts: 0, leased: false });
+    const theirs = await worker.claimWebhookDeliveries({
+      forge: "gitlab",
+      eventTypes: [...INSTALLATION_TYPES],
+      limit: 100,
+      leaseSeconds: 60,
+    });
+    expect(theirs.map((r) => [r.forge, r.deliveryId])).toEqual([["gitlab", gitlab.deliveryId]]);
+    await worker.completeWebhookDelivery(theirs[0]!, "test");
+    await expect(
+      worker.claimWebhookDeliveries({
+        forge: "bitbucket" as never,
+        eventTypes: [...INSTALLATION_TYPES],
+        limit: 1,
+        leaseSeconds: 60,
+      }),
+    ).rejects.toThrow(/forge/);
+  });
+
+  it("hands out one row per installation at a time, oldest first, even to concurrent workers (S2)", async () => {
+    await drain();
+    const installationId = nextInstallation++;
+    const created = installationDelivery({ installationId, type: "installation.created" });
+    const deleted = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(created);
+    await server.recordWebhookDelivery(deleted);
+    await superuser.query(
+      `update app.webhook_deliveries set received_at = received_at - interval '1 second'
+        where delivery_id = $1`,
+      [created.deliveryId],
+    );
+    const pools = Array.from({ length: 4 }, () =>
+      createDb({ connectionString: pgs.workerUrl, max: 1 }),
+    );
+    let claimed: ClaimedDelivery[];
+    try {
+      claimed = (
+        await Promise.all(
+          pools.map((w) =>
+            w.claimWebhookDeliveries({
+              forge: "github",
+              eventTypes: [...INSTALLATION_TYPES],
+              limit: 10,
+              leaseSeconds: 60,
+            }),
+          ),
+        )
+      )
+        .flat()
+        .filter((r) => r.installationId === installationId);
+    } finally {
+      await Promise.all(pools.map((p) => p.close()));
+    }
+    expect(claimed.map((r) => r.deliveryId)).toEqual([created.deliveryId]);
+    // While it is leased, the next event of that installation waits.
+    expect(await claimOne(deleted.deliveryId)).toBeUndefined();
+    expect(await worker.completeWebhookDelivery(claimed[0]!, "org_created")).toBe(true);
+    const next = await claimOne(deleted.deliveryId);
+    expect(next?.eventType).toBe("installation.deleted");
+    await worker.completeWebhookDelivery(next!, "test");
+  });
+
+  it("a delayed head holds back later events of its installation (no overtaking)", async () => {
+    await drain();
+    const installationId = nextInstallation++;
+    const created = installationDelivery({ installationId, type: "installation.created" });
+    const deleted = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(created);
+    await server.recordWebhookDelivery(deleted);
+    await superuser.query(
+      `update app.webhook_deliveries set received_at = received_at - interval '1 second'
+        where delivery_id = $1`,
+      [created.deliveryId],
+    );
+    const first = await claimOne(created.deliveryId);
+    await worker.failWebhookDelivery(first!, {
+      error: "forge_timeout",
+      retryAfterSeconds: 3600,
+      kind: "transient",
+    });
+    expect(await claimOne(deleted.deliveryId)).toBeUndefined();
+    expect(await state(deleted.deliveryId)).toMatchObject({ attempts: 0 });
+  });
+
+  it("supersedes older pending duplicates of an event without claiming them; keeps the newest (L5)", async () => {
+    await drain();
+    const installationId = nextInstallation++;
+    const copies = Array.from({ length: 4 }, () =>
+      installationDelivery({ installationId, type: "installation.deleted" }),
+    );
+    for (const c of copies) await server.recordWebhookDelivery(c);
+    // Distinct, ordered receive times (same-millisecond inserts would tie on received_at).
+    for (const [i, c] of copies.entries()) {
+      await superuser.query(
+        `update app.webhook_deliveries set received_at = now() - make_interval(secs => $2)
+          where delivery_id = $1`,
+        [c.deliveryId, 100 - i],
+      );
+    }
+    const newest = copies.at(-1)!;
+    const claimed = await claimOne(newest.deliveryId);
+    expect(claimed).toMatchObject({ deliveryId: newest.deliveryId, attempts: 1 });
+    for (const old of copies.slice(0, -1)) {
+      expect(await state(old.deliveryId)).toMatchObject({
+        attempts: 0,
+        processed: true,
+        outcome: "superseded",
+        leased: false,
+      });
+    }
+    await worker.completeWebhookDelivery(claimed!, "test");
+  });
+
+  it("does not supersede a duplicate that is currently leased (its holder finishes it)", async () => {
+    await drain();
+    const installationId = nextInstallation++;
+    const a = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(a);
+    const held = await claimOne(a.deliveryId);
+    const b = installationDelivery({ installationId, type: "installation.deleted" });
+    await server.recordWebhookDelivery(b);
+    expect(await claimOne(b.deliveryId)).toBeUndefined();
+    expect(await state(a.deliveryId)).toMatchObject({ leased: true, processed: false });
+    expect(await worker.completeWebhookDelivery(held!, "deletion_scheduled")).toBe(true);
+    const next = await claimOne(b.deliveryId);
+    expect(next?.deliveryId).toBe(b.deliveryId);
+    await worker.completeWebhookDelivery(next!, "test");
   });
 });
 

@@ -34,6 +34,8 @@ const respond =
       }),
     );
 
+const NOT_FOUND = githubFixture("get-installation.not-found");
+
 const failure = async (promise: Promise<unknown>): Promise<ForgeReadError> => {
   try {
     await promise;
@@ -137,6 +139,60 @@ describe("getInstallation fails closed (never null on an error)", () => {
     );
   });
 
+  it("reports the recorded enterprise shape (slug and name, no login) as unsupported (review N2)", async () => {
+    const enterprise = githubFixture("get-installation.enterprise");
+    const account = enterprise["account"] as Record<string, unknown>;
+    expect(account["login"]).toBeUndefined();
+    expect(typeof account["slug"]).toBe("string");
+    expect((await failure(reader(respond(200, enterprise)).getInstallation(4444))).code).toBe(
+      "forge_unsupported_account_type",
+    );
+    // Still about the installation asked for, and for this app; otherwise it is a bad answer.
+    for (const body of [
+      { ...enterprise, id: 4445 },
+      { ...enterprise, app_id: 1 },
+    ]) {
+      expect((await failure(reader(respond(200, body)).getInstallation(4444))).reason).toBe(
+        "invalid_response",
+      );
+    }
+  });
+
+  it("believes a 404 only when it is GitHub's own JSON Not Found (review M2)", async () => {
+    for (const [label, body, headers] of [
+      [
+        "html from a proxy",
+        "<html><body>404 Not Found</body></html>",
+        { "content-type": "text/html" },
+      ],
+      ["empty body", "", {}],
+      ["other message", { message: "Repository access blocked" }, {}],
+      ["not json", "Not Found", {}],
+      ["no content type", JSON.stringify(NOT_FOUND), { "content-type": "" }],
+      ["oversized", { ...NOT_FOUND, padding: "x".repeat(300 * 1024) }, {}],
+    ] as const) {
+      const error = await failure(
+        reader(respond(404, body, headers as Record<string, string>)).getInstallation(4242),
+      );
+      expect(error.reason, label).toBe("invalid_response");
+    }
+    expect(await reader(respond(404, NOT_FOUND)).getInstallation(4242)).toBeNull();
+    expect(
+      await reader(
+        respond(404, NOT_FOUND, { "content-type": "application/json; charset=utf-8" }),
+      ).getInstallation(4242),
+    ).toBeNull();
+  });
+
+  it("an injected non-JSON 404 from the fake is not an uninstall either", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    github.failNext(404, 1, { body: "<html>gateway</html>", contentType: "text/html" });
+    expect((await failure(reader(github.fetch).getInstallation(4242))).reason).toBe(
+      "invalid_response",
+    );
+    expect(await reader(github.fetch).getInstallation(4242)).toBeNull();
+  });
+
   it("maps network errors and timeouts; follows no redirect", async () => {
     const network = await failure(
       reader(() => Promise.reject(new TypeError("fetch failed"))).getInstallation(4242),
@@ -155,7 +211,7 @@ describe("getInstallation fails closed (never null on an error)", () => {
     let seen: RequestInit | undefined;
     await reader((_input, init) => {
       seen = init;
-      return respond(404, {})();
+      return respond(404, NOT_FOUND)();
     }).getInstallation(4242);
     expect(seen?.redirect).toBe("error");
     expect(seen?.method).toBe("GET");
@@ -169,8 +225,8 @@ describe("getInstallation fails closed (never null on an error)", () => {
     expect(() =>
       createGitHubInstallationReader({ auth, api: new URL("http://api.github.com/"), clock }),
     ).toThrow(/https/);
-    await expect(reader(respond(404, {})).getInstallation(0)).rejects.toThrow(/invalid/);
-    await expect(reader(respond(404, {})).getInstallation(1.5)).rejects.toThrow(/invalid/);
+    await expect(reader(respond(404, NOT_FOUND)).getInstallation(0)).rejects.toThrow(/invalid/);
+    await expect(reader(respond(404, NOT_FOUND)).getInstallation(1.5)).rejects.toThrow(/invalid/);
   });
 
   it("uses the GHES API base when configured", async () => {
@@ -182,9 +238,67 @@ describe("getInstallation fails closed (never null on an error)", () => {
       clock,
       fetch: (input) => {
         url = String(input);
-        return respond(404, {})();
+        return respond(404, NOT_FOUND)();
       },
     }).getInstallation(7);
     expect(url).toBe("https://ghe.example.com/api/v3/app/installations/7");
+  });
+});
+
+describe("request headers (review N3)", () => {
+  it("sends the versioned GitHub media type, the API version, a user agent and the app JWT", async () => {
+    const seen: Headers[] = [];
+    const capture = (status: number, body: unknown) => (_input: unknown, init?: RequestInit) => {
+      seen.push(new Headers(init?.headers));
+      return respond(status, body)();
+    };
+    await reader(capture(404, NOT_FOUND) as typeof fetch).getInstallation(4242);
+    await reader(capture(200, githubFixture("get-app")) as typeof fetch).verifyApp();
+    expect(seen).toHaveLength(2);
+    for (const headers of seen) {
+      expect(headers.get("accept")).toBe("application/vnd.github+json");
+      expect(headers.get("x-github-api-version")).toBe("2022-11-28");
+      expect(headers.get("user-agent")).toBe("rocky-reviews");
+      expect(headers.get("authorization")).toMatch(/^Bearer [\w-]+\.[\w-]+\.[\w-]+$/);
+    }
+  });
+});
+
+describe("verifyApp: the key belongs to the configured app (review M2)", () => {
+  it("passes when GET /app answers with the configured app id", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    await expect(reader(github.fetch).verifyApp()).resolves.toBeUndefined();
+    expect(github.requests).toEqual([{ method: "GET", path: "/app", authorized: true }]);
+    const raw = githubFixture("get-app");
+    expect(raw["id"]).toBe(FIXTURE_APP_ID);
+    await expect(reader(respond(200, raw)).verifyApp()).resolves.toBeUndefined();
+  });
+
+  it("fails as app_mismatch when the key authenticates another app", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    github.reportAppId(FIXTURE_APP_ID + 1);
+    const error = await failure(reader(github.fetch).verifyApp());
+    expect(error.code).toBe("forge_app_mismatch");
+    expect(error.message).not.toContain(String(FIXTURE_APP_ID + 1));
+  });
+
+  it("fails closed on any other answer", async () => {
+    const app = githubFixture("get-app");
+    for (const [label, status, body, reason] of [
+      ["401", 401, { message: "Bad credentials" }, "http_status"],
+      ["404", 404, NOT_FOUND, "http_status"],
+      ["500", 500, {}, "http_status"],
+      ["string id", 200, { ...app, id: String(app["id"]) }, "invalid_response"],
+      ["no id", 200, { ...app, id: undefined }, "invalid_response"],
+      ["not json", 200, "<html>", "invalid_response"],
+    ] as const) {
+      expect((await failure(reader(respond(status, body)).verifyApp())).reason, label).toBe(reason);
+    }
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: testAppKeys().publicKey });
+    expect((await failure(reader(github.fetch).verifyApp())).code).toBe("forge_http_401");
+    const network = await failure(
+      reader(() => Promise.reject(new TypeError("fetch failed"))).verifyApp(),
+    );
+    expect(network.reason).toBe("network");
   });
 });

@@ -1,7 +1,13 @@
 import type { OrgId } from "@rocky-reviews/core";
 import { describe, expect, it } from "vitest";
 import type { TenantTx } from "./client.js";
-import { bindInstallation, insertInstallationOrg, scheduleOrgDeletion } from "./installations.js";
+import {
+  beginOrgErasure,
+  bindInstallation,
+  cancelOrgDeletion,
+  insertInstallationOrg,
+  scheduleOrgDeletion,
+} from "./installations.js";
 
 /** P3-3: the org writes refuse malformed values before any SQL (the database re-checks). */
 
@@ -61,7 +67,11 @@ describe("insertInstallationOrg / bindInstallation", () => {
         kind: "organization",
       }),
     ).toBe(false);
-    expect(await scheduleOrgDeletion(tx, 1)).toBeNull();
+    // Nothing matched and the org is not (or no longer) bound to that installation.
+    expect(await scheduleOrgDeletion(tx, 1)).toBe("stale");
+    expect(await cancelOrgDeletion(tx)).toBe(false);
+    expect(await beginOrgErasure(tx)).toBe("not_due");
+    expect(statements.length).toBeGreaterThan(4);
     for (const s of statements) expect(s[1]).toBe(tx.orgId);
   });
 });

@@ -53,6 +53,14 @@ export interface TenantTx {
   ): Promise<pg.QueryResult<R>>;
 }
 
+export interface DueOrg {
+  readonly orgId: OrgId;
+  readonly forge: ForgeKind;
+  readonly installationId: number;
+  /** An earlier sweep already started erasing it (no more re-verification or cancelling). */
+  readonly erasing: boolean;
+}
+
 export interface PurgeResult {
   orgId: OrgId;
   deleted: number;
@@ -91,8 +99,11 @@ export interface Db {
    * tombstone in app.org_deletions. Worker login only (migration 0007).
    */
   deleteOrg(orgId: OrgId): Promise<OrgDeletion[]>;
-  /** Orgs past their deletion grace period by the database clock (worker login only). */
-  orgsDueForDeletion(limit: number): Promise<OrgId[]>;
+  /**
+   * Orgs past their deletion grace period by the database clock, with what the sweep needs to
+   * re-verify the uninstall and to resume an erasure in progress (worker login only).
+   */
+  orgsDueForDeletion(limit: number): Promise<DueOrg[]>;
   /**
    * The orgs bound to a forge installation, or to its account (a reinstall gets a new
    * installation id). Cross-tenant, ids only; worker login only.
@@ -433,13 +444,23 @@ export const createDb = (options: DbOptions): Db => {
     return rows.map((row) => ({ table: row.table_name, deleted: Number(row.deleted) }));
   };
 
-  const orgsDueForDeletion = async (limit: number): Promise<OrgId[]> => {
+  const orgsDueForDeletion = async (limit: number): Promise<DueOrg[]> => {
     if (!Number.isInteger(limit)) throw new Error("orgsDueForDeletion: limit must be an integer");
-    const { rows } = await pool.query<{ org_id: string }>(
-      "select org_id from retention.orgs_due_for_deletion($1)",
+    const { rows } = await pool.query<{
+      org_id: string;
+      forge: ForgeKind;
+      installation_id: string;
+      erasing: boolean;
+    }>(
+      "select org_id, forge, installation_id::text, erasing from retention.orgs_due_for_deletion($1)",
       [limit],
     );
-    return rows.map((r) => r.org_id as OrgId);
+    return rows.map((r) => ({
+      orgId: r.org_id as OrgId,
+      forge: r.forge,
+      installationId: Number(r.installation_id),
+      erasing: r.erasing,
+    }));
   };
 
   const installationOrgs = async (

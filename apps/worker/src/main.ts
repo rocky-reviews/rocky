@@ -4,7 +4,7 @@ import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubInstallationReader } from "@rocky-reviews/forge-github";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
-import { ConfigError, workerConfigFromEnv, type WorkerConfig } from "./config.js";
+import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { startJobs } from "./jobs.js";
 
 const log = createLogger("worker");
@@ -17,7 +17,8 @@ const errorCode = (error: unknown): string => {
 
 let config: WorkerConfig;
 try {
-  config = workerConfigFromEnv(process.env);
+  // Also removes GITHUB_APP_PRIVATE_KEY from process.env once parsed (L6).
+  config = loadWorkerConfig(process.env);
 } catch (error) {
   // Fail closed: no worker without its own login, or (in production) without app credentials.
   log.fatal(
@@ -44,7 +45,8 @@ try {
     process.exit(1);
   }
 } catch (error) {
-  log.fatal({ errorCode: errorCode(error) }, "worker cannot reach Postgres");
+  const code = errorCode(error);
+  log.fatal({ errorCode: code }, databaseLoginHint(code) ?? "worker cannot reach Postgres");
   process.exit(1);
 }
 

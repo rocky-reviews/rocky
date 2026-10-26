@@ -20,6 +20,10 @@ import {
  * (ADR 0007 §4). Every decision is taken on what `GET /app/installations/{id}` answers now, so
  * a forged, planted, replayed or out-of-order row can at most cause a redundant read:
  *
+ * When GitHub contradicts the event (a `created` it answers 404 for, a `deleted` it still has),
+ * the row is retried with backoff for its first CONTRADICTION_ATTEMPTS attempts (GitHub's API can
+ * lag its webhooks), each a strike; after that GitHub's answer is final (review round 1, S1).
+ *
  * `installation.created` (GitHub must say the installation exists):
  * - an org is bound to this installation id: nothing to do, or, if its deletion is scheduled,
  *   cancel it (the same id exists again: a redelivery after a transient 404, never a real
@@ -31,6 +35,7 @@ import {
  *
  * `installation.deleted` (GitHub must answer 404): schedule the deletion of the org bound to
  * this installation id; the database enforces the grace period and audits it (migration 0005).
+ * A deadline beyond the grace window is rescheduled, an in-window one kept (review round 1, H1).
  * A suspended installation still exists: nothing is scheduled.
  *
  * Every tenant effect, its audit events and the inbox "processed" mark commit in one `withOrg`
@@ -59,8 +64,22 @@ export interface InstallationResult {
 /** A row that cannot succeed as it is; parked for a human with this code. */
 export class ParkDeliveryError extends Error {
   override readonly name = "ParkDeliveryError";
-  constructor(readonly code: "account_mismatch" | "account_has_live_installation") {
+  constructor(
+    readonly code: "account_mismatch" | "account_has_live_installation" | "forge_mismatch",
+  ) {
     super(`installation lifecycle: ${code}`);
+  }
+}
+
+/** Attempts during which GitHub contradicting the event is retried rather than believed. */
+export const CONTRADICTION_ATTEMPTS = 3;
+
+/** GitHub contradicts the event, possibly because its API lags the webhook: retry (a strike). */
+export class ContradictionError extends Error {
+  override readonly name = "ContradictionError";
+  readonly code = "forge_contradiction";
+  constructor() {
+    super("installation lifecycle: GitHub contradicts the event");
   }
 }
 
@@ -100,12 +119,15 @@ const verify = async (forge: InstallationReader, installationId: number): Promis
 
 export const reconcileInstallation = async (
   deps: InstallationDeps,
-  lease: InboxLease,
+  lease: InboxLease & { readonly attempts: number },
   event: InstallationEvent,
 ): Promise<InstallationResult> => {
   const forge = deps.forge.kind;
   const actor = { type: "forge" as const, id: lease.deliveryId };
   const verified = await verify(deps.forge, event.installationId);
+  const contradicts =
+    event.type === "installation.deleted" ? verified.kind !== "gone" : verified.kind === "gone";
+  if (contradicts && lease.attempts < CONTRADICTION_ATTEMPTS) throw new ContradictionError();
 
   if (event.type === "installation.deleted") {
     if (verified.kind !== "gone") {
@@ -127,19 +149,22 @@ export const reconcileInstallation = async (
       (o) => o.installationId === event.installationId,
     );
     if (org === undefined) return { outcome: "no_org", completed: false };
-    if (org.deleteAfter !== null)
-      return { outcome: "deletion_already_scheduled", completed: false };
-    await deps.db.withOrg(org.orgId, async (tx) => {
-      await auditLifecycle(tx, actor, "org.uninstalled", {
-        installation_id: event.installationId,
-        uninstalled_by: event.sender?.id ?? null,
-      });
-      if ((await scheduleOrgDeletion(tx, event.installationId)) === null) {
-        throw new StaleOrgError();
+    // Scheduled even when a deadline exists: one beyond the grace window is replaced (H1).
+    const outcome = await deps.db.withOrg(org.orgId, async (tx) => {
+      const scheduled = await scheduleOrgDeletion(tx, event.installationId);
+      if (scheduled === "stale") throw new StaleOrgError();
+      const code = scheduled === "scheduled" ? "deletion_scheduled" : "deletion_already_scheduled";
+      if (scheduled === "scheduled") {
+        await auditLifecycle(tx, actor, "org.uninstalled", {
+          installation_id: event.installationId,
+          uninstalled_by: event.sender?.id ?? null,
+          rescheduled: org.deleteAfter !== null,
+        });
       }
-      await completeInTenantTx(tx, lease, "deletion_scheduled");
+      await completeInTenantTx(tx, lease, code);
+      return code;
     });
-    return { outcome: "deletion_scheduled", completed: true };
+    return { outcome, completed: true };
   }
 
   // installation.created
@@ -181,7 +206,11 @@ export const reconcileInstallation = async (
     // A new installation id for an account that has an org: a reinstall, but only once GitHub
     // confirms the old installation is gone (one installation per app per account).
     const previous = await verify(deps.forge, byAccount.installationId);
-    if (previous.kind !== "gone") throw new ParkDeliveryError("account_has_live_installation");
+    if (previous.kind !== "gone") {
+      // The old installation's removal may not have reached the API yet (S1).
+      if (lease.attempts < CONTRADICTION_ATTEMPTS) throw new ContradictionError();
+      throw new ParkDeliveryError("account_has_live_installation");
+    }
     await deps.db.withOrg(byAccount.orgId, async (tx) => {
       const bound = await bindInstallation(tx, {
         expectedInstallationId: byAccount.installationId,

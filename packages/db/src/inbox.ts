@@ -14,8 +14,13 @@ import { minimalEvent, WebhookInboxError } from "./webhooks.js";
  * free text, and the SQL refuses anything else through its CHECKs.
  */
 
-/** A claim beyond this many attempts parks the row (mirrors the constant in migration 0007). */
-export const WEBHOOK_MAX_ATTEMPTS = 5;
+/**
+ * Strikes (lost leases, contradictions, bad answers) after which a row is parked (mirrors the
+ * constant in migration 0007). Transient failures do not strike.
+ */
+export const WEBHOOK_MAX_STRIKES = 5;
+/** A row that only ever failed transiently is parked once it is this old (migration 0007). */
+export const WEBHOOK_TRANSIENT_PARK_HOURS = 72;
 
 /** What a worker holds while processing one row. Only the current holder can finish it. */
 export interface InboxLease {
@@ -34,6 +39,10 @@ export interface ClaimedDelivery extends InboxLease {
   readonly event: unknown;
   /** Claims so far, this one included (1 on the first). */
   readonly attempts: number;
+  /** Strikes so far (see WEBHOOK_MAX_STRIKES). */
+  readonly strikes: number;
+  /** When the lease runs out (database clock); a worker must not start a row past it. */
+  readonly leaseUntil: Date;
 }
 
 export type DecodedDelivery =
@@ -84,6 +93,8 @@ const checkLease = (lease: InboxLease): void => {
 };
 
 export interface ClaimOptions {
+  /** Only rows of this forge (the worker's adapter). */
+  readonly forge: ForgeKind;
   readonly eventTypes: readonly ForgeEventType[];
   /** Rows per claim (the database clamps to 1..100). */
   readonly limit: number;
@@ -104,11 +115,12 @@ export const claimSql = (
   if (!Number.isInteger(options.limit) || !Number.isInteger(options.leaseSeconds)) {
     throw new WebhookInboxError("webhook inbox: invalid claim bounds");
   }
+  if (!FORGES.has(options.forge)) throw new WebhookInboxError("webhook inbox: invalid forge");
   return {
     text: `select forge, delivery_id, event_type, installation_id::text as installation_id, event,
-                  attempts, lease_token::text as lease_token
-             from worker.claim_webhook_deliveries($1::text[], $2, $3)`,
-    values: [[...options.eventTypes], options.limit, options.leaseSeconds],
+                  attempts, strikes, lease_token::text as lease_token, lease_until
+             from worker.claim_webhook_deliveries($1, $2::text[], $3, $4)`,
+    values: [options.forge, [...options.eventTypes], options.limit, options.leaseSeconds],
   };
 };
 
@@ -119,7 +131,9 @@ export interface ClaimRow {
   installation_id: string;
   event: unknown;
   attempts: number;
+  strikes: number;
   lease_token: string;
+  lease_until: Date;
 }
 
 export const claimedFromRow = (row: ClaimRow): ClaimedDelivery => ({
@@ -130,6 +144,8 @@ export const claimedFromRow = (row: ClaimRow): ClaimedDelivery => ({
   installationId: Number(row.installation_id),
   event: row.event,
   attempts: row.attempts,
+  strikes: row.strikes,
+  leaseUntil: row.lease_until,
 });
 
 export const completeSql = (
@@ -149,9 +165,15 @@ export interface InboxFailure {
   readonly error: string;
   /** When to retry (0..86400 s; clamped by the database). */
   readonly retryAfterSeconds: number;
-  /** Park now instead of retrying (the row cannot succeed as it is). */
-  readonly permanent: boolean;
+  /**
+   * `transient`: the forge or the database is unavailable; no strike, parked only after
+   * WEBHOOK_TRANSIENT_PARK_HOURS. `strike`: the row itself is suspect; parked after
+   * WEBHOOK_MAX_STRIKES. `permanent`: it can never succeed; parked now.
+   */
+  readonly kind: "transient" | "strike" | "permanent";
 }
+
+const FAILURE_KINDS: ReadonlySet<string> = new Set(["transient", "strike", "permanent"]);
 
 export const failSql = (
   lease: InboxLease,
@@ -159,7 +181,7 @@ export const failSql = (
 ): { readonly text: string; readonly values: unknown[] } => {
   checkLease(lease);
   if (!isErrorCode(failure.error)) throw new WebhookInboxError("webhook inbox: invalid error code");
-  if (!Number.isInteger(failure.retryAfterSeconds) || typeof failure.permanent !== "boolean") {
+  if (!Number.isInteger(failure.retryAfterSeconds) || !FAILURE_KINDS.has(failure.kind)) {
     throw new WebhookInboxError("webhook inbox: invalid failure");
   }
   return {
@@ -170,7 +192,7 @@ export const failSql = (
       lease.leaseToken,
       failure.error,
       failure.retryAfterSeconds,
-      failure.permanent,
+      failure.kind,
     ],
   };
 };

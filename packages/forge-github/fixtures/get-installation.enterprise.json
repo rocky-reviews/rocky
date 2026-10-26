@@ -1,0 +1,35 @@
+{
+  "id": 4444,
+  "client_id": "Iv1.0000000000000000",
+  "account": {
+    "description": null,
+    "html_url": "https://github.com/enterprises/acme-corp",
+    "website_url": null,
+    "id": 9201,
+    "node_id": "E_kgDOAAAj8Q",
+    "name": "Acme Corp",
+    "slug": "acme-corp",
+    "created_at": "2026-01-15T10:00:00Z",
+    "updated_at": "2026-01-15T10:00:00Z",
+    "avatar_url": "https://avatars.githubusercontent.com/b/9201?v=4"
+  },
+  "repository_selection": "selected",
+  "access_tokens_url": "https://api.github.com/app/installations/4444/access_tokens",
+  "repositories_url": "https://api.github.com/installation/repositories",
+  "html_url": "https://github.com/enterprises/acme-corp/settings/installations/4444",
+  "app_id": 123456,
+  "app_slug": "rocky-reviews-test",
+  "target_id": 9201,
+  "target_type": "Enterprise",
+  "permissions": {
+    "organization_administration": "read"
+  },
+  "events": [],
+  "created_at": "2026-10-26T09:12:31.000Z",
+  "updated_at": "2026-10-26T09:12:31.000Z",
+  "single_file_name": null,
+  "has_multiple_single_files": false,
+  "single_file_paths": [],
+  "suspended_by": null,
+  "suspended_at": null
+}

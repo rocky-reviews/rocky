@@ -52,6 +52,8 @@ export const orgs = pgTable("orgs", {
   deleteAfter: timestamp("delete_after", { withTimezone: true }),
   /** The installer reported by the webhook: a candidate first admin, unverified (ADR 0009). */
   installerForgeUserId: bigint("installer_forge_user_id", { mode: "number" }),
+  /** Set when the deletion sweep starts erasing the org; a reinstall then gets a new org. */
+  erasingAt: timestamp("erasing_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
