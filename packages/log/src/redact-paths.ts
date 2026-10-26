@@ -143,10 +143,18 @@ export const ALLOWED_KEY_PREFIXES: readonly string[] = ["author"];
  */
 export const SCRUB_ONLY_KEYS: ReadonlySet<string> = new Set(["message", "msg"]);
 
+/** `token2` → `token`, `apikeyv2` → `apikey`. A loop, not a regex: keys are untrusted input. */
+const stripVersionSuffix = (k: string): string => {
+  let end = k.length;
+  while (end > 0 && k.charCodeAt(end - 1) >= 48 && k.charCodeAt(end - 1) <= 57) end--;
+  if (end < k.length && end > 0 && k[end - 1] === "v") end--;
+  return k.slice(0, end);
+};
+
 /** The key, plus the same with trailing digits/version and one trailing `s`/`es` removed. */
 const variants = (k: string): string[] => {
   const out = new Set<string>([k]);
-  const base = k.replace(/(?:v\d+|\d+)$/, "");
+  const base = stripVersionSuffix(k);
   if (base.length > 0) out.add(base);
   for (const b of [...out]) {
     if (b.length > 2 && b.endsWith("es")) out.add(b.slice(0, -2));

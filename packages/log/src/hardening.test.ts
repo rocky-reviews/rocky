@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { addRequestIdHeader, fastifyLoggerOptions } from "./fastify.js";
 import { FAKE, chars } from "./fixtures.js";
 import { createLogger } from "./index.js";
-import { REDACTED } from "./redact-paths.js";
+import { REDACTED, isSensitiveKey } from "./redact-paths.js";
 import { MAX_KEY_LENGTH, MAX_STRING_LENGTH, scrubSecrets, scrubValue } from "./scrub.js";
 
 type Line = Record<string, unknown>;
@@ -725,5 +725,21 @@ describe("N11: a depth-1 own __proto__ key survives pino's redact copy", () => {
     expect(last()["a"]).toBe(1);
     expect(last()["[__proto__]"]).toEqual({ token: REDACTED, n: 1 });
     expect(Object.hasOwn(last(), "__proto__")).toBe(false);
+  });
+});
+
+describe("key variants run in linear time (CodeQL js/polynomial-redos)", () => {
+  it("strips version suffixes from a long run of digits without backtracking", () => {
+    const hostile = `${"0".repeat(200_000)}x`;
+    const started = performance.now();
+    expect(isSensitiveKey(hostile)).toBe(false);
+    expect(isSensitiveKey(`token${"9".repeat(200_000)}`)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(TIME_BOUND_MS);
+  });
+
+  it("keeps the variant rules: trailing digits and vN are stripped", () => {
+    for (const key of ["token2", "apiKeyV2", "secret_v3", "password1"]) {
+      expect(isSensitiveKey(key)).toBe(true);
+    }
   });
 });
