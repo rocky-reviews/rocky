@@ -11,6 +11,8 @@ export const MAX_STRING_LENGTH = 8192;
 export const SCAN_MARGIN = 4096;
 /** Longest object or Map key emitted. */
 export const MAX_KEY_LENGTH = 256;
+/** Extra key characters scanned before cutting, for the same reason as `SCAN_MARGIN`. */
+export const KEY_SCAN_MARGIN = 512;
 /** Nesting limit for the deep scrub. */
 export const MAX_DEPTH = 8;
 /** Object entries and array items visited per log call. */
@@ -18,7 +20,8 @@ export const MAX_NODES = 1000;
 /** String characters (values and keys) scanned per log call; further strings become a marker. */
 export const MAX_CHARS_PER_CALL = 65_536;
 
-const UNREADABLE = "[unreadable]";
+/** Marker for a property whose getter threw (or an object whose keys could not be read). */
+export const UNREADABLE = "[unreadable]";
 
 interface Pattern {
   readonly kind: string;
@@ -126,9 +129,19 @@ export const scrubString = (text: string, budget?: ScrubBudget): string => {
   return `${scrubbed.slice(0, MAX_STRING_LENGTH)}…[truncated ${text.length - MAX_STRING_LENGTH} chars]`;
 };
 
-/** Keys are text too: a token used as a key is scrubbed, and a huge key is cut and budgeted. */
-const scrubKey = (key: string, budget: ScrubBudget): string =>
-  scrubString(key.length > MAX_KEY_LENGTH ? `${key.slice(0, MAX_KEY_LENGTH)}…` : key, budget);
+/**
+ * Keys are text too: scrub the first `MAX_KEY_LENGTH + KEY_SCAN_MARGIN` characters (so a token
+ * straddling the cut is still recognised), then cut to `MAX_KEY_LENGTH`; the key's characters
+ * count against the call budget.
+ */
+const scrubKey = (key: string, budget: ScrubBudget): string => {
+  const window =
+    key.length > MAX_KEY_LENGTH + KEY_SCAN_MARGIN
+      ? key.slice(0, MAX_KEY_LENGTH + KEY_SCAN_MARGIN)
+      : key;
+  const scrubbed = scrubString(window, budget);
+  return key.length > MAX_KEY_LENGTH ? `${scrubbed.slice(0, MAX_KEY_LENGTH)}…` : scrubbed;
+};
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   if (typeof value !== "object" || value === null) return false;
@@ -148,8 +161,9 @@ const typeName = (value: object): string => {
 /**
  * Own enumerable entries, read one property at a time: a throwing getter marks that property
  * `[unreadable]` instead of failing the whole log call (and leaking through the thrown error).
+ * Returns `undefined` only when the keys themselves cannot be read.
  */
-const readEntries = (value: object): [string, unknown][] | undefined => {
+export const readEntries = (value: object): [string, unknown][] | undefined => {
   let keys: string[];
   try {
     keys = Object.keys(value);
@@ -165,6 +179,16 @@ const readEntries = (value: object): [string, unknown][] | undefined => {
   });
 };
 
+/**
+ * Assigning `out["__proto__"]` would replace the prototype (and turn the payload into
+ * `[object Object]`), and pino's own redact copy drops a depth-1 own `__proto__` property, so an
+ * own `__proto__` key from JSON input is emitted as `[__proto__]`. Nothing is dropped, nothing
+ * becomes a prototype.
+ */
+export const setKey = (out: Record<string, unknown>, key: string, value: unknown): void => {
+  out[key === "__proto__" ? "[__proto__]" : key] = value;
+};
+
 const walkEntry = (
   key: string,
   value: unknown,
@@ -177,24 +201,6 @@ const walkEntry = (
     return keepCode ? value : REDACTED;
   }
   return walk(value, depth + 1, budget);
-};
-
-/**
- * Assigning `out["__proto__"]` would replace the prototype (and turn the payload into
- * `[object Object]`); an own `__proto__` key from JSON input is defined as an ordinary property.
- * Pino needs real `Object.prototype` objects (`hasOwnProperty`), so a null prototype is not an option.
- */
-export const setKey = (out: Record<string, unknown>, key: string, value: unknown): void => {
-  if (key === "__proto__") {
-    Object.defineProperty(out, key, {
-      value,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  } else {
-    out[key] = value;
-  }
 };
 
 const walkObject = (

@@ -9,7 +9,7 @@ import { addRequestIdHeader, fastifyLoggerOptions } from "./fastify.js";
 import { FAKE, chars } from "./fixtures.js";
 import { createLogger } from "./index.js";
 import { REDACTED } from "./redact-paths.js";
-import { MAX_STRING_LENGTH, scrubSecrets, scrubValue } from "./scrub.js";
+import { MAX_KEY_LENGTH, MAX_STRING_LENGTH, scrubSecrets, scrubValue } from "./scrub.js";
 
 type Line = Record<string, unknown>;
 
@@ -410,18 +410,15 @@ describe("N1: plural forms, more suffixes, and an explicit allowlist", () => {
     "totalTokens",
     "maxTokens",
     "tokenCount",
-    "idempotencyKey",
-    "cacheKey",
     "contentType",
     "contentLength",
-    "context",
   ])("keeps allowlisted or harmless key %s", (key) => {
     expect(scrubValue({ [key]: 7 })).toEqual({ [key]: 7 });
   });
 
   it("allowlisted keys still have their string values scrubbed", () => {
-    expect(scrubValue({ cacheKey: `k-${FAKE.ghp}`, author: FAKE.email })).toEqual({
-      cacheKey: "k-[redacted:github_token]",
+    expect(scrubValue({ requestId: `r-${FAKE.ghp}`, author: FAKE.email })).toEqual({
+      requestId: "r-[redacted:github_token]",
       author: "[redacted:email]",
     });
   });
@@ -575,7 +572,9 @@ describe("N6: an own __proto__ key cannot break the output", () => {
     const out = scrubValue(input) as Line;
     expect(out["a"]).toBe(1);
     expect(out["token"]).toBe(REDACTED);
-    expect(Object.hasOwn(out, "__proto__")).toBe(true);
+    // Renamed so it survives pino's own copy (N11); nothing is dropped and nothing is a prototype.
+    expect(Object.hasOwn(out, "__proto__")).toBe(false);
+    expect(out["[__proto__]"]).toEqual({ polluted: true });
     expect(({} as Line)["polluted"]).toBeUndefined();
 
     const { log, last, text } = capture();
@@ -594,5 +593,137 @@ describe("N7: URL-encoded emails", () => {
   ])("redacts %s", (text) => {
     expect(scrubSecrets(text)).toContain("[redacted:email]");
     expect(scrubSecrets(text)).not.toContain("example");
+  });
+});
+
+// ---- Third review pass --------------------------------------------------------------------
+
+describe("N8: body/text/message/output/source suffixes, patch/code prefixes, `es` plurals", () => {
+  it.each([
+    "requestBody",
+    "responseBody",
+    "rawBody",
+    "responseText",
+    "llmMessages",
+    "errorMessages",
+    "modelOutput",
+    "output",
+    "patchText",
+    "filePatches",
+    "patches",
+    "codeBlock",
+    "fileSource",
+    "resource_source",
+    "context",
+    "authorEmail",
+  ])("redacts key %s", (key) => {
+    expect(scrubValue({ [key]: "value" })).toEqual({ [key]: REDACTED });
+  });
+
+  it("an Error's message stays readable, scrubbed as a value", () => {
+    const { log, last } = capture();
+    log.error({ err: new Error(`boom ${FAKE.ghp}`) }, "db");
+    expect((last()["err"] as Line)["message"]).toBe("boom [redacted:github_token]");
+    log.error(new Error(`boom ${FAKE.email}`));
+    expect(last()["msg"]).toBe("boom [redacted:email]");
+    expect((last()["err"] as Line)["message"]).toBe("boom [redacted:email]");
+  });
+
+  it("a plain `message` field (API error shapes) is scrubbed as a value, not redacted", () => {
+    expect(
+      scrubValue({
+        message: `Bad credentials ${FAKE.ghp}`,
+        documentation_url: "https://docs.github.com",
+      }),
+    ).toEqual({
+      message: "Bad credentials [redacted:github_token]",
+      documentation_url: "https://docs.github.com",
+    });
+  });
+
+  it("pino's msg is untouched by key rules", () => {
+    const { log, last } = capture();
+    log.info({ requestBody: "{}", responseText: "ok" }, `hello ${FAKE.email}`);
+    expect(last()["msg"]).toBe("hello [redacted:email]");
+    expect(last()["requestBody"]).toBe(REDACTED);
+    expect(last()["responseText"]).toBe(REDACTED);
+  });
+});
+
+describe("N9/N10: allowlist changes and name variants", () => {
+  it.each([
+    "idempotencyKey",
+    "cacheKey",
+    "token2",
+    "apiKeyV2",
+    "secret_v3",
+    "password1",
+    "oauth2",
+    "basicAuth",
+    "auth",
+    "authorization",
+    "authorizationHeader",
+    "authHeader",
+    "authHeaders",
+    "authToken",
+    "authTokens",
+    "promptText",
+  ])("redacts %s", (key) => {
+    expect(scrubValue({ [key]: "value" })).toEqual({ [key]: REDACTED });
+  });
+
+  it.each([
+    "author",
+    "authorLogin",
+    "authors",
+    "authorId",
+    "authority",
+    "promptId",
+    "promptVersion",
+    "promptHash",
+    "statusCodes",
+    "requestId",
+    "resource",
+  ])("keeps %s", (key) => {
+    expect(scrubValue({ [key]: "value" })).toEqual({ [key]: "value" });
+  });
+});
+
+describe("N2 (follow-up): a throwing getter on the top-level merge object", () => {
+  it("does not throw out of log.info and leaks nothing", () => {
+    const { log, last, text } = capture();
+    const merge = {
+      ok: 1,
+      get boom(): string {
+        throw new Error(`leak ${FAKE.ghp}`);
+      },
+    };
+    expect(() => log.info(merge, "top")).not.toThrow();
+    expect(last()["msg"]).toBe("top");
+    expect(last()["ok"]).toBe(1);
+    expect(last()["boom"]).toBe("[unreadable]");
+    expect(text()).not.toContain(FAKE.ghp);
+  });
+});
+
+describe("N4 (follow-up): a token straddling the key cut is scrubbed before the cut", () => {
+  it("leaks no fragment", () => {
+    const key = `${"a".repeat(MAX_KEY_LENGTH - 10)} ${FAKE.ghp} tail`;
+    const out = scrubValue({ [key]: 1 }) as Line;
+    const [emitted] = Object.keys(out);
+    expect(emitted).not.toMatch(/ghp_[A-Za-z0-9]/);
+    expect(emitted!.length).toBeLessThanOrEqual(MAX_KEY_LENGTH + 1);
+    expect(emitted!.endsWith("…")).toBe(true);
+  });
+});
+
+describe("N11: a depth-1 own __proto__ key survives pino's redact copy", () => {
+  it("is emitted under the renamed key with its content walked", () => {
+    const { log, last } = capture();
+    const input = JSON.parse(`{"__proto__":{"token":"${FAKE.ghp}","n":1},"a":1}`) as Line;
+    log.info(input, "x");
+    expect(last()["a"]).toBe(1);
+    expect(last()["[__proto__]"]).toEqual({ token: REDACTED, n: 1 });
+    expect(Object.hasOwn(last(), "__proto__")).toBe(false);
   });
 });

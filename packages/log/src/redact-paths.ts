@@ -5,12 +5,14 @@ export const normaliseKey = (key: string): string => key.toLowerCase().replace(/
 
 /**
  * Field names whose values never reach a log line, wherever they appear. Matching works on the
- * normalised key (lower-case, `_` and `-` removed), so `access_token`, `accessToken` and
- * `Access-Token` are the same key, and it matches by exact name, suffix, prefix or substring
- * (`githubToken`, `x-access-token`, `dbPassword`, `diff_hunk`, `awsCredentials` are all caught).
+ * normalised key (lower-case, `_` and `-` removed) and on its variants (trailing digits or
+ * `v2`-style version removed, one trailing `s` or `es` removed), by exact name, suffix, prefix
+ * or substring: `githubToken`, `accessTokens`, `apiKeyV2`, `x-access-token`, `dbPassword`,
+ * `diff_hunk`, `filePatches`, `requestBody`, `modelOutput` and `awsCredentials` are all caught.
  * Three families: credentials, personal data, and PR/LLM content (code, diffs, prompts), which
  * is untrusted input and often contains secrets of its own. Over-matching is the intended
- * failure mode: a redacted `dispatch` field costs a lookup; a leaked token costs a rotation.
+ * failure mode: a redacted `dispatch` or `context` field costs a lookup; a leaked token costs a
+ * rotation. This is a safety net: see docs/logging.md for what must never be logged at all.
  */
 export const SENSITIVE_KEYS: ReadonlySet<string> = new Set(
   [
@@ -29,6 +31,7 @@ export const SENSITIVE_KEYS: ReadonlySet<string> = new Set(
     "dsn",
     "credential",
     "credentials",
+    "auth",
     "authorization",
     "proxyauthorization",
     "cookie",
@@ -42,7 +45,7 @@ export const SENSITIVE_KEYS: ReadonlySet<string> = new Set(
     "email",
     "emails",
     "useremail",
-    // PR content and prompt bodies
+    // PR content, prompt bodies and model output
     "diff",
     "patch",
     "patches",
@@ -60,13 +63,15 @@ export const SENSITIVE_KEYS: ReadonlySet<string> = new Set(
     "systemprompt",
     "messages",
     "completion",
+    "output",
     "suggestion",
   ].map(normaliseKey),
 );
 
 /**
- * Normalised-key patterns, applied to the key and to its singular form (one trailing `s`
- * removed, so `tokens`, `apiKeys` and `contents` match). Exported so docs and tests can list them.
+ * Normalised-key patterns, applied to every variant of the key. `hardPrefixes` are checked
+ * before the allowlist (so `authorizationHeader` can never be allowlisted by `author*`); the
+ * other patterns after it. Exported so docs and tests can list them.
  */
 export const SENSITIVE_KEY_RULES = {
   suffixes: [
@@ -83,22 +88,30 @@ export const SENSITIVE_KEY_RULES = {
     "jwt",
     "signature",
     "dsn",
+    "email",
     "diff",
     "hunk",
     "patch",
     "content",
+    "body",
+    "text",
+    "message",
     "prompt",
     "snippet",
     "code",
+    "output",
+    "source",
   ],
-  prefixes: ["diff", "auth", "prompt"],
+  prefixes: ["diff", "patch", "code", "prompt"],
+  hardPrefixes: ["authorization", "authheader", "authtoken"],
   substrings: ["credential", "privatekey"],
 } as const;
 
 /**
- * Keys the rules above would catch but that must survive because operators need them. Small
- * and explicit; a value under an allowlisted key is still scrubbed as text. `code` is not here:
- * `scrub.ts` keeps it only on Errors and only for error-code identifiers.
+ * Keys the rules above would catch but that must survive because operators need them. Small and
+ * explicit; a value under an allowlisted key is still scrubbed as text. Opaque credentials end
+ * up in `idempotencyKey`/`cacheKey`-style fields, so those are deliberately absent. `code` is
+ * not here either: `scrub.ts` keeps it only on Errors and only for error-code identifiers.
  */
 export const ALLOWED_KEYS: ReadonlySet<string> = new Set(
   [
@@ -106,7 +119,6 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set(
     "errorCode",
     "exitCode",
     "requestId",
-    "author",
     "inputTokens",
     "outputTokens",
     "promptTokens",
@@ -114,23 +126,56 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set(
     "totalTokens",
     "maxTokens",
     "tokenCount",
-    "idempotencyKey",
-    "cacheKey",
+    "promptId",
+    "promptVersion",
+    "promptHash",
+    "resource",
   ].map(normaliseKey),
 );
 
-const singular = (k: string): string => (k.length > 1 && k.endsWith("s") ? k.slice(0, -1) : k);
+/** `author`, `authorLogin`, `authors`, … are kept unless the rest of the name is itself sensitive (`authorEmail`). */
+export const ALLOWED_KEY_PREFIXES: readonly string[] = ["author"];
+
+/**
+ * Keys whose value is kept but scrubbed as text instead of being redacted: pino's `msg` and the
+ * `message` of errors and API error bodies (`{ message, code }`) must stay readable. Plural and
+ * compound forms (`messages`, `errorMessages`, `llmMessages`) are still redacted.
+ */
+export const SCRUB_ONLY_KEYS: ReadonlySet<string> = new Set(["message", "msg"]);
+
+/** The key, plus the same with trailing digits/version and one trailing `s`/`es` removed. */
+const variants = (k: string): string[] => {
+  const out = new Set<string>([k]);
+  const base = k.replace(/(?:v\d+|\d+)$/, "");
+  if (base.length > 0) out.add(base);
+  for (const b of [...out]) {
+    if (b.length > 2 && b.endsWith("es")) out.add(b.slice(0, -2));
+    if (b.length > 1 && b.endsWith("s")) out.add(b.slice(0, -1));
+  }
+  return [...out];
+};
 
 const matchesRules = (k: string): boolean =>
   SENSITIVE_KEYS.has(k) ||
   SENSITIVE_KEY_RULES.suffixes.some((s) => k.endsWith(s)) ||
   SENSITIVE_KEY_RULES.prefixes.some((p) => k.startsWith(p)) ||
+  SENSITIVE_KEY_RULES.hardPrefixes.some((p) => k.startsWith(p)) ||
   SENSITIVE_KEY_RULES.substrings.some((s) => k.includes(s));
+
+const isHardSensitive = (k: string): boolean =>
+  SENSITIVE_KEYS.has(k) || SENSITIVE_KEY_RULES.hardPrefixes.some((p) => k.startsWith(p));
+
+const isAllowed = (k: string): boolean =>
+  ALLOWED_KEYS.has(k) ||
+  ALLOWED_KEY_PREFIXES.some((p) => k.startsWith(p) && !matchesRules(k.slice(p.length)));
 
 export const isSensitiveKey = (key: string): boolean => {
   const k = normaliseKey(key);
-  if (ALLOWED_KEYS.has(k)) return false;
-  return matchesRules(k) || matchesRules(singular(k));
+  if (SCRUB_ONLY_KEYS.has(k)) return false;
+  const forms = variants(k);
+  if (forms.some(isHardSensitive)) return true;
+  if (forms.some(isAllowed)) return false;
+  return forms.some(matchesRules);
 };
 
 /**

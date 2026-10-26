@@ -10,7 +10,15 @@ import {
 } from "pino";
 import { traceContextMixin } from "./otel.js";
 import { REDACTED, REDACT_PATHS, isErrorCodeIdentifier } from "./redact-paths.js";
-import { newScrubBudget, scrubString, scrubValue, setKey, type ScrubBudget } from "./scrub.js";
+import {
+  UNREADABLE,
+  newScrubBudget,
+  readEntries,
+  scrubString,
+  scrubValue,
+  setKey,
+  type ScrubBudget,
+} from "./scrub.js";
 
 export interface CreateLoggerOptions {
   /** Defaults to `LOG_LEVEL`, then `info`. */
@@ -43,8 +51,11 @@ const applySerializers = (
   serializers: Record<string, Serializer> | undefined,
 ): Record<string, unknown> => {
   if (serializers === undefined) return merge;
+  // Property reads go through readEntries: a throwing getter must not escape log.info.
+  const entries = readEntries(merge);
+  if (entries === undefined) return { payload: UNREADABLE };
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(merge)) {
+  for (const [key, value] of entries) {
     const serializer = serializers[key];
     if (typeof serializer === "function" && typeof value === "object" && value !== null) {
       try {

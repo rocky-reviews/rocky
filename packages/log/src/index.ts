@@ -7,6 +7,8 @@ export { createLogger, type CreateLoggerOptions, type Logger } from "./logger.js
 export { traceContextMixin } from "./otel.js";
 export {
   ALLOWED_KEYS,
+  ALLOWED_KEY_PREFIXES,
+  SCRUB_ONLY_KEYS,
   REDACTED,
   REDACT_PATHS,
   SENSITIVE_KEYS,
