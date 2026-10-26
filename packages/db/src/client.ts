@@ -43,9 +43,10 @@ export interface Db {
    * Runs `fn` in one transaction scoped to `orgId`: `set_config('app.org_id', orgId, true)` is
    * transaction-local, so it is safe with connection pooling. Commits when `fn` resolves, rolls
    * back when it rejects, and refuses to commit if the tenant setting changed underneath it.
-   * Nested calls for the same org join the transaction (savepoint, serialised); a different org
-   * throws; a call made from work that outlived its enclosing transaction (a timer, an event
-   * listener) throws too, so detached work must start its own `withOrg` from outside.
+   * Nested calls for the same org join the transaction (savepoint; siblings are serialised); a
+   * different org throws; a call made from work that outlived its enclosing transaction (a
+   * timer, an event listener) throws too, so detached work must start its own `withOrg` from
+   * outside.
    */
   withOrg<T>(orgId: OrgId, fn: (tx: TenantTx) => Promise<T>): Promise<T>;
   /**
@@ -70,53 +71,109 @@ export type DbOptions =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-interface Scope {
+/** One tenant transaction: shared by the outer `withOrg` and every nested call inside it. */
+interface Shared {
   orgId: OrgId;
   client: pg.PoolClient;
   tx: TenantTx;
   savepoints: number;
   /** Set in `finally`, before the connection goes back to the pool. */
   closed: boolean;
-  /** Nested calls run one after another on this chain so savepoints never interleave. */
+}
+
+/**
+ * One nesting level. Nested calls made at the same level queue on their parent's `chain` so
+ * savepoints never interleave; each nested `fn` runs in its own scope, so deeper calls only
+ * queue behind their siblings, never behind the call that is awaiting them.
+ */
+interface Scope {
+  shared: Shared;
   chain: Promise<unknown>;
 }
 
 // --- Statement guard ------------------------------------------------------------------------
 
 /**
- * Statements that would alter the transaction or the tenant context from inside `withOrg`.
- * Checked on the first keyword after comments; `reset` and `discard` are refused entirely, and
- * `set` only for role, session authorization, transaction and `app.*` parameters.
+ * Best-effort denylist for statements that would alter the transaction or the tenant context
+ * from inside `withOrg` (the commit-time recheck of `app.org_id` is the real guarantee). The
+ * text is normalised first: comments removed, string literals blanked, quoted identifiers
+ * unquoted, lower-cased, whitespace collapsed.
  */
 const FORBIDDEN_HEAD =
-  /^(?:begin|start|commit|end|rollback|abort|savepoint|release|prepare|discard|reset|set\s+(?:local\s+|session\s+)?(?:role|session\s+authorization|transaction|app\s*\.))\b/i;
+  /^(?:begin|start|commit|end|rollback|abort|savepoint|release|prepare|discard|reset|set (?:local |session )?(?:role|session authorization|transaction|app ?\.))\b/;
 /** Any set_config call: the only legitimate one is withOrg's own. */
-const SET_CONFIG = /\bset_config\s*\(/i;
+const SET_CONFIG = /\bset_config ?\(/;
+const DOLLAR_TAG = /^\$([a-z_][a-z0-9_]*)?\$/i;
 
-const stripLeading = (sql: string): string => {
-  let rest = sql;
-  for (;;) {
-    const trimmed = rest.replace(/^[\s(]+/, "");
-    if (trimmed.startsWith("--")) {
-      const end = trimmed.indexOf("\n");
-      rest = end === -1 ? "" : trimmed.slice(end + 1);
-    } else if (trimmed.startsWith("/*")) {
-      const end = trimmed.indexOf("*/");
-      rest = end === -1 ? "" : trimmed.slice(end + 2);
+const normaliseSql = (sql: string): string => {
+  let out = "";
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i];
+    const next = sql[i + 1];
+    if (c === "-" && next === "-") {
+      const end = sql.indexOf("\n", i);
+      i = end === -1 ? n : end + 1;
+      out += " ";
+    } else if (c === "/" && next === "*") {
+      const end = sql.indexOf("*/", i + 2);
+      i = end === -1 ? n : end + 2;
+      out += " ";
+    } else if (c === "'") {
+      let j = i + 1;
+      while (j < n) {
+        if (sql[j] === "'") {
+          if (sql[j + 1] === "'") {
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        j++;
+      }
+      out += "''";
+      i = j + 1;
+    } else if (c === '"') {
+      let j = i + 1;
+      let identifier = "";
+      while (j < n) {
+        if (sql[j] === '"') {
+          if (sql[j + 1] === '"') {
+            identifier += '"';
+            j += 2;
+            continue;
+          }
+          break;
+        }
+        identifier += sql[j];
+        j++;
+      }
+      out += identifier.replace(/;/g, "");
+      i = j + 1;
+    } else if (c === "$" && DOLLAR_TAG.test(sql.slice(i, i + 64))) {
+      const tag = DOLLAR_TAG.exec(sql.slice(i, i + 64))?.[0] ?? "$$";
+      const end = sql.indexOf(tag, i + tag.length);
+      out += "''";
+      i = end === -1 ? n : end + tag.length;
     } else {
-      return trimmed;
+      out += c;
+      i++;
     }
   }
+  return out.toLowerCase().replace(/\s+/g, " ").trim();
 };
 
 const checkStatement = (sql: string): void => {
-  if (sql.includes(";")) {
-    throw new TenantContextError("withOrg: one statement per query (no ';')");
+  let text = normaliseSql(sql);
+  if (text.endsWith(";")) text = text.slice(0, -1).trim();
+  if (text.includes(";")) {
+    throw new TenantContextError("withOrg: one statement per query");
   }
-  if (SET_CONFIG.test(sql)) {
+  if (SET_CONFIG.test(text)) {
     throw new TenantContextError("withOrg: set_config is not allowed inside a tenant transaction");
   }
-  if (FORBIDDEN_HEAD.test(stripLeading(sql))) {
+  if (FORBIDDEN_HEAD.test(text.replace(/^[( ]+/, ""))) {
     throw new TenantContextError(
       "withOrg: transaction control, role and tenant settings are managed by withOrg",
     );
@@ -134,8 +191,8 @@ const textOf = (query: unknown): string => {
 
 // --- Tenant transaction ---------------------------------------------------------------------
 
-const assertOpen = (scope: Scope): void => {
-  if (scope.closed) {
+const assertOpen = (shared: Shared): void => {
+  if (shared.closed) {
     throw new TenantContextError(
       "withOrg: this tenant transaction has finished; start a new withOrg from outside it",
     );
@@ -143,30 +200,36 @@ const assertOpen = (scope: Scope): void => {
 };
 
 /**
- * The pg client Drizzle and `tx.query` talk to: every query is refused once the scope is closed
- * or when it would touch transaction control or the tenant setting. Everything else is the real
- * client, so Drizzle sees a normal `Client`-like object (not a `Pool`).
+ * The pg client Drizzle and `tx.query` talk to. It exposes exactly one thing, `query`, which is
+ * refused once the transaction ended or when the statement would touch transaction control or
+ * the tenant setting. Everything else on the real client (`release`, `connection`, `end`, …)
+ * throws, so nothing inside `fn` can hand a mid-transaction connection back to the pool.
  */
-const guardedClient = (scope: Scope): pg.PoolClient => {
+const guardedClient = (shared: Shared): pg.PoolClient => {
   // Async so a refusal is always a rejection, whichever way the caller consumes the result.
   const query = async (...args: unknown[]): Promise<unknown> => {
-    assertOpen(scope);
+    assertOpen(shared);
     checkStatement(textOf(args[0]));
-    return (scope.client.query as (...a: unknown[]) => Promise<unknown>)(...args);
+    return (shared.client.query as (...a: unknown[]) => Promise<unknown>)(...args);
   };
-  return new Proxy(scope.client, {
-    get(target, property) {
+  const surface = Object.freeze({ query });
+  return new Proxy(surface, {
+    get(_target, property) {
       if (property === "query") return query;
-      const value = Reflect.get(target, property, target) as unknown;
-      return typeof value === "function" ? (value as () => unknown).bind(target) : value;
+      // Drizzle checks `constructor.name` to tell a config object and a Pool from a client.
+      if (property === "constructor") return Object;
+      if (typeof property === "symbol" || property === "then") return undefined;
+      throw new TenantContextError(
+        `withOrg: the pg client is not exposed inside a tenant transaction (${property})`,
+      );
     },
-  });
+  }) as unknown as pg.PoolClient;
 };
 
-const makeTx = (scope: Scope): TenantTx => {
-  const client = guardedClient(scope);
+const makeTx = (shared: Shared): TenantTx => {
+  const client = guardedClient(shared);
   return {
-    orgId: scope.orgId,
+    orgId: shared.orgId,
     db: drizzle(client, { schema }),
     query: (text, values) => client.query(text, values as unknown[] | undefined),
   };
@@ -178,24 +241,29 @@ export const createDb = (options: DbOptions): Db => {
       ? options.pool
       : new pg.Pool({ connectionString: options.connectionString, max: options.max ?? 10 });
   // One store per Db, so two Db instances in one process never see each other's scope.
-  const scope = new AsyncLocalStorage<Scope>();
+  const scopes = new AsyncLocalStorage<Scope>();
 
-  const nested = <T>(current: Scope, fn: (tx: TenantTx) => Promise<T>): Promise<T> => {
+  const nested = <T>(parent: Scope, fn: (tx: TenantTx) => Promise<T>): Promise<T> => {
+    const { shared } = parent;
     const run = async (): Promise<T> => {
-      assertOpen(current);
-      const savepoint = `withorg_${++current.savepoints}`;
-      await current.client.query(`savepoint ${savepoint}`);
+      assertOpen(shared);
+      const savepoint = `withorg_${++shared.savepoints}`;
+      await shared.client.query(`savepoint ${savepoint}`);
+      const child: Scope = { shared, chain: Promise.resolve() };
       try {
-        const result = await fn(current.tx);
-        await current.client.query(`release savepoint ${savepoint}`);
+        const result = await scopes.run(child, () => fn(shared.tx));
+        // Deeper calls that `fn` did not await must settle before this savepoint is released.
+        await child.chain;
+        await shared.client.query(`release savepoint ${savepoint}`);
         return result;
       } catch (error) {
-        await current.client.query(`rollback to savepoint ${savepoint}`);
+        await child.chain;
+        await shared.client.query(`rollback to savepoint ${savepoint}`);
         throw error;
       }
     };
-    const result = current.chain.then(run, run);
-    current.chain = result.then(
+    const result = parent.chain.then(run, run);
+    parent.chain = result.then(
       () => undefined,
       () => undefined,
     );
@@ -206,12 +274,12 @@ export const createDb = (options: DbOptions): Db => {
     if (typeof orgId !== "string" || !UUID.test(orgId)) {
       throw new TenantContextError("withOrg: orgId must be a uuid");
     }
-    const current = scope.getStore();
+    const current = scopes.getStore();
     if (current !== undefined) {
       // A finished scope is still visible to timers and listeners created inside it; its
       // connection now belongs to someone else, so this is refused rather than re-run.
-      assertOpen(current);
-      if (current.orgId !== orgId) {
+      assertOpen(current.shared);
+      if (current.shared.orgId !== orgId) {
         throw new TenantContextError(
           "withOrg: nested call for a different org inside an open tenant transaction",
         );
@@ -220,15 +288,15 @@ export const createDb = (options: DbOptions): Db => {
     }
 
     const client = await pool.connect();
-    const store: Scope = {
+    const shared: Shared = {
       orgId,
       client,
       tx: undefined as unknown as TenantTx,
       savepoints: 0,
       closed: false,
-      chain: Promise.resolve(),
     };
-    store.tx = makeTx(store);
+    shared.tx = makeTx(shared);
+    const root: Scope = { shared, chain: Promise.resolve() };
     let broken: Error | undefined;
     try {
       // A pooled connection may carry a session-level app.org_id left by misbehaving code;
@@ -237,9 +305,9 @@ export const createDb = (options: DbOptions): Db => {
       await client.query("select set_config('app.org_id', '', false)");
       await client.query("begin");
       await client.query("select set_config('app.org_id', $1, true)", [orgId]);
-      const result = await scope.run(store, () => fn(store.tx));
+      const result = await scopes.run(root, () => fn(shared.tx));
       // Nested work that `fn` did not await must finish (or fail) before we decide to commit.
-      await store.chain;
+      await root.chain;
       const check = await client.query<{ org_id: string | null }>(
         "select current_setting('app.org_id', true) as org_id",
       );
@@ -257,7 +325,7 @@ export const createDb = (options: DbOptions): Db => {
       }
       throw error;
     } finally {
-      store.closed = true;
+      shared.closed = true;
       client.release(broken);
     }
   };
@@ -294,8 +362,9 @@ export const createDb = (options: DbOptions): Db => {
     const byCategory = new Map(rows.map((r) => [r.category, r.days]));
     const read = (key: keyof RetentionConfig): number => {
       const days = byCategory.get(SETTING_CATEGORIES[key]);
-      if (days === undefined)
+      if (days === undefined) {
         throw new Error(`retention settings: missing ${SETTING_CATEGORIES[key]}`);
+      }
       return days;
     };
     return {

@@ -219,6 +219,123 @@ describe("withOrg", () => {
     expect(contents).not.toContain("par-lost");
   });
 
+  /** A regression here would hold the connection forever; fail fast instead of hanging the suite. */
+  const withTimeout = <T>(promise: Promise<T>, ms = 5_000): Promise<T> =>
+    Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`timed out after ${ms} ms (deadlock?)`)), ms),
+      ),
+    ]);
+
+  it("nests three levels deep without deadlocking (re-review A)", async () => {
+    const result = await withTimeout(
+      db.withOrg(orgA, (l1) =>
+        db.withOrg(orgA, (l2) =>
+          db.withOrg(orgA, async (l3) => {
+            await l3.db.insert(schema.memoryEntries).values({ kind: "note", content: "depth-3" });
+            const rows = await l3.query<{ v: number }>("select 3 as v");
+            expect(l1.orgId).toBe(orgA);
+            expect(l2.orgId).toBe(orgA);
+            return rows.rows[0]?.v;
+          }),
+        ),
+      ),
+    );
+    expect(result).toBe(3);
+    // A failure three levels down rolls back only its own savepoint.
+    await withTimeout(
+      db.withOrg(orgA, async (l1) => {
+        await l1.db.insert(schema.memoryEntries).values({ kind: "note", content: "depth-1-kept" });
+        await expect(
+          db.withOrg(orgA, () =>
+            db.withOrg(orgA, async (l3) => {
+              await l3.db
+                .insert(schema.memoryEntries)
+                .values({ kind: "note", content: "depth-3-lost" });
+              throw new Error("depth-3 boom");
+            }),
+          ),
+        ).rejects.toThrow("depth-3 boom");
+      }),
+    );
+    const contents = await db.withOrg(orgA, async (tx) =>
+      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
+        (r) => r.c,
+      ),
+    );
+    expect(contents).toEqual(expect.arrayContaining(["depth-3", "depth-1-kept"]));
+    expect(contents).not.toContain("depth-3-lost");
+  });
+
+  it("nests inside one branch of a Promise.all without deadlocking (re-review A)", async () => {
+    const results = await withTimeout(
+      db.withOrg(orgA, () =>
+        Promise.all([
+          db.withOrg(orgA, (l2) =>
+            db.withOrg(orgA, async (l3) => {
+              await l3.db
+                .insert(schema.memoryEntries)
+                .values({ kind: "note", content: "branch-deep" });
+              expect(l2.orgId).toBe(orgA);
+              return "deep";
+            }),
+          ),
+          db.withOrg(orgA, async (l2) => {
+            await l2.db
+              .insert(schema.memoryEntries)
+              .values({ kind: "note", content: "branch-flat" });
+            return "flat";
+          }),
+          db.withOrg(orgA, () =>
+            db.withOrg(orgA, () => db.withOrg(orgA, async () => Promise.resolve("deeper"))),
+          ),
+        ]),
+      ),
+    );
+    expect(results).toEqual(["deep", "flat", "deeper"]);
+    const contents = await db.withOrg(orgA, async (tx) =>
+      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
+        (r) => r.c,
+      ),
+    );
+    expect(contents).toEqual(expect.arrayContaining(["branch-deep", "branch-flat"]));
+  });
+
+  it("exposes nothing of the pg client beyond query: release/connection/end throw (re-review C)", async () => {
+    await db.withOrg(orgA, async (tx) => {
+      const raw = (tx.db as unknown as { $client: Record<string, unknown> }).$client;
+      expect(() => raw["release"]).toThrow(TenantContextError);
+      expect(() => raw["connection"]).toThrow(TenantContextError);
+      expect(() => raw["end"]).toThrow(TenantContextError);
+      expect(() => raw["escapeLiteral"]).toThrow(TenantContextError);
+      expect(typeof raw["query"]).toBe("function");
+    });
+    // The connection stayed inside the transaction: B still sees only B, A only A.
+    expect(await repoOrgIds(orgB)).toEqual([orgB]);
+    expect(await repoOrgIds(orgA)).toEqual([orgA]);
+  });
+
+  it("accepts legitimate statements the guard must not misread (re-review B)", async () => {
+    await db.withOrg(orgA, async (tx) => {
+      expect((await tx.query<{ v: string }>("select 'a;b' as v")).rows[0]?.v).toBe("a;b");
+      expect((await tx.query<{ v: string }>("select 'it''s; fine' as v")).rows[0]?.v).toBe(
+        "it's; fine",
+      );
+      expect((await tx.query<{ v: string }>("select $$x;y$$ as v")).rows[0]?.v).toBe("x;y");
+      expect((await tx.query<{ v: string }>("select $q$a;b$q$ as v")).rows[0]?.v).toBe("a;b");
+      expect((await tx.query<{ v: number }>("select 1 as v;")).rows[0]?.v).toBe(1);
+      expect((await tx.query<{ v: number }>("select 1 as v; -- done")).rows[0]?.v).toBe(1);
+      expect(
+        (await tx.query<{ v: string }>("select current_setting('app.org_id') as v")).rows[0]?.v,
+      ).toBe(orgA);
+      expect((await tx.query<{ v: string }>("select '--not a comment' as v")).rows[0]?.v).toBe(
+        "--not a comment",
+      );
+      expect((await tx.query<{ v: string }>(`select 'commit' as "v"`)).rows[0]?.v).toBe("commit");
+    });
+  });
+
   it("rejects transaction control and tenant-switching statements inside a tx (review #11)", async () => {
     const forbidden = [
       "commit",
@@ -248,6 +365,16 @@ describe("withOrg", () => {
       "select 1; commit",
       "discard all",
       "discard temp",
+      // Bypasses found in re-review B: quoting, comments as whitespace, quoted parameter names.
+      `select "set_config"('app.org_id', $1, true)`,
+      "select set_config/**/('app.org_id', $1, true)",
+      `select SET_CONFIG /* x */ ( 'app.org_id', $1, true )`,
+      `set "app.org_id" = 'x'`,
+      `set local "app"."org_id" to 'x'`,
+      `SET SESSION "app" . "org_id" TO 'x'`,
+      "select 1; commit; select 2",
+      "select 'a'; commit",
+      "(commit)",
     ];
     for (const sql of forbidden) {
       const params = (sql.match(/\$\d/g) ?? []).map(() => "x");

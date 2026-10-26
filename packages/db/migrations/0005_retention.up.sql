@@ -34,7 +34,9 @@ GRANT SELECT ON app.retention_settings TO rocky_app, rocky_retention;
 
 -- The application schedules deletion by setting orgs.delete_after (uninstall, P3-3). It can
 -- never schedule it sooner than the configured grace period from now, so a compromised
--- credential cannot request-and-execute an erasure in one go.
+-- credential cannot request-and-execute an erasure in one go. Scheduling and cancelling are
+-- audited from here, as the invoking role: the application already has INSERT on audit_events
+-- for its own tenant, so the trigger needs no extra privilege (SECURITY INVOKER).
 CREATE FUNCTION app.orgs_enforce_deletion_grace() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog
@@ -42,10 +44,17 @@ AS $$
 DECLARE
   grace integer;
 BEGIN
-  IF NEW.delete_after IS NOT NULL
+  IF TG_OP = 'UPDATE' AND OLD.delete_after IS NOT NULL AND NEW.delete_after IS NULL THEN
+    INSERT INTO public.audit_events (org_id, actor_type, actor_id, action, target_type, target_id, metadata)
+    VALUES (NEW.id, 'system', 'orgs_deletion_grace', 'org.deletion_cancelled', 'org', NEW.id::text,
+            jsonb_build_object('was_due', OLD.delete_after));
+  ELSIF NEW.delete_after IS NOT NULL
      AND (TG_OP = 'INSERT' OR OLD.delete_after IS DISTINCT FROM NEW.delete_after) THEN
     SELECT s.days INTO STRICT grace FROM app.retention_settings s WHERE s.category = 'org_deletion_grace';
     NEW.delete_after := greatest(NEW.delete_after, now() + make_interval(days => grace));
+    INSERT INTO public.audit_events (org_id, actor_type, actor_id, action, target_type, target_id, metadata)
+    VALUES (NEW.id, 'system', 'orgs_deletion_grace', 'org.deletion_scheduled', 'org', NEW.id::text,
+            jsonb_build_object('delete_after', NEW.delete_after));
   END IF;
   RETURN NEW;
 END

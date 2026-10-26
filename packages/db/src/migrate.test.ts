@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { appliedMigrations, loadMigrations, migrate, rollback } from "./migrate.js";
+import { appliedMigrations, checksumOf, loadMigrations, migrate, rollback } from "./migrate.js";
 import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "./testing/index.js";
 
 /** P2-1: migrations go up and down, in both directions, on a real Postgres. */
@@ -121,6 +121,25 @@ describe("migrations", () => {
     await expect(rollback(db.migrator, { migrations: tampered, steps: 1 })).rejects.toThrow(
       /checksum/,
     );
+    expect((await appliedMigrations(db.migrator)).length).toBe(all.length);
+  });
+
+  it("checksums the down script too, and ignores line-ending differences (re-review E)", async () => {
+    const all = loadMigrations();
+    const downEdited = all.map((m, i) => (i === 2 ? { ...m, down: `${m.down}\n-- edited` } : m));
+    await expect(migrate(db.migrator, { migrations: downEdited })).rejects.toThrow(/checksum/);
+    await expect(rollback(db.migrator, { migrations: downEdited, steps: 1 })).rejects.toThrow(
+      /checksum/,
+    );
+    // The same files checked out with CRLF line endings are the same migrations.
+    const crlf = all.map((m) => ({
+      ...m,
+      up: m.up.replace(/\n/g, "\r\n"),
+      down: m.down.replace(/\n/g, "\r\n"),
+    }));
+    expect(crlf[0]?.up).not.toBe(all[0]?.up);
+    expect(crlf.map(checksumOf)).toEqual(all.map(checksumOf));
+    expect(await migrate(db.migrator, { migrations: crlf })).toEqual({ applied: [] });
     expect((await appliedMigrations(db.migrator)).length).toBe(all.length);
   });
 

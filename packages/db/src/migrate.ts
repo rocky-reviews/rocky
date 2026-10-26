@@ -31,9 +31,18 @@ const FILE = /^(\d{4})_([a-z0-9_]+)\.(up|down)\.sql$/;
 /** Arbitrary constant; identifies "Rocky migrations" among advisory locks on the cluster. */
 const LOCK_KEY = 726_335_920;
 
-/** Identity of a migration's content: the up script is what changed the database. */
+const normaliseLineEndings = (text: string): string => text.replace(/\r\n?/g, "\n");
+
+/**
+ * Identity of a migration's content: both scripts, with line endings normalised so a CRLF
+ * checkout is the same migration as an LF one.
+ */
 export const checksumOf = (migration: Migration): string =>
-  createHash("sha256").update(migration.up, "utf8").digest("hex");
+  createHash("sha256")
+    .update(normaliseLineEndings(migration.up), "utf8")
+    .update("\n-- down --\n", "utf8")
+    .update(normaliseLineEndings(migration.down), "utf8")
+    .digest("hex");
 
 export const loadMigrations = (dir: string = MIGRATIONS_DIR): Migration[] => {
   const partial = new Map<number, { name: string; up?: string; down?: string }>();

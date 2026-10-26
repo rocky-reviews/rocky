@@ -104,6 +104,41 @@ describe("retention.delete_org", () => {
     expect(backdated!.getTime()).toBeGreaterThan(Date.now() + 6.9 * DAY);
   });
 
+  it("audits scheduling and cancelling a deletion from the trigger (re-review D)", async () => {
+    const actions = async () =>
+      db.withOrg(a.orgId, async (tx) =>
+        (await tx.db.select().from(schema.auditEvents).orderBy(schema.auditEvents.id))
+          .filter((e) => e.action.startsWith("org.deletion_"))
+          .map((e) => ({ action: e.action, target: e.targetId, metadata: e.metadata })),
+      );
+    // The previous test scheduled twice (schedule, then an attempted backdate).
+    const scheduled = await actions();
+    expect(scheduled.map((e) => e.action)).toEqual([
+      "org.deletion_scheduled",
+      "org.deletion_scheduled",
+    ]);
+    for (const e of scheduled) {
+      expect(e.target).toBe(a.orgId);
+      expect(new Date(String(e.metadata["delete_after"])).getTime()).toBeGreaterThan(
+        Date.now() + 6.9 * DAY,
+      );
+    }
+    await db.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: null }));
+    expect((await actions()).map((e) => e.action)).toEqual([
+      "org.deletion_scheduled",
+      "org.deletion_scheduled",
+      "org.deletion_cancelled",
+    ]);
+    // Touching other columns, or re-saving the same value, writes nothing.
+    await db.withOrg(a.orgId, (tx) =>
+      tx.db.update(schema.orgs).set({ settings: { theme: "slate" }, deleteAfter: null }),
+    );
+    expect(await actions()).toHaveLength(3);
+    // Schedule again so the deletion test below has something to execute.
+    await db.withOrg(a.orgId, (tx) => tx.db.update(schema.orgs).set({ deleteAfter: new Date() }));
+    expect((await actions()).at(-1)?.action).toBe("org.deletion_scheduled");
+  });
+
   it("the app role cannot delete an org row directly, even its own", async () => {
     const c = await seedOrg(db, newOrgId(), { installationId: 3 });
     const error = await pgError(db.withOrg(c.orgId, (tx) => tx.query("delete from orgs")));

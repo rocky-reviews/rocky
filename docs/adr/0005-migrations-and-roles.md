@@ -18,7 +18,7 @@ deletion. The schema holds encrypted secrets (wrapped keys, forge tokens) writte
 
 - Migrations are hand-written SQL in `packages/db/migrations`, one `NNNN_name.up.sql` /
   `NNNN_name.down.sql` pair per version, applied by a small runner (`migrate`, `rollback`) that
-  records version, name and a sha256 of the up script in `app.schema_migrations`, takes an advisory
+  records version, name and a sha256 of the up and down scripts (line endings normalised) in `app.schema_migrations`, takes an advisory
   lock and runs each file in its own transaction. An applied migration whose content changed is
   refused (write a new migration instead). Both directions are exercised in CI (up → down to
   nothing → up, single steps, target version, concurrent migrators, checksum mismatch).
@@ -64,12 +64,21 @@ local, pool-safe), runs `fn`, waits for any nested work, re-reads the setting an
 commit if it changed, then commits or rolls back.
 
 - The `tx` handle (raw `query` and the Drizzle `db`) talks to the connection through a proxy
-  that refuses every query once the transaction has ended, and refuses statements that would
-  alter the transaction or the tenant context: `BEGIN/COMMIT/ROLLBACK/END/ABORT/SAVEPOINT/RELEASE/
-PREPARE/DISCARD/RESET`, `SET [LOCAL|SESSION] ROLE | SESSION AUTHORIZATION | TRANSACTION | app.*`,
-  any `set_config(` and any `;`. Drizzle's `db.transaction()` is therefore refused as well.
-- Nested calls for the same org join the transaction through a savepoint and are serialised, so
-  concurrent nested calls cannot interleave savepoints. A nested call for a different org throws.
+  that exposes exactly one member, `query`; every other property of the pg client (`release`,
+  `connection`, `end`, …) throws, so nothing inside `fn` can return a mid-transaction connection
+  to the pool. `query` refuses every statement once the transaction has ended, and (best effort,
+  after normalising comments, literals, quoting and case) statements that would alter the
+  transaction or the tenant context: `BEGIN/COMMIT/ROLLBACK/END/ABORT/SAVEPOINT/RELEASE/PREPARE/
+DISCARD/RESET`, `SET [LOCAL|SESSION] ROLE | SESSION AUTHORIZATION | TRANSACTION | app.*`, any
+  `set_config(` and real multi-statement text (`;` inside a literal or one trailing `;` is fine).
+  Drizzle's `db.transaction()` is therefore refused as well. The commit-time recheck of
+  `app.org_id` remains the actual guarantee.
+- Nested calls for the same org join the transaction through a savepoint. Each nesting level is
+  its own async scope sharing the connection, the closed flag and the savepoint counter but with
+  its own queue: sibling calls are serialised so savepoints never interleave, while a call nested
+  inside a nested call runs immediately (queueing it behind its awaiting parent would deadlock).
+  Every level awaits its children before releasing its savepoint. A nested call for a different
+  org throws.
 - A `withOrg` call made from work that outlived its enclosing transaction (a timer, an event
   listener created inside `fn`) finds a _closed_ scope and throws `TenantContextError` rather than
   starting a new transaction: that scope's connection now belongs to someone else, and detached
@@ -108,7 +117,9 @@ parent (org_id, id)`; parents carry `UNIQUE (org_id, id)`. Nullable references u
   `audit_events` as `rocky_retention` (foreign-key cascades run as the table owner, which the
   trigger blocks) and then the `orgs` row, which cascades through every other tenant table. A
   trigger on `orgs` pushes any `delete_after` the application sets to at least `now() + grace`,
-  so scheduling and executing a deletion can never happen in one go.
+  so scheduling and executing a deletion can never happen in one go, and writes an
+  `org.deletion_scheduled` / `org.deletion_cancelled` audit row with the application's own
+  INSERT right (no extra privilege).
 - `runRetention(db, { clock })` runs the three purges as of the injected clock and returns a
   report; it writes no audit rows itself. Application (Pino) logs are not in the database; their
   retention is a hosting concern.

@@ -25,4 +25,5 @@ Task log for the project plan. Agents append a row when a task is merged.
 - First CI run on `main`: verify, CodeQL, Semgrep, gitleaks, osv-scanner all green; `verify` took 37 s (P0-1: under 5 min).
 - `scripts/github/protect-main.sh` applied: PR required, 7 required checks pinned to the GitHub Actions app, linear history, signed commits, no force push, enforced for admins; secret scanning + push protection on (P0-3).
 - `cla-signatures` branch created (P0-2).
+- Pre-commit gitleaks inside worktrees (the containerised scan could not resolve the worktree's `.git` file and scanned 0 commits; found while committing P2-1) is fixed on `main` by PR #5. The P2 commits were scanned by hand as patches with the pinned image: no leaks.
 - This PR is the P0-4 dry run: opened from a task branch with the PR template, merged only after all required checks passed.
