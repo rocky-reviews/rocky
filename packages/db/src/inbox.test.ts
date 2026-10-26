@@ -28,7 +28,8 @@ import { WebhookInboxError } from "./webhooks.js";
  * concurrent workers never share a row; a crash lets the lease expire and the row is retried; a
  * row that keeps striking is parked after WEBHOOK_MAX_STRIKES, one that only fails transiently
  * after WEBHOOK_TRANSIENT_PARK_HOURS; only processed rows are purged. Review round 1: claims are
- * per forge (M3), at most one live lease per installation (S2), duplicates are superseded (L5).
+ * per forge (M3), at most one live lease per installation (S2). Review round 2 (A): nothing is
+ * superseded at claim time, and installation rows must have minimalEvent's shape to be stored.
  */
 
 const INSUFFICIENT_PRIVILEGE = "42501";
@@ -602,7 +603,7 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
     expect(await state(deleted.deliveryId)).toMatchObject({ attempts: 0 });
   });
 
-  it("supersedes older pending duplicates of an event without claiming them; keeps the newest (L5)", async () => {
+  it("never marks a row processed on another row's account: duplicates are each claimed, oldest first (review round 2, A)", async () => {
     await drain();
     const installationId = nextInstallation++;
     const copies = Array.from({ length: 4 }, () =>
@@ -617,21 +618,19 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
         [c.deliveryId, 100 - i],
       );
     }
-    const newest = copies.at(-1)!;
-    const claimed = await claimOne(newest.deliveryId);
-    expect(claimed).toMatchObject({ deliveryId: newest.deliveryId, attempts: 1 });
-    for (const old of copies.slice(0, -1)) {
-      expect(await state(old.deliveryId)).toMatchObject({
-        attempts: 0,
-        processed: true,
-        outcome: "superseded",
-        leased: false,
-      });
+    // A planted newer copy (same installation and type, the receiver's role) changes nothing.
+    for (const c of copies) {
+      const claimed = await claimOne(c.deliveryId);
+      expect(claimed).toMatchObject({ deliveryId: c.deliveryId, attempts: 1 });
+      for (const other of copies) {
+        if (other !== c) expect((await state(other.deliveryId))?.outcome).not.toBe("superseded");
+      }
+      expect(await worker.completeWebhookDelivery(claimed!, "deletion_scheduled")).toBe(true);
     }
-    await worker.completeWebhookDelivery(claimed!, "test");
+    expect(await claimOne(copies[0]!.deliveryId)).toBeUndefined();
   });
 
-  it("does not supersede a duplicate that is currently leased (its holder finishes it)", async () => {
+  it("a duplicate waits while another row of its installation is leased (its holder finishes it)", async () => {
     await drain();
     const installationId = nextInstallation++;
     const a = installationDelivery({ installationId, type: "installation.deleted" });
@@ -645,6 +644,69 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
     const next = await claimOne(b.deliveryId);
     expect(next?.deliveryId).toBe(b.deliveryId);
     await worker.completeWebhookDelivery(next!, "test");
+  });
+});
+
+describe("installation rows must have minimalEvent's shape (review round 2, A)", () => {
+  const insertAsApp = async (event: unknown) => {
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    try {
+      const type = (event as { type: string }).type;
+      await app.query(
+        `insert into app.webhook_deliveries
+           (forge, delivery_id, payload_sha256, event_type, installation_id, event)
+         values ('github', $1, $2, $3, 4321, $4::jsonb)`,
+        [randomUUID(), randomBytes(32), type, JSON.stringify(event)],
+      );
+      return undefined;
+    } catch (error) {
+      if (error instanceof pg.DatabaseError) return error.code;
+      throw error;
+    } finally {
+      await app.end();
+    }
+  };
+  const base = {
+    type: "installation.deleted",
+    installationId: 4321,
+    account: { id: 77, login: "victim", kind: "organization" },
+    sender: { id: 9, login: "owner" },
+  };
+
+  it("refuses an installation row the worker could not decode, for the receiver's role", async () => {
+    const account = base.account;
+    for (const [label, event] of [
+      ["no account", { type: base.type, installationId: 4321 }],
+      ["account array", { ...base, account: [1, 2] }],
+      ["account null", { ...base, account: null }],
+      ["account id string", { ...base, account: { ...account, id: "77" } }],
+      ["account id zero", { ...base, account: { ...account, id: 0 } }],
+      ["account id fraction", { ...base, account: { ...account, id: 1.5 } }],
+      ["account id too big", { ...base, account: { ...account, id: 2 ** 60 } }],
+      ["login missing", { ...base, account: { id: 77, kind: "user" } }],
+      ["login bad", { ...base, account: { ...account, login: "../etc" } }],
+      ["login number", { ...base, account: { ...account, login: 5 } }],
+      ["kind bad", { ...base, account: { ...account, kind: "enterprise" } }],
+      ["sender missing", { type: base.type, installationId: 4321, account }],
+      ["sender array", { ...base, sender: [] }],
+      ["sender id string", { ...base, sender: { id: "9", login: "owner" } }],
+      ["sender login bad", { ...base, sender: { id: 9, login: "a b" } }],
+      ["created, no account", { type: "installation.created", installationId: 4321, sender: null }],
+    ] as const) {
+      expect(await insertAsApp(event), label).toBe("23514");
+    }
+  });
+
+  it("accepts every shape minimalEvent accepts", async () => {
+    for (const event of [
+      base,
+      { ...base, sender: null },
+      { ...base, sender: { id: 9, login: "some-app[bot]" } },
+      { ...base, type: "installation.created", account: { id: 78, login: "u_1", kind: "user" } },
+    ]) {
+      expect(await insertAsApp(event), JSON.stringify(event)).toBeUndefined();
+    }
+    await drain();
   });
 });
 

@@ -108,7 +108,9 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
         batchSize,
       });
       if (report.claimed > 0) deps.log.info({ job: "inbox", ...report }, "inbox drained");
-      return report.claimed === batchSize;
+      // Again at once only after a full batch that all went through: a batch with released,
+      // retried or lost rows waits for the next tick (no hot loop, review round 2 SF3).
+      return report.claimed === batchSize && report.processed + report.parked === batchSize;
     });
 
     every("org_deletion_sweep", intervals.sweepMs, async () => {

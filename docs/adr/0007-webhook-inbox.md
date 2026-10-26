@@ -6,7 +6,8 @@
 - **Amends:** [ADR 0005](0005-migrations-and-roles.md) §1 (a third non-tenant table in `app`)
 - **Amended by:** [ADR 0009](0009-installation-lifecycle.md) (P3-3: the inbox's processing state,
   the worker's claim path, the purge skips unprocessed rows; review round 1: claims per forge, one
-  live lease per installation, superseded duplicates, transient vs. strike failures)
+  live lease per installation, transient vs. strike failures; review round 2: no superseding, a
+  shape CHECK on installation rows)
 
 ## Context
 
@@ -137,8 +138,10 @@ job: the worker consumes the inbox (P3-3 adds the claim path) and creates tenant
   `lease_token`/`lease_until`, `processed_at` + `outcome`, `parked_at`, `last_error` (SQLSTATE or
   reason code). Reset by the stamp trigger on insert. The worker role claims rows of **its forge**
   with a lease through `worker.claim_webhook_deliveries`: at most one live lease per
-  `(forge, installation_id)`, the oldest pending row first, older pending duplicates of the same
-  event marked `superseded` unclaimed. It finishes them with `worker.complete_webhook_delivery`
+  `(forge, installation_id)`, the oldest pending row first; no row is ever finished except by its
+  own lease holder (duplicates are processed one by one). Installation rows must have the shape
+  `minimalEvent` produces (CHECK `webhook_deliveries_installation_shape`, for every role). It
+  finishes them with `worker.complete_webhook_delivery`
   (inside the tenant transaction that applied the effect) or `worker.fail_webhook_delivery` with a
   kind: `transient` failures never park a row before it is 72 h old, `strike`s park it at five
   (a lost lease is a strike), `permanent` parks it now. The app role still holds `INSERT` only.

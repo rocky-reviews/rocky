@@ -195,9 +195,18 @@ describe("failure classification (review round 1, S3)", () => {
 describe("lease sizing (review round 1, S4)", () => {
   it("covers every row's worst case: two forge reads at the timeout, plus slack", () => {
     expect(ROW_BUDGET_SECONDS).toBeGreaterThanOrEqual(2 * 10 + 5);
-    expect(leaseSecondsFor(10)).toBe(10 * ROW_BUDGET_SECONDS);
-    expect(leaseSecondsFor(10, 60)).toBe(10 * ROW_BUDGET_SECONDS);
+    // Strictly more than the batch's worst case (review round 2, SF3): a batch of one leaves its
+    // row a full budget.
+    for (const batch of [1, 2, 10, 100]) {
+      expect(leaseSecondsFor(batch)).toBeGreaterThan(batch * ROW_BUDGET_SECONDS);
+      expect(leaseSecondsFor(batch) - ROW_BUDGET_SECONDS).toBeGreaterThanOrEqual(
+        batch * ROW_BUDGET_SECONDS,
+      );
+    }
+    expect(leaseSecondsFor(10, 60)).toBe(11 * ROW_BUDGET_SECONDS);
     expect(leaseSecondsFor(1, 900)).toBe(900);
+    // Within what the claim accepts (it clamps to 3600 s).
+    expect(leaseSecondsFor(100)).toBeLessThanOrEqual(3600);
   });
 });
 

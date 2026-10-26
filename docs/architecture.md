@@ -69,8 +69,8 @@ packages/schema (analysis document; shared contract)
   before parsing, decodes the few fields the domain needs and inserts one row into
   `app.webhook_deliveries`, a non-tenant inbox (installations precede orgs) that the app role can
   only `INSERT` into, deduplicated by delivery id and body sha256 in the database. The worker
-  claims rows of its forge with a lease, one live lease per installation (oldest first, older
-  duplicates superseded), re-validates them and re-reads state from the forge before acting.
+  claims rows of its forge with a lease, one live lease per installation (oldest first; a row is
+  only finished by its own lease holder), re-validates them and re-reads state from the forge before acting.
   Outages back off and wait; rows that keep failing for their own reasons are parked.
 - Installation lifecycle (ADR 0009): nothing is claimed or erased until `GET /app` proves the
   key belongs to `GITHUB_APP_ID`. `installation.created` creates an org only if

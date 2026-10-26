@@ -99,6 +99,7 @@ $$;
 
 DROP INDEX IF EXISTS app.webhook_deliveries_pending_idx;
 ALTER TABLE app.webhook_deliveries
+  DROP CONSTRAINT IF EXISTS webhook_deliveries_installation_shape,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_processed_or_parked,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_outcome_when_processed,
   DROP CONSTRAINT IF EXISTS webhook_deliveries_lease_pair,

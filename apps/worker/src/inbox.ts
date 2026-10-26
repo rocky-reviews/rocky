@@ -22,8 +22,8 @@ import {
 
 /**
  * Drains installation events from the webhook inbox (P3-3, ADR 0009). Claims a batch of this
- * worker's forge with a lease (at most one row per installation at a time, older duplicates
- * superseded: migration 0007), re-validates each row, reconciles it with GitHub and records the
+ * worker's forge with a lease (at most one row per installation at a time, oldest first:
+ * migration 0007), re-validates each row, reconciles it with GitHub and records the
  * outcome. Nothing is claimed until the app check passed (review round 1, M2). Pull request
  * events are not claimed here: they wait for their consumer (P3-4).
  *
@@ -39,8 +39,10 @@ import {
 /**
  * Worst-case time for one row: two GitHub reads (the event's installation and, for a reinstall,
  * the previous one) at the reader's 10 s timeout, plus slack for the database (review round 1,
- * S4). The lease covers a whole batch of these; a row whose lease has less than this left is
- * released untouched instead of started.
+ * S4). The lease covers a whole batch of these plus one; a row whose lease has less than this
+ * left is released untouched instead of started. "Left" is measured on the worker's own clock
+ * from just before the claim, never against the database's `lease_until`, so clock skew cannot
+ * release every row (review round 2, SF3).
  */
 export const ROW_BUDGET_SECONDS = 2 * 10 + 10;
 
@@ -52,7 +54,7 @@ export interface InboxDeps extends InstallationDeps {
   readonly clock?: Clock;
   /** Rows per claim (default 10). */
   readonly batchSize?: number;
-  /** Lease per claim (default batchSize × ROW_BUDGET_SECONDS; never less). */
+  /** Lease per claim (default (batchSize + 1) × ROW_BUDGET_SECONDS; never less). */
   readonly leaseSeconds?: number;
 }
 
@@ -70,9 +72,13 @@ const EMPTY: DrainReport = { claimed: 0, processed: 0, retried: 0, parked: 0, lo
 export const retryDelaySeconds = (attempts: number): number =>
   Math.min(30 * 2 ** Math.max(0, attempts - 1), 3600);
 
-/** The lease for a batch: enough for every row's worst case (S4). */
+/**
+ * The lease for a batch: every row's worst case plus one budget of slack, so even the last row
+ * of a full-speed batch (or the only row of a batch of one) starts with a full budget left (S4,
+ * SF3). Strictly more than `batchSize × ROW_BUDGET_SECONDS`.
+ */
 export const leaseSecondsFor = (batchSize: number, requested?: number): number =>
-  Math.max(requested ?? 0, batchSize * ROW_BUDGET_SECONDS);
+  Math.max(requested ?? 0, (batchSize + 1) * ROW_BUDGET_SECONDS);
 
 const errorCodeOf = (error: unknown): string => {
   const code =
@@ -158,21 +164,25 @@ export const drainInstallationEvents = async (deps: InboxDeps): Promise<DrainRep
   if (!(await deps.appCheck.ready())) return EMPTY;
   const clock = deps.clock ?? { now: () => new Date() };
   const batchSize = deps.batchSize ?? 10;
+  const leaseSeconds = leaseSecondsFor(batchSize, deps.leaseSeconds);
+  // Read before the claim, so the local deadline is never later than the database's.
+  const deadline = clock.now().getTime() + leaseSeconds * 1000;
   const rows = await deps.db.claimWebhookDeliveries({
     forge: deps.forge.kind,
     eventTypes: INSTALLATION_EVENT_TYPES,
     limit: batchSize,
-    leaseSeconds: leaseSecondsFor(batchSize, deps.leaseSeconds),
+    leaseSeconds,
   });
   const counts = { processed: 0, retried: 0, parked: 0, lost: 0 };
   for (const row of rows) {
     let result: RowResult;
     try {
-      if (clock.now().getTime() + ROW_BUDGET_SECONDS * 1000 > row.leaseUntil.getTime()) {
-        // Not enough lease left to finish this row safely: hand it back untouched (S4).
+      if (clock.now().getTime() + ROW_BUDGET_SECONDS * 1000 > deadline) {
+        // Not enough lease left to finish this row safely: hand it back untouched (S4), with a
+        // delay so a slow worker does not reclaim it at once (SF3).
         const released = await deps.db.failWebhookDelivery(row, {
           error: "lease_budget",
-          retryAfterSeconds: 0,
+          retryAfterSeconds: ROW_BUDGET_SECONDS,
           kind: "transient",
         });
         deps.log.warn(

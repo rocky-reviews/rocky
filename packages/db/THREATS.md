@@ -3,7 +3,7 @@
 The webhook inbox (`app.webhook_deliveries`, P3-2) has its own threat table (W1–W13) in
 [ADR 0007](../../docs/adr/0007-webhook-inbox.md); its database rows are W4, W5, W11–W13. The
 installation lifecycle (P3-3: worker role, org creation, inbox claim path, erasure sweep) has its
-own table (L1–L24) in [ADR 0009](../../docs/adr/0009-installation-lifecycle.md).
+own table (L1–L26) in [ADR 0009](../../docs/adr/0009-installation-lifecycle.md).
 
 Companion to [ADR 0003 tenancy](../../docs/adr/0003-tenancy.md) and
 [ADR 0005 migrations and roles](../../docs/adr/0005-migrations-and-roles.md). Each row names the

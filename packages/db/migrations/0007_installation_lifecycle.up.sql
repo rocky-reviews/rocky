@@ -15,12 +15,14 @@
 --      infinite. `erasing_at` marks an erasure in progress: from then on the org can no longer be
 --      cancelled or rebound, and a reinstall gets a fresh org.
 --   3. The inbox gets a processing state (lease, attempts, strikes, outcome, parked, last error
---      code) and a claim path per forge: one claim at a time (advisory lock), one live lease
---      per installation, superseded duplicates, transient errors that do not exhaust the budget;
---      the purge skips unprocessed rows.
+--      code), installation rows must have the decodable shape (CHECK), and a claim path per
+--      forge: one claim at a time (advisory lock), one live lease per installation, oldest first,
+--      no row finished by anyone but its lease holder, transient errors that do not exhaust the
+--      budget; the purge skips unprocessed rows.
 --   4. The deletion sweep: list due orgs, erase each through retention.delete_org, which now also
---      removes the org's inbox rows (or scrubs the ones still pending) and leaves a tombstone in
---      app.org_deletions.
+--      removes the erased installation's inbox rows (or scrubs the ones still pending), the
+--      account's finished rows under installations no live org holds, and leaves a tombstone in
+--      app.org_deletions. Rows of a reinstall (another installation) are never touched.
 
 -- --- 1. Roles ----------------------------------------------------------------------------------
 
@@ -187,6 +189,31 @@ ALTER TABLE app.webhook_deliveries
   ADD CONSTRAINT webhook_deliveries_outcome_when_processed CHECK ((processed_at IS NULL) = (outcome IS NULL)),
   ADD CONSTRAINT webhook_deliveries_processed_or_parked CHECK (processed_at IS NULL OR parked_at IS NULL);
 
+-- Review round 2 (A): an installation row must have the shape `minimalEvent` (packages/db)
+-- accepts, for every role: `account` an object with a positive safe-integer `id`, a login and a
+-- known kind; `sender` present and either null or an object with a positive safe-integer `id` and
+-- an actor login. The receiver only ever stores such rows, so a row without them was planted by
+-- whoever holds the receiver's credential; the worker could not decode it anyway, and a stored
+-- shape the erasure's scrub can rely on (CASE: evaluated in order, so no cast ever fails).
+ALTER TABLE app.webhook_deliveries ADD CONSTRAINT webhook_deliveries_installation_shape CHECK (
+  event_type NOT LIKE 'installation.%' OR CASE
+    WHEN jsonb_typeof(event -> 'account') IS DISTINCT FROM 'object' THEN false
+    WHEN jsonb_typeof(event #> '{account,id}') IS DISTINCT FROM 'number' THEN false
+    WHEN (event #>> '{account,id}') !~ '^[1-9][0-9]{0,15}$' THEN false
+    WHEN (event #>> '{account,id}')::numeric > 9007199254740991 THEN false
+    WHEN jsonb_typeof(event #> '{account,login}') IS DISTINCT FROM 'string' THEN false
+    WHEN (event #>> '{account,login}') !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$' THEN false
+    WHEN jsonb_typeof(event #> '{account,kind}') IS DISTINCT FROM 'string' THEN false
+    WHEN (event #>> '{account,kind}') NOT IN ('organization', 'user') THEN false
+    WHEN jsonb_typeof(event -> 'sender') = 'null' THEN true
+    WHEN jsonb_typeof(event -> 'sender') IS DISTINCT FROM 'object' THEN false
+    WHEN jsonb_typeof(event #> '{sender,id}') IS DISTINCT FROM 'number' THEN false
+    WHEN (event #>> '{sender,id}') !~ '^[1-9][0-9]{0,15}$' THEN false
+    WHEN (event #>> '{sender,id}')::numeric > 9007199254740991 THEN false
+    WHEN jsonb_typeof(event #> '{sender,login}') IS DISTINCT FROM 'string' THEN false
+    ELSE (event #>> '{sender,login}') ~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(\[bot\])?$'
+  END);
+
 CREATE INDEX webhook_deliveries_pending_idx ON app.webhook_deliveries (forge, installation_id, received_at)
   WHERE processed_at IS NULL AND parked_at IS NULL;
 
@@ -225,8 +252,9 @@ CREATE SCHEMA worker;
 -- (clamped to 1..100 rows and 5..3600 s). In order:
 --   * one claim at a time across workers (transaction advisory lock), so the per-installation
 --     rule below cannot race;
---   * older pending duplicates (same installation and event type) not held by a live lease are
---     marked processed as `superseded`: only the newest is worth a forge read;
+--   * nothing is marked processed here: a row is only ever finished by its own lease holder
+--     (review round 2: superseding one row because of another let a planted row swallow a
+--     genuine uninstall; duplicates are cheap, they are processed one at a time);
 --   * expired leases (the holder crashed) are released with a strike; the fifth parks the row;
 --   * per installation only the oldest pending row is a candidate, and only when nothing of that
 --     installation is leased: events of one installation are processed one at a time, in order.
@@ -241,18 +269,6 @@ AS $$
 #variable_conflict use_column
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('rocky.worker.claim_webhook_deliveries', 0));
-
-  UPDATE app.webhook_deliveries d
-     SET processed_at = now(), outcome = 'superseded', lease_token = NULL, lease_until = NULL
-   WHERE d.forge = p_forge AND d.event_type = ANY (p_event_types)
-     AND d.processed_at IS NULL AND d.parked_at IS NULL
-     AND (d.lease_until IS NULL OR d.lease_until <= now())
-     AND EXISTS (
-       SELECT 1 FROM app.webhook_deliveries n
-        WHERE n.forge = d.forge AND n.installation_id = d.installation_id
-          AND n.event_type = d.event_type
-          AND n.processed_at IS NULL AND n.parked_at IS NULL
-          AND (n.received_at, n.delivery_id) > (d.received_at, d.delivery_id));
 
   UPDATE app.webhook_deliveries d
      SET strikes = d.strikes + 1,
@@ -486,13 +502,15 @@ AS $$
   SELECT count(*) FROM removed
 $$;
 
--- 0005's erasure plus the org's inbox rows: finished rows and every row of the erased
--- installation that is not an installation event (pull requests: no org will consume them) are
--- deleted; the installation events still pending for its installation or account (a reinstall's
--- `created` among them) stay, with the installer and the account login scrubbed (they stay
--- decodable: sender null is valid, the login is display data the worker re-reads from the
--- forge). A tombstone goes to app.org_deletions. The FOR UPDATE lock and the order of deletes
--- are unchanged (see 0005).
+-- 0005's erasure plus the org's inbox rows. Of the erased installation: finished rows, rows that
+-- are not installation events (pull requests: no org will consume them) and rows of an
+-- unexpected shape are deleted; its installation events still pending stay, with the installer
+-- and the account login scrubbed (they stay decodable: sender null is valid, the login is
+-- display data the worker re-reads from the forge). Of the account's other installations: only
+-- finished rows of installations no live org holds (the org's own past, before a rebind). Rows
+-- of a reinstall (another installation, pending or bound to a live org) are not the erased
+-- org's and are left alone. A tombstone goes to app.org_deletions. The FOR UPDATE lock and the
+-- order of deletes are unchanged (see 0005).
 CREATE FUNCTION retention.delete_org(org uuid)
   RETURNS TABLE (table_name text, deleted bigint)
   LANGUAGE plpgsql SECURITY DEFINER
@@ -506,6 +524,7 @@ DECLARE
   n_audit bigint;
   n_orgs bigint;
   n_inbox bigint;
+  n_older bigint;
   n_scrubbed bigint;
 BEGIN
   SELECT o.delete_after, o.installation_id, o.account_id, o.forge
@@ -528,20 +547,40 @@ BEGIN
   GET DIAGNOSTICS n_orgs = ROW_COUNT;
   table_name := 'orgs'; deleted := n_orgs; RETURN NEXT;
 
+  -- The erased installation's rows: finished ones, ones nobody will process for an erased org
+  -- (pull requests), and any whose stored shape is unexpected (cannot be scrubbed safely; the
+  -- CHECK on the table keeps new ones out, review round 2 B).
   DELETE FROM app.webhook_deliveries d
-   WHERE d.forge = frg
-     AND (((d.processed_at IS NOT NULL OR d.parked_at IS NOT NULL)
-           AND (d.installation_id = inst OR (d.event -> 'account' ->> 'id') = acct::text))
-          OR (d.installation_id = inst AND d.event_type NOT LIKE 'installation.%'));
+   WHERE d.forge = frg AND d.installation_id = inst
+     AND (d.processed_at IS NOT NULL OR d.parked_at IS NOT NULL
+          OR d.event_type NOT LIKE 'installation.%'
+          OR jsonb_typeof(d.event -> 'account') IS DISTINCT FROM 'object'
+          OR coalesce(jsonb_typeof(d.event -> 'sender'), 'missing') NOT IN ('null', 'object'));
   GET DIAGNOSTICS n_inbox = ROW_COUNT;
+  -- The account's finished rows under its earlier installations (before a rebind), unless that
+  -- installation belongs to a live org now (a reinstall during this erasure, review round 2 C).
+  -- Pending rows of other installations are a reinstall's work and are left alone.
+  DELETE FROM app.webhook_deliveries d
+   WHERE d.forge = frg AND d.installation_id <> inst
+     AND (d.processed_at IS NOT NULL OR d.parked_at IS NOT NULL)
+     AND jsonb_typeof(d.event -> 'account') = 'object'
+     AND (d.event #>> '{account,id}') = acct::text
+     AND NOT EXISTS (SELECT 1 FROM public.orgs o
+                      WHERE o.forge = frg AND o.installation_id = d.installation_id
+                        AND o.erasing_at IS NULL);
+  GET DIAGNOSTICS n_older = ROW_COUNT;
+  n_inbox := n_inbox + n_older;
   table_name := 'webhook_deliveries'; deleted := n_inbox; RETURN NEXT;
 
+  -- The erased installation's remaining (pending, well-formed) rows keep ids only.
   UPDATE app.webhook_deliveries d
      SET event = jsonb_set(jsonb_set(d.event, '{sender}', 'null'::jsonb),
                            '{account,login}', '"erased"'::jsonb)
-   WHERE d.forge = frg AND d.event ? 'account'
-     AND (d.installation_id = inst OR (d.event -> 'account' ->> 'id') = acct::text)
-     AND (d.event -> 'sender' <> 'null'::jsonb OR d.event -> 'account' ->> 'login' <> 'erased');
+   WHERE d.forge = frg AND d.installation_id = inst
+     AND jsonb_typeof(d.event -> 'account') = 'object'
+     AND jsonb_typeof(d.event -> 'sender') IN ('null', 'object')
+     AND (d.event -> 'sender' <> 'null'::jsonb
+          OR d.event #>> '{account,login}' IS DISTINCT FROM 'erased');
   GET DIAGNOSTICS n_scrubbed = ROW_COUNT;
 
   INSERT INTO app.org_deletions (org_id, forge, installation_id, was_due, audit_events_deleted,

@@ -426,10 +426,12 @@ describe("the deletion sweep's database side (P3-3)", () => {
   it("is structural: every column that holds an org id, in any schema, is emptied for the erased org", async () => {
     const c = await seedOrg(worker, newOrgId(), { installationId: 60, accountId: 60_060 });
     const d = await seedOrg(worker, newOrgId(), { installationId: 61, accountId: 61_061 });
-    // Inbox rows: finished ones for c (by installation, and by account after a rebind), one
-    // pending reinstall for c's account (must survive: it is work not yet done, but loses the
-    // sender and the login, review round 1 L4), a pending pull request of c's installation
-    // (deleted: nobody will process it for an erased org, L4), one finished for d.
+    // Inbox rows: finished ones for c (by installation, and by account under an older,
+    // unbound installation), a pending redelivery for c's installation (kept: work not yet done,
+    // but loses the sender and the login, review round 1 L4), a pending pull request of c's
+    // installation (deleted: nobody will process it for an erased org, L4), one finished for d.
+    // Review round 2 (C): rows of the account under another installation that is pending, or
+    // bound to a live org (a reinstall during the erasure), are not c's and stay untouched.
     const delivery = (installationId: number, accountId: number) => ({
       forge: "github" as const,
       deliveryId: randomUUID(),
@@ -444,6 +446,11 @@ describe("the deletion sweep's database side (P3-3)", () => {
     const finishedC = delivery(60, 60_060);
     const finishedCOld = delivery(59, 60_060);
     const pendingC = delivery(62, 60_060);
+    const pendingSameC = {
+      ...delivery(60, 60_060),
+      event: { ...delivery(60, 60_060).event, sender: { id: 8, login: "redeliverer" } },
+    };
+    const finishedE = delivery(63, 60_060);
     const finishedD = delivery(61, 61_061);
     const pendingPrC = {
       forge: "github" as const,
@@ -458,13 +465,21 @@ describe("the deletion sweep's database side (P3-3)", () => {
         merged: false,
       },
     };
-    for (const row of [finishedC, finishedCOld, pendingC, finishedD, pendingPrC]) {
+    for (const row of [
+      finishedC,
+      finishedCOld,
+      pendingC,
+      pendingSameC,
+      finishedE,
+      finishedD,
+      pendingPrC,
+    ]) {
       expect(await db.recordWebhookDelivery(row)).toBe("queued");
     }
     await superuser.query(
       `update app.webhook_deliveries set processed_at = now(), outcome = 'test'
         where delivery_id = any($1)`,
-      [[finishedC.deliveryId, finishedCOld.deliveryId, finishedD.deliveryId]],
+      [[finishedC.deliveryId, finishedCOld.deliveryId, finishedD.deliveryId, finishedE.deliveryId]],
     );
 
     // Every column that can hold an org id: anything named org_id (any schema), and every
@@ -516,6 +531,19 @@ describe("the deletion sweep's database side (P3-3)", () => {
     ]);
 
     await makeDue(c.orgId);
+    // The account reinstalls while c is being erased: a fresh, live org e for installation 63.
+    expect(await worker.withOrg(c.orgId, (tx) => beginOrgErasure(tx))).toBe("started");
+    const e = newOrgId();
+    await worker.withOrg(e, (tx) =>
+      insertInstallationOrg(tx, {
+        forge: "github",
+        installationId: 63,
+        accountId: 60_060,
+        login: "acct-60060",
+        kind: "organization",
+        installerForgeUserId: 7,
+      }),
+    );
     const report = await worker.deleteOrg(c.orgId);
     expect(report).toEqual(
       expect.arrayContaining([
@@ -539,24 +567,34 @@ describe("the deletion sweep's database side (P3-3)", () => {
           pendingC.deliveryId,
           finishedD.deliveryId,
           pendingPrC.deliveryId,
+          pendingSameC.deliveryId,
+          finishedE.deliveryId,
         ],
       ],
     );
     expect(inbox.rows.map((r) => r.delivery_id)).toEqual(
-      [pendingC.deliveryId, finishedD.deliveryId].sort(),
+      [
+        pendingC.deliveryId,
+        pendingSameC.deliveryId,
+        finishedD.deliveryId,
+        finishedE.deliveryId,
+      ].sort(),
     );
-    // The surviving row of the erased account keeps ids only; d's row is untouched.
+    // The surviving row of the erased installation keeps ids only; everything else is untouched.
     const events = await superuser.query<{ delivery_id: string; event: unknown }>(
       "select delivery_id, event from app.webhook_deliveries where delivery_id = any($1)",
-      [[pendingC.deliveryId, finishedD.deliveryId]],
+      [[pendingC.deliveryId, pendingSameC.deliveryId, finishedD.deliveryId, finishedE.deliveryId]],
     );
     const eventOf = (id: string) => events.rows.find((r) => r.delivery_id === id)?.event;
-    expect(eventOf(pendingC.deliveryId)).toEqual({
-      ...pendingC.event,
-      account: { ...pendingC.event.account, login: "erased" },
+    expect(eventOf(pendingSameC.deliveryId)).toEqual({
+      ...pendingSameC.event,
+      account: { ...pendingSameC.event.account, login: "erased" },
       sender: null,
     });
+    expect(eventOf(pendingC.deliveryId)).toEqual(pendingC.event);
+    expect(eventOf(finishedE.deliveryId)).toEqual(finishedE.event);
     expect(eventOf(finishedD.deliveryId)).toEqual(finishedD.event);
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, e)).toBe(1);
     const tombstone = await superuser.query(
       `select forge, installation_id::text, audit_events_deleted > 0 as audited,
               inbox_rows_deleted::text, inbox_rows_scrubbed::text, deleted_at <= now() as stamped
@@ -806,5 +844,104 @@ describe("rescheduling and erasing (review round 1, H1 and S6)", () => {
     await worker.deleteOrg(orgId);
     expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(0);
     expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, fresh)).toBe(1);
+  });
+});
+
+describe("review round 2", () => {
+  it("B: a malformed pending row of the installation cannot wedge the erasure (shape guard + delete)", async () => {
+    const orgId = await bareOrg(95);
+    // Rows like this cannot be stored any more (CHECK webhook_deliveries_installation_shape,
+    // review round 2 A); plant them with the CHECK lifted, as if they predated it.
+    const def = await superuser.query<{ def: string }>(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+        where conrelid = 'app.webhook_deliveries'::regclass
+          and conname = 'webhook_deliveries_installation_shape'`,
+    );
+    expect(def.rows).toHaveLength(1);
+    const planted = [randomUUID(), randomUUID(), randomUUID()];
+    await superuser.query(
+      "alter table app.webhook_deliveries drop constraint webhook_deliveries_installation_shape",
+    );
+    try {
+      for (const [i, event] of [
+        { type: "installation.created", installationId: 95, account: [1], sender: null },
+        { type: "installation.created", installationId: 95, account: "x", sender: [] },
+        {
+          type: "installation.deleted",
+          installationId: 95,
+          account: { id: 1, login: "a", kind: "user" },
+          sender: "x",
+        },
+      ].entries()) {
+        await superuser.query(
+          `insert into app.webhook_deliveries
+             (forge, delivery_id, payload_sha256, event_type, installation_id, event)
+           values ('github', $1, $2, $3, 95, $4::jsonb)`,
+          [planted[i], randomBytes(32), event.type, JSON.stringify(event)],
+        );
+      }
+      await makeDue(orgId);
+      const report = await worker.deleteOrg(orgId);
+      expect(report).toEqual(
+        expect.arrayContaining([
+          { table: "orgs", deleted: 1 },
+          { table: "webhook_deliveries", deleted: 3 },
+        ]),
+      );
+      const left = await superuser.query(
+        "select 1 from app.webhook_deliveries where delivery_id = any($1)",
+        [planted],
+      );
+      expect(left.rowCount).toBe(0);
+    } finally {
+      await superuser.query("delete from app.webhook_deliveries where delivery_id = any($1)", [
+        planted,
+      ]);
+      await superuser.query(
+        `alter table app.webhook_deliveries add constraint webhook_deliveries_installation_shape ${def.rows[0]!.def}`,
+      );
+    }
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(0);
+  });
+
+  it("N-a: the trigger alone refuses the schedule and installer to a role that holds the column grant", async () => {
+    const orgId = await bareOrg(96);
+    const role = "rocky_probe_test";
+    const password = randomBytes(12).toString("hex");
+    // A member of rocky_app (the tenant policies apply) that is not in rocky_worker.
+    await superuser.query(
+      `create role ${role} login inherit password '${password}' in role rocky_app`,
+    );
+    await superuser.query(
+      `grant update (delete_after, installer_forge_user_id, erasing_at, installation_id, login, kind) on orgs to ${role}`,
+    );
+    const url = new URL(pgs.appUrl);
+    url.username = role;
+    url.password = password;
+    const probe = createDb({ connectionString: url.href, max: 1 });
+    try {
+      for (const sql of [
+        "update orgs set delete_after = now()",
+        "update orgs set installer_forge_user_id = 1",
+        "update orgs set login = 'renamed'",
+        "update orgs set kind = 'user'",
+        "update orgs set installation_id = 97",
+      ]) {
+        const error = await pgError(probe.withOrg(orgId, (tx) => tx.query(sql)));
+        expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+        expect(error.message, sql).not.toMatch(/permission denied for (table|column)/);
+      }
+    } finally {
+      await probe.close();
+      await superuser.query(
+        `revoke update (delete_after, installer_forge_user_id, erasing_at, installation_id, login, kind) on orgs from ${role}`,
+      );
+      await superuser.query(`drop role ${role}`);
+    }
+    const { rows } = await superuser.query(
+      "select delete_after, installer_forge_user_id, login from orgs where id = $1",
+      [orgId],
+    );
+    expect(rows).toEqual([{ delete_after: null, installer_forge_user_id: null, login: "bare-96" }]);
   });
 });

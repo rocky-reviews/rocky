@@ -21,8 +21,9 @@ import {
  * a forged, planted, replayed or out-of-order row can at most cause a redundant read:
  *
  * When GitHub contradicts the event (a `created` it answers 404 for, a `deleted` it still has),
- * the row is retried with backoff for its first CONTRADICTION_ATTEMPTS attempts (GitHub's API can
- * lag its webhooks), each a strike; after that GitHub's answer is final (review round 1, S1).
+ * the row is retried with backoff (GitHub's API can lag its webhooks), each time a strike; the
+ * CONTRADICTION_ATTEMPTS-th contradiction is believed (review round 1, S1). Only strikes count,
+ * so outages before or between them do not shorten the window (review round 2, SF2).
  *
  * `installation.created` (GitHub must say the installation exists):
  * - an org is bound to this installation id: nothing to do, or, if its deletion is scheduled,
@@ -71,8 +72,14 @@ export class ParkDeliveryError extends Error {
   }
 }
 
-/** Attempts during which GitHub contradicting the event is retried rather than believed. */
+/**
+ * GitHub contradicting the event is believed on this contradiction, counted in strikes (earlier
+ * contradictions, lost leases, bad answers), never in attempts (outages, released rows).
+ */
 export const CONTRADICTION_ATTEMPTS = 3;
+
+const retryContradiction = (lease: { readonly strikes: number }): boolean =>
+  lease.strikes < CONTRADICTION_ATTEMPTS - 1;
 
 /** GitHub contradicts the event, possibly because its API lags the webhook: retry (a strike). */
 export class ContradictionError extends Error {
@@ -119,7 +126,7 @@ const verify = async (forge: InstallationReader, installationId: number): Promis
 
 export const reconcileInstallation = async (
   deps: InstallationDeps,
-  lease: InboxLease & { readonly attempts: number },
+  lease: InboxLease & { readonly strikes: number },
   event: InstallationEvent,
 ): Promise<InstallationResult> => {
   const forge = deps.forge.kind;
@@ -127,7 +134,7 @@ export const reconcileInstallation = async (
   const verified = await verify(deps.forge, event.installationId);
   const contradicts =
     event.type === "installation.deleted" ? verified.kind !== "gone" : verified.kind === "gone";
-  if (contradicts && lease.attempts < CONTRADICTION_ATTEMPTS) throw new ContradictionError();
+  if (contradicts && retryContradiction(lease)) throw new ContradictionError();
 
   if (event.type === "installation.deleted") {
     if (verified.kind !== "gone") {
@@ -208,7 +215,7 @@ export const reconcileInstallation = async (
     const previous = await verify(deps.forge, byAccount.installationId);
     if (previous.kind !== "gone") {
       // The old installation's removal may not have reached the API yet (S1).
-      if (lease.attempts < CONTRADICTION_ATTEMPTS) throw new ContradictionError();
+      if (retryContradiction(lease)) throw new ContradictionError();
       throw new ParkDeliveryError("account_has_live_installation");
     }
     await deps.db.withOrg(byAccount.orgId, async (tx) => {
