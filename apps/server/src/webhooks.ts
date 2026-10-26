@@ -16,13 +16,45 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
  * those exact bytes has been checked.
  */
 
-/** GitHub caps payloads at 25 MB; the events we consume are far smaller. Larger bodies get 413. */
-export const WEBHOOK_BODY_LIMIT_BYTES = 5 * 1024 * 1024;
+/**
+ * GitHub's documented payload cap (25 MB). Anything GitHub sends fits; a 413 is never returned
+ * for a genuine delivery (GitHub does not retry it). `installation.created` for an account with
+ * many repositories is the large case.
+ */
+export const WEBHOOK_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Longest the route waits for the inbox before answering 503: well inside GitHub's 10 s
+ * delivery timeout, so the delivery is marked failed (and can be redelivered) instead of timing
+ * out with an unknown outcome. The pool's own timeouts (connect 2 s, statement 3 s) fire first.
+ */
+export const INBOX_RECORD_TIMEOUT_MS = 5_000;
 
 export interface WebhookDeps {
   ingress: WebhookIngress;
   inbox: WebhookInbox;
+  /** Overrides INBOX_RECORD_TIMEOUT_MS (tests). */
+  recordTimeoutMs?: number;
 }
+
+class InboxTimeoutError extends Error {
+  override readonly name = "InboxTimeoutError";
+}
+
+/** Settles with `promise`, or rejects with InboxTimeoutError after `ms`. Clears its timer. */
+const withTimeout = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new InboxTimeoutError("inbox timeout")), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 const REJECTION_STATUS: Readonly<Record<WebhookRejection, number>> = {
   unauthenticated: 401,
@@ -49,6 +81,7 @@ const errorCode = (error: unknown): string | undefined => {
 
 export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void => {
   const forge = deps.ingress.forge;
+  const recordTimeoutMs = deps.recordTimeoutMs ?? INBOX_RECORD_TIMEOUT_MS;
   void app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
     scope.addContentTypeParser(
@@ -87,6 +120,7 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
                   outcome: "ignored",
                   deliveryId: receipt.deliveryId,
                   eventName: receipt.eventName,
+                  ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
                   bytes,
                 },
               },
@@ -97,18 +131,17 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
             const { deliveryId, event } = receipt.delivery;
             let stored: "queued" | "duplicate";
             try {
-              stored = await deps.inbox.record(receipt.delivery);
+              // A timed-out insert may still commit later; a redelivery then reads `duplicate`.
+              stored = await withTimeout(deps.inbox.record(receipt.delivery), recordTimeoutMs);
             } catch (error) {
               // Infrastructure failure: 503 so the delivery shows as failed on the forge and can
               // be redelivered. Only the error code is logged (driver messages can echo values).
               request.log.error(
                 {
-                  webhook: {
-                    forge,
-                    outcome: "inbox_error",
-                    deliveryId,
-                    sqlstate: errorCode(error),
-                  },
+                  webhook:
+                    error instanceof InboxTimeoutError
+                      ? { forge, outcome: "inbox_timeout", deliveryId, timeoutMs: recordTimeoutMs }
+                      : { forge, outcome: "inbox_error", deliveryId, sqlstate: errorCode(error) },
                 },
                 "webhook inbox unavailable",
               );

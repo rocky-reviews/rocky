@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ConfigError, webhookSecretFromEnv } from "./config.js";
+import { ConfigError, isProduction, webhookSecretFromEnv } from "./config.js";
 
 const GOOD = "0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -72,5 +72,40 @@ describe("server boot", () => {
     const result = boot({ NODE_ENV: "production", GITHUB_WEBHOOK_SECRET: weak });
     expect(result.status).toBe(1);
     expect(result.stdout + result.stderr).not.toContain(weak);
+  }, 30_000);
+});
+
+describe("production detection (review round 1, item 5)", () => {
+  it("treats NODE_ENV=production or a set FLY_APP_NAME as production", () => {
+    expect(isProduction({ NODE_ENV: "production" })).toBe(true);
+    expect(isProduction({ FLY_APP_NAME: "rocky-cloud" })).toBe(true);
+    expect(isProduction({ NODE_ENV: "development", FLY_APP_NAME: "rocky-cloud" })).toBe(true);
+    expect(isProduction({})).toBe(false);
+    expect(isProduction({ FLY_APP_NAME: "" })).toBe(false);
+    expect(isProduction({ NODE_ENV: "development" })).toBe(false);
+  });
+
+  it("requires the secret on Fly.io even when NODE_ENV is unset", () => {
+    expect(() => webhookSecretFromEnv({ FLY_APP_NAME: "rocky-cloud" })).toThrow(ConfigError);
+    expect(webhookSecretFromEnv({ FLY_APP_NAME: "rocky-cloud", GITHUB_WEBHOOK_SECRET: GOOD })).toBe(
+      GOOD,
+    );
+  });
+
+  it("fails to boot on Fly.io without GITHUB_WEBHOOK_SECRET (spawned main)", () => {
+    const main = fileURLToPath(new URL("./main.ts", import.meta.url));
+    const result = spawnSync(process.execPath, ["--import", "tsx", main], {
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        DATABASE_URL: "postgres://nobody:nothing@127.0.0.1:1/none",
+        PORT: "0",
+        HOST: "127.0.0.1",
+        FLY_APP_NAME: "rocky-cloud",
+      },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toMatch(/GITHUB_WEBHOOK_SECRET is required/);
   }, 30_000);
 });

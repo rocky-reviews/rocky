@@ -150,6 +150,7 @@ describe("recordWebhookDelivery", () => {
         type: "installation.created",
         installationId: 7,
         account: { id: 8, login: "acme", kind: "organization", email: "a@example.com" },
+        sender: { id: 9, login: "alice", email: "alice@example.com", site_admin: true },
       } as unknown as ForgeEvent,
     });
     await db.recordWebhookDelivery(install);
@@ -157,7 +158,20 @@ describe("recordWebhookDelivery", () => {
       type: "installation.created",
       installationId: 7,
       account: { id: 8, login: "acme", kind: "organization" },
+      sender: { id: 9, login: "alice" },
     });
+  });
+
+  it("stores the installer (sender) and fits the largest installation event in the size cap", async () => {
+    const event: ForgeEvent = {
+      type: "installation.deleted",
+      installationId: Number.MAX_SAFE_INTEGER,
+      account: { id: Number.MAX_SAFE_INTEGER, login: `a${"b".repeat(99)}`, kind: "organization" },
+      sender: { id: Number.MAX_SAFE_INTEGER, login: `c${"d".repeat(99)}` },
+    };
+    const d = delivery({ event });
+    expect(await db.recordWebhookDelivery(d)).toBe("queued");
+    expect((await rows(d.deliveryId))[0]?.event).toEqual(event);
   });
 
   it("has exactly the expected columns: no raw payload, title, body or email", async () => {
@@ -195,6 +209,7 @@ describe("recordWebhookDelivery", () => {
             type: "installation.created",
             installationId: 1,
             account: { id: 2, login: "a b <script>", kind: "user" },
+            sender: { id: 3, login: "bob" },
           },
         }),
       ],
@@ -205,6 +220,7 @@ describe("recordWebhookDelivery", () => {
             type: "installation.deleted",
             installationId: 1,
             account: { id: 2, login: "a", kind: "enterprise" as "user" },
+            sender: { id: 3, login: "bob" },
           },
         }),
       ],
@@ -221,6 +237,39 @@ describe("recordWebhookDelivery", () => {
             type: "installation.deleted",
             installationId: 1,
             account: { id: -2, login: "a", kind: "user" },
+            sender: { id: 3, login: "bob" },
+          },
+        }),
+      ],
+      [
+        "sender",
+        delivery({
+          event: {
+            type: "installation.created",
+            installationId: 1,
+            account: { id: 2, login: "a", kind: "user" },
+          } as unknown as ForgeEvent,
+        }),
+      ],
+      [
+        "sender id",
+        delivery({
+          event: {
+            type: "installation.created",
+            installationId: 1,
+            account: { id: 2, login: "a", kind: "user" },
+            sender: { id: 0, login: "bob" },
+          },
+        }),
+      ],
+      [
+        "sender login",
+        delivery({
+          event: {
+            type: "installation.created",
+            installationId: 1,
+            account: { id: 2, login: "a", kind: "user" },
+            sender: { id: 3, login: "bob <script>" },
           },
         }),
       ],

@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
 import type { WebhookDelivery, WebhookInbox } from "@rocky-reviews/core";
 import { createGitHubWebhookIngress, signWebhookBody } from "@rocky-reviews/forge-github";
 import {
@@ -13,7 +16,7 @@ import { createLogger } from "@rocky-reviews/log";
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./app.js";
-import { WEBHOOK_BODY_LIMIT_BYTES } from "./webhooks.js";
+import { INBOX_RECORD_TIMEOUT_MS, WEBHOOK_BODY_LIMIT_BYTES } from "./webhooks.js";
 
 const URL = "/webhooks/github";
 
@@ -343,5 +346,102 @@ describe("POST /webhooks/github under fuzzing (no 5xx)", () => {
       ),
       { seed: SEED, numRuns: 300 },
     );
+  });
+});
+
+describe("review round 1", () => {
+  it("item 2: answers 503 when the inbox never settles, within the 5 s guard (GitHub waits 10 s)", async () => {
+    const hanging: WebhookInbox = { record: () => new Promise(() => undefined) };
+    const { app, lines } = setup(hanging);
+    const started = Date.now();
+    const res = await post(app, signedDelivery("pull_request", pullRequestPayload("opened")));
+    const elapsed = Date.now() - started;
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: "unavailable" });
+    expect(INBOX_RECORD_TIMEOUT_MS).toBe(5_000);
+    expect(elapsed).toBeGreaterThanOrEqual(INBOX_RECORD_TIMEOUT_MS - 50);
+    expect(elapsed).toBeLessThan(7_000);
+    const entry = lines.find((l) => l["msg"] === "webhook inbox unavailable");
+    expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_timeout", timeoutMs: 5_000 });
+  }, 15_000);
+
+  it("item 2: the guard is per request and leaves a fast inbox alone", async () => {
+    let calls = 0;
+    const inbox: WebhookInbox = {
+      record: () => (++calls === 1 ? new Promise(() => undefined) : Promise.resolve("queued")),
+    };
+    const app = buildApp({
+      checkDatabase: () => Promise.resolve(true),
+      webhooks: {
+        ingress: createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET }),
+        inbox,
+        recordTimeoutMs: 50,
+      },
+    });
+    const first = await post(app, signedDelivery("pull_request", pullRequestPayload("opened")));
+    expect(first.statusCode).toBe(503);
+    const second = await post(app, signedDelivery("pull_request", pullRequestPayload("closed")));
+    expect(second.statusCode).toBe(202);
+  });
+
+  it("item 3: the limit is GitHub's 25 MB cap, and a large installation.created is accepted", async () => {
+    expect(WEBHOOK_BODY_LIMIT_BYTES).toBe(25 * 1024 * 1024);
+    const { app, inbox } = setup();
+    const payload = installationPayload("created");
+    payload["repositories"] = Array.from({ length: 60_000 }, (_, i) => ({
+      id: i + 1,
+      node_id: `R_kgDO${String(i).padStart(8, "0")}`,
+      name: `repository-${i}`,
+      full_name: `acme/repository-${i}`,
+      private: true,
+    }));
+    const d = signedDelivery("installation", payload);
+    expect(d.body.length).toBeGreaterThan(6 * 1024 * 1024);
+    expect((await post(app, d)).statusCode).toBe(202);
+    expect(inbox.record).toHaveBeenCalledTimes(1);
+  });
+
+  it("item 8: opens no network connection of any kind in the request path", async () => {
+    const blocked = () => {
+      throw new Error("network access in the webhook request path");
+    };
+    const spies = [
+      vi.spyOn(globalThis, "fetch").mockImplementation(blocked),
+      vi.spyOn(http, "request").mockImplementation(blocked),
+      vi.spyOn(http, "get").mockImplementation(blocked),
+      vi.spyOn(https, "request").mockImplementation(blocked),
+      vi.spyOn(https, "get").mockImplementation(blocked),
+      vi.spyOn(net.Socket.prototype, "connect").mockImplementation(blocked),
+      vi.spyOn(net, "connect").mockImplementation(blocked),
+      vi.spyOn(net, "createConnection").mockImplementation(blocked),
+    ];
+    const { app } = setup();
+    for (const d of [
+      signedDelivery("installation", installationPayload("created")),
+      signedDelivery("installation", installationPayload("deleted")),
+      signedDelivery("pull_request", pullRequestPayload("synchronize")),
+      signedDelivery("pull_request", pullRequestPayload("labeled")),
+      signedDelivery("ping", { zen: "Speak like a human.", hook_id: 1 }),
+    ]) {
+      expect((await post(app, d)).statusCode).toBeLessThan(300);
+    }
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("item 7: logs the reason when an unsupported account type is ignored", async () => {
+    const { app, inbox, lines } = setup();
+    const d = signedDelivery(
+      "installation",
+      installationPayload("created", { type: "Enterprise" }),
+    );
+    const res = await post(app, d);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: "ignored" });
+    expect(inbox.record).not.toHaveBeenCalled();
+    expect(lines.find((l) => l["msg"] === "webhook ignored")?.["webhook"]).toMatchObject({
+      outcome: "ignored",
+      eventName: "installation",
+      reason: "unsupported_account_type",
+    });
   });
 });

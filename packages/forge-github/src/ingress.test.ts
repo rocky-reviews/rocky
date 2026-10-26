@@ -142,7 +142,7 @@ describe("after authentication", () => {
 
 describe("installation events", () => {
   it.each(["created", "deleted"])(
-    "decodes installation.%s to ids, login and account kind only",
+    "decodes installation.%s to ids, logins, account kind and the installer only",
     (action) => {
       const d = signedDelivery("installation", installationPayload(action));
       const r = receive(d);
@@ -156,11 +156,13 @@ describe("installation events", () => {
             type: `installation.${action}`,
             installationId: 4242,
             account: { id: 9001, login: "acme", kind: "organization" },
+            sender: { id: 5, login: "alice" },
           },
         },
       });
       const serialised = JSON.stringify(r);
-      for (const planted of [PLANTED.email, "html_url", "permissions", "alice", "acme/api"]) {
+      // The installer's login is kept on purpose (P3-3); their email and type are not.
+      for (const planted of [PLANTED.email, "html_url", "permissions", '"User"', "acme/api"]) {
         expect(serialised).not.toContain(planted);
       }
     },
@@ -190,10 +192,26 @@ describe("installation events", () => {
     }
   });
 
+  it("acknowledges and ignores an account type the domain does not model, with a reason code", () => {
+    for (const type of ["Enterprise", "Bot", "organization", ""]) {
+      const d = signedDelivery("installation", installationPayload("created", { type }));
+      expect(receive(d), type).toEqual({
+        outcome: "ignored",
+        deliveryId: d.headers["x-github-delivery"],
+        eventName: "installation",
+        reason: "unsupported_account_type",
+      });
+    }
+  });
+
   it("refuses a known action with the wrong shape", () => {
     for (const payload of [
-      installationPayload("created", { type: "Enterprise" }),
       installationPayload("created", { login: "acme corp" }),
+      { ...installationPayload("created"), sender: undefined },
+      { ...installationPayload("created"), sender: { id: 0, login: "alice" } },
+      { ...installationPayload("created"), sender: { id: 5, login: "alice smith" } },
+      { ...installationPayload("created"), sender: { id: 5, login: "a".repeat(101) } },
+      installationPayload("created", { type: 7 as unknown as string }),
       installationPayload("created", { login: "a".repeat(101) }),
       installationPayload("created", { installationId: 0 }),
       installationPayload("created", { installationId: -1 }),

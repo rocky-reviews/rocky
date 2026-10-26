@@ -58,7 +58,11 @@ export const createGitHubWebhookIngress = (options: { secret: string }): Webhook
 
     const decoded = decodeGitHubEvent(eventName, payload);
     if (decoded.kind === "invalid") return rejected("bad_payload");
-    if (decoded.kind === "ignored") return { outcome: "ignored", deliveryId, eventName };
+    if (decoded.kind === "ignored") {
+      return decoded.reason === undefined
+        ? { outcome: "ignored", deliveryId, eventName }
+        : { outcome: "ignored", deliveryId, eventName, reason: decoded.reason };
+    }
     return {
       outcome: "accepted",
       delivery: {

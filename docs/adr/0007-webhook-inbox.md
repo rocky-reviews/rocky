@@ -29,7 +29,9 @@ The domain must also stay forge-neutral (GitLab and Gitea later, P3-7).
 
 - `ForgeEvent`: the six events the domain consumes (`installation.created|deleted`,
   `pull_request.opened|synchronize|closed|reopened`) carrying only ids, the PR number, the head
-  sha, `merged`, and for installations the account id, login and kind;
+  sha, `merged`, and for installations the account id, login and kind plus the installer
+  (`sender`: id and login, recorded because the forge cannot be asked for it later; P3-3 uses it
+  for the first admin and the audit trail);
 - `WebhookIngress`: authenticate and decode one request (`receive(request) → WebhookReceipt`),
   pure, no I/O, never throws, authenticates the raw body before parsing it;
 - `WebhookInbox`: `record(delivery) → "queued" | "duplicate"`;
@@ -44,7 +46,9 @@ imports; `packages/core/src/forge.test.ts` scans core's sources and manifest).
 ### 2. The receiver (`apps/server`, `POST /webhooks/github`)
 
 The route runs in its own Fastify scope whose only content-type parser returns the raw bytes
-(limit 5 MiB, larger → 413). Then, in this order:
+(limit 25 MiB, GitHub's documented payload cap, so a genuine delivery such as a large
+`installation.created` with thousands of repositories is never refused; larger → 413). Then, in
+this order:
 
 1. **Authenticate** `X-Hub-Signature-256` = `sha256=` + HMAC-SHA256(secret, raw body):
    `node:crypto` `createHmac` + `timingSafeEqual` over the two 32-byte digests. Missing, malformed
@@ -53,17 +57,25 @@ The route runs in its own Fastify scope whose only content-type parser returns t
    **400**; `Content-Type: application/json` → else **415**.
 3. Events other than `installation`, `pull_request` and `ping` → **200 ignored**, body not parsed.
 4. `JSON.parse` (strict UTF-8) and decode with zod schemas that read only the needed fields. Unknown
-   actions → **200 ignored**; a known action with the wrong shape → **400**.
-5. `inbox.record(delivery)` → **202 queued** or **200 duplicate**; a database failure → **503**.
+   actions, and installations on an account type the domain does not model (an enterprise),
+   → **200 ignored** (the latter with reason `unsupported_account_type`); a known action with the
+   wrong shape → **400**.
+5. `inbox.record(delivery)` → **202 queued** or **200 duplicate**; a database failure, or no
+   answer within 5 s, → **503**. The server's single pool has `connectionTimeoutMillis` 2 s and
+   `statement_timeout`/`query_timeout` 3 s, so the request path stays well inside GitHub's 10 s
+   delivery timeout. A timed-out insert may still commit; a redelivery then reads `duplicate`.
+   The pool has an `error` listener (logs the code only), so an idle connection dropped by a
+   Postgres restart does not crash the server.
 
 No forge API call and no processing happens in the request path. Logs carry the forge, outcome,
 fixed reason codes, delivery id, event name/type and body size; never headers, body, signature
 or secret.
 
-**Secret.** `GITHUB_WEBHOOK_SECRET`, at least 32 characters, no surrounding whitespace. With
-`NODE_ENV=production` the server refuses to boot without it; elsewhere an unset secret disables
+**Secret.** `GITHUB_WEBHOOK_SECRET`, at least 32 characters, no surrounding whitespace. In
+production (`NODE_ENV=production`, or `FLY_APP_NAME` set by Fly.io) the server refuses to boot
+without it; elsewhere an unset secret disables
 the route (404) instead of verifying against an empty key. A set-but-weak secret is refused
-everywhere.
+everywhere. The boot log line `server listening` carries `webhooks: true|false`.
 
 ### 3. The inbox: `app.webhook_deliveries` (migration 0006)
 
@@ -98,6 +110,16 @@ only if `Forge.getInstallation` returns `null`; `installation.created` creates t
 installation exists; PR events re-fetch the PR. This makes a replay outside the dedup window, or
 a row planted by a compromised app credential, harmless. Processing is idempotent per delivery.
 
+- **Re-validate on read.** A consumer decodes each inbox row again (`minimalEvent` in
+  `packages/db`, or the same schema) and refuses a row that does not pass. It never trusts the
+  stored shape: the app role can insert any row its CHECKs allow.
+- **Reprocess from the inbox, not from GitHub.** "Redeliver" in GitHub's UI (or API) for a
+  delivery already stored returns `duplicate` and stores nothing new, so retrying a failed
+  processing step must re-run the inbox row, not ask GitHub to redeliver.
+- **Never bind by login.** P3-3 must not attach an installation to an existing org by
+  `account.login` (logins can be renamed and reused); bind by forge and installation id, and treat
+  `account` and `sender` as display data until re-read from the forge.
+
 ### 5. Why not pg-boss now
 
 `docs/architecture.md` names pg-boss for jobs. It is a consumer-side choice: its schema holds
@@ -114,21 +136,23 @@ Attackers: anyone on the internet; a network attacker holding captured signed de
 authors (their content is inside genuine signed payloads); other tenants; whoever holds the
 application's database credential.
 
-| #   | Threat                                                                                | Prevention                                                                                                                       | Test                                                                                                                                                                                                                                        |
-| --- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W1  | Forged delivery (no, wrong or malformed signature)                                    | HMAC-SHA256 over the raw body, constant-time compare, checked first → 401                                                        | `signature.test.ts` (GitHub's documented vector, malformed headers, other secret, flipped bit); `ingress.test.ts` "authentication comes first"; `webhooks.test.ts` "answers 401…", `webhooks.db.test.ts` "a forged delivery stores nothing" |
-| W2  | Parser differential: signature checked over a re-encoding, or body parsed before auth | Raw-bytes content parser in an isolated scope; JSON parsed only after verification                                               | `signature.test.ts` "verifies the raw bytes, not a re-encoding"; `webhooks.test.ts` "checks the signature before parsing…", "rejects a tampered body"                                                                                       |
-| W3  | Empty or weak secret makes the HMAC forgeable                                         | `checkWebhookSecret` (≥ 32 chars, no padding) in the verifier and at boot; production refuses to boot without it; dev → no route | `signature.test.ts` "refuses to be built with an empty, short…"; `config.test.ts` (unit + spawned boot in production); `webhooks.test.ts` "is not registered at all…"                                                                       |
-| W4  | Same delivery twice (GitHub retry, redelivery, concurrent instances) → two jobs       | PK `(forge, delivery_id)` + `ON CONFLICT DO NOTHING`; the database decides                                                       | `webhooks.test.ts` (db) "stores a delivery once", "is race-safe: 25 concurrent duplicates…"; `webhooks.db.test.ts` "same delivery twice → one job", "concurrent duplicates… → exactly one job"                                              |
-| W5  | Captured signed body replayed under a new (unsigned) delivery id                      | Unique `(forge, payload_sha256)`                                                                                                 | db "treats the same signed body under a new delivery id as a replay", "is race-safe for concurrent replays…"; `webhooks.db.test.ts` "concurrent replays…"                                                                                   |
-| W6  | Unsigned `X-GitHub-Event` swapped to reinterpret a signed body                        | Per-event strict schemas; disjoint action sets; body hash dedup                                                                  | `ingress.test.ts` "refuses a pull request body replayed under the installation event name"                                                                                                                                                  |
-| W7  | Malformed, deep or huge payloads crash the server or cause 5xx                        | Body limit 5 MiB → 413; ingress never throws (fatal UTF-8, try/catch, zod `safeParse`); 5xx only for the inbox (503)             | `property.test.ts` (4 seeded properties); `webhooks.test.ts` "under fuzzing (no 5xx)", "refuses bodies over the limit"; `ingress.test.ts` 200 000-deep nesting                                                                              |
-| W8  | Slow work or forge calls in the request path (timeouts, amplification)                | Request path = HMAC + parse + one INSERT; the receiver has no forge client                                                       | `webhooks.test.ts` "does no forge I/O in the request path"                                                                                                                                                                                  |
-| W9  | Untrusted PR content stored or logged (prompt injection later, PII)                   | Decoders keep ids, numbers, sha, login; `minimalEvent` rebuilds from known fields; logs carry ids and sizes only                 | `ingress.test.ts` "decodes … only" (planted title/body/email absent); db "stores only the minimal event", "has exactly the expected columns"; `webhooks.test.ts` "never logs the body, signature, secret…"                                  |
-| W10 | Prototype pollution or type confusion from JSON                                       | `JSON.parse` (own `__proto__` keys), `Object.hasOwn` lookups, zod numeric bounds (safe positive ints)                            | `ingress.test.ts` "does not let **proto** keys…", "refuses a known action with the wrong shape"; property invariants                                                                                                                        |
-| W11 | Compromised app credential reads, deletes or backdates deliveries                     | `INSERT` only + INSERT-only RLS policy; stamp trigger; purge only via SECURITY DEFINER with owner-held period and 7-day floor    | db "can insert but not read, change, delete or truncate", "cannot choose received_at", "has a 7-day floor", "is reachable … only through the function"; `isolation.test.ts` privilege matrix                                                |
-| W12 | A non-tenant table weakens tenant isolation                                           | Explicit allow-list entry; no tenant data in the row beyond ids and the account login; app cannot read it                        | `isolation.test.ts` "every table in the database", "holds exactly the expected privileges…", SECURITY DEFINER allow-list                                                                                                                    |
-| W13 | Database error text leaks row values into logs                                        | `WebhookInboxError` keeps only the SQLSTATE; the route logs `sqlstate`                                                           | db "reduces a database failure to its SQLSTATE"; `webhooks.test.ts` "answers 503 … logging only the error code"                                                                                                                             |
+| #   | Threat                                                                                                                 | Prevention                                                                                                                           | Test                                                                                                                                                                                                                                                                                                               |
+| --- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| W1  | Forged delivery (no, wrong or malformed signature)                                                                     | HMAC-SHA256 over the raw body, constant-time compare, checked first → 401                                                            | `signature.test.ts` (GitHub's documented vector, malformed headers, other secret, flipped bit); `ingress.test.ts` "authentication comes first"; `webhooks.test.ts` "answers 401…", `webhooks.db.test.ts` "a forged delivery stores nothing"                                                                        |
+| W2  | Parser differential: signature checked over a re-encoding, or body parsed before auth                                  | Raw-bytes content parser in an isolated scope; JSON parsed only after verification                                                   | `signature.test.ts` "verifies the raw bytes, not a re-encoding"; `webhooks.test.ts` "checks the signature before parsing…", "rejects a tampered body"                                                                                                                                                              |
+| W3  | Empty or weak secret makes the HMAC forgeable                                                                          | `checkWebhookSecret` (≥ 32 chars, no padding) in the verifier and at boot; production refuses to boot without it; dev → no route     | `signature.test.ts` "refuses to be built with an empty, short…"; `config.test.ts` (unit + spawned boot in production); `webhooks.test.ts` "is not registered at all…"                                                                                                                                              |
+| W4  | Same delivery twice (GitHub retry, redelivery, concurrent instances) → two jobs                                        | PK `(forge, delivery_id)` + `ON CONFLICT DO NOTHING`; the database decides                                                           | `webhooks.test.ts` (db) "stores a delivery once", "is race-safe: 25 concurrent duplicates…"; `webhooks.db.test.ts` "same delivery twice → one job", "concurrent duplicates… → exactly one job"                                                                                                                     |
+| W5  | Captured signed body replayed under a new (unsigned) delivery id                                                       | Unique `(forge, payload_sha256)`                                                                                                     | db "treats the same signed body under a new delivery id as a replay", "is race-safe for concurrent replays…"; `webhooks.db.test.ts` "concurrent replays…"                                                                                                                                                          |
+| W6  | Unsigned `X-GitHub-Event` swapped to reinterpret a signed body                                                         | Per-event strict schemas; disjoint action sets; body hash dedup                                                                      | `ingress.test.ts` "refuses a pull request body replayed under the installation event name"                                                                                                                                                                                                                         |
+| W7  | Malformed, deep or huge payloads crash the server or cause 5xx                                                         | Body limit 25 MiB (GitHub's cap) → 413; ingress never throws (fatal UTF-8, try/catch, zod `safeParse`); 5xx only for the inbox (503) | `property.test.ts` (4 seeded properties); `webhooks.test.ts` "under fuzzing (no 5xx)", "refuses bodies over the limit"; `ingress.test.ts` 200 000-deep nesting                                                                                                                                                     |
+| W8  | Slow work or forge calls in the request path (timeouts, amplification)                                                 | Request path = HMAC + parse + one INSERT; the receiver has no forge client                                                           | `webhooks.test.ts` "does no forge I/O in the request path"                                                                                                                                                                                                                                                         |
+| W9  | Untrusted PR content stored or logged (prompt injection later, PII)                                                    | Decoders keep ids, numbers, sha, login; `minimalEvent` rebuilds from known fields; logs carry ids and sizes only                     | `ingress.test.ts` "decodes … only" (planted title/body/email absent); db "stores only the minimal event", "has exactly the expected columns"; `webhooks.test.ts` "never logs the body, signature, secret…"                                                                                                         |
+| W10 | Prototype pollution or type confusion from JSON                                                                        | `JSON.parse` (own `__proto__` keys), `Object.hasOwn` lookups, zod numeric bounds (safe positive ints)                                | `ingress.test.ts` "does not let **proto** keys…", "refuses a known action with the wrong shape"; property invariants                                                                                                                                                                                               |
+| W11 | Compromised app credential reads, deletes or backdates deliveries                                                      | `INSERT` only + INSERT-only RLS policy; stamp trigger; purge only via SECURITY DEFINER with owner-held period and 7-day floor        | db "can insert but not read, change, delete or truncate", "cannot choose received_at", "has a 7-day floor", "is reachable … only through the function"; `isolation.test.ts` privilege matrix                                                                                                                       |
+| W12 | A non-tenant table weakens tenant isolation                                                                            | Explicit allow-list entry; no tenant data in the row beyond ids and the account login; app cannot read it                            | `isolation.test.ts` "every table in the database", "holds exactly the expected privileges…", SECURITY DEFINER allow-list                                                                                                                                                                                           |
+| W13 | Database error text leaks row values into logs                                                                         | `WebhookInboxError` keeps only the SQLSTATE; the route logs `sqlstate`                                                               | db "reduces a database failure to its SQLSTATE"; `webhooks.test.ts` "answers 503 … logging only the error code"                                                                                                                                                                                                    |
+| W14 | A slow or hung database stalls the request path past GitHub's timeout, or a dropped idle connection crashes the server | Pool timeouts (connect 2 s, statement 3 s), a 5 s route guard → 503, one pool with an `error` listener                               | `webhooks.test.ts` "item 2: answers 503 when the inbox never settles…", "the guard is per request…"; `server.test.ts` "bounds connect and statement time", "survives an idle-client error…"; `server.db.test.ts` "survives its idle connections being terminated", "runs statements under a 3 s statement_timeout" |
+| W15 | Production starts with webhooks silently off                                                                           | Secret required when `NODE_ENV=production` or `FLY_APP_NAME` is set; `webhooks` in the boot log                                      | `config.test.ts` "production detection", spawned boot on Fly.io; `server.test.ts` "startServer"                                                                                                                                                                                                                    |
 
 ## Consequences
 
@@ -144,10 +168,15 @@ application's database credential.
   Mitigated by §4 (consumers re-verify with the forge); GitHub signs no timestamp to bound it.
 - **Lost deliveries on infrastructure failure:** a 503 is not retried by GitHub automatically.
   Follow-up: a reconcile job that lists failed deliveries through the GitHub API and redelivers.
-- **Unauthenticated load:** anyone can make the server read up to 5 MiB and compute one HMAC per
-  request. Rate limits on the webhook endpoint come with P7-3; Cloudflare sits in front in Cloud.
+- **Unauthenticated load:** anyone can make the server buffer up to 25 MiB and compute one HMAC
+  per request (the limit matches GitHub's cap so genuine deliveries are never refused; GitHub does
+  not retry a 413). Memory per concurrent request is bounded by that limit only. Rate limits and a
+  concurrency cap on the webhook endpoint come with P7-3; Cloudflare sits in front in Cloud.
+- **Installer login shape:** `sender.login` uses the same pattern as account logins, so an
+  installation triggered by a bot account (`name[bot]`) is refused with 400. Installs and
+  uninstalls are done by users, so this is not expected; revisit if GitHub reports failures.
 - **Existence oracle:** a compromised app credential can learn whether a delivery id or body
   digest exists by attempting an insert. Delivery ids are not secret and digests need the body.
-- `NODE_ENV=production` is what makes the secret mandatory; a production deployment that does not
-  set it starts with the receiver disabled (404), which fails closed but silently. Deployment
-  docs (Phase 10) must set it; the boot log says `webhooks: false`.
+- `NODE_ENV=production` or `FLY_APP_NAME` makes the secret mandatory; a production deployment
+  elsewhere that sets neither starts with the receiver disabled (404), which fails closed. The
+  boot log says `webhooks: false`; deployment docs (Phase 10) must set `NODE_ENV`.

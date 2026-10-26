@@ -1,4 +1,9 @@
-import type { ForgeEvent, InstallationEventType, PullRequestEventType } from "@rocky-reviews/core";
+import type {
+  ForgeEvent,
+  WebhookIgnoreReason,
+  InstallationEventType,
+  PullRequestEventType,
+} from "@rocky-reviews/core";
 import { z } from "zod";
 
 /**
@@ -28,6 +33,12 @@ const InstallationPayload = z.object({
       type: z.enum(["Organization", "User"]),
     }),
   }),
+  sender: z.object({ id: ForgeId, login: Login }),
+});
+
+/** Read first, so an account kind the domain does not model is ignored rather than refused. */
+const AccountType = z.object({
+  installation: z.object({ account: z.object({ type: z.string().max(64) }) }),
 });
 
 const PullRequestPayload = z.object({
@@ -60,7 +71,7 @@ export const HANDLED_EVENTS = ["installation", "pull_request"] as const;
 
 export type DecodeResult =
   | { readonly kind: "event"; readonly event: ForgeEvent }
-  | { readonly kind: "ignored" }
+  | { readonly kind: "ignored"; readonly reason?: WebhookIgnoreReason }
   | { readonly kind: "invalid" };
 
 const lookup = <T>(table: Readonly<Record<string, T>>, key: string): T | undefined =>
@@ -77,9 +88,16 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
   if (eventName === "installation") {
     const type = lookup(INSTALLATION_ACTIONS, action.data.action);
     if (type === undefined) return { kind: "ignored" };
+    const accountType = AccountType.safeParse(payload);
+    if (
+      accountType.success &&
+      !Object.hasOwn(ACCOUNT_KIND, accountType.data.installation.account.type)
+    ) {
+      return { kind: "ignored", reason: "unsupported_account_type" };
+    }
     const parsed = InstallationPayload.safeParse(payload);
     if (!parsed.success) return { kind: "invalid" };
-    const { installation } = parsed.data;
+    const { installation, sender } = parsed.data;
     return {
       kind: "event",
       event: {
@@ -90,6 +108,7 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
           login: installation.account.login,
           kind: ACCOUNT_KIND[installation.account.type],
         },
+        sender: { id: sender.id, login: sender.login },
       },
     };
   }

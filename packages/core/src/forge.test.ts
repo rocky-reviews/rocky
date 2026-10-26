@@ -34,6 +34,7 @@ describe("forge event types", () => {
       type: "installation.deleted",
       installationId: 1,
       account: { id: 2, login: "acme", kind: "organization" },
+      sender: { id: 5, login: "alice" },
     };
     const pr: ForgeEvent = {
       type: "pull_request.opened",

@@ -67,10 +67,17 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
     if (!isId(account.id)) return invalid("account id");
     if (typeof account.login !== "string" || !LOGIN.test(account.login)) return invalid("login");
     if (account.kind !== "organization" && account.kind !== "user") return invalid("account kind");
+    const sender = event.sender;
+    if (typeof sender !== "object" || sender === null) return invalid("sender");
+    if (!isId(sender.id)) return invalid("sender id");
+    if (typeof sender.login !== "string" || !LOGIN.test(sender.login)) {
+      return invalid("sender login");
+    }
     return {
       type: event.type,
       installationId: event.installationId,
       account: { id: account.id, login: account.login, kind: account.kind },
+      sender: { id: sender.id, login: sender.login },
     };
   }
   if (!isId(event.repositoryId)) return invalid("repository id");

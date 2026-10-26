@@ -53,11 +53,22 @@ export type InstallationEventType = (typeof INSTALLATION_EVENT_TYPES)[number];
 export type PullRequestEventType = (typeof PULL_REQUEST_EVENT_TYPES)[number];
 export type ForgeEventType = (typeof FORGE_EVENT_TYPES)[number];
 
+/** The forge user who triggered an event (for installations: who installed or removed the app). */
+export interface ForgeActor {
+  readonly id: ForgeNumericId;
+  readonly login: string;
+}
+
 /** App installed on / removed from an account (P3-3 creates or schedules deletion of the org). */
 export interface InstallationEvent {
   readonly type: InstallationEventType;
   readonly installationId: ForgeNumericId;
   readonly account: ForgeAccount;
+  /**
+   * Who installed or uninstalled the app. Recorded at receipt because the forge cannot be asked
+   * later (P3-3 uses it for the first admin and the audit trail). Untrusted: P3-3 re-checks it.
+   */
+  readonly sender: ForgeActor;
 }
 
 /** A pull request changed (P3-4 re-reads it from the forge and updates the mirror). */
@@ -102,12 +113,23 @@ export type WebhookRejection =
   /** Authenticated, but the body is not JSON or does not have the shape of the event. */
   | "bad_payload";
 
+/** Why an authenticated event the domain would otherwise consume is ignored. Safe to log. */
+export type WebhookIgnoreReason =
+  /** Installed on an account kind the domain does not model (e.g. an enterprise). */
+  "unsupported_account_type";
+
 export type WebhookReceipt =
   | { readonly outcome: "rejected"; readonly reason: WebhookRejection }
   /** The forge's connectivity check. */
   | { readonly outcome: "ping"; readonly deliveryId: string }
   /** Authenticated, but not an event or action the domain consumes. */
-  | { readonly outcome: "ignored"; readonly deliveryId: string; readonly eventName: string }
+  | {
+      readonly outcome: "ignored";
+      readonly deliveryId: string;
+      readonly eventName: string;
+      /** Set when a consumed event/action is ignored for a specific reason. Fixed codes. */
+      readonly reason?: WebhookIgnoreReason;
+    }
   | { readonly outcome: "accepted"; readonly delivery: WebhookDelivery };
 
 export interface WebhookRequest {
