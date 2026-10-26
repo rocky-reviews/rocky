@@ -10,7 +10,7 @@ import {
   startPostgres,
   type TestPostgres,
 } from "./testing/index.js";
-import { WebhookInboxError } from "./webhooks.js";
+import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS, WebhookInboxError } from "./webhooks.js";
 
 /**
  * P3-2 webhook inbox (migration 0006, ADR 0007): one row per delivery, decided by the database
@@ -300,6 +300,37 @@ describe("recordWebhookDelivery", () => {
       expect((error as Error).message).not.toMatch(/secret-looking|script/);
     }
     expect(await rows()).toHaveLength(before);
+  });
+
+  it("bounds every statement of the insert transaction client-side, not only the insert", async () => {
+    // A stall on begin/commit must not strand the checked-out client (review round 3 follow-up).
+    const configs: unknown[] = [];
+    const released: unknown[] = [];
+    const recordingClient = {
+      query: (config: unknown) => {
+        configs.push(config);
+        return Promise.resolve({ rowCount: 1, rows: [] });
+      },
+      release: (err?: unknown) => void released.push(err),
+    };
+    const recording = createDb({
+      pool: {
+        connect: () => Promise.resolve(recordingClient),
+        end: () => Promise.resolve(),
+      } as unknown as pg.Pool,
+    });
+    expect(await recording.recordWebhookDelivery(delivery())).toBe("queued");
+    expect(configs.map((c) => (c as { text: string }).text.split(" ")[0])).toEqual([
+      "begin",
+      "set",
+      "set",
+      expect.stringMatching(/^insert$/i),
+      "commit",
+    ]);
+    for (const config of configs) {
+      expect(config).toMatchObject({ query_timeout: WEBHOOK_INBOX_QUERY_TIMEOUT_MS });
+    }
+    expect(released).toEqual([undefined]);
   });
 
   it("reduces a database failure to its SQLSTATE (no driver message or row detail)", async () => {

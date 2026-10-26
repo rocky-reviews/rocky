@@ -681,6 +681,20 @@ describe("review round 3, S-B: the budget counts bytes actually received", () =>
     }
   });
 
+  it("answers 413, not 503, to a declared length over the body limit even beyond the budget", async () => {
+    const { app, port } = await listening({ maxInFlightBytes: 4096 });
+    const client = slowClient(port, WEBHOOK_BODY_LIMIT_BYTES * 3);
+    try {
+      for (let i = 0; i < 40 && client.response() === ""; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(client.response()).toMatch(/^HTTP\/1\.1 413 /);
+    } finally {
+      client.stop();
+      await app.close();
+    }
+  });
+
   it("answers 503 when the bytes actually sent overflow the budget (chunked, nothing declared)", async () => {
     const { app, port } = await listening({ maxInFlightBytes: 4096 });
     try {

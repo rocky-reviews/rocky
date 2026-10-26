@@ -164,9 +164,14 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
         return reply.code(REJECTION_STATUS[rejection]).send({ error: rejection });
       }
       // Cheap early refusal: a declared length that cannot fit in what is left right now. Not a
-      // reservation: the budget counts received bytes only (preParsing below).
+      // reservation: the budget counts received bytes only (preParsing below). A length over the
+      // body limit is left to Fastify's 413.
       const declared = declaredBytes(request);
-      if (declared !== undefined && inFlightBytes + declared > maxInFlightBytes) {
+      if (
+        declared !== undefined &&
+        declared <= WEBHOOK_BODY_LIMIT_BYTES &&
+        inFlightBytes + declared > maxInFlightBytes
+      ) {
         overloaded(request, declared);
         return reply.code(503).send({ error: "overloaded" });
       }

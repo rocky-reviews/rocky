@@ -396,20 +396,25 @@ export const createDb = (options: DbOptions): Db => {
     } catch (error) {
       throw inboxDatabaseError(error);
     }
-    let inserted: number | null;
-    try {
-      await client.query("begin");
-      // Integers are milliseconds; constants, not input.
-      await client.query(`set local lock_timeout = ${WEBHOOK_INBOX_LOCK_TIMEOUT_MS}`);
-      await client.query(`set local statement_timeout = ${WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS}`);
-      // node-pg reads `query_timeout` from the query config (lib/client.js); its typings omit it.
+    // Every statement carries the client-side backstop, so a stall on begin/commit can't strand
+    // the checked-out client. node-pg reads `query_timeout` from the query config
+    // (lib/client.js); its typings omit it.
+    const bounded = (text: string, values: unknown[] = []): Promise<pg.QueryResult> => {
       const config: pg.QueryConfig<unknown[]> & { query_timeout: number } = {
-        text: insert.sql,
-        values: insert.values as unknown[],
+        text,
+        values,
         query_timeout: WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
       };
-      ({ rowCount: inserted } = await client.query(config));
-      await client.query("commit");
+      return client.query(config);
+    };
+    let inserted: number | null;
+    try {
+      await bounded("begin");
+      // Integers are milliseconds; constants, not input.
+      await bounded(`set local lock_timeout = ${WEBHOOK_INBOX_LOCK_TIMEOUT_MS}`);
+      await bounded(`set local statement_timeout = ${WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS}`);
+      ({ rowCount: inserted } = await bounded(insert.sql, insert.values as unknown[]));
+      await bounded("commit");
     } catch (error) {
       // Any failure discards the connection (release(err)) instead of rolling back on it: after a
       // client-side timeout its state is unknown; Postgres rolls back the open transaction when
