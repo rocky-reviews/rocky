@@ -108,6 +108,22 @@ describe("migrations", () => {
     expect(await userObjects(db.migrator)).toEqual(before);
   });
 
+  it("records a sha256 per migration and refuses to run when an applied one changed (review #12)", async () => {
+    const all = loadMigrations();
+    const { rows } = await db.migrator.query<{ checksum: string }>(
+      "select checksum from app.schema_migrations order by version",
+    );
+    expect(rows).toHaveLength(all.length);
+    for (const r of rows) expect(r.checksum).toMatch(/^[0-9a-f]{64}$/);
+
+    const tampered = all.map((m, i) => (i === 1 ? { ...m, up: `${m.up}\n-- edited` } : m));
+    await expect(migrate(db.migrator, { migrations: tampered })).rejects.toThrow(/checksum/);
+    await expect(rollback(db.migrator, { migrations: tampered, steps: 1 })).rejects.toThrow(
+      /checksum/,
+    );
+    expect((await appliedMigrations(db.migrator)).length).toBe(all.length);
+  });
+
   it("holds an advisory lock so two migrators cannot interleave", async () => {
     const all = loadMigrations();
     await rollback(db.migrator, { steps: all.length });

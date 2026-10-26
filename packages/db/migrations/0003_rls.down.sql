@@ -1,3 +1,9 @@
+DO $$
+BEGIN
+  EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC', current_database());
+END
+$$;
+
 REVOKE ALL ON
   orgs, members, repos, pull_requests, pr_revisions, analyses, findings_state,
   comments_pending, memory_entries, embeddings, audit_events, llm_usage, jobs

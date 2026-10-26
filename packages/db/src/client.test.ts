@@ -146,4 +146,125 @@ describe("withOrg", () => {
     expect(rows.map((r) => r.id)).toEqual([orgB]);
     await own.close();
   });
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("refuses a detached nested withOrg whose enclosing transaction has finished (review #1)", async () => {
+    // A timer scheduled inside withOrg(A) inherits A's async scope and fires after A committed,
+    // while withOrg(B) holds the (single) pooled connection. Reusing A's scope would run the
+    // query on B's connection, inside B's transaction.
+    let detached: Promise<unknown> = Promise.resolve();
+    await db.withOrg(orgA, async () => {
+      detached = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          db.withOrg(orgA, (tx) => tx.query<{ org_id: string }>("select org_id from repos")).then(
+            resolve,
+            reject,
+          );
+        }, 20);
+      });
+      // The rejection arrives before this test looks at it; keep Node from flagging it.
+      detached.catch(() => undefined);
+    });
+    await db.withOrg(orgB, async () => {
+      await sleep(80);
+    });
+    await expect(detached).rejects.toThrow(TenantContextError);
+    await expect(detached).rejects.toThrow(/finished/);
+  });
+
+  it("refuses queries on a tx handle after its transaction ended (review #2)", async () => {
+    const saved = await db.withOrg(orgA, async (tx) => tx);
+    await db.withOrg(orgB, async () => {
+      await expect(saved.query("select org_id from repos")).rejects.toThrow(TenantContextError);
+      // Drizzle wraps driver errors; the TenantContextError is the cause.
+      await expect(saved.db.select().from(schema.repos)).rejects.toMatchObject({
+        cause: expect.any(TenantContextError) as unknown,
+      });
+    });
+    await expect(saved.query("select 1")).rejects.toThrow(TenantContextError);
+    // The connection itself is unaffected: a fresh transaction still works and sees only A.
+    expect(await repoOrgIds(orgA)).toEqual([orgA]);
+  });
+
+  it("serialises concurrent nested calls so savepoints never interleave (review #6)", async () => {
+    await db.withOrg(orgA, async () => {
+      await Promise.all(
+        [1, 2, 3].map((n) =>
+          db.withOrg(orgA, async (tx) => {
+            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: `par-${n}` });
+            await sleep(5);
+          }),
+        ),
+      );
+      await expect(
+        Promise.all([
+          db.withOrg(orgA, async (tx) => {
+            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "par-keep" });
+            await sleep(5);
+          }),
+          db.withOrg(orgA, async (tx) => {
+            await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "par-lost" });
+            throw new Error("par boom");
+          }),
+        ]),
+      ).rejects.toThrow("par boom");
+    });
+    const contents = await db.withOrg(orgA, async (tx) =>
+      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
+        (r) => r.c,
+      ),
+    );
+    expect(contents).toEqual(expect.arrayContaining(["par-1", "par-2", "par-3", "par-keep"]));
+    expect(contents).not.toContain("par-lost");
+  });
+
+  it("rejects transaction control and tenant-switching statements inside a tx (review #11)", async () => {
+    const forbidden = [
+      "commit",
+      " COMMIT;",
+      "end",
+      "rollback",
+      "abort",
+      "begin",
+      "start transaction",
+      "savepoint x",
+      "release savepoint x",
+      "rollback to savepoint x",
+      "prepare transaction 'x'",
+      "set role rocky_retention",
+      "SET LOCAL ROLE rocky_retention",
+      "set session authorization rocky_retention",
+      "reset role",
+      "reset app.org_id",
+      "reset all",
+      "set local app.org_id = 'x'",
+      "set app.org_id to 'x'",
+      "select set_config('app.org_id', 'x', true)",
+      "select pg_catalog.set_config( 'app.org_id' , $1, true)",
+      "select set_config($1, $2, true)",
+      "/* c */ commit",
+      "-- c\ncommit",
+      "select 1; commit",
+      "discard all",
+      "discard temp",
+    ];
+    for (const sql of forbidden) {
+      const params = (sql.match(/\$\d/g) ?? []).map(() => "x");
+      await expect(
+        db.withOrg(orgA, (tx) => tx.query(sql, params)),
+        sql,
+      ).rejects.toThrow(TenantContextError);
+    }
+    // Drizzle's own transaction() would BEGIN/COMMIT inside ours: refused too.
+    await expect(
+      db.withOrg(orgA, (tx) => tx.db.transaction(async () => Promise.resolve())),
+    ).rejects.toMatchObject({ cause: expect.any(TenantContextError) as unknown });
+    // Ordinary statements, including a harmless SET LOCAL, still work.
+    await db.withOrg(orgA, async (tx) => {
+      await tx.query("set local statement_timeout = '5s'");
+      const rows = await tx.query<{ v: string }>("select current_setting('app.org_id') as v");
+      expect(rows.rows[0]?.v).toBe(orgA);
+    });
+  });
 });

@@ -7,6 +7,7 @@ import {
   expiryCutoff,
   retentionFromEnv,
   runRetention,
+  setRetentionSettings,
 } from "./retention.js";
 import * as schema from "./schema.js";
 import {
@@ -18,9 +19,10 @@ import {
 } from "./testing/index.js";
 
 /**
- * P2-6: time-travel test. The clock is injected; rows are planted just inside and just outside
- * each boundary. A row is expired iff `created_at < now - period` (strictly older): a row created
- * exactly `period` ago is kept.
+ * P2-6: time-travel test. The clock is injected as `as_of`; rows are planted just inside and just
+ * outside each boundary. A row is expired iff `created_at < as_of - period` (strictly older): a
+ * row created exactly `period` ago is kept. Periods live in app.retention_settings (migrator-
+ * owned); the app can only move `as_of` into the past, never the cutoff towards now.
  */
 
 const DAY = 86_400_000;
@@ -30,7 +32,7 @@ let pgs: Awaited<ReturnType<typeof startPostgres>>;
 let db: Db;
 let orgA: SeededOrg;
 let orgB: SeededOrg;
-/** Real "now" minus a day, so the audit floor (which uses the database clock) is never crossed. */
+/** Real "now" minus a day, so the injected clock is always behind the database clock. */
 const NOW = new Date(Date.now() - DAY);
 
 beforeAll(async () => {
@@ -98,14 +100,20 @@ describe("expiryCutoff", () => {
 describe("retentionFromEnv", () => {
   it("uses the defaults when unset and parses overrides", () => {
     expect(retentionFromEnv({})).toEqual(DEFAULT_RETENTION);
-    expect(DEFAULT_RETENTION).toEqual({ analysesDays: 90, logsDays: 30, auditDays: 365 });
+    expect(DEFAULT_RETENTION).toEqual({
+      analysesDays: 90,
+      logsDays: 30,
+      auditDays: 365,
+      orgDeletionGraceDays: 7,
+    });
     expect(
       retentionFromEnv({
         RETENTION_ANALYSES_DAYS: "7",
         RETENTION_LOGS_DAYS: "14",
         RETENTION_AUDIT_DAYS: "730",
+        ORG_DELETION_GRACE_DAYS: "30",
       }),
-    ).toEqual({ analysesDays: 7, logsDays: 14, auditDays: 730 });
+    ).toEqual({ analysesDays: 7, logsDays: 14, auditDays: 730, orgDeletionGraceDays: 30 });
   });
 
   it("rejects non-integers, non-positive values and an audit period under the floor", () => {
@@ -114,6 +122,9 @@ describe("retentionFromEnv", () => {
     );
     expect(() => retentionFromEnv({ RETENTION_LOGS_DAYS: "0" })).toThrow(/RETENTION_LOGS_DAYS/);
     expect(() => retentionFromEnv({ RETENTION_LOGS_DAYS: "1.5" })).toThrow(/RETENTION_LOGS_DAYS/);
+    expect(() => retentionFromEnv({ ORG_DELETION_GRACE_DAYS: "0" })).toThrow(
+      /ORG_DELETION_GRACE_DAYS/,
+    );
     expect(() =>
       retentionFromEnv({ RETENTION_AUDIT_DAYS: String(AUDIT_MIN_RETENTION_DAYS - 1) }),
     ).toThrow(/RETENTION_AUDIT_DAYS/);
@@ -123,12 +134,26 @@ describe("retentionFromEnv", () => {
   });
 });
 
+describe("retention settings", () => {
+  it("are seeded with the defaults, readable by the app, and written only by the owner", async () => {
+    expect(await db.retentionSettings()).toEqual(DEFAULT_RETENTION);
+    await setRetentionSettings(pgs.migrator, { ...DEFAULT_RETENTION, logsDays: 45 });
+    expect((await db.retentionSettings()).logsDays).toBe(45);
+    await setRetentionSettings(pgs.migrator, DEFAULT_RETENTION);
+    await expect(
+      setRetentionSettings(pgs.migrator, {
+        ...DEFAULT_RETENTION,
+        auditDays: AUDIT_MIN_RETENTION_DAYS - 1,
+      }),
+    ).rejects.toThrow(/auditDays/);
+    expect(await db.retentionSettings()).toEqual(DEFAULT_RETENTION);
+  });
+});
+
 describe("runRetention", () => {
-  it("deletes exactly the expired rows in every org, keeps the boundary row, and audits the purge", async () => {
-    const config = { analysesDays: 90, logsDays: 30, auditDays: 365 };
+  it("deletes exactly the expired rows in every org, keeps the boundary row, and audits the purge in the same statement", async () => {
     for (const org of [orgA, orgB]) {
-      // analyses (90 d) and jobs (30 d) and audit (365 d) are all planted at every age, so each
-      // category must pick its own boundary and ignore the others'.
+      // Every category is planted at every age, so each must pick its own boundary.
       await plant(org, "age-400d", ageDays(400));
       await plant(org, "age-365d-plus-1s", new Date(ageDays(365).getTime() - 1000));
       await plant(org, "age-365d", ageDays(365));
@@ -141,7 +166,7 @@ describe("runRetention", () => {
       await plant(org, "age-0d", NOW);
     }
 
-    const report = await runRetention(db, { clock: fixedClock(NOW), config });
+    const report = await runRetention(db, { clock: fixedClock(NOW) });
 
     expect(report.ranAt).toEqual(NOW);
     expect(report.categories.map((c) => c.category)).toEqual(["analyses", "logs", "audit"]);
@@ -185,20 +210,18 @@ describe("runRetention", () => {
       const purges = events.filter((e) => e.action === "retention.purged");
       expect(purges.map((p) => p.targetId).sort()).toEqual(["analyses", "audit_events", "jobs"]);
       expect(purges.every((p) => p.actorType === "system" && p.targetType === "table")).toBe(true);
-      expect(purges.find((p) => p.targetId === "analyses")?.metadata).toEqual({
-        category: "analyses",
-        deleted: 4,
-        before: ageDays(90).toISOString(),
-      });
+      const analysesPurge = purges.find((p) => p.targetId === "analyses")?.metadata;
+      expect(analysesPurge).toMatchObject({ category: "analyses", deleted: 4 });
+      expect(new Date(String(analysesPurge?.["before"])).getTime()).toBe(ageDays(90).getTime());
     }
 
-    // Deleting analyses cascaded to findings_state but kept llm_usage (billing) with a null link.
+    // Deleting analyses cascaded to findings_state but kept llm_usage (billing) with its link.
     const usage = await db.withOrg(orgA.orgId, ({ db: tx }) => tx.select().from(schema.llmUsage));
     expect(usage).toHaveLength(1);
     expect(usage[0]?.analysisId).toBe(orgA.analysisId);
   });
 
-  it("is idempotent: a second run at the same instant deletes nothing", async () => {
+  it("is idempotent: a second run at the same instant deletes nothing and audits nothing", async () => {
     const report = await runRetention(db, { clock: fixedClock(NOW) });
     expect(report.categories.map((c) => c.deleted)).toEqual([0, 0, 0]);
     const events = await db.withOrg(orgA.orgId, ({ db: tx }) =>
@@ -208,22 +231,30 @@ describe("runRetention", () => {
   });
 
   it("moves with the clock: one more day expires the next row", async () => {
-    const report = await runRetention(db, {
-      clock: fixedClock(new Date(NOW.getTime() + DAY)),
-      config: { analysesDays: 90, logsDays: 30, auditDays: 365 },
-    });
+    const report = await runRetention(db, { clock: fixedClock(new Date(NOW.getTime() + DAY)) });
     const byCategory = Object.fromEntries(report.categories.map((c) => [c.category, c]));
     expect(byCategory["analyses"]?.deleted).toBe(2); // age-90d in both orgs
     expect(byCategory["logs"]?.deleted).toBe(2); // age-30d in both orgs
     expect(byCategory["audit"]?.deleted).toBe(2); // planted.age-365d in both orgs
   });
 
-  it("refuses an audit period under the floor even if passed directly", async () => {
-    await expect(
-      runRetention(db, {
-        clock: fixedClock(NOW),
-        config: { analysesDays: 90, logsDays: 30, auditDays: AUDIT_MIN_RETENTION_DAYS - 1 },
-      }),
-    ).rejects.toThrow(/auditDays/);
+  it("cannot be pushed forward: a clock in the future is clamped to the database clock", async () => {
+    for (const org of [orgA, orgB]) {
+      await plant(org, "clamp-fresh", NOW);
+      await plant(org, "clamp-old", ageDays(400));
+    }
+    const report = await runRetention(db, {
+      clock: fixedClock(new Date(Date.now() + 365 * DAY)),
+    });
+    for (const c of report.categories) expect(c.deleted, c.category).toBeGreaterThanOrEqual(2);
+    for (const org of [orgA, orgB]) {
+      const left = await remaining(org);
+      expect(left.analyses).toContain("clamp-fresh");
+      expect(left.analyses).not.toContain("clamp-old");
+      expect(left.jobs).toContain("clamp-fresh");
+      expect(left.jobs).not.toContain("clamp-old");
+      expect(left.audit).toContain("planted.clamp-fresh");
+      expect(left.audit).not.toContain("planted.clamp-old");
+    }
   });
 });

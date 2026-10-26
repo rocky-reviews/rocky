@@ -4,11 +4,13 @@ export {
   TenantContextError,
   type Db,
   type DbOptions,
+  type OrgDeletion,
   type PurgeResult,
   type TenantTx,
 } from "./client.js";
 export {
   appliedMigrations,
+  checksumOf,
   loadMigrations,
   migrate,
   MIGRATIONS_DIR,
@@ -23,11 +25,12 @@ export {
   retentionFromEnv,
   RETENTION_CATEGORIES,
   runRetention,
+  setRetentionSettings,
   validateRetention,
   type RetentionCategory,
   type RetentionCategoryReport,
   type RetentionConfig,
   type RetentionReport,
 } from "./retention.js";
-export { APP_ROLE, ensureLoginRole, RETENTION_ROLE } from "./roles.js";
+export { APP_ROLE, ensureLoginRole, RETENTION_ROLE, scramSha256Verifier } from "./roles.js";
 export * as schema from "./schema.js";

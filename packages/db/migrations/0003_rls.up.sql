@@ -38,3 +38,13 @@ TO rocky_app;
 
 -- Append-only for the application (trigger in 0004 adds the same rule for everyone else).
 GRANT SELECT, INSERT ON audit_events TO rocky_app;
+
+-- No temporary objects: pg_temp is searched before public for unqualified names, so a TEMP
+-- table or function created on a pooled connection could shadow a tenant table for the next
+-- user of that connection. The database owner can revoke this from PUBLIC.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM rocky_app, rocky_retention', current_database());
+END
+$$;

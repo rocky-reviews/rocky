@@ -2,7 +2,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { audit, AUDIT_METADATA_MAX_BYTES } from "./audit.js";
 import { createDb, type Db } from "./client.js";
-import { AUDIT_MIN_RETENTION_DAYS } from "./retention.js";
+import { AUDIT_MIN_RETENTION_DAYS, DEFAULT_RETENTION, setRetentionSettings } from "./retention.js";
 import * as schema from "./schema.js";
 import {
   CONTAINER_TIMEOUT_MS,
@@ -140,27 +140,95 @@ describe("append-only trigger", () => {
 });
 
 describe("retention purge path", () => {
-  it("is the only way to delete, and refuses cutoffs newer than the minimum retention", async () => {
-    const tooRecent = new Date(Date.now() - (AUDIT_MIN_RETENTION_DAYS - 1) * 86_400_000);
-    const error = await pgError(db.purgeExpired("audit", tooRecent));
-    expect(error.message).toMatch(/minimum retention/);
-
-    const old = new Date(Date.now() - 400 * 86_400_000);
-    await db.withOrg(org.orgId, (tx) =>
-      tx.db.insert(schema.auditEvents).values({
+  const DAY = 86_400_000;
+  const plant = async (label: string, at: Date) =>
+    db.withOrg(org.orgId, async ({ db: tx }) => {
+      await tx.insert(schema.analyses).values({
+        revisionId: org.revisionId,
+        status: "failed",
+        errorCode: label,
+        createdAt: at,
+      });
+      await tx.insert(schema.jobs).values({
+        kind: "analyse",
+        idempotencyKey: label,
+        status: "failed",
+        createdAt: at,
+        finishedAt: at,
+      });
+      await tx.insert(schema.auditEvents).values({
         actorType: "system",
         actorId: "test",
-        action: "old.event",
+        action: `planted.${label}`,
         targetType: "org",
         targetId: org.orgId,
-        createdAt: old,
-      }),
+        createdAt: at,
+      });
+    });
+  const remaining = () =>
+    db.withOrg(org.orgId, async ({ db: tx }) => ({
+      analyses: (await tx.select({ v: schema.analyses.errorCode }).from(schema.analyses))
+        .map((r) => r.v)
+        .filter((v): v is string => v !== null),
+      jobs: (await tx.select({ v: schema.jobs.idempotencyKey }).from(schema.jobs)).map((r) => r.v),
+      audit: (await tx.select({ v: schema.auditEvents.action }).from(schema.auditEvents)).map(
+        (r) => r.v,
+      ),
+    }));
+
+  it("cannot be steered to a recent cutoff: the period comes from the settings table and as_of is clamped to the database clock (review #3, #5)", async () => {
+    await plant("ancient", new Date(Date.now() - 400 * DAY));
+    await plant("recent", new Date(Date.now() - DAY));
+    const future = new Date(Date.now() + 400 * DAY);
+    for (const category of ["analyses", "logs", "audit"] as const) {
+      const result = await db.purgeExpired(category, future);
+      expect(result, category).toEqual([{ orgId: org.orgId, deleted: 1 }]);
+    }
+    const left = await remaining();
+    expect(left.analyses).toContain("recent");
+    expect(left.analyses).not.toContain("ancient");
+    expect(left.jobs).toContain("recent");
+    expect(left.jobs).not.toContain("ancient");
+    expect(left.audit).toContain("planted.recent");
+    expect(left.audit).not.toContain("planted.ancient");
+
+    // Direct calls as the app role: an explicit future cutoff and the no-argument form.
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    try {
+      for (const sql of [
+        "select * from retention.purge_analyses(now() + interval '1 day')",
+        "select * from retention.purge_jobs(now() + interval '1 day')",
+        "select * from retention.purge_audit_events(now() + interval '1 day')",
+        "select * from retention.purge_analyses()",
+        "select * from retention.purge_jobs()",
+        "select * from retention.purge_audit_events()",
+      ]) {
+        expect((await app.query(sql)).rowCount, sql).toBe(0);
+      }
+      // The old shape (arbitrary cutoff deleting everything) must not exist in any form.
+      const error = await pgError(app.query("select * from retention.purge_analyses(now(), true)"));
+      expect(error.code).toBe("42883"); // undefined_function
+    } finally {
+      await app.end();
+    }
+    expect(await remaining()).toEqual(left);
+  });
+
+  it("the audit floor is the configured period itself: raising it protects older rows (review #5)", async () => {
+    await plant("mid", new Date(Date.now() - 380 * DAY));
+    await setRetentionSettings(pgs.migrator, { ...DEFAULT_RETENTION, auditDays: 400 });
+    expect(await db.purgeExpired("audit", new Date())).toEqual([]);
+    expect((await remaining()).audit).toContain("planted.mid");
+    await setRetentionSettings(pgs.migrator, DEFAULT_RETENTION);
+    expect(await db.purgeExpired("audit", new Date())).toEqual([{ orgId: org.orgId, deleted: 1 }]);
+    expect((await remaining()).audit).not.toContain("planted.mid");
+    // The table refuses an audit period under the floor even for the owner.
+    const error = await pgError(
+      pgs.migrator.query("update app.retention_settings set days = $1 where category = 'audit'", [
+        AUDIT_MIN_RETENTION_DAYS - 1,
+      ]),
     );
-    const purged = await db.purgeExpired("audit", new Date(Date.now() - 365 * 86_400_000));
-    expect(purged).toEqual([{ orgId: org.orgId, deleted: 1 }]);
-    const left = await db.withOrg(org.orgId, (tx) => tx.db.select().from(schema.auditEvents));
-    expect(left.map((r) => r.action)).not.toContain("old.event");
-    expect(left.length).toBeGreaterThan(0);
+    expect(error.code).toBe("23514"); // check_violation
   });
 
   it("is owned by a NOLOGIN role that owns only the retention schema and its functions", async () => {
@@ -179,6 +247,7 @@ describe("retention purge path", () => {
        order by 1, 2`,
     );
     expect(owned.rows).toEqual([
+      { kind: "function", name: "delete_org" },
       { kind: "function", name: "purge_analyses" },
       { kind: "function", name: "purge_audit_events" },
       { kind: "function", name: "purge_jobs" },
@@ -192,9 +261,13 @@ describe("retention purge path", () => {
       { table_name: "analyses", privilege_type: "DELETE" },
       { table_name: "analyses", privilege_type: "SELECT" },
       { table_name: "audit_events", privilege_type: "DELETE" },
+      { table_name: "audit_events", privilege_type: "INSERT" },
       { table_name: "audit_events", privilege_type: "SELECT" },
       { table_name: "jobs", privilege_type: "DELETE" },
       { table_name: "jobs", privilege_type: "SELECT" },
+      { table_name: "orgs", privilege_type: "DELETE" },
+      { table_name: "orgs", privilege_type: "SELECT" },
+      { table_name: "retention_settings", privilege_type: "SELECT" },
     ]);
   });
 });

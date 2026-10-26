@@ -17,8 +17,16 @@ import {
  * new table that lacks RLS, org_id, the cascade FK or a fixture row fails here.
  */
 
-/** The only non-tenant table allowed to exist. Everything else must be a tenant table. */
-const ALLOWED_NON_TENANT_TABLES = ["app.schema_migrations"];
+/** The only non-tenant tables allowed to exist (migrator-owned, in `app`). Everything else is a tenant table. */
+const ALLOWED_NON_TENANT_TABLES = ["app.schema_migrations", "app.retention_settings"];
+
+/** SECURITY DEFINER functions the application role may execute (ADR 0005 §5). */
+const ALLOWED_SECURITY_DEFINER = [
+  "retention.delete_org",
+  "retention.purge_analyses",
+  "retention.purge_audit_events",
+  "retention.purge_jobs",
+];
 
 const INSUFFICIENT_PRIVILEGE = "42501";
 const FOREIGN_KEY_VIOLATION = "23503";
@@ -100,7 +108,7 @@ const countAs = async (orgId: OrgId, table: TenantTable, where = ""): Promise<nu
   });
 
 describe("every table in the database", () => {
-  it("is a tenant table in public (only the migration ledger is exempt)", () => {
+  it("is a tenant table in public (only the ledger and retention settings are exempt)", () => {
     expect(tables.length).toBeGreaterThanOrEqual(13);
     for (const t of tables) expect(t.schema).toBe("public");
     const names = tables.map((t) => t.name);
@@ -424,6 +432,90 @@ describe("the application role", () => {
       "create table public.leak (id int)",
       "create policy p on repos for all to public using (true)",
       "alter table audit_events disable trigger all",
+    ]) {
+      const error = await pgError(appPool.query(sql));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+  });
+
+  it("cannot create temporary tables or functions, which could shadow names on pooled connections (review #7)", async () => {
+    for (const sql of [
+      "create temp table leak (id int)",
+      "create temporary table leak2 as select 1 as x",
+      "create function pg_temp.repos() returns setof repos language sql as 'select * from repos'",
+    ]) {
+      const error = await pgError(appPool.query(sql));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+    const priv = await appPool.query<{ app: boolean; pub: boolean }>(
+      `select has_database_privilege($1, current_database(), 'TEMP') as app,
+              has_database_privilege(0, current_database(), 'TEMP') as pub`,
+      [APP_ROLE],
+    );
+    expect(priv.rows[0]).toEqual({ app: false, pub: false });
+  });
+});
+
+describe("other catalog objects (review #8)", () => {
+  it("views and materialized views run as the invoker or are not granted to the app role", async () => {
+    const { rows } = await pgs.migrator.query<{
+      name: string;
+      options: string[] | null;
+      granted: boolean;
+    }>(
+      `select n.nspname || '.' || c.relname as name, c.reloptions as options,
+              has_table_privilege($1, c.oid, 'SELECT') as granted
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.relkind in ('v', 'm')
+          and n.nspname not in ('pg_catalog', 'information_schema')`,
+      [APP_ROLE],
+    );
+    for (const v of rows) {
+      const invoker = (v.options ?? []).includes("security_invoker=true");
+      expect(invoker || !v.granted, v.name).toBe(true);
+    }
+  });
+
+  it("SECURITY DEFINER functions executable by the app role are exactly the retention allow-list", async () => {
+    const { rows } = await pgs.migrator.query<{ name: string }>(
+      `select n.nspname || '.' || p.proname as name
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where p.prosecdef
+          and n.nspname not in ('pg_catalog', 'information_schema')
+          and has_function_privilege($1, p.oid, 'EXECUTE')
+        order by 1`,
+      [APP_ROLE],
+    );
+    expect(rows.map((r) => r.name)).toEqual(ALLOWED_SECURITY_DEFINER);
+    // And none of them is reachable by PUBLIC.
+    const pub = await pgs.migrator.query<{ name: string }>(
+      `select p.proname as name from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where p.prosecdef and n.nspname = 'retention' and has_function_privilege(0, p.oid, 'EXECUTE')`,
+    );
+    expect(pub.rows).toEqual([]);
+  });
+
+  it("has no default ACLs that could grant future objects automatically", async () => {
+    const { rows } = await pgs.migrator.query<{ n: string }>(
+      "select count(*)::text as n from pg_default_acl",
+    );
+    expect(rows[0]?.n).toBe("0");
+  });
+
+  it("lets the app role read but not change the retention settings", async () => {
+    const settings = await appPool.query<{ category: string; days: number }>(
+      "select category, days from app.retention_settings order by 1",
+    );
+    expect(settings.rows.map((r) => r.category)).toEqual([
+      "analyses",
+      "audit",
+      "logs",
+      "org_deletion_grace",
+    ]);
+    for (const sql of [
+      "update app.retention_settings set days = 1 where category = 'audit'",
+      "delete from app.retention_settings",
+      "insert into app.retention_settings (category, days) values ('audit', 1)",
     ]) {
       const error = await pgError(appPool.query(sql));
       expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);

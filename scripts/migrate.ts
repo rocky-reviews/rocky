@@ -1,4 +1,10 @@
-import { appliedMigrations, migrate, rollback } from "@rocky-reviews/db";
+import {
+  appliedMigrations,
+  migrate,
+  retentionFromEnv,
+  rollback,
+  setRetentionSettings,
+} from "@rocky-reviews/db";
 import pg from "pg";
 
 /**
@@ -23,6 +29,11 @@ try {
       console.log(
         applied.length === 0 ? "migrations: up to date" : `applied: ${applied.join(", ")}`,
       );
+      // Retention periods are owner-managed settings (ADR 0005 §5): the deployment that runs
+      // migrations also writes RETENTION_*_DAYS / ORG_DELETION_GRACE_DAYS (defaults when unset).
+      const retention = retentionFromEnv(process.env);
+      await setRetentionSettings(pool, retention);
+      console.log(`retention settings: ${JSON.stringify(retention)}`);
       break;
     }
     case "down": {

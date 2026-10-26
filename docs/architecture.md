@@ -54,14 +54,20 @@ packages/schema (analysis document; shared contract)
 
 ## Data layer
 
-- Three database roles (ADR 0005): the migrator owns the schema and runs `pnpm db:migrate`;
-  the application logs in as a member of `rocky_app` (RLS enforced, no bypass); `rocky_retention`
-  owns the `SECURITY DEFINER` purge functions and nothing else.
+- Three database roles (ADR 0005): the migrator owns the schema, runs `pnpm db:migrate` and
+  writes the retention settings; the application logs in as a member of `rocky_app` (RLS
+  enforced, no bypass, no TEMP objects); `rocky_retention` owns the `SECURITY DEFINER` purge and
+  org-deletion functions and nothing else.
 - Every table in `public` is a tenant table: `org_id NOT NULL` with `ON DELETE CASCADE` to `orgs`,
   composite foreign keys to parents, `FORCE ROW LEVEL SECURITY`, one policy for `rocky_app`.
-- `audit_events` is append-only (trigger). Retention: analyses 90 d, finished jobs 30 d, audit
-  365 d (`RETENTION_*_DAYS`), rows strictly older than the cutoff are deleted and the purge is
-  itself audited per org.
+- `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and
+  it refuses transaction-control, role and `app.*` statements. Detached work (timers, listeners)
+  must start its own `withOrg` from outside.
+- `audit_events` is append-only (trigger). Retention periods live in `app.retention_settings`
+  (analyses 90 d, finished jobs 30 d, audit 365 d, org deletion grace 7 d; `RETENTION_*_DAYS`,
+  `ORG_DELETION_GRACE_DAYS` applied by the migrator). Purge functions delete rows strictly older
+  than `period` before the database clock and audit the purge in the same statement.
 - Integration tests run on Testcontainers with the pgvector image pinned in
-  `docker-compose.dev.yml`; the isolation suite enumerates tables from `pg_catalog`
-  (`packages/db/THREATS.md` maps each threat to its test).
+  `docker-compose.dev.yml`; the isolation suite enumerates tables, views, SECURITY DEFINER
+  functions and default ACLs from `pg_catalog` (`packages/db/THREATS.md` maps each threat to its
+  test).
