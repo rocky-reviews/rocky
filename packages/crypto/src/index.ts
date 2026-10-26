@@ -19,6 +19,7 @@ export {
 } from "./key-wrapper.js";
 export {
   CIPHERTEXT_PREFIX,
+  MIN_CIPHERTEXT_BYTES,
   OrgKeyring,
   PURPOSES,
   decodeWrappedDataKey,

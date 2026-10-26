@@ -65,6 +65,8 @@ export interface TestPostgres {
 
 export interface DumpOptions {
   readonly inserts?: boolean;
+  /** pg_dump honours the session's `bytea_output`; `escape` writes octal instead of hex. */
+  readonly byteaOutput?: "hex" | "escape";
 }
 
 const dumpDatabase = async (
@@ -76,7 +78,9 @@ const dumpDatabase = async (
   args.push("--username", container.getUsername(), container.getDatabase());
   // Inside the container pg_dump uses the unix socket; the password covers an image that
   // does not trust local connections. Test-only credentials of a throwaway container.
-  const result = await container.exec(args, { env: { PGPASSWORD: container.getPassword() } });
+  const env: Record<string, string> = { PGPASSWORD: container.getPassword() };
+  if (options.byteaOutput !== undefined) env.PGOPTIONS = `-c bytea_output=${options.byteaOutput}`;
+  const result = await container.exec(args, { env });
   if (result.exitCode !== 0) {
     throw new Error(`pg_dump exited with ${result.exitCode}: ${result.stderr.trim()}`);
   }
