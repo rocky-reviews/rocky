@@ -13,7 +13,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseEnv } from "node:util";
+import { execFile } from "node:child_process";
+import { parseEnv, promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkCredentialsTarget,
@@ -57,6 +58,67 @@ describe("credentialsEnvText", () => {
       GITHUB_APP_PRIVATE_KEY: s.privateKeyPem,
       GITHUB_WEBHOOK_SECRET: s.webhookSecret,
     });
+  });
+
+  it("single-quotes every value (review round 1, item 6)", () => {
+    const text = credentialsEnvText(secrets());
+    const assignments = text.split("\n").filter((l) => /^[A-Z_]+=/.test(l));
+    expect(assignments.map((l) => l.split("=")[0])).toStrictEqual([
+      "GITHUB_APP_ID",
+      "GITHUB_APP_SLUG",
+      "GITHUB_APP_CLIENT_ID",
+      "GITHUB_APP_CLIENT_SECRET",
+      "GITHUB_WEBHOOK_SECRET",
+      "GITHUB_APP_PRIVATE_KEY",
+    ]);
+    for (const line of assignments) expect(line, line.slice(0, 20)).toMatch(/^[A-Z_]+='/);
+    expect(text).not.toContain('"');
+  });
+
+  it("reads back identically through node --env-file and a POSIX shell's source, PEM included", async () => {
+    const s = secrets();
+    const file = join(dir, "github-app.env");
+    await writeCredentialsOnce(file, credentialsEnvText(s));
+    const run = promisify(execFile);
+    const keys = [
+      "GITHUB_APP_ID",
+      "GITHUB_APP_SLUG",
+      "GITHUB_APP_CLIENT_ID",
+      "GITHUB_APP_CLIENT_SECRET",
+      "GITHUB_WEBHOOK_SECRET",
+      "GITHUB_APP_PRIVATE_KEY",
+    ];
+    const expected = ["4242", s.slug, s.clientId, s.clientSecret, s.webhookSecret, PEM];
+    const viaNode = await run(process.execPath, [
+      `--env-file=${file}`,
+      "-e",
+      `process.stdout.write(JSON.stringify(${JSON.stringify(keys)}.map((k) => process.env[k])))`,
+    ]);
+    expect(JSON.parse(viaNode.stdout)).toStrictEqual(expected);
+    const viaShell = await run("/bin/sh", [
+      "-c",
+      `set -eu; . "$1"; printf '%s\\0' ${keys.map((k) => `"$${k}"`).join(" ")}`,
+      "sh",
+      file,
+    ]);
+    expect(viaShell.stdout.split("\0").slice(0, -1)).toStrictEqual(expected);
+  });
+
+  it("omits the slug when GitHub returned none, and still writes everything else", () => {
+    const s = { ...secrets(), slug: undefined };
+    const env = parseEnv(credentialsEnvText(s));
+    expect(env["GITHUB_APP_SLUG"]).toBeUndefined();
+    expect(env["GITHUB_APP_CLIENT_SECRET"]).toBe(s.clientSecret);
+    expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(PEM);
+  });
+
+  it("refuses shell-active characters in any value", () => {
+    for (const c of ["!", "*", "?", ";", "^", ",", "'", "$", "`", "\\", "#", " ", "&", "|"]) {
+      expect(
+        () => credentialsEnvText({ ...secrets(), clientSecret: `abc${c}def0123456789abcdef` }),
+        c,
+      ).toThrow(CredentialsFileError);
+    }
   });
 
   it("refuses values that could inject extra lines or quotes into the env file", () => {
@@ -128,6 +190,23 @@ describe("writeCredentialsOnce", () => {
     await expect(writeCredentialsOnce("relative/f.env", "X=1\n")).rejects.toMatchObject({
       reason: "not_absolute",
     });
+  });
+
+  it("refuses to write on Windows, where file modes do not protect the file (item 7)", async () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...original, value: "win32" });
+    try {
+      const file = join(dir, "github-app.env");
+      await expect(writeCredentialsOnce(file, "X='1'\n")).rejects.toMatchObject({
+        reason: "unsupported_platform",
+      });
+      await expect(checkCredentialsTarget(file)).rejects.toMatchObject({
+        reason: "unsupported_platform",
+      });
+      expect(await readdir(dir)).toStrictEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
   });
 
   it("checkCredentialsTarget answers before anything is written", async () => {

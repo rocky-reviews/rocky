@@ -10,7 +10,10 @@ and in your local `.env`.
 
 ## Before you start
 
-- You are an owner of the `rocky-reviews` organization, or a GitHub App manager there.
+- You are an **owner** of the `rocky-reviews` organization. A GitHub App manager can register
+  the app but cannot install it on the organization's repositories (step 5).
+- You are on macOS, Linux or WSL. Setup refuses to run on Windows, because file modes cannot
+  protect the credentials file there.
 - Docker is running, `pnpm install` is done, and `.env` exists (`pnpm dev` creates it from
   `.env.example` on first run).
 - **Why the app is created under the organization:** a private app can only be installed on the
@@ -24,8 +27,15 @@ inbound port, and its URL stays the same across restarts. ADR 0008 §6 explains 
 chosen over tunnels and over creating the app with webhooks inactive.
 
 1. Open <https://smee.io/new> and copy the channel URL (`https://smee.io/<random>`).
-   **Treat it as semi-secret.** Anyone holding it can read the deliveries, so use it only with test
-   repositories.
+   Anyone holding it can read the deliveries. `rocky-reviews/rocky` is public, so this exposes
+   nothing private, but never use smee with private repositories.
+
+**Known limitation:** smee-client re-serialises each payload instead of forwarding GitHub's
+exact bytes. Deliveries whose JSON comes out differently (HTML comments, emoji, non-ASCII text,
+tabs in a PR body, for example) fail Rocky's signature check with **401**. This happens **every
+time** for that payload; redelivering does not help. Rocky's check is correct and is not
+relaxed. Step 6 tests for it. If it gets in the way, use the cloudflared alternative in
+ADR 0008 §6: a named tunnel with an ingress rule limited to `/webhooks/github`.
 
 ## 2. Turn setup on
 
@@ -35,6 +45,7 @@ Add to `.env`:
 GITHUB_APP_SETUP=true
 GITHUB_APP_WEBHOOK_URL=https://smee.io/<your channel>
 # Optional: GITHUB_APP_NAME="Rocky Reviews Dev"   (app names are global on GitHub; max 34 chars)
+# Optional: GITHUB_APP_HOMEPAGE_URL=https://github.com/rocky-reviews/rocky   (see step 3.4)
 ```
 
 Keep `HOST=127.0.0.1` and `PORT=4310` from `.env.example`. The public URL then defaults to
@@ -60,12 +71,19 @@ Keep `HOST=127.0.0.1` and `PORT=4310` from `.env.example`. The public URL then d
 4. On GitHub, check the name. Edit it if GitHub says it is taken, for example "Rocky Reviews
    Dev". Do **not** change permissions or events: Rocky refuses to save an app with more access
    than it asked for. Click **Create GitHub App for rocky-reviews**.
+   - If GitHub rejects the homepage URL `http://127.0.0.1:4310/`, set
+     `GITHUB_APP_HOMEPAGE_URL=https://github.com/rocky-reviews/rocky` in `.env`, restart
+     `pnpm dev` and start again from step 1 with the new URL. Nothing was created yet.
 5. GitHub sends you back to Rocky. The page says **GitHub App created** and shows where the
    credentials file is. Setup is now closed on this server.
    - If the page has a **Webhook secret** notice, open the credentials file. Paste the value of
      `GITHUB_WEBHOOK_SECRET` into the app's settings on GitHub (General → Webhook secret → Save).
    - If the page says the app has more access than Rocky asked for, or the credentials could not
      be saved, delete the app using the link on the page and start again from step 1 of this section.
+   - If the page says **GitHub did not complete the setup**, the app most likely exists on GitHub
+     without saved credentials. Open the app list linked on the page. Either delete the app and start
+     again (restart `pnpm dev` for a new URL), or keep it and generate a client secret, a private key
+     and a webhook secret (`openssl rand -hex 32`) in its settings, then store them as in section 4.
 
 ## 4. Where the credentials are and what to store
 
@@ -87,14 +105,17 @@ Do this now:
    six values. The private key is the multi-line PEM, including the `BEGIN`/`END` lines. This is
    the only lasting copy: GitHub will not show the key or the client secret again. They can be
    regenerated in the app settings.
-2. **Local `.env`:** append the file and remove the setup flag:
+2. **Local `.env`:** first delete from `.env` any earlier `GITHUB_WEBHOOK_SECRET=` or
+   `GITHUB_APP_*=` line, and the `GITHUB_APP_SETUP=true` line, so no key appears twice. Then append
+   the file:
 
    ```sh
+   grep -nE '^(GITHUB_WEBHOOK_SECRET|GITHUB_APP_[A-Z_]+)=' .env   # must print nothing
    cat ~/.rocky/github-app.env >> .env
-   # then edit .env: delete GITHUB_APP_SETUP=true
    ```
 
-   Node's `--env-file` reads the quoted multi-line `GITHUB_APP_PRIVATE_KEY` as-is.
+   Every value is single-quoted. Node's `--env-file` and a shell's `. file` both read the
+   multi-line `GITHUB_APP_PRIVATE_KEY` as-is.
 
 3. **Delete the file:** `rm ~/.rocky/github-app.env`. Also check that no
    `~/.rocky/.rocky-credentials-*.tmp` is left over (one can remain only after a crash).
@@ -105,7 +126,9 @@ Do this now:
 ## 5. Install on `rocky-reviews/rocky`
 
 1. Open the install link from the success page,
-   `https://github.com/apps/<slug>/installations/new`.
+   `https://github.com/apps/<slug>/installations/new`. If the page had no link (GitHub returned no
+   slug), open the app from `https://github.com/organizations/rocky-reviews/settings/apps` and
+   choose **Install App**.
 2. Choose the **rocky-reviews** account, then **Only select repositories → rocky-reviews/rocky**,
    then **Install**.
 
@@ -124,9 +147,17 @@ Do this now:
 3. On GitHub, open the app's settings → **Advanced → Recent Deliveries**. Redeliver the
    `installation.created` delivery. The server logs `webhook queued` (202), and a second
    redelivery logs `webhook duplicate`.
-   - A **401** means the signature did not match: either `GITHUB_WEBHOOK_SECRET` in `.env`
-     differs from the app's, or smee re-serialised the JSON body (ADR 0008 §6). This fails closed.
-     Redeliver once more. If it persists, compare the secrets.
+   - A **401** on `installation` or `ping` almost always means `GITHUB_WEBHOOK_SECRET` in `.env`
+     differs from the app's. Compare them.
+4. **smee check.** On `rocky-reviews/rocky`, open a test PR whose description contains all of:
+   an HTML comment (`<!-- note -->`), an emoji, non-ASCII text (`café`), and a tab character.
+   Look for the `pull_request.opened` delivery in the server log:
+   - `webhook queued` (202): smee forwarded bytes that verify.
+   - `webhook rejected` with reason `unauthenticated` (401), while step 3 passed: this is smee's
+     re-serialisation (see section 1). It is expected and will repeat on redelivery. Record it in
+     the H3 notes. Use cloudflared (ADR 0008 §6) if PR deliveries must arrive in development.
+
+   Close the test PR afterwards.
 
 ## Undo
 

@@ -84,6 +84,12 @@ export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup
       "GITHUB_APP_SETUP is for creating the app from a workstation; it is refused in production",
     );
   }
+  if (process.platform === "win32") {
+    // The credentials file is protected by POSIX modes (0600/0700), which Windows does not apply.
+    throw new ConfigError(
+      "GITHUB_APP_SETUP is not supported on Windows (file modes cannot protect the credentials); run it under WSL, macOS or Linux",
+    );
+  }
   const credentialsFile =
     nonEmpty(env, "GITHUB_APP_CREDENTIALS_FILE") ?? join(homedir, ".rocky", "github-app.env");
   if (!isAbsolute(credentialsFile)) {
@@ -128,6 +134,15 @@ export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup
     throw new ConfigError(`GITHUB_URL/GITHUB_API_URL: ${(error as Error).message}`);
   }
 
+  const homepageRaw = nonEmpty(env, "GITHUB_APP_HOMEPAGE_URL");
+  let homepageUrl: URL | undefined;
+  if (homepageRaw !== undefined) {
+    homepageUrl = urlFrom(homepageRaw, "GITHUB_APP_HOMEPAGE_URL");
+    if (homepageUrl.protocol !== "https:") {
+      throw new ConfigError("GITHUB_APP_HOMEPAGE_URL must be https");
+    }
+  }
+
   const appName = nonEmpty(env, "GITHUB_APP_NAME") ?? "Rocky Reviews";
   try {
     // Validates the name (and the URLs once more) exactly as the page will use them.
@@ -140,7 +155,17 @@ export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup
     throw new ConfigError(`GITHUB_APP_NAME: ${(error as Error).message}`);
   }
 
-  return { enabled: true, config: { publicUrl, webhookUrl, appName, endpoints, credentialsFile } };
+  return {
+    enabled: true,
+    config: {
+      publicUrl,
+      webhookUrl,
+      ...(homepageUrl === undefined ? {} : { homepageUrl }),
+      appName,
+      endpoints,
+      credentialsFile,
+    },
+  };
 };
 
 /** Anything at the path (file, directory, even a dangling symlink) counts as configured. */

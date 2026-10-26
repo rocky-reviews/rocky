@@ -70,6 +70,34 @@ describe("githubAppSetupFromEnv (P3-1)", () => {
     expect(b.enabled && b.config.webhookUrl?.href).toBe("https://smee.io/abc");
   });
 
+  it("takes an https GITHUB_APP_HOMEPAGE_URL (review round 1, item 11)", () => {
+    const setup = githubAppSetupFromEnv(
+      { ...ON, GITHUB_APP_HOMEPAGE_URL: "https://github.com/rocky-reviews/rocky" },
+      home,
+    );
+    expect(setup.enabled && setup.config.homepageUrl?.href).toBe(
+      "https://github.com/rocky-reviews/rocky",
+    );
+    expect(() =>
+      githubAppSetupFromEnv({ ...ON, GITHUB_APP_HOMEPAGE_URL: "http://example.com" }, home),
+    ).toThrow(ConfigError);
+  });
+
+  it("refuses setup on Windows, where file modes cannot protect the credentials (item 7)", () => {
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...original, value: "win32" });
+    try {
+      expect(() => githubAppSetupFromEnv(ON, home)).toThrow(/Windows/);
+      // Not requested → no error, whatever the platform.
+      expect(githubAppSetupFromEnv({}, home)).toStrictEqual({
+        enabled: false,
+        reason: "not_requested",
+      });
+    } finally {
+      Object.defineProperty(process, "platform", original);
+    }
+  });
+
   it("fails closed on unsafe URLs, names and paths", () => {
     for (const env of [
       { ROCKY_PUBLIC_URL: "http://rocky.example.com" },

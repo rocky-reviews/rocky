@@ -67,6 +67,21 @@ describe("GitHub App manifest (P3-1)", () => {
     expect(Object.keys(JSON.parse(json) as object)).toHaveLength(11);
   });
 
+  it("uses GITHUB_APP_HOMEPAGE_URL for the homepage when given, nothing else changes", () => {
+    const base = buildGitHubAppManifest({
+      name: "R",
+      publicUrl: PUBLIC_URL,
+      webhookUrl: WEBHOOK_URL,
+    });
+    const other = buildGitHubAppManifest({
+      name: "R",
+      publicUrl: PUBLIC_URL,
+      webhookUrl: WEBHOOK_URL,
+      homepageUrl: new URL("https://github.com/rocky-reviews/rocky"),
+    });
+    expect(other).toStrictEqual({ ...base, url: "https://github.com/rocky-reviews/rocky" });
+  });
+
   it("refuses a webhook URL that is not https, and app names GitHub would refuse", () => {
     expect(() =>
       buildGitHubAppManifest({
@@ -285,7 +300,6 @@ describe("convertManifestCode", () => {
       ["no pem", json(201, conversionBody({ pem: undefined }))],
       ["id string", json(201, conversionBody({ id: "1" }))],
       ["id zero", json(201, conversionBody({ id: 0 }))],
-      ["slug injection", json(201, conversionBody({ slug: "x\nNODE_OPTIONS=--require=/tmp/x" }))],
       ["client id quote", json(201, conversionBody({ client_id: 'Iv1."x' }))],
       [
         "client secret newline",
@@ -319,6 +333,130 @@ describe("convertManifestCode", () => {
     const { fetch } = fakeFetch(() => json(201, conversionBody({ webhook_secret: null })));
     const result = await convertManifestCode({ api, code: "abc", fetch });
     expect(result.webhookSecret).toBeNull();
+  });
+});
+
+describe("convertManifestCode: GitHub's documented response (review round 1, items 2 and 8)", () => {
+  const api = githubEndpoints({}).api;
+
+  /**
+   * GitHub's OpenAPI example `integration-from-manifest` (rest-api-description), field for field.
+   * The example's PEM, client secret and webhook secret are replaced by values generated at run
+   * time so no key material is committed.
+   */
+  const documented = (overrides: Record<string, unknown> = {}) => ({
+    id: 1,
+    slug: "octoapp",
+    node_id: "MDxOkludGVncmF0aW9uMQ==",
+    owner: {
+      login: "github",
+      id: 1,
+      node_id: "MDEyOk9yZ2FuaXphdGlvbjE=",
+      url: "https://api.github.com/orgs/github",
+      repos_url: "https://api.github.com/orgs/github/repos",
+      events_url: "https://api.github.com/orgs/github/events",
+      avatar_url: "https://github.com/images/error/octocat_happy.gif",
+      gravatar_id: "",
+      html_url: "https://github.com/octocat",
+      followers_url: "https://api.github.com/users/octocat/followers",
+      following_url: "https://api.github.com/users/octocat/following{/other_user}",
+      gists_url: "https://api.github.com/users/octocat/gists{/gist_id}",
+      starred_url: "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+      subscriptions_url: "https://api.github.com/users/octocat/subscriptions",
+      organizations_url: "https://api.github.com/users/octocat/orgs",
+      received_events_url: "https://api.github.com/users/octocat/received_events",
+      type: "User",
+      site_admin: true,
+    },
+    name: "Octocat App",
+    description: "",
+    external_url: "https://example.com",
+    html_url: "https://github.com/apps/octoapp",
+    created_at: "2017-07-08T16:18:44-04:00",
+    updated_at: "2017-07-08T16:18:44-04:00",
+    permissions: { metadata: "read", contents: "read", issues: "write", single_file: "write" },
+    events: ["push", "pull_request"],
+    client_id: "Iv1.8a61f9b3a7aba766",
+    client_secret: randomBytes(20).toString("hex"),
+    webhook_secret: randomBytes(20).toString("hex"),
+    pem: PEM,
+    ...overrides,
+  });
+
+  const convert = async (body: unknown) => {
+    const { fetch } = fakeFetch(() => json(201, body));
+    return convertManifestCode({ api, code: "abc", fetch });
+  };
+
+  it("accepts the documented response, including a null webhook secret", async () => {
+    const body = documented({ webhook_secret: null });
+    const result = await convert(body);
+    expect(result).toStrictEqual({
+      appId: 1,
+      slug: "octoapp",
+      clientId: "Iv1.8a61f9b3a7aba766",
+      clientSecret: body.client_secret,
+      privateKeyPem: PEM,
+      webhookSecret: null,
+      permissions: body.permissions,
+      events: body.events,
+    });
+    // The documented example is wider than Rocky's manifest: the caller refuses to save it.
+    expect(widenedGrants(result.permissions, result.events)).toStrictEqual([
+      "permission:issues",
+      "permission:single_file",
+      "event:push",
+    ]);
+  });
+
+  it("accepts slugs with underscores", async () => {
+    expect((await convert(documented({ slug: "rocky_reviews-dev" }))).slug).toBe(
+      "rocky_reviews-dev",
+    );
+  });
+
+  it("falls back to html_url when the slug is missing or invalid, never failing the conversion", async () => {
+    const noSlug: Record<string, unknown> = documented();
+    delete noSlug["slug"];
+    expect((await convert(noSlug)).slug).toBe("octoapp");
+    expect((await convert(documented({ slug: "x\nNODE_OPTIONS=--require=/tmp/x" }))).slug).toBe(
+      "octoapp",
+    );
+    expect((await convert(documented({ slug: 42 }))).slug).toBe("octoapp");
+  });
+
+  it("omits the slug when neither it nor html_url is usable", async () => {
+    for (const html_url of [
+      undefined,
+      "http://github.com/apps/octoapp",
+      "https://github.com/apps/Octo App",
+      "https://github.com/apps/x/y",
+      "https://github.com/users/octoapp",
+      "not a url",
+    ]) {
+      const result = await convert(
+        documented({
+          slug: "Bad Slug\nX=1",
+          ...(html_url === undefined ? { html_url: null } : { html_url }),
+        }),
+      );
+      expect(result.slug, String(html_url)).toBeUndefined();
+      expect(result.clientSecret).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
+
+  it("reports invalid UTF-8 as invalid_response, not network", async () => {
+    const bad = Buffer.concat([
+      Buffer.from('{"id":1,"x":"'),
+      Buffer.from([0xc3, 0x28]),
+      Buffer.from('"}'),
+    ]);
+    const { fetch } = fakeFetch(
+      () => new Response(bad, { status: 201, headers: { "content-type": "application/json" } }),
+    );
+    await expect(convertManifestCode({ api, code: "abc", fetch })).rejects.toMatchObject({
+      reason: "invalid_response",
+    });
   });
 });
 
@@ -364,6 +502,10 @@ describe("usableWebhookSecret", () => {
       `${"x".repeat(40)}"`,
       `${"x".repeat(40)}$`,
       `${"x".repeat(40)}é`,
+      // Shell-active characters (review round 1, item 6).
+      ...["!", "*", "?", ";", "^", ",", "`", "'", "\\", "#", "&", "|", "<", ">", "(", ")"].map(
+        (c) => `${"x".repeat(40)}${c}`,
+      ),
     ]) {
       expect(usableWebhookSecret(bad), String(bad)).toBeUndefined();
     }

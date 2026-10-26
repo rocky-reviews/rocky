@@ -44,11 +44,21 @@ export interface GitHubAppSetupConfig {
   publicUrl: URL;
   /** https; undefined → the page explains what to set instead of rendering a form. */
   webhookUrl: URL | undefined;
+  /** The app's homepage (GITHUB_APP_HOMEPAGE_URL, https); defaults to `publicUrl`. */
+  homepageUrl?: URL;
   appName: string;
   endpoints: GitHubEndpoints;
   /** Absolute path; written once with mode 0600. */
   credentialsFile: string;
 }
+
+/**
+ * `Sec-Fetch-Site` values allowed to create a state: typed or pasted URLs (`none`) and Rocky's own
+ * links (`same-origin`). Another site navigating the operator's browser here (the Lax cookie
+ * rides along) would otherwise mint states and evict the real one (review round 1, item 5).
+ * Absent (older browsers) is allowed.
+ */
+const STATE_FETCH_SITES = new Set(["none", "same-origin"]);
 
 export interface GitHubAppSetupDeps extends GitHubAppSetupConfig {
   /** One-time token printed to the server's terminal at boot (never logged). */
@@ -70,7 +80,7 @@ const escapeHtml = (value: string): string =>
     .replaceAll("'", "&#39;");
 
 /** No colours: browser defaults with `color-scheme`, so both themes work and lint stays clean. */
-const STYLE =
+export const STYLE =
   ":root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}code{word-break:break-all}button{font:inherit;padding:.5rem 1rem}";
 const STYLE_HASH = createHash("sha256").update(STYLE).digest("base64");
 
@@ -139,6 +149,13 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
   /** sha256 of every code ever presented to GitHub. */
   const usedCodes = new Set<string>();
   const formOrigin = deps.endpoints.web.origin;
+  /** Where the person finds (and can delete) the app when Rocky has no direct link. */
+  const appsList = (org: string | undefined): string =>
+    new URL(
+      org === undefined ? "settings/apps" : `organizations/${org}/settings/apps`,
+      deps.endpoints.web,
+    ).href;
+  const link = (href: string): string => `<a href="${escapeHtml(href)}">${escapeHtml(href)}</a>`;
   const secure = deps.publicUrl.protocol === "https:";
 
   const prune = (): void => {
@@ -228,6 +245,17 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         );
       }
 
+      const fetchSite = request.headers["sec-fetch-site"];
+      if (fetchSite !== undefined && !STATE_FETCH_SITES.has(String(fetchSite))) {
+        log(request, "warn", "cross_site_page");
+        return send(
+          reply,
+          403,
+          "Open this page directly",
+          "<p>The setup page was opened from another site. Open it from the address bar or from the link the server printed.</p>",
+        );
+      }
+
       // Before sending the human to GitHub: the conversion's secrets can be fetched only once.
       try {
         await checkCredentialsTarget(deps.credentialsFile);
@@ -256,10 +284,14 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         name: deps.appName,
         publicUrl: deps.publicUrl,
         webhookUrl: deps.webhookUrl,
+        ...(deps.homepageUrl === undefined ? {} : { homepageUrl: deps.homepageUrl }),
       });
       const action = manifestFormAction(deps.endpoints, state, org);
       const owner = org === undefined ? "your personal account" : `the organization ${org}`;
       log(request, "info", "page_rendered", { org: org !== undefined });
+      // The form POSTs cross-origin to GitHub; with `no-referrer` browsers send `Origin: null`,
+      // which GitHub may refuse. This URL carries no secret (the token was dropped by the 303).
+      void reply.header("referrer-policy", "strict-origin");
       return send(
         reply,
         200,
@@ -324,7 +356,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
             reply,
             409,
             "Credentials file unusable",
-            `<p>Rocky will not overwrite <code>${escapeHtml(deps.credentialsFile)}</code> or write into a directory others can modify (${escapeHtml(reason)}), so it did not fetch the new app's credentials. Delete the app on GitHub (Settings → Developer settings → GitHub Apps), fix the file, restart the server and start again.</p>`,
+            `<p>Rocky will not overwrite <code>${escapeHtml(deps.credentialsFile)}</code> or write into a directory others can modify (${escapeHtml(reason)}), so it did not fetch the new app's credentials. The app already exists on GitHub: delete it at ${link(appsList(pending.org))}, fix the file, restart the server and start again.</p>`,
           );
         }
 
@@ -341,20 +373,26 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
             reason: e?.reason ?? "unknown",
             ...(e?.status === undefined ? {} : { status: e.status }),
           });
+          const apps = appsList(pending.org);
           return send(
             reply,
             502,
             "GitHub did not complete the setup",
-            `<p>Converting the code failed (${escapeHtml(e?.reason ?? "unknown")}${e?.status === undefined ? "" : ` ${e.status}`}). Codes expire after an hour and work once. Start again from the setup page.</p>`,
+            `<p>Fetching the new app's credentials failed (${escapeHtml(e?.reason ?? "unknown")}${e?.status === undefined ? "" : ` ${e.status}`}). GitHub only sends this page a code after the app is created, so <strong>the app most likely already exists</strong> on GitHub, without credentials saved here. Find it at ${link(apps)}, then either:</p>` +
+              `<ul><li>delete it (Advanced → Danger zone) and start again from <a href="${escapeHtml(SETUP_PATH)}">the setup page</a>, or</li>` +
+              `<li>keep it and set it up by hand in its settings: note the App ID and Client ID, generate a client secret and a private key, set a webhook secret (at least 32 characters, e.g. <code>openssl rand -hex 32</code>), and store them as the runbook describes.</li></ul>`,
           );
         }
 
-        const settings = new URL(
-          pending.org === undefined
-            ? `settings/apps/${credentials.slug}/advanced`
-            : `organizations/${pending.org}/settings/apps/${credentials.slug}/advanced`,
-          deps.endpoints.web,
-        ).href;
+        const settings =
+          credentials.slug === undefined
+            ? appsList(pending.org)
+            : new URL(
+                pending.org === undefined
+                  ? `settings/apps/${credentials.slug}/advanced`
+                  : `organizations/${pending.org}/settings/apps/${credentials.slug}/advanced`,
+                deps.endpoints.web,
+              ).href;
         const widened = widenedGrants(credentials.permissions, credentials.events);
         if (widened.length > 0) {
           log(request, "error", "grants_widened", { widened });
@@ -397,8 +435,10 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         sessions.clear();
         states.clear();
         log(request, "info", "created", { webhookSecretSource });
-        const install = new URL(`apps/${credentials.slug}/installations/new`, deps.endpoints.web)
-          .href;
+        const install =
+          credentials.slug === undefined
+            ? undefined
+            : new URL(`apps/${credentials.slug}/installations/new`, deps.endpoints.web).href;
         return send(
           reply,
           200,
@@ -407,7 +447,9 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
             (webhookSecretSource === "generated"
               ? `<p><strong>Webhook secret:</strong> GitHub did not return a usable one, so Rocky generated <code>GITHUB_WEBHOOK_SECRET</code> in that file. Paste it into the app's webhook settings on GitHub before installing.</p>`
               : "") +
-            `<p>Next, install the app on your repositories: <a href="${escapeHtml(install)}">${escapeHtml(install)}</a>. Setup is now closed on this server.</p>`,
+            (install === undefined
+              ? `<p>Next, install the app on your repositories: GitHub did not return its slug, so open it from ${link(appsList(pending.org))}, choose <em>Install App</em>, and add <code>GITHUB_APP_SLUG</code> (the last part of its public URL) to your settings. Setup is now closed on this server.</p>`
+              : `<p>Next, install the app on your repositories: ${link(install)}. Setup is now closed on this server.</p>`),
         );
       } finally {
         exchanging = false;

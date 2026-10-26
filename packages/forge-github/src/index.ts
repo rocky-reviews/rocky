@@ -11,6 +11,7 @@ export {
 export {
   buildGitHubAppManifest,
   convertManifestCode,
+  ENV_SAFE,
   GITHUB_APP_EVENTS,
   GITHUB_APP_PERMISSIONS,
   githubEndpoints,

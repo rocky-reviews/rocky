@@ -74,7 +74,9 @@ Pinned exactly (`app-manifest.test.ts` "is pinned exactly…"):
   that Rocky would have to treat as untrusted anyway. The onboarding UX can add it later.
 - `name` defaults to "Rocky Reviews" (`GITHUB_APP_NAME`, 1–34 plain characters). App names are
   global on GitHub, so the person may need to edit it on GitHub's page; that is allowed.
-- `url` (homepage) is `ROCKY_PUBLIC_URL`; `description` is fixed text.
+- `url` (homepage) is `ROCKY_PUBLIC_URL`, or `GITHUB_APP_HOMEPAGE_URL` (https) when set. That
+  override exists in case GitHub refuses a loopback homepage in development; the repository URL
+  is a fine value. `description` is fixed text.
 
 ### 4. The setup routes (`apps/server/src/github-app-setup.ts`)
 
@@ -94,7 +96,10 @@ Pinned exactly (`app-manifest.test.ts` "is pinned exactly…"):
   the target org, 30 minutes, at most 10 per session. On the callback it is removed at first
   presentation, whatever happens next (single use), and must belong to the presenting session
   and be unexpired. Otherwise 403 and no request to GitHub. `SameSite=Lax` lets the cookie ride
-  the top-level GET redirect back from github.com.
+  the top-level GET redirect back from github.com. The same property lets another site navigate
+  the operator's browser to the page, so a state is minted only when `Sec-Fetch-Site` is absent,
+  `none` or `same-origin`. A `cross-site` or `same-site` navigation gets 403 and cannot evict the
+  real state.
 - **Code.** It must match `^[A-Za-z0-9_-]{1,128}$` (never a path or query), and its hash is
   remembered. A second presentation gets 409, and so does a second callback while an exchange
   is running (the claim happens before the first `await`).
@@ -109,19 +114,31 @@ Pinned exactly (`app-manifest.test.ts` "is pinned exactly…"):
   env file. The PEM must parse with `node:crypto` as an RSA key of at least 2048 bits. Failures
   become `ManifestConversionError(reason, status?)`, so pages and logs see only a fixed reason
   and GitHub's HTTP status.
-- **No widening.** If GitHub reports permissions or events beyond the manifest (the person
-  can edit an app after creation, and GitHub's page is outside Rocky's control),
-  the credentials are not saved. The page links to the app's settings so the person can delete
-  it.
+- **No widening.** The manifest page does not let the person change permissions or events, so
+  this guards against GitHub changing its behaviour (or a response that does not match what was
+  asked for). If GitHub reports permissions or events beyond the manifest, the credentials are
+  not saved. The page links to the app's settings so the person can delete it.
+- **A failed conversion leaves a live app.** GitHub sends the callback only after the app is
+  created, so when the conversion fails (bad response, timeout, network, any HTTP error) the app
+  most likely exists without saved credentials. The page says so. It links to
+  `<GitHub>/settings/apps`, or `<GitHub>/organizations/<org>/settings/apps` (the org comes from
+  the pending state). It offers two ways forward: delete the app and start again, or keep it and
+  generate a client secret, private key and webhook secret by hand in its settings.
+- **Slug.** GitHub's schema does not require `slug`, and slugs may contain `_`. A missing or
+  invalid slug falls back to the last segment of `html_url` (`https://…/apps/<slug>`) when that
+  is valid. Otherwise `GITHUB_APP_SLUG` and the install link are omitted and the page says where
+  to find the app. A bad slug never stops the credentials from being saved.
 - **Pages.** Server-rendered, no script, every dynamic value HTML-escaped. Headers:
   `Content-Security-Policy: default-src 'none'; style-src 'sha256-…'; form-action <GitHub
 origin>; frame-ancestors 'none'; base-uri 'none'`, `X-Frame-Options: DENY`,
-  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer` (except the form page, which sends `strict-origin`, so the
+  cross-origin POST to GitHub carries a real `Origin` instead of `null`; that URL holds no secret
+  after the 303), `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `Cross-Origin-Opener-Policy: same-origin`. Redirects go only to the fixed setup path plus a
   validated org login.
 - **What a page may show.** The success page shows the credentials file's path, a link to install
-  the app (`https://github.com/apps/<slug>/installations/new`), and whether the webhook secret was
-  generated. This is deliberate: the slug is public, it is the app's public URL, so the human can
+  the app (`https://github.com/apps/<slug>/installations/new`, or the app list when there is no
+  slug), and whether the webhook secret was generated. This is deliberate: the slug is public, it is the app's public URL, so the human can
   install it. The page never shows the id, client id, any secret, the key, the code or the state.
 - **Logs.** `githubAppSetup.outcome` (fixed codes such as `bad_token`, `bad_state`,
   `code_reused`, `conversion_failed`, `grants_widened`, `created`), plus a reason, an HTTP status,
@@ -133,15 +150,21 @@ origin>; frame-ancestors 'none'; base-uri 'none'`, `X-Frame-Options: DENY`,
 **Written once to a file**, `GITHUB_APP_CREDENTIALS_FILE` (absolute; default
 `~/.rocky/github-app.env`, outside the repository so it cannot be committed), in `.env` format:
 `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`,
-`GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_PRIVATE_KEY` (the PEM, double-quoted multi-line, which
-Node's `--env-file` and `util.parseEnv` read back exactly).
+`GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_PRIVATE_KEY` (the PEM, multi-line). Every value is
+**single-quoted** and limited to `[A-Za-z0-9._~+/=:@%-]` (`ENV_SAFE`; the PEM to base64 lines).
+So the file reads back identically through Node's `--env-file`, `util.parseEnv`, and a POSIX
+shell's `. file`, with nothing a shell would expand. Tests check all three.
 
 The write is atomic and never overwrites: the directory is created `0700`, or refused when it
 is group- or world-writable or not owned by the server's user. A temp file is opened with
 `O_CREAT|O_EXCL` (no symlink following), mode `0600` re-applied with `fchmod` whatever the
 umask, written and fsynced, then `link()`ed to the target. `link` fails if anything is there,
-even a dangling symlink. The temp file is then removed. Each value is re-checked against a plain
-character set before writing.
+even a dangling symlink. The temp file is then removed. Each value is re-checked against
+`ENV_SAFE` before writing.
+
+**POSIX only.** The protection rests on file modes, which Windows does not apply (it uses ACLs).
+`GITHUB_APP_SETUP=true` on Windows is a ConfigError, and the writer refuses as well. Use WSL,
+macOS or Linux to create the app.
 
 Why a file rather than printing to the terminal: the PEM is about 1.7 KB of multi-line text that
 terminals, `tmux` scrollback and CI logs keep and mangle. A file has an owner and a mode, and
@@ -153,8 +176,8 @@ storing them with ADR 0006 envelope encryption under a KEK.
 
 **Webhook secret.** GitHub documents `webhook_secret` as generated and nullable, with no stated
 format, and the manifest cannot supply one. Rocky keeps GitHub's secret only when it passes
-`checkWebhookSecret` (at least 32 characters, no padding) and is plain ASCII safe for an env
-file (`usableWebhookSecret`). Otherwise Rocky generates 32 random bytes as hex, writes them with
+`checkWebhookSecret` (at least 32 characters, no padding) and uses only `ENV_SAFE` characters
+(`usableWebhookSecret`). Otherwise Rocky generates 32 random bytes as hex, writes them with
 a comment, and the success page tells the person to paste the secret into the app's settings
 before installing. The value appears only in the file.
 
@@ -163,15 +186,37 @@ before installing. The value appears only in the file.
 GitHub must reach the webhook URL over the internet; `127.0.0.1` is not reachable. Options
 considered:
 
-- **smee.io channel (chosen for H3).** `GITHUB_APP_WEBHOOK_URL=https://smee.io/<channel>`, with
-  `npx smee-client` forwarding to `http://127.0.0.1:4310/webhooks/github`. It needs no account,
-  the URL is stable across restarts, and **nothing on the workstation is exposed inbound**.
-  GitHub's own webhook-testing docs use it. Caveats: anyone holding the channel URL can read
-  the deliveries, so use it only with test repositories. And smee-client re-serialises the
-  JSON, so a delivery whose bytes change gets **401**, because the HMAC is over the raw body.
-  That fails closed and never accepts a forged delivery.
-- A tunnel (`cloudflared`, `ngrok`): forwards raw bytes, but exposes the whole local server
-  (including the setup routes) to the internet, and quick-tunnel URLs change on every run.
+- **smee.io channel (default, chosen for H3).** `GITHUB_APP_WEBHOOK_URL=https://smee.io/<channel>`,
+  with `npx smee-client` forwarding to `http://127.0.0.1:4310/webhooks/github`. It needs no
+  account, the URL is stable across restarts, and **nothing on the workstation is exposed
+  inbound**. GitHub's own webhook-testing docs use it. Caveats:
+  - Anyone holding the channel URL can read the deliveries. The H3 repository
+    (`rocky-reviews/rocky`) is public, so a channel exposes nothing that is not already public.
+    Do not use smee with private repositories.
+  - smee-client re-serialises the body (`JSON.stringify` of the parsed payload) instead of
+    forwarding GitHub's bytes. Whenever that output differs from GitHub's serialisation (escaped
+    characters such as `<`, `>`, `&` in an HTML comment, non-ASCII text, emoji, tabs, number
+    formatting), the HMAC over the raw body fails and the receiver answers **401**. The failure
+    is **deterministic** for that payload: redelivering sends the same bytes through the same
+    re-serialisation and fails again. This is the receiver working as designed. **The HMAC check
+    is not relaxed for development.**
+- **cloudflared (raw bytes; the alternative when smee's 401s get in the way).** A named
+  tunnel forwards GitHub's bytes unchanged, so every delivery verifies. It needs a Cloudflare
+  account and a hostname. Limit the ingress to the webhook route so nothing else on the
+  workstation (setup routes, `/healthz`) is reachable:
+
+  ```yaml
+  ingress:
+    - hostname: rocky-dev.example.com
+      path: ^/webhooks/github$
+      service: http://127.0.0.1:4310
+    - service: http_status:404
+  ```
+
+  Then set `GITHUB_APP_WEBHOOK_URL=https://rocky-dev.example.com/webhooks/github`. A quick
+  tunnel (`cloudflared tunnel --url …`) exposes the whole server and changes URL on every run,
+  so it is not recommended.
+
 - Creating the app with webhooks inactive and setting the URL later: an extra manual step, and
   installation events would be lost until then.
 
@@ -202,6 +247,8 @@ permissions the app ends up with, which §1–2 minimise.
 | S10 | The app ends up with more access than Rocky needs                                            | Pinned manifest; refuse to save if GitHub reports widened grants                                                                                                                      | `app-manifest.test.ts` "is pinned exactly…", "requests exactly the four permissions…", `widenedGrants` suite; "refuses to save an app created with more than was requested"                                                                                                                                                        |
 | S11 | Weak or missing webhook secret makes deliveries forgeable                                    | `usableWebhookSecret` (`checkWebhookSecret` plus a plain charset), else 32 random bytes generated and the human told to set it                                                        | `usableWebhookSecret` suite; "generates a strong webhook secret when GitHub's is missing or weak…"                                                                                                                                                                                                                                 |
 | S12 | The token leaks via history, Referer or a shared screen                                      | Burned at first use; 303 to a token-free URL; `no-referrer`; restart issues a new one                                                                                                 | "exchanges the token once…", "generates a different token on every boot"                                                                                                                                                                                                                                                           |
+| S14 | Another site navigates the operator's browser to the page repeatedly to evict the real state | States minted only for `Sec-Fetch-Site` absent, `none` or `same-origin`                                                                                                               | "item 5: cross-site navigations cannot mint states or evict the real one"                                                                                                                                                                                                                                                          |
+| S15 | Credentials file sourced by a shell runs code; file modes ignored on Windows                 | Single-quoted values from `ENV_SAFE` only; setup refused on Windows                                                                                                                   | `credentials-file.test.ts` "single-quotes every value", "reads back identically through node --env-file and a POSIX shell's source…", "refuses shell-active characters…", "refuses to write on Windows…"; `config.setup.test.ts` "refuses setup on Windows…"                                                                       |
 | S13 | Unbounded memory from setup state                                                            | Only a session (which needs the token) creates states, at most 10 per session; expired entries pruned                                                                                 | Code review (bounded by construction)                                                                                                                                                                                                                                                                                              |
 
 ## Consequences
@@ -225,7 +272,13 @@ permissions the app ends up with, which §1–2 minimise.
   It is only readable by the owner and named `.rocky-credentials-*.tmp`; the runbook says to
   check for it.
 - **smee.io in development** exposes deliveries of the test repository to anyone with the
-  channel URL. Use it only for test repositories.
+  channel URL (public repository only). Some deliveries reliably fail the signature check through
+  smee (§6); use cloudflared when that matters.
+- **`Sec-Fetch-Site` absent:** older browsers send no fetch metadata. There a cross-site page could
+  still mint up to 10 states and evict the real one. That is denial of service only; the person
+  reloads the setup page.
+- **A failed conversion leaves an app on GitHub** without saved credentials; the page tells the
+  person to delete it or finish its setup by hand.
 - **Session binding is redundant by construction.** Only one session can exist per boot, so the
   state-to-session check cannot be exercised separately from "has the session". It stays as
   defence in depth if multiple sessions are ever allowed.

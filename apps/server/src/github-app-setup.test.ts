@@ -8,7 +8,9 @@ import { createLogger } from "@rocky-reviews/log";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "./app.js";
+import { createHash } from "node:crypto";
 import {
+  STYLE,
   SETUP_COOKIE,
   SETUP_SESSION_TTL_MS,
   SETUP_STATE_TTL_MS,
@@ -166,6 +168,17 @@ const callback = (cookie: string | undefined, query: string, harness = h) =>
 
 const CODE = "0f1e2d3c4b5a69788796";
 
+const created = (body: Conversion | Record<string, unknown>) => () =>
+  new Response(JSON.stringify(body), {
+    status: 201,
+    headers: { "content-type": "application/json" },
+  });
+
+const cleanup = async (harness: Harness) => {
+  await harness.app.close();
+  await rm(harness.dir, { recursive: true, force: true });
+};
+
 /** Changes the last character to a different one (never a no-op). */
 const tamper = (value: string): string => `${value.slice(0, -1)}${value.endsWith("A") ? "B" : "A"}`;
 
@@ -285,7 +298,8 @@ describe("setup page", () => {
     expect(csp).toContain("base-uri 'none'");
     expect(csp).not.toContain("unsafe-inline");
     expect(res.headers["x-frame-options"]).toBe("DENY");
-    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    // strict-origin on the form page only, so the cross-origin POST carries a real Origin.
+    expect(res.headers["referrer-policy"]).toBe("strict-origin");
     expect(res.headers["cache-control"]).toBe("no-store");
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
@@ -612,6 +626,184 @@ describe("callback", () => {
         await harness.app.close();
         await rm(harness.dir, { recursive: true, force: true });
       }
+    }
+  });
+});
+
+describe("review round 1", () => {
+  it("item 1: a failed conversion says the app probably exists and links the user's app list", async () => {
+    h.respond = () => new Response("{}", { status: 500 });
+    const cookie = await login();
+    const { state } = await page(cookie);
+    const res = await callback(cookie, `code=${CODE}&state=${state}`);
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toContain("most likely already exists");
+    expect(res.body).toContain('href="https://github.com/settings/apps"');
+    expect(res.body).toContain("delete it");
+    expect(res.body).toContain("generate a client secret and a private key");
+  });
+
+  it("item 1: … and the organization's app list when the app was created for an org", async () => {
+    for (const respond of [
+      () => new Response("{}", { status: 502 }),
+      () => new Response("<html>", { status: 201, headers: { "content-type": "text/html" } }),
+    ]) {
+      const harness = await build({ respond });
+      try {
+        const cookie = await login(harness, "&org=rocky-reviews");
+        const { state } = await page(cookie, "?org=rocky-reviews", harness);
+        const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
+        expect(res.statusCode).toBe(502);
+        expect(res.body).toContain(
+          'href="https://github.com/organizations/rocky-reviews/settings/apps"',
+        );
+        expect(res.body).toContain("most likely already exists");
+      } finally {
+        await cleanup(harness);
+      }
+    }
+  });
+
+  it("item 2: saves the credentials without a slug when GitHub returned no usable one", async () => {
+    const full = conversion();
+    const body: Record<string, unknown> = {
+      ...full,
+      html_url: "https://github.com/users/not-an-app",
+    };
+    delete body["slug"];
+    const harness = await build({ respond: created(body) });
+    try {
+      const cookie = await login(harness, "&org=rocky-reviews");
+      const { state } = await page(cookie, "?org=rocky-reviews", harness);
+      const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
+      expect(res.statusCode).toBe(200);
+      const env = parseEnv(await readFile(harness.file, "utf8"));
+      expect(env["GITHUB_APP_SLUG"]).toBeUndefined();
+      expect(env["GITHUB_APP_CLIENT_SECRET"]).toBe(full.client_secret);
+      expect(res.body).not.toContain("installations/new");
+      expect(res.body).toContain("https://github.com/organizations/rocky-reviews/settings/apps");
+      expect(res.body).toContain("GITHUB_APP_SLUG");
+    } finally {
+      await cleanup(harness);
+    }
+  });
+
+  it("item 2: takes the slug from html_url and accepts underscores", async () => {
+    const rest: Record<string, unknown> = { ...conversion() };
+    delete rest["slug"];
+    const harness = await build({
+      respond: created({ ...rest, html_url: "https://github.com/apps/rocky_reviews-dev" }),
+    });
+    try {
+      const cookie = await login(harness);
+      const { state } = await page(cookie, "", harness);
+      const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
+      expect(res.statusCode).toBe(200);
+      expect(parseEnv(await readFile(harness.file, "utf8"))["GITHUB_APP_SLUG"]).toBe(
+        "rocky_reviews-dev",
+      );
+      expect(res.body).toContain("https://github.com/apps/rocky_reviews-dev/installations/new");
+    } finally {
+      await cleanup(harness);
+    }
+  });
+
+  it("item 4: Referrer-Policy is no-referrer everywhere except the form page", async () => {
+    const policy = (res: LightMyRequestResponse) => res.headers["referrer-policy"];
+    const denied = await h.app.inject({ method: "GET", url: "/setup/github-app" });
+    expect(policy(denied)).toBe("no-referrer");
+    const bad = await h.app.inject({ method: "GET", url: "/setup/github-app?token=nope" });
+    expect(policy(bad)).toBe("no-referrer");
+    const tokenRes = await h.app.inject({
+      method: "GET",
+      url: `/setup/github-app?token=${h.token}`,
+    });
+    expect(tokenRes.statusCode).toBe(303);
+    expect(policy(tokenRes)).toBe("no-referrer");
+    const cookie = setCookieOf(tokenRes)!.split(";")[0]!;
+    const form = await page(cookie);
+    expect(policy(form.res)).toBe("strict-origin");
+    const badCallback = await callback(cookie, `code=${CODE}&state=${"x".repeat(43)}`);
+    expect(badCallback.statusCode).toBe(403);
+    expect(policy(badCallback)).toBe("no-referrer");
+    const ok = await callback(cookie, `code=${CODE}&state=${form.state}`);
+    expect(ok.statusCode).toBe(200);
+    expect(policy(ok)).toBe("no-referrer");
+  });
+
+  it("item 5: cross-site navigations cannot mint states or evict the real one", async () => {
+    const cookie = await login();
+    const real = await page(cookie);
+    for (let i = 0; i < 25; i++) {
+      for (const site of ["cross-site", "same-site"]) {
+        const res = await h.app.inject({
+          method: "GET",
+          url: "/setup/github-app",
+          headers: { cookie, "sec-fetch-site": site },
+        });
+        expect(res.statusCode, site).toBe(403);
+        expect(res.body).not.toContain("<form");
+      }
+    }
+    for (const site of ["none", "same-origin"]) {
+      const res = await h.app.inject({
+        method: "GET",
+        url: "/setup/github-app",
+        headers: { cookie, "sec-fetch-site": site },
+      });
+      expect(res.statusCode, site).toBe(200);
+    }
+    expect((await callback(cookie, `code=${CODE}&state=${real.state}`)).statusCode).toBe(200);
+  });
+
+  it("item 11: the manifest uses GITHUB_APP_HOMEPAGE_URL when configured", async () => {
+    const homepageUrl = new URL("https://github.com/rocky-reviews/rocky");
+    const harness = await build({ homepageUrl });
+    try {
+      const cookie = await login(harness);
+      const { manifest } = await page(cookie, "", harness);
+      expect(manifest).toStrictEqual(
+        buildGitHubAppManifest({
+          name: "Rocky Reviews",
+          publicUrl: PUBLIC_URL,
+          webhookUrl: WEBHOOK_URL,
+          homepageUrl,
+        }),
+      );
+      expect((manifest as { url: string }).url).toBe("https://github.com/rocky-reviews/rocky");
+    } finally {
+      await cleanup(harness);
+    }
+  });
+
+  it("item 13: the CSP style hash is the sha256 of the page's only inline style", async () => {
+    const cookie = await login();
+    const { res } = await page(cookie);
+    const styles = [...res.body.matchAll(/<style>([^<]*)<\/style>/g)].map((m) => m[1]);
+    expect(styles).toStrictEqual([STYLE]);
+    const hash = createHash("sha256").update(STYLE, "utf8").digest("base64");
+    expect(String(res.headers["content-security-policy"])).toContain(`style-src 'sha256-${hash}';`);
+  });
+
+  it("item 13: org success path writes the file and links the org's install page", async () => {
+    const body = conversion();
+    const harness = await build({ respond: created(body) });
+    try {
+      const cookie = await login(harness, "&org=rocky-reviews");
+      const { action, state } = await page(cookie, "?org=rocky-reviews", harness);
+      expect(action).toBe(
+        `https://github.com/organizations/rocky-reviews/settings/apps/new?state=${state}`,
+      );
+      const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain("https://github.com/apps/rocky-reviews-h3/installations/new");
+      const env = parseEnv(await readFile(harness.file, "utf8"));
+      expect(env["GITHUB_APP_ID"]).toBe("98765");
+      expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(PEM);
+      expect((await stat(harness.file)).mode & 0o777).toBe(0o600);
+      expect(res.body + harness.logs.join("")).not.toContain(body.client_secret);
+    } finally {
+      await cleanup(harness);
     }
   });
 });

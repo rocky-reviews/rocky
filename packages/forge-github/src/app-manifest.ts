@@ -39,6 +39,13 @@ const ORG_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 const STATE = /^[A-Za-z0-9_-]{16,128}$/;
 /** Manifest codes GitHub returns are short hex strings; anything else never reaches a URL. */
 const MANIFEST_CODE = /^[A-Za-z0-9_-]{1,128}$/;
+/**
+ * Characters inert in a `.env` file and in a POSIX shell, quoted or not: no whitespace, quotes,
+ * `$`, `#`, backslash, backtick, `!`, `*`, `?`, `;`, `^`, `,`. Shared with the credentials writer.
+ */
+export const ENV_SAFE = /^[A-Za-z0-9._~+/=:@%-]+$/;
+/** App slugs: lower-case letters, digits, `-` and `_`. */
+const SLUG = /^[a-z0-9][a-z0-9_-]{0,99}$/;
 
 export interface GitHubAppManifest {
   name: string;
@@ -61,6 +68,8 @@ export interface ManifestOptions {
   publicUrl: URL;
   /** Receives webhooks: must be https (GitHub must reach it). */
   webhookUrl: URL;
+  /** The app's homepage on GitHub; defaults to `publicUrl` (GITHUB_APP_HOMEPAGE_URL). */
+  homepageUrl?: URL;
 }
 
 const at = (base: URL, path: string): string => new URL(path, base).href;
@@ -75,7 +84,7 @@ export const buildGitHubAppManifest = (options: ManifestOptions): GitHubAppManif
   }
   return {
     name: options.name,
-    url: options.publicUrl.href,
+    url: (options.homepageUrl ?? options.publicUrl).href,
     description: DESCRIPTION,
     hook_attributes: { url: options.webhookUrl.href, active: true },
     redirect_url: at(options.publicUrl, SETUP_CALLBACK_PATH),
@@ -143,11 +152,11 @@ export const isManifestCode = (value: unknown): value is string =>
 
 /**
  * GitHub's secret when it is safe to use as Rocky's webhook secret: long enough for
- * `checkWebhookSecret` and plain printable ASCII without quotes, `$`, `#` or backslashes (it is
- * written to an env file). `undefined` → the caller generates one and tells the human to set it.
+ * `checkWebhookSecret` and only characters that are inert in an env file and in a shell
+ * (`ENV_SAFE`). `undefined` → the caller generates one and tells the human to set it.
  */
 export const usableWebhookSecret = (secret: string | null): string | undefined => {
-  if (secret === null || !/^[A-Za-z0-9._~+/=:@%^*!,;?-]+$/.test(secret)) return undefined;
+  if (secret === null || !ENV_SAFE.test(secret)) return undefined;
   try {
     return checkWebhookSecret(secret);
   } catch {
@@ -202,7 +211,10 @@ const PrivateKeyPem = z
  */
 const ConversionResponse = z.object({
   id: z.int().min(1).max(Number.MAX_SAFE_INTEGER),
-  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/),
+  // Optional in GitHub's schema; checked separately so a missing or odd slug never loses the
+  // credentials (`slugOf`).
+  slug: z.unknown().optional(),
+  html_url: z.unknown().optional(),
   client_id: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/),
   client_secret: z.string().regex(/^[A-Za-z0-9._-]{20,255}$/),
   webhook_secret: z.string().max(1024).nullable(),
@@ -213,7 +225,8 @@ const ConversionResponse = z.object({
 
 export interface GitHubAppCredentials {
   appId: number;
-  slug: string;
+  /** Undefined when GitHub returned no usable slug (callers then omit it and the install link). */
+  slug: string | undefined;
   clientId: string;
   clientSecret: string;
   privateKeyPem: string;
@@ -223,10 +236,25 @@ export interface GitHubAppCredentials {
   events: string[];
 }
 
-const readCapped = async (response: Response, limit: number): Promise<string | undefined> => {
+/** The slug, or the last path segment of `html_url` (`https://…/apps/<slug>`), when valid. */
+const slugOf = (slug: unknown, htmlUrl: unknown): string | undefined => {
+  if (typeof slug === "string" && SLUG.test(slug)) return slug;
+  if (typeof htmlUrl !== "string") return undefined;
+  try {
+    const url = new URL(htmlUrl);
+    const match = /^\/apps\/([^/]+)\/?$/.exec(url.pathname);
+    return url.protocol === "https:" && match?.[1] !== undefined && SLUG.test(match[1])
+      ? match[1]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const readCapped = async (response: Response, limit: number): Promise<Buffer | undefined> => {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (declared > limit) return undefined;
-  if (response.body === null) return "";
+  if (response.body === null) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -240,7 +268,7 @@ const readCapped = async (response: Response, limit: number): Promise<string | u
     }
     chunks.push(value);
   }
-  return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
+  return Buffer.concat(chunks);
 };
 
 const isAbort = (error: unknown): boolean =>
@@ -262,7 +290,7 @@ export const convertManifestCode = async (options: {
   const signal = AbortSignal.timeout(options.timeoutMs ?? MANIFEST_CONVERSION_TIMEOUT_MS);
   const doFetch = options.fetch ?? fetch;
 
-  let text: string | undefined;
+  let bytes: Buffer | undefined;
   try {
     const response = await doFetch(url.href, {
       method: "POST",
@@ -283,20 +311,18 @@ export const convertManifestCode = async (options: {
       await response.body?.cancel().catch(() => undefined);
       throw new ManifestConversionError("invalid_response");
     }
-    text = await readCapped(response, MAX_CONVERSION_RESPONSE_BYTES);
+    bytes = await readCapped(response, MAX_CONVERSION_RESPONSE_BYTES);
   } catch (error) {
     if (error instanceof ManifestConversionError) throw error;
     if (signal.aborted || isAbort(error)) throw new ManifestConversionError("timeout");
-    if (error instanceof TypeError && error.message.includes("decode")) {
-      throw new ManifestConversionError("invalid_response");
-    }
     throw new ManifestConversionError("network");
   }
-  if (text === undefined) throw new ManifestConversionError("invalid_response");
+  if (bytes === undefined) throw new ManifestConversionError("invalid_response");
 
+  // Decoded outside the transport's try: invalid UTF-8 is a bad response, not a network error.
   let json: unknown;
   try {
-    json = JSON.parse(text);
+    json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new ManifestConversionError("invalid_response");
   }
@@ -305,7 +331,7 @@ export const convertManifestCode = async (options: {
   const r = parsed.data;
   return {
     appId: r.id,
-    slug: r.slug,
+    slug: slugOf(r.slug, r.html_url),
     clientId: r.client_id,
     clientSecret: r.client_secret,
     privateKeyPem: r.pem,
