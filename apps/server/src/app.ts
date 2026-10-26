@@ -1,6 +1,7 @@
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
@@ -11,6 +12,8 @@ export interface AppDeps {
   log?: Logger;
   /** Forge webhook receiver (P3-2). Omitted when no webhook secret is configured (development). */
   webhooks?: WebhookDeps;
+  /** GitHub App manifest setup (P3-1). Only when requested, outside production, unconfigured. */
+  githubAppSetup?: GitHubAppSetupDeps;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -56,6 +59,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
   });
 
   if (deps.webhooks !== undefined) registerWebhooks(app, deps.webhooks);
+  if (deps.githubAppSetup !== undefined) registerGitHubAppSetup(app, deps.githubAppSetup);
 
   return app;
 };

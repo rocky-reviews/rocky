@@ -2,9 +2,12 @@ import { createDb } from "@rocky-reviews/db";
 import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
+import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp } from "./app.js";
-import { webhookSecretFromEnv } from "./config.js";
+import { githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
+import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import type { WebhookDeps } from "./webhooks.js";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -43,15 +46,41 @@ export interface RunningServer {
   readonly app: FastifyInstance;
   readonly pool: pg.Pool;
   readonly webhooks: boolean;
+  /** Whether the GitHub App manifest setup routes are registered (P3-1). */
+  readonly githubAppSetup: boolean;
   close(): Promise<void>;
 }
+
+export interface StartOptions {
+  /**
+   * Shows the one-time setup URL to the operator. Defaults to writing to the terminal (stderr),
+   * deliberately not through the logger: log pipelines ship and retain lines, and the token is a
+   * credential (ADR 0008).
+   */
+  announce?: (text: string) => void;
+}
+
+const announceToTerminal = (text: string): void => {
+  process.stderr.write(`${text}\n`);
+};
 
 /**
  * Validates configuration (throws `ConfigError` before opening anything), builds the app on one
  * pool and listens. `main.ts` turns a ConfigError into exit code 1.
  */
-export const startServer = async (env: Env, log: Logger): Promise<RunningServer> => {
+export const startServer = async (
+  env: Env,
+  log: Logger,
+  options: StartOptions = {},
+): Promise<RunningServer> => {
   const webhookSecret = webhookSecretFromEnv(env);
+  const setup = githubAppSetupFromEnv(env, homedir());
+  let githubAppSetup: GitHubAppSetupDeps | undefined;
+  if (setup.enabled) {
+    githubAppSetup = { ...setup.config, token: randomBytes(32).toString("base64url") };
+  } else if (setup.reason === "configured" && env["GITHUB_APP_SETUP"] === "true") {
+    log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
+  }
   const pool = createServerPool(env["DATABASE_URL"], log);
 
   let webhooks: WebhookDeps | undefined;
@@ -69,6 +98,7 @@ export const startServer = async (env: Env, log: Logger): Promise<RunningServer>
     checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,
     log,
     ...(webhooks === undefined ? {} : { webhooks }),
+    ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
@@ -80,7 +110,17 @@ export const startServer = async (env: Env, log: Logger): Promise<RunningServer>
     await pool.end();
     throw error;
   }
-  log.info({ host, port, webhooks: webhooks !== undefined }, "server listening");
+  log.info(
+    { host, port, webhooks: webhooks !== undefined, githubAppSetup: githubAppSetup !== undefined },
+    "server listening",
+  );
+  if (githubAppSetup !== undefined) {
+    const url = new URL(SETUP_PATH, githubAppSetup.publicUrl);
+    url.searchParams.set("token", githubAppSetup.token);
+    (options.announce ?? announceToTerminal)(
+      `\nGitHub App setup is open. Open this one-time URL in your browser (do not share it):\n  ${url.href}\n`,
+    );
+  }
 
   // Idempotent: a second signal (or caller) awaits the same shutdown instead of ending the pool
   // twice, which pg refuses.
@@ -89,6 +129,7 @@ export const startServer = async (env: Env, log: Logger): Promise<RunningServer>
     app,
     pool,
     webhooks: webhooks !== undefined,
+    githubAppSetup: githubAppSetup !== undefined,
     close: () => {
       closing ??= (async () => {
         try {

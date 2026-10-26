@@ -120,3 +120,52 @@ describe("shutdown (review round 2, S2)", () => {
     expect(server.app.server.listening).toBe(false);
   });
 });
+
+describe("GitHub App setup at boot (P3-1)", () => {
+  const SETUP_ENV = {
+    ...BASE_ENV,
+    GITHUB_APP_SETUP: "true",
+    ROCKY_PUBLIC_URL: "http://127.0.0.1:4310",
+    GITHUB_APP_CREDENTIALS_FILE: "/nonexistent-rocky-test/github-app.env",
+  };
+
+  it("prints the one-time setup URL to the terminal only, never to the logger", async () => {
+    const { log, lines } = capture();
+    const printed: string[] = [];
+    running = await startServer(SETUP_ENV, log, { announce: (text) => printed.push(text) });
+    expect(running.githubAppSetup).toBe(true);
+    expect(printed).toHaveLength(1);
+    const token = /\/setup\/github-app\?token=([A-Za-z0-9_-]{43})/.exec(printed[0]!)?.[1];
+    expect(token).toBeDefined();
+    expect(printed[0]).toContain("http://127.0.0.1:4310/setup/github-app?token=");
+    expect(JSON.stringify(lines)).not.toContain(token);
+    expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({
+      githubAppSetup: true,
+    });
+    const res = await running.app.inject({
+      method: "GET",
+      url: `/setup/github-app?token=${token}`,
+    });
+    expect(res.statusCode).toBe(303);
+  });
+
+  it("generates a different token on every boot", async () => {
+    const tokens: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const { log } = capture();
+      const server = await startServer(SETUP_ENV, log, { announce: (t) => tokens.push(t) });
+      await server.close();
+    }
+    expect(tokens[0]).not.toBe(tokens[1]);
+  });
+
+  it("registers no setup route when not requested", async () => {
+    const { log } = capture();
+    const printed: string[] = [];
+    running = await startServer(BASE_ENV, log, { announce: (t) => printed.push(t) });
+    expect(running.githubAppSetup).toBe(false);
+    expect(printed).toHaveLength(0);
+    const res = await running.app.inject({ method: "GET", url: "/setup/github-app" });
+    expect(res.statusCode).toBe(404);
+  });
+});
