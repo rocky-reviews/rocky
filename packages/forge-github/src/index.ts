@@ -8,3 +8,23 @@ export {
   signWebhookBody,
   WebhookSecretError,
 } from "./signature.js";
+export {
+  buildGitHubAppManifest,
+  convertManifestCode,
+  GITHUB_APP_EVENTS,
+  GITHUB_APP_PERMISSIONS,
+  githubEndpoints,
+  isManifestCode,
+  isOrganizationLogin,
+  manifestFormAction,
+  ManifestConversionError,
+  MANIFEST_CONVERSION_TIMEOUT_MS,
+  OAUTH_CALLBACK_PATH,
+  SETUP_CALLBACK_PATH,
+  usableWebhookSecret,
+  widenedGrants,
+  type GitHubAppCredentials,
+  type GitHubAppManifest,
+  type GitHubEndpoints,
+  type ManifestConversionFailure,
+} from "./app-manifest.js";

@@ -1,0 +1,417 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  buildGitHubAppManifest,
+  convertManifestCode,
+  isManifestCode,
+  isOrganizationLogin,
+  manifestFormAction,
+  ManifestConversionError,
+  usableWebhookSecret,
+  widenedGrants,
+  type GitHubEndpoints,
+} from "@rocky-reviews/forge-github";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import {
+  checkCredentialsTarget,
+  CredentialsFileError,
+  credentialsEnvText,
+  writeCredentialsOnce,
+} from "./credentials-file.js";
+
+/**
+ * GitHub App manifest flow for self-hosters (P3-1, ADR 0008).
+ *
+ *   GET /setup/github-app?token=T  one-time boot token → session cookie, 303 to the page
+ *   GET /setup/github-app          (session) page with a form that POSTs the manifest to GitHub
+ *   GET /setup/github-app/callback (session) `code` + `state` → one conversion → credentials file
+ *
+ * Registered only when explicitly requested outside production and no app is configured
+ * (`githubAppSetupFromEnv`); every route answers 404 once an app has been created. Secrets from
+ * the conversion go to the credentials file only: never to logs, responses or the database.
+ */
+
+export const SETUP_PATH = "/setup/github-app";
+export const SETUP_CALLBACK = "/setup/github-app/callback";
+export const SETUP_COOKIE = "rocky_setup";
+/** A setup session lasts one hour (GitHub's manifest code also lives one hour). */
+export const SETUP_SESSION_TTL_MS = 60 * 60 * 1000;
+/** Time to click "Create GitHub App" on GitHub after the page was rendered. */
+export const SETUP_STATE_TTL_MS = 30 * 60 * 1000;
+/** Outstanding states per session; older ones are dropped. */
+const MAX_STATES = 10;
+
+export interface GitHubAppSetupConfig {
+  publicUrl: URL;
+  /** https; undefined → the page explains what to set instead of rendering a form. */
+  webhookUrl: URL | undefined;
+  appName: string;
+  endpoints: GitHubEndpoints;
+  /** Absolute path; written once with mode 0600. */
+  credentialsFile: string;
+}
+
+export interface GitHubAppSetupDeps extends GitHubAppSetupConfig {
+  /** One-time token printed to the server's terminal at boot (never logged). */
+  token: string;
+  fetch?: typeof fetch;
+  now?: () => number;
+}
+
+const sha256 = (value: string): Buffer => createHash("sha256").update(value, "utf8").digest();
+const randomToken = (): string => randomBytes(32).toString("base64url");
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+
+const escapeHtml = (value: string): string =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
+/** No colours: browser defaults with `color-scheme`, so both themes work and lint stays clean. */
+const STYLE =
+  ":root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}code{word-break:break-all}button{font:inherit;padding:.5rem 1rem}";
+const STYLE_HASH = createHash("sha256").update(STYLE).digest("base64");
+
+const securityHeaders = (reply: FastifyReply, formOrigin: string): void => {
+  void reply
+    .header(
+      "content-security-policy",
+      `default-src 'none'; style-src 'sha256-${STYLE_HASH}'; form-action ${formOrigin}; frame-ancestors 'none'; base-uri 'none'`,
+    )
+    .header("x-frame-options", "DENY")
+    .header("referrer-policy", "no-referrer")
+    .header("cache-control", "no-store")
+    .header("x-content-type-options", "nosniff")
+    .header("cross-origin-opener-policy", "same-origin");
+};
+
+/** `body` is trusted markup built here; every dynamic value in it is passed through escapeHtml. */
+const html = (title: string, body: string): string =>
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
+
+const send = (reply: FastifyReply, status: number, title: string, body: string) =>
+  reply.code(status).type("text/html; charset=utf-8").send(html(title, body));
+
+const NOT_FOUND = { message: "Route not found", error: "Not Found", statusCode: 404 } as const;
+
+interface Session {
+  expiresAt: number;
+}
+interface PendingState {
+  session: string;
+  org: string | undefined;
+  expiresAt: number;
+}
+
+/** Single-valued string query parameter; arrays (repeated params) and others → undefined. */
+const param = (request: FastifyRequest, name: string): string | undefined | null => {
+  const query = request.query as Record<string, unknown>;
+  if (!Object.hasOwn(query, name)) return undefined;
+  const value = query[name];
+  return typeof value === "string" ? value : null;
+};
+
+const cookieValue = (request: FastifyRequest): string | undefined => {
+  const header = request.headers.cookie;
+  if (typeof header !== "string") return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq !== -1 && part.slice(0, eq).trim() === SETUP_COOKIE) {
+      const value = part.slice(eq + 1).trim();
+      return TOKEN_SHAPE.test(value) ? value : undefined;
+    }
+  }
+  return undefined;
+};
+
+export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetupDeps): void => {
+  const now = deps.now ?? Date.now;
+  const tokenHash = sha256(deps.token);
+  let tokenUsed = false;
+  let done = false;
+  let exchanging = false;
+  /** Keyed by sha256(session id) hex; the cookie value is never stored. */
+  const sessions = new Map<string, Session>();
+  /** Keyed by sha256(state) hex. */
+  const states = new Map<string, PendingState>();
+  /** sha256 of every code ever presented to GitHub. */
+  const usedCodes = new Set<string>();
+  const formOrigin = deps.endpoints.web.origin;
+  const secure = deps.publicUrl.protocol === "https:";
+
+  const prune = (): void => {
+    const t = now();
+    for (const [k, s] of sessions) if (s.expiresAt <= t) sessions.delete(k);
+    for (const [k, s] of states) if (s.expiresAt <= t) states.delete(k);
+  };
+
+  const sessionOf = (request: FastifyRequest): string | undefined => {
+    prune();
+    const value = cookieValue(request);
+    if (value === undefined) return undefined;
+    const key = sha256(value).toString("hex");
+    return sessions.has(key) ? key : undefined;
+  };
+
+  const log = (
+    request: FastifyRequest,
+    level: "info" | "warn" | "error",
+    outcome: string,
+    extra = {},
+  ) => request.log[level]({ githubAppSetup: { outcome, ...extra } }, "github app setup");
+
+  const forbidden = (reply: FastifyReply) =>
+    send(
+      reply,
+      403,
+      "Setup link required",
+      "<p>Open the one-time setup URL printed in the server's terminal. If you already used it, restart the server to get a new one.</p>",
+    );
+
+  void app.register(async (scope) => {
+    scope.addHook("onRequest", async (_request, reply) => {
+      securityHeaders(reply, formOrigin);
+      if (done) return reply.code(404).send(NOT_FOUND);
+      return undefined;
+    });
+
+    scope.get(SETUP_PATH, async (request, reply) => {
+      const token = param(request, "token");
+      const org = param(request, "org");
+      if (org === null || (org !== undefined && !isOrganizationLogin(org))) {
+        log(request, "warn", "bad_org");
+        return send(
+          reply,
+          400,
+          "Invalid organization",
+          "<p>The organization login is not valid.</p>",
+        );
+      }
+
+      if (token !== undefined) {
+        // Hash both sides to a fixed length, then compare in constant time.
+        const ok = token !== null && !tokenUsed && timingSafeEqual(sha256(token), tokenHash);
+        if (!ok) {
+          log(request, "warn", "bad_token");
+          return forbidden(reply);
+        }
+        tokenUsed = true;
+        const session = randomToken();
+        sessions.set(sha256(session).toString("hex"), { expiresAt: now() + SETUP_SESSION_TTL_MS });
+        log(request, "info", "session_started");
+        const cookie = [
+          `${SETUP_COOKIE}=${session}`,
+          `Path=${SETUP_PATH}`,
+          `Max-Age=${SETUP_SESSION_TTL_MS / 1000}`,
+          "HttpOnly",
+          "SameSite=Lax",
+          ...(secure ? ["Secure"] : []),
+        ].join("; ");
+        // Fixed, relative target: the only dynamic part is a validated organization login.
+        const location = org === undefined ? SETUP_PATH : `${SETUP_PATH}?org=${org}`;
+        return reply.code(303).header("set-cookie", cookie).header("location", location).send();
+      }
+
+      const session = sessionOf(request);
+      if (session === undefined) {
+        log(request, "warn", "no_session");
+        return forbidden(reply);
+      }
+      if (deps.webhookUrl === undefined) {
+        return send(
+          reply,
+          409,
+          "Webhook URL needed",
+          "<p>GitHub must reach Rocky's webhook receiver over https. Set <code>GITHUB_APP_WEBHOOK_URL</code> (for local development, a smee.io channel URL; see <code>docs/runbooks/h3-create-github-app.md</code>) or an https <code>ROCKY_PUBLIC_URL</code>, then restart the server.</p>",
+        );
+      }
+
+      // Before sending the human to GitHub: the conversion's secrets can be fetched only once.
+      try {
+        await checkCredentialsTarget(deps.credentialsFile);
+      } catch (error) {
+        const reason = error instanceof CredentialsFileError ? error.reason : "io";
+        log(request, "warn", "credentials_target_unusable", { reason });
+        return send(
+          reply,
+          409,
+          "Credentials file unusable",
+          `<p>Rocky will not overwrite <code>${escapeHtml(deps.credentialsFile)}</code> or write into a directory others can modify (${escapeHtml(reason)}). Move it away or set <code>GITHUB_APP_CREDENTIALS_FILE</code>, then reload.</p>`,
+        );
+      }
+
+      const state = randomToken();
+      const mine = [...states].filter(([, s]) => s.session === session);
+      for (const [key] of mine.slice(0, Math.max(0, mine.length - (MAX_STATES - 1)))) {
+        states.delete(key);
+      }
+      states.set(sha256(state).toString("hex"), {
+        session,
+        org,
+        expiresAt: now() + SETUP_STATE_TTL_MS,
+      });
+      const manifest = buildGitHubAppManifest({
+        name: deps.appName,
+        publicUrl: deps.publicUrl,
+        webhookUrl: deps.webhookUrl,
+      });
+      const action = manifestFormAction(deps.endpoints, state, org);
+      const owner = org === undefined ? "your personal account" : `the organization ${org}`;
+      log(request, "info", "page_rendered", { org: org !== undefined });
+      return send(
+        reply,
+        200,
+        "Create the Rocky Reviews GitHub App",
+        `<p>This creates a private GitHub App owned by ${escapeHtml(owner)} with read access to code, checks and metadata and write access to pull requests (to post reviews a person submits). GitHub shows the details before you confirm.</p>` +
+          `<form method="post" action="${escapeHtml(action)}"><input type="hidden" name="manifest" value="${escapeHtml(JSON.stringify(manifest))}"><button type="submit">Continue to GitHub</button></form>` +
+          `<p>To create it under an organization instead, open <code>${escapeHtml(SETUP_PATH)}?org=&lt;organization&gt;</code>.</p>`,
+      );
+    });
+
+    scope.get(SETUP_CALLBACK, async (request, reply) => {
+      const session = sessionOf(request);
+      if (session === undefined) {
+        log(request, "warn", "no_session");
+        return forbidden(reply);
+      }
+      const code = param(request, "code");
+      const state = param(request, "state");
+      if (typeof state !== "string" || !TOKEN_SHAPE.test(state) || !isManifestCode(code)) {
+        log(request, "warn", "bad_parameters");
+        return send(
+          reply,
+          400,
+          "Invalid callback",
+          "<p>The callback parameters are missing or malformed. Start again from the setup page.</p>",
+        );
+      }
+      const stateKey = sha256(state).toString("hex");
+      const pending = states.get(stateKey);
+      // Single use: removed on first presentation, whatever happens next.
+      if (pending !== undefined) states.delete(stateKey);
+      if (pending === undefined || pending.session !== session || pending.expiresAt <= now()) {
+        log(request, "warn", "bad_state");
+        return send(
+          reply,
+          403,
+          "Invalid or expired state",
+          "<p>Start again from the setup page.</p>",
+        );
+      }
+      const codeKey = sha256(code).toString("hex");
+      if (exchanging || usedCodes.has(codeKey)) {
+        log(request, "warn", exchanging ? "busy" : "code_reused");
+        return send(
+          reply,
+          409,
+          "Already in progress or used",
+          "<p>This code was already used, or another attempt is running. Start again from the setup page.</p>",
+        );
+      }
+      // Claimed synchronously, before any await, so concurrent callbacks cannot both pass.
+      exchanging = true;
+      usedCodes.add(codeKey);
+      try {
+        // Refuse before the exchange: GitHub returns the secrets only once.
+        try {
+          await checkCredentialsTarget(deps.credentialsFile);
+        } catch (error) {
+          const reason = error instanceof CredentialsFileError ? error.reason : "io";
+          log(request, "error", "credentials_target_unusable", { reason });
+          return send(
+            reply,
+            409,
+            "Credentials file unusable",
+            `<p>Rocky will not overwrite <code>${escapeHtml(deps.credentialsFile)}</code> or write into a directory others can modify (${escapeHtml(reason)}), so it did not fetch the new app's credentials. Delete the app on GitHub (Settings → Developer settings → GitHub Apps), fix the file, restart the server and start again.</p>`,
+          );
+        }
+
+        let credentials;
+        try {
+          credentials = await convertManifestCode({
+            api: deps.endpoints.api,
+            code,
+            ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
+          });
+        } catch (error) {
+          const e = error instanceof ManifestConversionError ? error : undefined;
+          log(request, "error", "conversion_failed", {
+            reason: e?.reason ?? "unknown",
+            ...(e?.status === undefined ? {} : { status: e.status }),
+          });
+          return send(
+            reply,
+            502,
+            "GitHub did not complete the setup",
+            `<p>Converting the code failed (${escapeHtml(e?.reason ?? "unknown")}${e?.status === undefined ? "" : ` ${e.status}`}). Codes expire after an hour and work once. Start again from the setup page.</p>`,
+          );
+        }
+
+        const settings = new URL(
+          pending.org === undefined
+            ? `settings/apps/${credentials.slug}/advanced`
+            : `organizations/${pending.org}/settings/apps/${credentials.slug}/advanced`,
+          deps.endpoints.web,
+        ).href;
+        const widened = widenedGrants(credentials.permissions, credentials.events);
+        if (widened.length > 0) {
+          log(request, "error", "grants_widened", { widened });
+          return send(
+            reply,
+            502,
+            "The app has more access than Rocky asked for",
+            `<p>GitHub reports permissions or events beyond the manifest, so Rocky did not save the credentials. Please delete this app (Danger zone at <a href="${escapeHtml(settings)}">${escapeHtml(settings)}</a>) and start again.</p>`,
+          );
+        }
+
+        const githubSecret = usableWebhookSecret(credentials.webhookSecret);
+        const webhookSecret = githubSecret ?? randomBytes(32).toString("hex");
+        const webhookSecretSource = githubSecret === undefined ? "generated" : "github";
+        try {
+          await writeCredentialsOnce(
+            deps.credentialsFile,
+            credentialsEnvText({
+              appId: credentials.appId,
+              slug: credentials.slug,
+              clientId: credentials.clientId,
+              clientSecret: credentials.clientSecret,
+              privateKeyPem: credentials.privateKeyPem,
+              webhookSecret,
+              webhookSecretSource,
+            }),
+          );
+        } catch (error) {
+          const reason = error instanceof CredentialsFileError ? error.reason : "io";
+          log(request, "error", "credentials_write_failed", { reason });
+          return send(
+            reply,
+            500,
+            "Could not save the credentials",
+            `<p>The app was created on GitHub but its credentials could not be written (${escapeHtml(reason)}). They cannot be fetched again: delete the app (<a href="${escapeHtml(settings)}">${escapeHtml(settings)}</a>) and start again.</p>`,
+          );
+        }
+
+        done = true;
+        sessions.clear();
+        states.clear();
+        log(request, "info", "created", { webhookSecretSource });
+        const install = new URL(`apps/${credentials.slug}/installations/new`, deps.endpoints.web)
+          .href;
+        return send(
+          reply,
+          200,
+          "GitHub App created",
+          `<p>The credentials were written once to <code>${escapeHtml(deps.credentialsFile)}</code> (readable only by you). Move them into your secret manager, or <code>.env</code> in development, then delete the file.</p>` +
+            (webhookSecretSource === "generated"
+              ? `<p><strong>Webhook secret:</strong> GitHub did not return a usable one, so Rocky generated <code>GITHUB_WEBHOOK_SECRET</code> in that file. Paste it into the app's webhook settings on GitHub before installing.</p>`
+              : "") +
+            `<p>Next, install the app on your repositories: <a href="${escapeHtml(install)}">${escapeHtml(install)}</a>. Setup is now closed on this server.</p>`,
+        );
+      } finally {
+        exchanging = false;
+      }
+    });
+  });
+};

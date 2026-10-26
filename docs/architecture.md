@@ -5,7 +5,8 @@ Decisions behind this page:
 [ADR 0004 schema-first LLM](adr/0004-schema-first-llm.md),
 [ADR 0005 migrations and roles](adr/0005-migrations-and-roles.md),
 [ADR 0006 envelope encryption](adr/0006-envelope-encryption.md),
-[ADR 0007 forge port and webhook inbox](adr/0007-webhook-inbox.md).
+[ADR 0007 forge port and webhook inbox](adr/0007-webhook-inbox.md),
+[ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md).
 
 ## Runtime
 
@@ -67,6 +68,11 @@ packages/schema (analysis document; shared contract)
   `app.webhook_deliveries`, a non-tenant inbox (installations precede orgs) that the app role can
   only `INSERT` into, deduplicated by delivery id and body sha256 in the database. The worker
   consumes it and re-reads state from the forge before acting.
+- GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
+  only, one-time token printed to the terminal); four permissions (`contents:read`,
+  `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event
+  (`pull_request`), pinned by a test. The conversion's credentials are written once to a
+  `0600` file for the operator's secret manager; they are never logged or stored in the database.
 - `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and
   it refuses transaction-control, role and `app.*` statements. Detached work (timers, listeners)
   must start its own `withOrg` from outside.
