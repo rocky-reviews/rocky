@@ -82,12 +82,15 @@ describe("LocalKeyWrapper", () => {
     });
   });
 
-  it("zeroes its KEKs on destroy and refuses further use", async () => {
-    const copy = Buffer.from(kek1);
-    const wrapper = new LocalKeyWrapper({ v1: copy });
+  it("refuses further use after destroy and leaves the caller's buffer alone", async () => {
+    const mine = Buffer.from(kek1);
+    const wrapper = new LocalKeyWrapper({ v1: mine });
     const wrapped = await wrapper.wrap(randomBytes(32), ctx);
     wrapper.destroy();
-    expect(copy.every((b) => b === 0)).toBe(true);
+    expect(mine.equals(kek1)).toBe(true);
+    await expect(wrapper.wrap(randomBytes(32), ctx)).rejects.toMatchObject({
+      code: "keyring_destroyed",
+    });
     await expect(wrapper.unwrap(wrapped.blob, "v1", ctx)).rejects.toMatchObject({
       code: "keyring_destroyed",
     });

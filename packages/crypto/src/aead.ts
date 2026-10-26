@@ -41,10 +41,17 @@ export const open = (key: Uint8Array, sealed: Sealed, aad: Uint8Array): Buffer =
   const decipher = createDecipheriv(ALGORITHM, key, sealed.nonce, { authTagLength: TAG_LENGTH });
   decipher.setAAD(aad, { plaintextLength: sealed.ciphertext.length });
   decipher.setAuthTag(sealed.tag);
+  // The cipher hands back plaintext in chunks; they are copied into one buffer and then zeroed,
+  // so only the returned buffer (which the caller owns and zeroes) holds the plaintext.
+  const chunks: Buffer[] = [];
   try {
-    return Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]);
+    chunks.push(decipher.update(sealed.ciphertext));
+    chunks.push(decipher.final());
+    return Buffer.concat(chunks);
   } catch {
     throw new CryptoError("authentication_failed");
+  } finally {
+    for (const chunk of chunks) zero(chunk);
   }
 };
 

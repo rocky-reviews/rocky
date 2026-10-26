@@ -30,10 +30,23 @@ export interface KeyWrapper {
 export const KEK_KEYS_ENV = "ROCKY_KEK_KEYS";
 export const KEK_CURRENT_ENV = "ROCKY_KEK_CURRENT";
 
+/**
+ * A real 256-bit key has about 28 distinct byte values; fewer than this means a placeholder
+ * (all zeros, a repeated byte, an ASCII string) was pasted in. The chance that a random key
+ * fails this check is far below 1e-10.
+ */
+export const MIN_DISTINCT_KEY_BYTES = 16;
+
 const KEK_VERSION_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 const WRAP_PURPOSE = "data_key";
 
 export const isKekVersion = (value: string): boolean => KEK_VERSION_PATTERN.test(value);
+
+/** A KEK must be exactly 32 bytes and look random. */
+export const assertStrongKey = (key: Uint8Array): void => {
+  assertKey(key);
+  if (new Set(key).size < MIN_DISTINCT_KEY_BYTES) throw new CryptoError("invalid_key");
+};
 
 const wrapAad = (context: WrapContext): Buffer => {
   if (!Number.isSafeInteger(context.dataKeyVersion) || context.dataKeyVersion < 1) {
@@ -45,24 +58,35 @@ const wrapAad = (context: WrapContext): Buffer => {
   return encodeAad([context.orgId, WRAP_PURPOSE, String(context.dataKeyVersion)]);
 };
 
+/** KEKs by version id, in the order they were listed (the last one is the default current). */
+export type KekEntries =
+  Iterable<readonly [string, Uint8Array]> | Readonly<Record<string, Uint8Array>>;
+
+const toEntries = (keys: KekEntries): (readonly [string, Uint8Array])[] =>
+  typeof keys === "object" && Symbol.iterator in keys
+    ? [...(keys as Iterable<readonly [string, Uint8Array]>)]
+    : Object.entries(keys as Readonly<Record<string, Uint8Array>>);
+
 /**
  * Local `KeyWrapper`: AES-256-GCM with 32-byte KEKs held in memory. Blob layout:
- * `nonce(12) || tag(16) || wrapped key(32)`.
+ * `nonce(12) || tag(16) || wrapped key(32)`. Key bytes are copied on construction, so the
+ * caller's buffers are neither shared nor zeroed by `destroy()`.
  */
 export class LocalKeyWrapper implements KeyWrapper {
   readonly currentKekVersion: string;
   readonly #keys: Map<string, Uint8Array>;
   #destroyed = false;
 
-  constructor(keys: Readonly<Record<string, Uint8Array>>, currentKekVersion?: string) {
-    const entries = Object.entries(keys);
+  constructor(keys: KekEntries, currentKekVersion?: string) {
+    const entries = toEntries(keys);
     if (entries.length === 0) throw new CryptoError("invalid_key");
+    this.#keys = new Map();
     for (const [version, key] of entries) {
-      if (!isKekVersion(version)) throw new CryptoError("invalid_key");
-      assertKey(key);
+      if (!isKekVersion(version) || this.#keys.has(version)) throw new CryptoError("invalid_key");
+      assertStrongKey(key);
+      this.#keys.set(version, Buffer.from(key));
     }
-    this.#keys = new Map(entries);
-    const current = currentKekVersion ?? entries.at(-1)?.[0] ?? "";
+    const current = currentKekVersion ?? entries[entries.length - 1]?.[0] ?? "";
     if (!this.#keys.has(current)) throw new CryptoError("unknown_key_version");
     this.currentKekVersion = current;
   }
@@ -109,7 +133,7 @@ export class LocalKeyWrapper implements KeyWrapper {
     });
   }
 
-  /** Zeroes every KEK. The wrapper refuses all calls afterwards. */
+  /** Zeroes every KEK copy it holds. The wrapper refuses all calls afterwards. */
   destroy(): void {
     for (const key of this.#keys.values()) zero(key);
     this.#keys.clear();
@@ -132,21 +156,26 @@ const decodeBase64Strict = (value: string): Buffer => {
 /**
  * Builds a `LocalKeyWrapper` from the environment:
  * `ROCKY_KEK_KEYS="v1=<base64 32 bytes>,v2=<base64 32 bytes>"` and optionally
- * `ROCKY_KEK_CURRENT=v2` (default: the last entry). Errors never echo the values.
+ * `ROCKY_KEK_CURRENT=v2` (default: the last entry as listed). Errors never echo the values.
  */
 export const localKeyWrapperFromEnv = (
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): LocalKeyWrapper => {
   const raw = env[KEK_KEYS_ENV];
   if (raw === undefined || raw.trim() === "") throw new CryptoError("invalid_key");
-  const keys: Record<string, Uint8Array> = {};
+  const entries: [string, Uint8Array][] = [];
+  const seen = new Set<string>();
   for (const entry of raw.split(",")) {
     const separator = entry.indexOf("=");
     if (separator <= 0) throw new CryptoError("invalid_key");
     const version = entry.slice(0, separator).trim();
-    if (!isKekVersion(version) || version in keys) throw new CryptoError("invalid_key");
-    keys[version] = decodeBase64Strict(entry.slice(separator + 1).trim());
+    if (!isKekVersion(version) || seen.has(version)) throw new CryptoError("invalid_key");
+    seen.add(version);
+    entries.push([version, decodeBase64Strict(entry.slice(separator + 1).trim())]);
   }
   const current = env[KEK_CURRENT_ENV]?.trim();
-  return new LocalKeyWrapper(keys, current === undefined || current === "" ? undefined : current);
+  return new LocalKeyWrapper(
+    entries,
+    current === undefined || current === "" ? undefined : current,
+  );
 };

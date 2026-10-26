@@ -33,11 +33,15 @@ const base64Needles = (secret: Buffer, encoding: "base64" | "base64url"): string
   return needles;
 };
 
+/** pg_dump's COPY text format escapes backslash, newline, tab and carriage return. */
+const copyEscape = (text: string): string =>
+  text.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\t/g, "\\t").replace(/\r/g, "\\r");
+
 const needlesFor = (secret: string, encoding: LeakEncoding): string[] => {
   const bytes = Buffer.from(secret, "utf8");
   switch (encoding) {
     case "utf8":
-      return [secret];
+      return [...new Set([secret, copyEscape(secret)])];
     case "hex":
       return [bytes.toString("hex"), bytes.toString("hex").toUpperCase()];
     case "base64":

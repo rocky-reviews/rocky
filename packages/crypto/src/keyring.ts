@@ -116,7 +116,9 @@ export const decodeWrappedDataKey = (text: string): WrappedDataKey => {
   if (!DATA_KEY_VERSION_PATTERN.test(version) || !isKekVersion(kekVersion)) {
     throw new CryptoError("malformed_ciphertext");
   }
-  return { version: Number(version), kekVersion, blob: decodeBase64UrlStrict(blob) };
+  const number = Number(version);
+  assertVersion(number); // the pattern alone admits values above u32 MAX_VERSION
+  return { version: number, kekVersion, blob: decodeBase64UrlStrict(blob) };
 };
 
 const assertKeySet = (keys: readonly WrappedDataKey[]): void => {
