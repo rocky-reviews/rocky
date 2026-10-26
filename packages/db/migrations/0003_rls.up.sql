@@ -1,0 +1,57 @@
+-- 0003 row-level security and application grants (P2-2, ADR 0003).
+--
+-- For every tenant table: enable RLS, FORCE it (so the owner is subject to it too), one policy
+-- for the application role that filters reads and checks writes against the current tenant,
+-- and exactly the DML privileges the application needs. There is no policy for PUBLIC and no
+-- permissive fallback: a role without a policy sees nothing.
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'members', 'repos', 'pull_requests', 'pr_revisions', 'analyses', 'findings_state',
+    'comments_pending', 'memory_entries', 'embeddings', 'audit_events', 'llm_usage', 'jobs'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE public.%I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format(
+      'CREATE POLICY %I ON public.%I FOR ALL TO rocky_app
+         USING (org_id = app.current_org_id())
+         WITH CHECK (org_id = app.current_org_id())',
+      t || '_tenant', t);
+  END LOOP;
+END
+$$;
+
+-- orgs is the tenant root: its tenant column is `id`.
+ALTER TABLE orgs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orgs FORCE ROW LEVEL SECURITY;
+CREATE POLICY orgs_tenant ON orgs FOR ALL TO rocky_app
+  USING (id = app.current_org_id())
+  WITH CHECK (id = app.current_org_id());
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON
+  members, repos, pull_requests, pr_revisions, analyses, findings_state,
+  comments_pending, memory_entries, embeddings, llm_usage, jobs
+TO rocky_app;
+
+-- The tenant root is never deleted by the application: a DELETE here cascades through every
+-- tenant table, skipping the deletion grace period, and leaves no audit trail. Erasure goes
+-- through retention.delete_org (0005). No DELETE privilege, and a restrictive policy on top so
+-- a stray future GRANT still matches no row.
+GRANT SELECT, INSERT, UPDATE ON orgs TO rocky_app;
+CREATE POLICY orgs_app_no_delete ON orgs AS RESTRICTIVE FOR DELETE TO rocky_app USING (false);
+
+-- Append-only for the application (trigger in 0004 adds the same rule for everyone else).
+GRANT SELECT, INSERT ON audit_events TO rocky_app;
+
+-- No temporary objects: pg_temp is searched before public for unqualified names, so a TEMP
+-- table or function created on a pooled connection could shadow a tenant table for the next
+-- user of that connection. The database owner can revoke this from PUBLIC.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM rocky_app, rocky_retention', current_database());
+END
+$$;

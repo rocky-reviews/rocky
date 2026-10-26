@@ -10,7 +10,7 @@
     "node": ">=24.11.0"
   },
   "scripts": {
-    "dev": "node scripts/ensure-env.mjs && docker compose -f docker-compose.dev.yml up -d --wait && pnpm --parallel --filter \"./apps/*\" dev",
+    "dev": "node scripts/ensure-env.mjs && docker compose -f docker-compose.dev.yml up -d --wait && pnpm db:migrate && pnpm --parallel --filter \"./apps/*\" dev",
     "dev:down": "docker compose -f docker-compose.dev.yml down",
     "seed": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/seed.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
@@ -24,7 +24,8 @@
     "prepare": "simple-git-hooks",
     "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh",
     "schema:emit": "tsx packages/schema/scripts/emit.ts",
-    "schema:fixtures": "tsx packages/schema/scripts/generate-large-fixture.ts"
+    "schema:fixtures": "tsx packages/schema/scripts/generate-large-fixture.ts",
+    "db:migrate": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/migrate.ts"
   },
   "simple-git-hooks": {
     "pre-commit": "sh scripts/precommit.sh"
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.64.1",
+    "@rocky-reviews/db": "workspace:*",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.0.5",

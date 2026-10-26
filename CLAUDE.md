@@ -52,5 +52,6 @@ decisions, hosting costs): reference task IDs only.
 
 - `pnpm dev` — Postgres (Docker) + server (127.0.0.1:4310) + worker + web (5173)
 - `pnpm verify` — everything CI runs
-- `pnpm seed` — check the dev database and extensions
+- `pnpm db:migrate` — apply SQL migrations as the owner (`DATABASE_ADMIN_URL`); `down [n]`, `status`
+- `pnpm seed` — check the dev database, extensions and the app role; applies migrations
 - `pnpm design:poc-screenshots` — regenerate POC reference screenshots
