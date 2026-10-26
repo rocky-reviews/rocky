@@ -10,6 +10,7 @@ import {
   widenedGrants,
   type GitHubEndpoints,
 } from "@rocky-reviews/forge-github";
+import rateLimit from "@fastify/rate-limit";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   checkCredentialsTarget,
@@ -41,6 +42,8 @@ export const SETUP_STATE_TTL_MS = 30 * 60 * 1000;
 const MAX_STATES = 10;
 /** Wrong setup tokens tolerated before token redemption locks until the server restarts. */
 export const MAX_TOKEN_FAILURES = 20;
+/** Requests per client per minute across the setup routes; a person needs a handful. */
+export const SETUP_RATE_LIMIT_PER_MINUTE = 100;
 
 export interface GitHubAppSetupConfig {
   publicUrl: URL;
@@ -191,6 +194,11 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
     );
 
   void app.register(async (scope) => {
+    // Scoped to the setup routes: registered inside this encapsulated context.
+    await scope.register(rateLimit, {
+      max: SETUP_RATE_LIMIT_PER_MINUTE,
+      timeWindow: 60_000,
+    });
     scope.addHook("onRequest", async (_request, reply) => {
       securityHeaders(reply, formOrigin);
       if (done) return reply.code(404).send(NOT_FOUND);

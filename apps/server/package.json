@@ -9,6 +9,7 @@
     "dev": "tsx watch --env-file=../../.env src/main.ts"
   },
   "dependencies": {
+    "@fastify/rate-limit": "11.2.1",
     "@rocky-reviews/core": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/forge-github": "workspace:*",

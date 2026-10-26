@@ -11,6 +11,7 @@ import { buildApp } from "./app.js";
 import { createHash } from "node:crypto";
 import {
   MAX_TOKEN_FAILURES,
+  SETUP_RATE_LIMIT_PER_MINUTE,
   STYLE,
   SETUP_COOKIE,
   SETUP_SESSION_TTL_MS,
@@ -214,6 +215,17 @@ describe("setup token (one-time, from the server terminal)", () => {
     const res = await h.app.inject({ method: "GET", url: `/setup/github-app?token=${h.token}` });
     expect(res.statusCode).toBe(403);
     expect(setCookieOf(res)).toBeUndefined();
+  });
+
+  it("rate-limits the setup routes per client, and only them", async () => {
+    let last = 0;
+    for (let i = 0; i <= SETUP_RATE_LIMIT_PER_MINUTE; i++) {
+      last = (await h.app.inject({ method: "GET", url: "/setup/github-app" })).statusCode;
+    }
+    expect(last).toBe(429);
+    const callback = await h.app.inject({ method: "GET", url: "/setup/github-app/callback" });
+    expect(callback.statusCode).toBe(429);
+    expect((await h.app.inject({ method: "GET", url: "/healthz" })).statusCode).not.toBe(429);
   });
 
   it("still accepts the right token after fewer wrong ones than the limit", async () => {
