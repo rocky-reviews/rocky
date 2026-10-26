@@ -42,6 +42,14 @@ Approved with these minor items open:
 - Plain `SET` (e.g. `search_path`, `statement_timeout`) inside `withOrg` persists on the pooled connection for the next tenant. It can't expose data (the app can't create objects), but it can break queries. Run `RESET ALL` before `begin`, or refuse `SET` that isn't `SET LOCAL`.
 - Nits: revoke the `lo_*` large-object functions from PUBLIC (global storage outside tenancy); use `search_path = pg_catalog, pg_temp` on the SECURITY DEFINER functions.
 
+### P2-3 dump-test review follow-ups
+
+Approved with these minor items open:
+
+- `findKeyMaterial` (`packages/crypto/src/testing.ts`) has no octal `bytea_output = escape` form for key bytes, so a raw key in a future `bytea` column dumped in escape format would not be found. Current secret columns reject raw bytes.
+- `replaceOrgDataKey` checks only the version: require `version === expected` (re-wrap) or `expected + 1` (rotation), and ideally compare the stored wrapped bytes.
+- Add a concurrency test for the insert-once and compare-and-swap writes (two `withOrg` in `Promise.all`, exactly one succeeds).
+
 ## Remote verification (2026-10-25, first push to rocky-reviews/rocky)
 
 - First CI run on `main`: verify, CodeQL, Semgrep, gitleaks, osv-scanner all green; `verify` took 37 s (P0-1: under 5 min).
