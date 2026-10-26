@@ -58,7 +58,12 @@ const wrapAad = (context: WrapContext): Buffer => {
   return encodeAad([context.orgId, WRAP_PURPOSE, String(context.dataKeyVersion)]);
 };
 
-/** KEKs by version id, in the order they were listed (the last one is the default current). */
+/**
+ * KEKs by version id. The last entry is the default current version, so order matters: only an
+ * entry list (array, `Map`) keeps the listed order; a plain `Record` follows JavaScript key
+ * order, which moves integer-like ids such as `"10"` ahead of `"v1"`. `localKeyWrapperFromEnv`
+ * always builds an entry list.
+ */
 export type KekEntries =
   Iterable<readonly [string, Uint8Array]> | Readonly<Record<string, Uint8Array>>;
 
