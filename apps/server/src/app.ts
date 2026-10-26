@@ -16,7 +16,8 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     deps.log === undefined ? Fastify({ logger: false }) : Fastify(fastifyLoggerOptions(deps.log));
   if (deps.log !== undefined) addRequestIdHeader(app);
 
-  app.get("/healthz", async (_req, reply) => {
+  // Health probes arrive every few seconds; log them only when something is wrong.
+  app.get("/healthz", { logLevel: "warn" }, async (_req, reply) => {
     const database = await deps.checkDatabase().catch(() => false);
     return reply.code(database ? 200 : 503).send({ ok: database, database });
   });

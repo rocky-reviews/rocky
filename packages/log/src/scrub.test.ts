@@ -137,17 +137,18 @@ describe("scrubValue", () => {
     for (const value of Object.values(out as Record<string, unknown>)) expect(value).toBe(REDACTED);
   });
 
-  it("keeps error-code identifiers under `code` but redacts anything that could be source", () => {
-    expect(scrubValue({ code: "ECONNRESET" })).toEqual({ code: "ECONNRESET" });
-    expect(scrubValue({ code: "ERR_STREAM_PREMATURE_CLOSE" })).toEqual({
-      code: "ERR_STREAM_PREMATURE_CLOSE",
-    });
-    expect(scrubValue({ code: "23505" })).toEqual({ code: "23505" });
-    expect(scrubValue({ code: "P2002" })).toEqual({ code: "P2002" });
-    expect(scrubValue({ code: "const x = 1;" })).toEqual({ code: REDACTED });
-    expect(scrubValue({ code: "abc123def456abc123de" })).toEqual({ code: REDACTED });
-    expect(scrubValue({ code: FAKE.awsAccessKey })).toEqual({ code: REDACTED });
-    expect(scrubValue({ code: 42 })).toEqual({ code: REDACTED });
+  it("keeps error-code identifiers under an Error's `code` but redacts anything else", () => {
+    const codeOf = (code: unknown) =>
+      (scrubValue(Object.assign(new Error("x"), { code })) as Record<string, unknown>)["code"];
+    expect(codeOf("ECONNRESET")).toBe("ECONNRESET");
+    expect(codeOf("ERR_STREAM_PREMATURE_CLOSE")).toBe("ERR_STREAM_PREMATURE_CLOSE");
+    expect(codeOf("23505")).toBe("23505");
+    expect(codeOf("P2002")).toBe("P2002");
+    expect(codeOf("const x = 1;")).toBe(REDACTED);
+    expect(codeOf("abc123def456abc123de")).toBe(REDACTED);
+    expect(codeOf(FAKE.awsAccessKey)).toBe(REDACTED);
+    expect(codeOf(42)).toBe(REDACTED);
+    expect(scrubValue({ code: "ECONNRESET" })).toEqual({ code: REDACTED });
   });
 
   it("scrubs secrets inside string values of non-sensitive keys", () => {
@@ -193,29 +194,26 @@ describe("scrubValue", () => {
     expect(scrubValue(cyclic)).toEqual({ name: "loop", self: "[circular]" });
   });
 
-  it("passes primitives and non-plain objects through untouched", () => {
-    const date = new Date(0);
-    const buffer = Buffer.from("x");
+  it("passes primitives through and normalises non-plain objects", () => {
     class Thing {
-      token = "kept-for-serializers";
+      token = "never-passed-through";
     }
-    const thing = new Thing();
     const out = scrubValue({
       n: 1,
       b: true,
       nil: null,
       u: undefined,
-      date,
-      buffer,
-      thing,
+      date: new Date(0),
+      buffer: Buffer.from("x"),
+      thing: new Thing(),
     }) as Record<string, unknown>;
     expect(out["n"]).toBe(1);
     expect(out["b"]).toBe(true);
     expect(out["nil"]).toBeNull();
     expect(out["u"]).toBeUndefined();
-    expect(out["date"]).toBe(date);
-    expect(out["buffer"]).toBe(buffer);
-    expect(out["thing"]).toBe(thing);
+    expect(out["date"]).toBe("1970-01-01T00:00:00.000Z");
+    expect(out["buffer"]).toBe("[object Buffer]");
+    expect(out["thing"]).toBe("[object Thing]");
     expect(scrubValue(7)).toBe(7);
     expect(scrubValue(FAKE.ghp)).toBe("[redacted:github_token]");
   });

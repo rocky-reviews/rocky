@@ -26,13 +26,28 @@ describe("GET /healthz", () => {
     const app = buildApp({ checkDatabase: () => Promise.resolve(true), log });
     const res = await app.inject({
       method: "GET",
-      url: "/healthz?token=should-not-appear",
+      url: "/nope?token=should-not-appear",
       headers: { "x-request-id": "client-chosen" },
     });
+    expect(res.statusCode).toBe(404);
     const requestId = res.headers["x-request-id"];
     expect(requestId).toMatch(/^[0-9a-f-]{36}$/);
     expect(lines.length).toBeGreaterThanOrEqual(2);
     for (const line of lines) expect(line["requestId"]).toBe(requestId);
     expect(JSON.stringify(lines)).not.toMatch(/should-not-appear|client-chosen/);
+  });
+
+  it("does not log health probes at info level (review F10)", async () => {
+    const lines: Record<string, unknown>[] = [];
+    const log = createLogger("server-test", {
+      destination: {
+        write: (c: string) => void lines.push(JSON.parse(c) as Record<string, unknown>),
+      },
+    });
+    const app = buildApp({ checkDatabase: () => Promise.resolve(true), log });
+    const res = await app.inject({ method: "GET", url: "/healthz" });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(lines).toEqual([]);
   });
 });

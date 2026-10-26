@@ -6,12 +6,16 @@ import {
 } from "fastify";
 import type { Logger } from "pino";
 import { newRequestId } from "./request.js";
+import { scrubString } from "./scrub.js";
 
-/** Path only: query strings carry OAuth codes, state tokens and API keys. */
-const pathOnly = (url: string | undefined): string => {
+/**
+ * Path only, scrubbed: query strings carry OAuth codes, state tokens and API keys, and paths
+ * can carry tokens too (`/invite/<token>`).
+ */
+const safePath = (url: string | undefined): string => {
   if (url === undefined || url === "") return "/";
   const cut = url.search(/[?#]/);
-  return cut === -1 ? url : url.slice(0, cut);
+  return scrubString(cut === -1 ? url : url.slice(0, cut));
 };
 
 /**
@@ -19,7 +23,7 @@ const pathOnly = (url: string | undefined): string => {
  * string, host and client IP (personal data) are never logged; `requestId` binds the lines.
  */
 const serializers = {
-  req: (req: { method?: string; url?: string }) => ({ method: req.method, url: pathOnly(req.url) }),
+  req: (req: { method?: string; url?: string }) => ({ method: req.method, url: safePath(req.url) }),
   res: (res: { statusCode?: number }) => ({ statusCode: res.statusCode }),
 };
 
@@ -27,7 +31,7 @@ const serializers = {
 class RedactingLogController extends LogController {
   override routeNotFound(request: FastifyRequest): void {
     if (this.isLogDisabled(request)) return;
-    request.log.info({ method: request.method, url: pathOnly(request.url) }, "route not found");
+    request.log.info({ method: request.method, url: safePath(request.url) }, "route not found");
   }
 }
 
