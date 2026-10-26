@@ -600,3 +600,145 @@ describe("review round 2, S1: memory exposure to unauthenticated clients", () =>
     }
   }, 10_000);
 });
+
+describe("review round 3, S-B: the budget counts bytes actually received", () => {
+  const listening = async (deps: { maxInFlightBytes: number; requestTimeoutMs?: number }) => {
+    const app = buildApp({
+      checkDatabase: () => Promise.resolve(true),
+      webhooks: {
+        ingress: createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET }),
+        inbox: memoryInbox(),
+        maxInFlightBytes: deps.maxInFlightBytes,
+      },
+      ...(deps.requestTimeoutMs === undefined
+        ? {}
+        : { requestTimeoutMs: deps.requestTimeoutMs, timeoutCheckIntervalMs: 100 }),
+    });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as net.AddressInfo;
+    return { app, port };
+  };
+
+  /** A client with well-formed (forged) headers that announces `declared` bytes and trickles. */
+  const slowClient = (port: number, declared: number) => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const socket = net.connect({ port, host: "127.0.0.1" });
+    socket.on("error", () => undefined); // reset by the server on timeout or close: expected
+    const received: Buffer[] = [];
+    socket.on("data", (c: Buffer) => received.push(c));
+    socket.write(
+      [
+        `POST ${URL} HTTP/1.1`,
+        "host: 127.0.0.1",
+        ...Object.entries(d.headers).map(
+          ([k, v]) => `${k}: ${k === "x-hub-signature-256" ? "sha256=" + "0".repeat(64) : v}`,
+        ),
+        `content-length: ${declared}`,
+        "",
+        "",
+      ].join("\r\n"),
+    );
+    const trickle = setInterval(() => {
+      if (socket.writable) socket.write("x");
+    }, 50);
+    const closed = new Promise<void>((resolve) =>
+      socket.on("close", () => {
+        clearInterval(trickle);
+        resolve();
+      }),
+    );
+    return {
+      closed,
+      response: () => Buffer.concat(received).toString("latin1"),
+      stop: () => {
+        clearInterval(trickle);
+        socket.destroy();
+      },
+    };
+  };
+
+  const deliver = async (port: number, d: SignedDelivery) => {
+    const res = await fetch(`http://127.0.0.1:${port}${URL}`, {
+      method: "POST",
+      headers: d.headers,
+      body: d.body,
+    });
+    return { status: res.status, body: (await res.json()) as unknown };
+  };
+
+  it("slow clients that announce big bodies but trickle do not crowd out a genuine delivery", async () => {
+    const budget = 4 * 1024 * 1024;
+    const { app, port } = await listening({ maxInFlightBytes: budget });
+    // Together they announce the whole budget (the round-2 code reserved it and answered 503).
+    const liars = [slowClient(port, budget / 2), slowClient(port, budget / 2)];
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const res = await deliver(port, signedDelivery("pull_request", pullRequestPayload("opened")));
+      expect(res).toEqual({ status: 202, body: { status: "queued" } });
+    } finally {
+      for (const liar of liars) liar.stop();
+      await app.close();
+    }
+  });
+
+  it("answers 503 when the bytes actually sent overflow the budget (chunked, nothing declared)", async () => {
+    const { app, port } = await listening({ maxInFlightBytes: 4096 });
+    try {
+      const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+      const socket = net.connect({ port, host: "127.0.0.1" });
+      socket.on("error", () => undefined);
+      const received: Buffer[] = [];
+      socket.on("data", (c: Buffer) => received.push(c));
+      const closed = new Promise<void>((resolve) => socket.on("close", () => resolve()));
+      socket.write(
+        [
+          `POST ${URL} HTTP/1.1`,
+          "host: 127.0.0.1",
+          "connection: close",
+          ...Object.entries(d.headers).map(([k, v]) => `${k}: ${v}`),
+          "transfer-encoding: chunked",
+          "",
+          "",
+        ].join("\r\n"),
+      );
+      const chunk = Buffer.alloc(1024, 0x20);
+      for (let i = 0; i < 16 && socket.writable; i++) {
+        socket.write(`${chunk.length.toString(16)}\r\n`);
+        socket.write(chunk);
+        socket.write("\r\n");
+      }
+      if (socket.writable) socket.write("0\r\n\r\n");
+      await closed;
+      const text = Buffer.concat(received).toString("latin1");
+      expect(text).toMatch(/^HTTP\/1\.1 503/);
+      expect(text).toContain('{"error":"overloaded"}');
+      // The overflowing request's bytes were released: a delivery that fits gets through.
+      expect((await deliver(port, d)).status).toBe(202);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("frees the budget after a 408: with room for exactly one body, the next delivery gets 202", async () => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const { app, port } = await listening({
+      maxInFlightBytes: d.body.length,
+      requestTimeoutMs: 500,
+    });
+    try {
+      const slow = slowClient(port, d.body.length);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      // While the slow client holds part of the budget, a full-size body does not fit.
+      expect((await deliver(port, d)).status).toBe(503);
+      await slow.closed;
+      expect(slow.response()).toMatch(/^HTTP\/1\.1 408/);
+      // Same size as `d` (only the PR number differs), so it needs the whole budget.
+      const next = signedDelivery("pull_request", pullRequestPayload("opened", { number: 848 }));
+      expect(next.body.length).toBe(d.body.length);
+      const res = await deliver(port, next);
+      expect(res).toEqual({ status: 202, body: { status: "queued" } });
+    } finally {
+      await app.close();
+    }
+  }, 10_000);
+});

@@ -102,7 +102,11 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
     const { installation } = parsed.data;
     // Non-fatal: an uninstall by an app, a deleted ("ghost") user or a staff action must still
     // be recorded, so an unusable sender becomes null instead of refusing the delivery.
-    const sender = Sender.safeParse((payload as { sender?: unknown }).sender);
+    const sender = Sender.safeParse(
+      Object.hasOwn(payload as object, "sender")
+        ? (payload as { sender: unknown }).sender
+        : undefined,
+    );
     return {
       kind: "event",
       event: {

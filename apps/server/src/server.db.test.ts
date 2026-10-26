@@ -53,7 +53,7 @@ describe("the server pool", () => {
     expect(rows[0]?.statement_timeout).toBe("0");
   });
 
-  it("bounds the inbox insert itself: a locked inbox gives 503 after ~3 s, before the 6 s guard", async () => {
+  it("bounds the inbox insert itself: a locked inbox gives 503 after the 2 s lock_timeout, before the 6 s guard, and leaves no waiting backend", async () => {
     const locker = await superuser.connect();
     try {
       await locker.query("begin");
@@ -68,10 +68,31 @@ describe("the server pool", () => {
       });
       const elapsed = Date.now() - started;
       expect(res.statusCode).toBe(503);
-      expect(elapsed).toBeGreaterThanOrEqual(2_900);
-      expect(elapsed).toBeLessThan(5_500);
+      expect(elapsed).toBeGreaterThanOrEqual(1_900);
+      expect(elapsed).toBeLessThan(4_000);
       const entry = lines.findLast((l) => l["msg"] === "webhook inbox unavailable");
-      expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_error" });
+      // 55P03 lock_not_available: the server-side bound fired, with its real SQLSTATE.
+      expect(entry?.["webhook"]).toMatchObject({ outcome: "inbox_error", sqlstate: "55P03" });
+      // Review round 3, S-A: the bound is server-side too. While the lock is still held, no
+      // backend of the app role may be left waiting on it (an orphan per blocked webhook would
+      // exhaust max_connections).
+      // Its own connection: `locker` holds the superuser pool's only one.
+      const observer = new pg.Client({ connectionString: pgs.superUrl });
+      await observer.connect();
+      try {
+        const waiting = async () =>
+          Number(
+            (
+              await observer.query<{ n: string }>(
+                `select count(*)::text as n from pg_stat_activity
+                  where usename = 'rocky_app_test' and wait_event_type = 'Lock'`,
+              )
+            ).rows[0]?.n,
+          );
+        await expect.poll(waiting, { timeout: 1_000, interval: 100 }).toBe(0);
+      } finally {
+        await observer.end();
+      }
     } finally {
       await locker.query("rollback");
       locker.release();

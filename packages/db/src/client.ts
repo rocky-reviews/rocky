@@ -10,7 +10,13 @@ import {
   type RetentionConfig,
 } from "./retention-sql.js";
 import * as schema from "./schema.js";
-import { inboxDatabaseError, inboxInsert, WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "./webhooks.js";
+import {
+  inboxDatabaseError,
+  inboxInsert,
+  WEBHOOK_INBOX_LOCK_TIMEOUT_MS,
+  WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
+  WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS,
+} from "./webhooks.js";
 
 /** Thrown before any SQL runs when the tenant context would be wrong (ADR 0003, ADR 0005 §3). */
 export class TenantContextError extends Error {
@@ -384,18 +390,34 @@ export const createDb = (options: DbOptions): Db => {
     delivery: WebhookDelivery,
   ): Promise<"queued" | "duplicate"> => {
     const insert = inboxInsert(delivery);
+    let client: pg.PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      throw inboxDatabaseError(error);
+    }
     let inserted: number | null;
     try {
+      await client.query("begin");
+      // Integers are milliseconds; constants, not input.
+      await client.query(`set local lock_timeout = ${WEBHOOK_INBOX_LOCK_TIMEOUT_MS}`);
+      await client.query(`set local statement_timeout = ${WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS}`);
       // node-pg reads `query_timeout` from the query config (lib/client.js); its typings omit it.
       const config: pg.QueryConfig<unknown[]> & { query_timeout: number } = {
         text: insert.sql,
         values: insert.values as unknown[],
         query_timeout: WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
       };
-      ({ rowCount: inserted } = await pool.query(config));
+      ({ rowCount: inserted } = await client.query(config));
+      await client.query("commit");
     } catch (error) {
+      // Any failure discards the connection (release(err)) instead of rolling back on it: after a
+      // client-side timeout its state is unknown; Postgres rolls back the open transaction when
+      // the connection closes.
+      client.release(error instanceof Error ? error : new Error("webhook inbox failure"));
       throw inboxDatabaseError(error);
     }
+    client.release();
     return inserted === 1 ? "queued" : "duplicate";
   };
 

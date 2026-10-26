@@ -4,6 +4,7 @@ import type {
   WebhookRejection,
   WebhookRequest,
 } from "@rocky-reviews/core";
+import { Transform } from "node:stream";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 /**
@@ -35,10 +36,11 @@ export const WEBHOOK_BODY_LIMIT_BYTES = 25 * 1024 * 1024;
 export const INBOX_RECORD_TIMEOUT_MS = 6_000;
 
 /**
- * Bytes of request bodies the route may hold at once, across requests (declared
- * `Content-Length`, or the body limit when none is declared). Beyond it → 503. Under a flood this
- * can refuse genuine deliveries (GitHub does not retry them) in exchange for not running out of
- * memory; rate limiting (P7-3) narrows that window.
+ * Bytes of request bodies the route may hold at once, across requests, counted as they are
+ * actually received (not as declared: a client that announces 25 MiB and trickles bytes holds
+ * only what it sent). Beyond it → 503. Only a client that really sends that much data, fast,
+ * can exhaust it; under such a flood genuine deliveries can be refused (GitHub does not retry a
+ * 503) in exchange for not running out of memory, until rate limiting (P7-3).
  */
 export const MAX_IN_FLIGHT_BYTES = 64 * 1024 * 1024;
 
@@ -101,14 +103,23 @@ const webhookRequest = (request: FastifyRequest): WebhookRequest => ({
   header: headerOf(request),
 });
 
-/** Bytes to reserve for a request: its declared length (capped at the limit), else the limit. */
-const declaredBytes = (request: FastifyRequest): number => {
+/** The declared body length, when there is a usable one (chunked requests have none). */
+const declaredBytes = (request: FastifyRequest): number | undefined => {
   const raw = request.headers["content-length"];
-  const declared = typeof raw === "string" && /^\d{1,15}$/.test(raw) ? Number(raw) : NaN;
-  return Number.isSafeInteger(declared)
-    ? Math.min(declared, WEBHOOK_BODY_LIMIT_BYTES)
-    : WEBHOOK_BODY_LIMIT_BYTES;
+  return typeof raw === "string" && /^\d{1,15}$/.test(raw) ? Number(raw) : undefined;
 };
+
+/** The byte counter overflowed the in-flight budget mid-body; answered with 503. */
+class InFlightBudgetError extends Error {
+  override readonly name = "InFlightBudgetError";
+  readonly statusCode = 503;
+}
+
+/** Body bytes one request holds in the budget; released once (close, abort or response). */
+interface Holding {
+  received: number;
+  released: boolean;
+}
 
 const errorCode = (error: unknown): string | undefined => {
   if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
@@ -120,8 +131,18 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
   const recordTimeoutMs = deps.recordTimeoutMs ?? INBOX_RECORD_TIMEOUT_MS;
   const maxInFlightBytes = deps.maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES;
   let inFlightBytes = 0;
-  const releases = new WeakMap<FastifyRequest, () => void>();
-  const release = async (request: FastifyRequest): Promise<void> => releases.get(request)?.();
+  const holdings = new WeakMap<FastifyRequest, Holding>();
+  const free = (holding: Holding | undefined): void => {
+    if (holding === undefined || holding.released) return;
+    holding.released = true;
+    inFlightBytes -= holding.received;
+  };
+  const release = async (request: FastifyRequest): Promise<void> => free(holdings.get(request));
+  const overloaded = (request: FastifyRequest, bytes: number | undefined) =>
+    request.log.warn(
+      { webhook: { forge, outcome: "overloaded", ...(bytes === undefined ? {} : { bytes }) } },
+      "webhook refused: in-flight byte budget exhausted",
+    );
 
   void app.register(async (scope) => {
     scope.removeAllContentTypeParsers();
@@ -142,28 +163,53 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
         );
         return reply.code(REJECTION_STATUS[rejection]).send({ error: rejection });
       }
-      const reserve = declaredBytes(request);
-      if (inFlightBytes + reserve > maxInFlightBytes) {
-        request.log.warn(
-          { webhook: { forge, outcome: "overloaded", bytes: reserve } },
-          "webhook refused: in-flight byte budget exhausted",
-        );
+      // Cheap early refusal: a declared length that cannot fit in what is left right now. Not a
+      // reservation: the budget counts received bytes only (preParsing below).
+      const declared = declaredBytes(request);
+      if (declared !== undefined && inFlightBytes + declared > maxInFlightBytes) {
+        overloaded(request, declared);
         return reply.code(503).send({ error: "overloaded" });
       }
-      inFlightBytes += reserve;
-      let held = true;
-      const free = (): void => {
-        if (!held) return;
-        held = false;
-        inFlightBytes -= reserve;
-      };
-      releases.set(request, free);
-      // Whichever comes first: response sent, request aborted, connection closed.
-      reply.raw.once("close", free);
+      const holding: Holding = { received: 0, released: false };
+      holdings.set(request, holding);
+      // Whichever comes first: response sent, request aborted, connection closed (e.g. a 408).
+      reply.raw.once("close", () => free(holding));
       return undefined;
     });
+
+    // Counts body bytes into the budget as they arrive, before the parser buffers them.
+    scope.addHook("preParsing", async (request, _reply, payload) => {
+      const holding = holdings.get(request);
+      if (holding === undefined) return payload;
+      const counter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          if (!holding.released) {
+            holding.received += chunk.length;
+            inFlightBytes += chunk.length;
+            if (inFlightBytes > maxInFlightBytes) {
+              callback(new InFlightBudgetError("in-flight byte budget exhausted"));
+              return;
+            }
+          }
+          callback(null, chunk);
+        },
+      });
+      payload.on("error", (error) => counter.destroy(error));
+      payload.pipe(counter);
+      return counter;
+    });
+
     scope.addHook("onResponse", release);
     scope.addHook("onRequestAbort", release);
+
+    scope.setErrorHandler(async (error, request, reply) => {
+      if (error instanceof InFlightBudgetError) {
+        overloaded(request, undefined);
+        return reply.code(503).send({ error: "overloaded" });
+      }
+      // Everything else (413, client aborts, …) keeps Fastify's default handling.
+      throw error;
+    });
 
     scope.post(
       `/webhooks/${forge}`,

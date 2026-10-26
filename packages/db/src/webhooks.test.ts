@@ -303,7 +303,9 @@ describe("recordWebhookDelivery", () => {
   });
 
   it("reduces a database failure to its SQLSTATE (no driver message or row detail)", async () => {
-    const failing = {
+    // The insert runs on a checked-out client (review round 3, S-A); every statement fails.
+    const released: unknown[] = [];
+    const failingClient = {
       query: () =>
         Promise.reject(
           Object.assign(new Error("new row violates check: Failing row contains (secret-row)"), {
@@ -311,6 +313,10 @@ describe("recordWebhookDelivery", () => {
             detail: "Failing row contains (secret-row)",
           }),
         ),
+      release: (err?: unknown) => void released.push(err),
+    };
+    const failing = {
+      connect: () => Promise.resolve(failingClient),
       end: () => Promise.resolve(),
     } as unknown as pg.Pool;
     const broken = createDb({ pool: failing });
@@ -322,8 +328,11 @@ describe("recordWebhookDelivery", () => {
     expect(error).toMatchObject({ message: "webhook inbox: database error", code: "57P01" });
     expect(JSON.stringify(error)).not.toContain("secret-row");
     expect((error as Error).cause).toBeUndefined();
+    // The failed connection is discarded, not returned to the pool.
+    expect(released).toHaveLength(1);
+    expect(released[0]).toBeInstanceOf(Error);
     const noCode = await createDb({
-      pool: { query: () => Promise.reject(new Error("x")) } as unknown as pg.Pool,
+      pool: { connect: () => Promise.reject(new Error("x")) } as unknown as pg.Pool,
     })
       .recordWebhookDelivery(delivery())
       .then(

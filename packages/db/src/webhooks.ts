@@ -105,12 +105,17 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
 };
 
 /**
- * Client-side bound on the inbox insert (pg `query_timeout`): the receiver answers within
- * GitHub's 10 s delivery timeout even if the table is locked. Per query, not per pool, so other
- * queries on the same pool keep their own limits. A timed-out client is discarded by the pool;
- * the insert may still commit server-side, after which a redelivery reads `duplicate`.
+ * Bounds on the inbox insert, so the receiver answers within GitHub's 10 s delivery timeout even
+ * when the table is locked. Server-side first: the insert runs in its own transaction with
+ * `SET LOCAL lock_timeout` (2 s) and `SET LOCAL statement_timeout` (3 s), so Postgres itself
+ * gives up and the backend is free again: a client-side timeout alone would leave the backend
+ * waiting on the lock after the client is gone, one orphan per blocked webhook (review round 3).
+ * `SET LOCAL` keeps the shared pool free of any pool-wide cap. The pg `query_timeout` is only a
+ * backstop for a backend that stops answering; it is above the server-side bounds.
  */
-export const WEBHOOK_INBOX_QUERY_TIMEOUT_MS = 3_000;
+export const WEBHOOK_INBOX_LOCK_TIMEOUT_MS = 2_000;
+export const WEBHOOK_INBOX_STATEMENT_TIMEOUT_MS = 3_000;
+export const WEBHOOK_INBOX_QUERY_TIMEOUT_MS = 3_500;
 
 export interface InboxRow {
   readonly sql: string;

@@ -20,6 +20,10 @@ export interface AppDeps {
  * Longest a client may take to send a whole request (headers and body). Bounds how long a slow
  * upload can hold a body buffer (ADR 0007, "Memory"). Node checks it every
  * TIMEOUT_CHECK_INTERVAL_MS (its default, 30 s, would double the bound).
+ *
+ * Server-wide: it applies to every route, not just webhooks, and bounds only the time the
+ * client takes to *send* the request (not the handler). A future large-upload route would
+ * inherit it and needs its own server or an explicit decision to raise it.
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const TIMEOUT_CHECK_INTERVAL_MS = 1_000;
