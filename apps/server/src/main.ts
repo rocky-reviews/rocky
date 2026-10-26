@@ -8,6 +8,7 @@ pool.on("error", (error) => log.error({ err: error.message }, "postgres idle cli
 
 const app = buildApp({
   checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,
+  log,
 });
 
 // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
