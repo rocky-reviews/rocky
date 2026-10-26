@@ -109,9 +109,17 @@ export const MIN_SCORE = 0;
 export const MAX_SCORE = 100;
 export const MIN_CONFIDENCE = 0;
 export const MAX_CONFIDENCE = 100;
-/** Estimated review time, in minutes. A day of review is the most a single PR gets. */
+/** Estimated review time for the whole PR, in minutes. A day of review is the most a PR gets. */
 export const MIN_REVIEW_MINUTES = 1;
 export const MAX_REVIEW_MINUTES = 480;
+/**
+ * Estimated review time for one triaged file (`triage.files[].reviewMinutes`). Zero is allowed:
+ * a two-line wiring change is read in passing. The cap equals the PR cap because the PR
+ * estimate must cover the sum of its files (REVIEW_MINUTES_TOO_LOW), so a larger value could
+ * never pass anyway. The sidebar's "minutes of high-risk code left" adds these up.
+ */
+export const MIN_FILE_REVIEW_MINUTES = 0;
+export const MAX_FILE_REVIEW_MINUTES = MAX_REVIEW_MINUTES;
 
 /**
  * Triage score bands per level. A score outside its level's band is rejected by the

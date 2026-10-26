@@ -13,7 +13,16 @@ const CORE_MESSAGE =
   "packages/core holds domain logic and ports only: import zod, @rocky-reviews/schema or core's own files; inject I/O through a port (ADR-0002).";
 
 export default tseslint.config(
-  { ignores: ["**/node_modules/**", "**/dist/**", "coverage/**", "design-poc/**", "artifacts/**"] },
+  {
+    ignores: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "coverage/**",
+      "design-poc/**",
+      "artifacts/**",
+      ".claude/worktrees/**",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strict,
   {

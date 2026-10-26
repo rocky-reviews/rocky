@@ -13,7 +13,10 @@ import {
 } from "./limits.js";
 import { prose, RepositoryPath } from "./primitives.js";
 
-/** PR-level risk. Must not sit below what the findings say (VERDICT_TOO_LOW). */
+/**
+ * PR-level risk. Must not sit below what the findings say (VERDICT_TOO_LOW): a critical finding
+ * makes the verdict `critical`, a high finding makes it at least `medium`.
+ */
 export const RiskLevel = z.enum(["low", "medium", "high", "critical"]);
 export type RiskLevel = z.infer<typeof RiskLevel>;
 
@@ -40,7 +43,13 @@ export const Briefing = z
       "What the PR does, for someone who has not read it.",
     ),
     verdict: Verdict,
-    estimatedReviewMinutes: z.int().min(MIN_REVIEW_MINUTES).max(MAX_REVIEW_MINUTES),
+    estimatedReviewMinutes: z
+      .int()
+      .min(MIN_REVIEW_MINUTES)
+      .max(MAX_REVIEW_MINUTES)
+      .describe(
+        "Minutes for the whole PR; at least the sum of triage.files[].reviewMinutes, plus the briefing and noise.",
+      ),
     reviewPath: z
       .array(ReviewPathStep)
       .max(MAX_REVIEW_PATH)
