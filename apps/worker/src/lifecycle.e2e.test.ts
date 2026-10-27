@@ -1364,6 +1364,40 @@ describe("review round 3", () => {
   });
 });
 
+describe("review round 5", () => {
+  it("N2: delete_org refusing an org that is not erasing (55000) is a failure, logged and counted, not a skip", async () => {
+    github.install(9170, { id: 19170, login: "unmarked", type: "Organization" });
+    await install(9170, 19170, "unmarked");
+    await drain();
+    github.uninstall(9170);
+    await uninstall(9170, 19170, "unmarked");
+    await drain();
+    const org = await orgOf(9170);
+    await advanceGrace(org!.id, 8);
+    // A listing that wrongly claims the org is already erasing: the sweep skips the re-check
+    // and the mark, and the database refuses the erasure.
+    const lying: Db = {
+      ...workerDb,
+      orgsDueForDeletion: async (limit) =>
+        (await workerDb.orgsDueForDeletion(limit)).map((o) =>
+          o.orgId === org!.id ? { ...o, erasing: true } : o,
+        ),
+    };
+    const before = logLines.length;
+    const report = await sweep(lying);
+    expect(report).toMatchObject({ failed: 1, skipped: 0, deleted: 0 });
+    expect(await orgOf(9170)).toBeDefined();
+    const failure = logLines
+      .slice(before)
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l["msg"] === "org erasure failed; retried next sweep");
+    expect(failure).toMatchObject({ orgId: org!.id, errorCode: "55000" });
+    // The honest sweep then re-verifies, marks and erases it.
+    expect(await sweep()).toMatchObject({ deleted: 1, failed: 0 });
+    expect(await orgOf(9170)).toBeUndefined();
+  });
+});
+
 describe("logs", () => {
   it("never contain the key, the app JWT, logins, emails or event content", () => {
     const all = logLines.join("\n");

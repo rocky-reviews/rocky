@@ -66,6 +66,84 @@ const acceptable = (state: RoleState, allowed: readonly string[]): boolean =>
   !state.privileged && state.groups.every((g) => allowed.includes(g));
 
 /**
+ * Roles the server's login must not reach by any grant option: `pg_has_role(..., 'MEMBER')`
+ * sees ADMIN-only and SET-only grants, which `USAGE` misses (review round 5). The owner of the
+ * database and of `public.orgs` is checked separately, since its name varies by deployment.
+ */
+export const SERVER_FORBIDDEN_ROLES = [WORKER_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE] as const;
+
+/** Which check refused a server login. Names the check, never the login. */
+export type ServerLoginRefusal =
+  | `${"session_user" | "current_user"}:${"privileged" | "membership" | "owner" | "forbidden_role"}`
+  | "unexpected_answer";
+
+/** One row per identity, as the check query answers it. */
+interface LoginRow {
+  who: unknown;
+  privileged: unknown;
+  groups: unknown;
+  owner: unknown;
+  reaches: unknown;
+}
+
+const SERVER_LOGIN_CHECK = `
+  select v.who,
+         (r.rolsuper or r.rolbypassrls or r.rolcreaterole or r.rolcreatedb or r.rolreplication)
+           as privileged,
+         array(select distinct m.roleid::regrole::text from pg_auth_members m
+                where m.member = r.oid order by 1) as groups,
+         (pg_has_role(r.oid, d.datdba, 'MEMBER') or pg_has_role(r.oid, c.relowner, 'MEMBER'))
+           as owner,
+         (select bool_or(pg_has_role(r.oid, g::name, 'MEMBER')) from unnest($1::text[]) g)
+           as reaches
+    from (values ('session_user', session_user::text), ('current_user', current_user::text))
+           v(who, name)
+    left join pg_roles r on r.rolname = v.name
+    cross join pg_database d
+    cross join pg_class c
+   where d.datname = current_database() and c.oid = 'public.orgs'::regclass
+   order by 1 desc`;
+
+const IDENTITIES = ["session_user", "current_user"] as const;
+
+/**
+ * Checks, on an open connection, that the internet-facing server holds `rocky_app`'s privileges
+ * and nothing more (ADR 0009, L28). An allow-list, for both `session_user` and `current_user`
+ * (a `role=` startup option makes them differ): no privilege attribute; no membership other than
+ * `rocky_app` (any grant option counts); not a member of the owner of the database or of
+ * `public.orgs`; not a member of any of SERVER_FORBIDDEN_ROLES. Anything but two well-formed
+ * rows refuses. Returns the refusals (empty when acceptable); a query error propagates, and
+ * callers treat it as a refusal too.
+ */
+export const checkServerLogin = async (
+  client: Pick<pg.ClientBase, "query">,
+): Promise<ServerLoginRefusal[]> => {
+  const { rows } = await client.query<LoginRow>(SERVER_LOGIN_CHECK, [[...SERVER_FORBIDDEN_ROLES]]);
+  if (!Array.isArray(rows) || rows.length !== IDENTITIES.length) return ["unexpected_answer"];
+  const refusals: ServerLoginRefusal[] = [];
+  for (const [i, who] of IDENTITIES.entries()) {
+    const row = rows[i];
+    if (
+      row?.who !== who ||
+      typeof row.privileged !== "boolean" ||
+      typeof row.owner !== "boolean" ||
+      typeof row.reaches !== "boolean" ||
+      !Array.isArray(row.groups) ||
+      !row.groups.every((g): g is string => typeof g === "string")
+    ) {
+      return ["unexpected_answer"];
+    }
+    const state: RoleState = { privileged: row.privileged, groups: row.groups };
+    if (state.privileged) refusals.push(`${who}:privileged`);
+    if (!acceptable({ ...state, privileged: false }, [APP_ROLE]))
+      refusals.push(`${who}:membership`);
+    if (row.owner) refusals.push(`${who}:owner`);
+    if (row.reaches) refusals.push(`${who}:forbidden_role`);
+  }
+  return refusals;
+};
+
+/**
  * Creates or updates a LOGIN role that is a member of `rocky_app` and nothing else (or, with
  * `worker: true`, of `rocky_app` and `rocky_worker` and nothing else), with every privilege
  * attribute switched off. Used by the dev seed and the test harness; production roles

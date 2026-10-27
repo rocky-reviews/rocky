@@ -730,9 +730,13 @@ $$;
 -- finished rows of installations no live org holds (the org's own past, before a rebind). Rows
 -- of a reinstall (another installation, pending or bound to a live org) are not the erased
 -- org's and are left alone. A tombstone goes to app.org_deletions. The FOR UPDATE lock and the
--- order of deletes are unchanged (see 0005). The org must also be marked erasing: the sweep sets
--- erasing_at only after re-verifying the uninstall with the forge, and erases the external
--- stores after it, so no caller can reach the database erasure without both (review round 4).
+-- order of deletes are unchanged (see 0005). The org must also be marked erasing (review round
+-- 4): the database guarantees only that erasing_at is set before this erasure, and that only
+-- the worker sets it. That the uninstall was re-verified with the forge and the external stores
+-- erased first is enforced in code, by the sweep (apps/worker/src/deletion-sweep.ts). "Not
+-- erasing" raises its own SQLSTATE, 55000 object_not_in_prerequisite_state, so callers do not
+-- confuse it with "not scheduled" (22023, also what a second worker gets for an org already
+-- erased) (review round 5, N2).
 CREATE FUNCTION retention.delete_org(org uuid)
   RETURNS TABLE (table_name text, deleted bigint)
   LANGUAGE plpgsql SECURITY DEFINER
@@ -763,7 +767,7 @@ BEGIN
   END IF;
   IF erasing IS NULL THEN
     RAISE EXCEPTION 'org % is not being erased (erasing_at is not set)', org
-      USING ERRCODE = 'invalid_parameter_value';
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
   DELETE FROM public.audit_events e WHERE e.org_id = org;

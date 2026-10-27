@@ -1,4 +1,4 @@
-import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
+import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
 import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
@@ -26,52 +26,60 @@ const errorCode = (error: unknown): string | undefined => {
 };
 
 /**
- * DATABASE_URL logs in as a member of `rocky_worker` (the worker's login, or a superuser, which
- * is a member of every role). The internet-facing server must never hold the worker's
- * privileges: creating orgs, claiming inbox rows, erasing orgs (ADR 0009, L28). The message
- * names roles and variables only, never the connection string.
+ * DATABASE_URL does not log in as a plain member of `rocky_app` (ADR 0009, L28): the owner or
+ * migrator, a superuser or BYPASSRLS login, the worker's login, or a login that can reach
+ * `rocky_worker`, `rocky_lifecycle` or `rocky_retention` by any grant option. The
+ * internet-facing server must never hold those privileges: creating orgs, claiming inbox rows,
+ * erasing orgs, disabling triggers. The message names roles, checks and variables only, never
+ * the connection string or the login.
  */
-export class WorkerLoginError extends ConfigError {
-  constructor() {
+export class ServerLoginError extends ConfigError {
+  readonly refusals: readonly string[];
+  constructor(refusals: readonly string[]) {
     super(
-      `DATABASE_URL logs in as a member of ${WORKER_ROLE}: the server needs its own rocky_app login, never the worker's (WORKER_DATABASE_URL) or a superuser`,
+      `DATABASE_URL must log in as a plain member of ${APP_ROLE} (refused: ${refusals.join(", ")}): not the database owner or migrator (DATABASE_ADMIN_URL), a superuser, a BYPASSRLS login, the worker's login (WORKER_DATABASE_URL), or a member of ${SERVER_FORBIDDEN_ROLES.join(", ")}`,
     );
+    this.refusals = refusals;
   }
 }
 
-/** Fails closed: an unexpected answer is treated as membership. */
-const refuseWorkerLogin = async (client: pg.ClientBase): Promise<void> => {
-  const { rows } = await client.query<{ worker: boolean }>(
-    "select pg_has_role(current_user, $1, 'USAGE') as worker",
-    [WORKER_ROLE],
-  );
-  if (rows[0]?.worker !== false) throw new WorkerLoginError();
-};
+/** Connections live at most this long, bounding a grant made after the check (S4). */
+export const POOL_MAX_LIFETIME_SECONDS = 300;
 
 /**
- * The server's single Postgres pool. Every new connection is checked before first use
- * (`onConnect`): one whose login is a member of `rocky_worker` is closed and the query fails,
- * so a role granted after boot, or a database unreachable at boot, cannot hand the server the
- * worker's privileges. An idle client losing its connection (Postgres restart,
+ * The server's single Postgres pool. Each new connection is checked before first use
+ * (`onConnect`, `checkServerLogin`): anything but a plain `rocky_app` login is closed and the
+ * query fails, and so is any error or unexpected answer from the check (fail closed). This
+ * covers new connections only: a role granted to the login takes effect at once on connections
+ * already open, which keep it until they are recycled (`maxLifetimeSeconds`, 5 minutes; a
+ * checked-out connection ends when released). A database unreachable at boot is checked on the
+ * first connection that succeeds. An idle client losing its connection (Postgres restart,
  * pg_terminate_backend) emits `error` on the pool; without a listener that crashes the process.
- * Only the error code is logged: driver messages can carry connection details or values.
+ * Only codes are logged: driver messages can carry connection details or values.
  */
 export const createServerPool = (connectionString: string | undefined, log: Logger): pg.Pool => {
   const options: pg.PoolConfig & { onConnect: (client: pg.ClientBase) => Promise<void> } = {
     ...(connectionString === undefined ? {} : { connectionString }),
     max: 10,
     ...POOL_TIMEOUTS,
+    maxLifetimeSeconds: POOL_MAX_LIFETIME_SECONDS,
     // pg-pool awaits the hook and discards the connection when it rejects (@types/pg types it
     // as returning void).
     onConnect: async (client) => {
+      let refusals: readonly string[];
+      let code: string | undefined;
       try {
-        await refuseWorkerLogin(client);
+        refusals = await checkServerLogin(client);
       } catch (error) {
-        if (error instanceof WorkerLoginError) {
-          log.error({ role: WORKER_ROLE }, "database login refused");
-        }
-        throw error;
+        refusals = ["check_failed"];
+        code = errorCode(error) ?? "unknown";
       }
+      if (refusals.length === 0) return;
+      log.error(
+        { refusals, ...(code === undefined ? {} : { errorCode: code }) },
+        "database login refused",
+      );
+      throw new ServerLoginError(refusals);
     },
   };
   const pool = new pg.Pool(options);
@@ -121,12 +129,13 @@ export const startServer = async (
     log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
   }
   const pool = createServerPool(env["DATABASE_URL"], log);
-  // Review round 4: refuse to start on the worker's login. Booting does not need the database
-  // (health reports it); when it is unreachable now, the pool's hook checks each connection later.
+  // Review rounds 4 and 5: refuse to start on anything but a plain rocky_app login. Booting does
+  // not need the database (health reports it); when it is unreachable now, the pool's hook checks
+  // each new connection later.
   try {
     await pool.query("select 1");
   } catch (error) {
-    if (error instanceof WorkerLoginError) {
+    if (error instanceof ServerLoginError) {
       await pool.end();
       throw error;
     }

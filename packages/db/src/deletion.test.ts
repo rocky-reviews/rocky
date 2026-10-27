@@ -129,6 +129,7 @@ afterAll(async () => {
 describe("retention.delete_org", () => {
   it("refuses an org that is not scheduled for deletion", async () => {
     const error = await pgError(worker.deleteOrg(a.orgId));
+    expect(error.code).toBe("22023");
     expect(error.message).toMatch(/not scheduled/);
     expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, a.orgId)).toBe(1);
   });
@@ -145,6 +146,7 @@ describe("retention.delete_org", () => {
     expect(deleteAfter).not.toBeNull();
     expect(deleteAfter!.getTime()).toBeGreaterThan(Date.now() + 6.9 * DAY);
     const error = await pgError(worker.deleteOrg(a.orgId));
+    expect(error.code).toBe("22023");
     expect(error.message).toMatch(/grace/);
     // Backdating directly is refused the same way: the trigger moves it forward again.
     const backdated = await worker.withOrg(a.orgId, async (tx) => {
@@ -155,11 +157,13 @@ describe("retention.delete_org", () => {
     expect(backdated!.getTime()).toBeGreaterThan(Date.now() + 6.9 * DAY);
   });
 
-  it("refuses a due org that is not marked erasing, so no caller skips the sweep's re-check and the external erasers (review round 4)", async () => {
+  it("refuses a due org that is not marked erasing, with its own SQLSTATE (review rounds 4 and 5)", async () => {
     const orgId = await bareOrg(140);
     await makeDue(orgId);
     const error = await pgError(worker.deleteOrg(orgId));
-    expect(error.code).toBe("22023");
+    // 55000 object_not_in_prerequisite_state: its own code, so the sweep counts it as a
+    // failure instead of the "already erased" skip (review round 5, N2).
+    expect(error.code).toBe("55000");
     expect(error.message).toMatch(/not being erased/);
     expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(1);
     const tombstones = await superuser.query("select 1 from app.org_deletions where org_id = $1", [

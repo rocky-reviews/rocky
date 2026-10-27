@@ -5,7 +5,7 @@ import {
 } from "@rocky-reviews/forge-github/testing";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { WORKER_ROLE } from "@rocky-reviews/db";
+import { APP_ROLE, LIFECYCLE_ROLE, WORKER_ROLE } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
 import {
   CONTAINER_TIMEOUT_MS,
@@ -16,7 +16,7 @@ import {
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ConfigError } from "./config.js";
-import { startServer, WorkerLoginError, type RunningServer } from "./server.js";
+import { ServerLoginError, startServer, type RunningServer } from "./server.js";
 
 /**
  * Review round 1, items 1 and 2, against a real Postgres: the server's single pool carries the
@@ -133,30 +133,143 @@ describe("the server pool", () => {
 });
 
 /**
- * Review round 4: the internet-facing server must never hold the worker's privileges (creating
- * orgs, claiming inbox rows, erasing orgs). An operator reusing WORKER_DATABASE_URL (or a
- * superuser URL, which is a member of every role) as DATABASE_URL must get a refusal, not a server.
+ * Review rounds 4 and 5: the internet-facing server must never hold more than `rocky_app`'s
+ * privileges. Round 4 refused members of `rocky_worker`; round 5 replaces that probe with an
+ * allow-list (L28): the session and current user must be plain logins whose only membership is
+ * `rocky_app`, own nothing, and be no member, by any grant option, of the worker, lifecycle,
+ * retention or owner roles. Each case below booted under the round-4 probe.
  */
-describe("the server's database login (review round 4)", () => {
+describe("the server's database login (review rounds 4 and 5)", () => {
   const env = (url: string) => ({ DATABASE_URL: url, HOST: "127.0.0.1", PORT: "0" });
   const passwordOf = (url: string) => decodeURIComponent(new URL(url).password);
+  const loginUrl = (name: string) => {
+    const url = new URL(pgs.appUrl);
+    url.username = name;
+    url.password = `${name}-only`;
+    return url.toString();
+  };
+  /** A login role made by the superuser: `grants` run with the role name substituted for %. */
+  const makeLogin = async (name: string, attributes: string, grants: string[]) => {
+    await superuser.query(`create role ${name} login ${attributes} password '${name}-only'`);
+    for (const grant of grants) await superuser.query(grant.replaceAll("%", name));
+    return loginUrl(name);
+  };
+
+  const logins: Record<string, () => string> = {};
+  beforeAll(async () => {
+    const bypass = await makeLogin("rocky_bypass_test", "bypassrls", ["grant rocky_app to %"]);
+    const setOnly = await makeLogin("rocky_set_only_test", "", [
+      "grant rocky_app to %",
+      `grant ${WORKER_ROLE} to % with inherit false, set true`,
+    ]);
+    const lifecycle = await makeLogin("rocky_lifecycle_member_test", "", [
+      "grant rocky_app to %",
+      `grant ${LIFECYCLE_ROLE} to %`,
+    ]);
+    const asApp = new URL(pgs.workerUrl);
+    asApp.searchParams.set("options", "-c role=rocky_app");
+    Object.assign(logins, {
+      bypass: () => bypass,
+      setOnly: () => setOnly,
+      lifecycle: () => lifecycle,
+      workerAsApp: () => asApp.toString(),
+    });
+  });
 
   it.each([
-    ["the worker login", () => pgs.workerUrl],
-    ["a superuser", () => pgs.superUrl],
-  ])("refuses to start on %s, before listening", async (_name, url) => {
+    ["the worker login", () => pgs.workerUrl, "session_user:forbidden_role"],
+    ["a superuser", () => pgs.superUrl, "session_user:privileged"],
+    [
+      "the migrator (owner, CREATEROLE, ADMIN-only grants)",
+      () => pgs.migratorUrl,
+      "session_user:owner",
+    ],
+    ["a BYPASSRLS login", () => logins["bypass"]!(), "session_user:privileged"],
+    [
+      "a SET-only (inherit false) grant of rocky_worker",
+      () => logins["setOnly"]!(),
+      "session_user:forbidden_role",
+    ],
+    [
+      "the worker login with options=-c role=rocky_app",
+      () => logins["workerAsApp"]!(),
+      "session_user:membership",
+    ],
+    ["a member of rocky_lifecycle", () => logins["lifecycle"]!(), "session_user:forbidden_role"],
+  ])("refuses to start on %s, before listening", async (_name, url, refusal) => {
     const { log, out } = capture();
     const error = await startServer(env(url()), log).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(WorkerLoginError);
+    expect(error).toBeInstanceOf(ServerLoginError);
     expect(error).toBeInstanceOf(ConfigError);
-    expect((error as Error).message).toContain(WORKER_ROLE);
+    expect((error as ServerLoginError).refusals).toContain(refusal);
+    expect((error as Error).message).toContain(APP_ROLE);
     expect(out.find((l) => l["msg"] === "server listening")).toBeUndefined();
-    // Neither the connection string nor its host and login reach the message or the log.
+    expect(out.find((l) => l["msg"] === "database login refused")).toBeDefined();
+    // Neither the connection string nor its host, login or password reach the message or the log.
     const { host, username } = new URL(url());
-    for (const secret of [url(), `${username}:`, `@${host}`]) {
+    // (The container superuser's password is "test", too short to search for.)
+    const password = passwordOf(url());
+    const secrets = [
+      url(),
+      `${username}:`,
+      `@${host}`,
+      ...(password.length >= 8 ? [password] : []),
+    ];
+    for (const secret of secrets) {
       expect((error as Error).message).not.toContain(secret);
       expect(JSON.stringify(out)).not.toContain(secret);
     }
+  });
+
+  it("refuses a login that reaches rocky_worker only through rocky_app itself (indirect membership)", async () => {
+    const { log } = capture();
+    await superuser.query(`grant ${WORKER_ROLE} to ${APP_ROLE}`);
+    try {
+      const error = await startServer(env(pgs.appUrl), log).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ServerLoginError);
+      // Its own memberships are still exactly rocky_app: only the MEMBER probe sees it.
+      expect((error as ServerLoginError).refusals).toEqual([
+        "session_user:forbidden_role",
+        "current_user:forbidden_role",
+      ]);
+    } finally {
+      await superuser.query(`revoke ${WORKER_ROLE} from ${APP_ROLE}`);
+    }
+  });
+
+  it("the refused logins really hold what the check is about (the fixtures are not vacuous)", async () => {
+    const probe = async (url: string, sql: string) => {
+      const client = new pg.Client({ connectionString: url });
+      await client.connect();
+      try {
+        return (await client.query<{ ok: boolean }>(sql)).rows[0]?.ok;
+      } finally {
+        await client.end();
+      }
+    };
+    // S1: a SET-only grant reaches the worker's functions after `set role`.
+    expect(
+      await probe(
+        logins["setOnly"]!(),
+        `select pg_has_role(current_user, '${WORKER_ROLE}', 'USAGE') = false
+            and pg_has_role(current_user, '${WORKER_ROLE}', 'SET') as ok`,
+      ),
+    ).toBe(true);
+    // S2: current_user looks like the application role, session_user is the worker login.
+    expect(
+      await probe(
+        logins["workerAsApp"]!(),
+        `select current_user = 'rocky_app' and session_user = '${TEST_ROLES.worker}' as ok`,
+      ),
+    ).toBe(true);
+    // B1: the migrator's grant of rocky_worker is ADMIN-only, invisible to USAGE.
+    expect(
+      await probe(
+        pgs.migratorUrl,
+        `select pg_has_role(current_user, '${WORKER_ROLE}', 'USAGE') = false
+            and pg_has_role(current_user, '${WORKER_ROLE}', 'MEMBER') as ok`,
+      ),
+    ).toBe(true);
   });
 
   it("main.ts exits 1 with a clear message that holds no credential", () => {
@@ -175,7 +288,7 @@ describe("the server's database login (review round 4)", () => {
       .filter((l) => l.startsWith("{"))
       .map((l) => JSON.parse(l) as Record<string, unknown>)
       .find((l) => l["msg"] === "invalid configuration");
-    expect(fatal?.["err"]).toMatch(/DATABASE_URL logs in as a member of rocky_worker/);
+    expect(fatal?.["err"]).toMatch(/DATABASE_URL must log in as a plain member of rocky_app/);
     expect(result.stdout).not.toContain("server listening");
     expect(result.stdout + result.stderr).not.toContain(passwordOf(pgs.workerUrl));
   }, 30_000);
@@ -185,32 +298,35 @@ describe("the server's database login (review round 4)", () => {
     const running = await startServer(env(pgs.appUrl), log);
     try {
       expect(out.find((l) => l["msg"] === "server listening")).toBeDefined();
+      expect(out.find((l) => l["msg"] === "database login refused")).toBeUndefined();
       expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
     } finally {
       await running.close();
     }
   });
 
-  it("checks every new connection too: a login granted the worker role after boot gets no connection", async () => {
+  it("checks new connections only: one opened after a grant is refused; open ones keep it until they are recycled (S4)", async () => {
     const { log, out } = capture();
     const running = await startServer(env(pgs.appUrl), log);
-    const grant = `grant ${WORKER_ROLE} to ${TEST_ROLES.app}`;
+    const held: pg.PoolClient[] = [];
     try {
       expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
-      await superuser.query(grant);
-      // Existing connections end (as on a restart); the pool opens new ones on the next query.
-      await superuser.query(
-        `select pg_terminate_backend(pid) from pg_stat_activity where usename = $1`,
-        [TEST_ROLES.app],
+      expect(running.pool.idleCount).toBeGreaterThan(0);
+      await superuser.query(`grant ${WORKER_ROLE} to ${TEST_ROLES.app}`);
+      // Take every open connection, so the next checkout has to open a new one.
+      while (running.pool.idleCount > 0) held.push(await running.pool.connect());
+      // The bounded window, stated honestly: a grant takes effect at once on a connection that
+      // is already open; the hook does not see it. maxLifetimeSeconds (300) recycles it.
+      const already = await held[0]!.query<{ worker: boolean }>(
+        `select pg_has_role(current_user, '${WORKER_ROLE}', 'USAGE') as worker`,
       );
-      await expect.poll(() => running.pool.totalCount, { timeout: 5_000 }).toBe(0);
-      await expect(running.pool.query("select 1")).rejects.toBeInstanceOf(WorkerLoginError);
-      expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(503);
-      expect(out.find((l) => l["msg"] === "database login refused")).toMatchObject({
-        role: WORKER_ROLE,
-      });
-      expect(running.pool.totalCount).toBe(0);
+      expect(already.rows[0]?.worker).toBe(true);
+      const opened = running.pool.totalCount;
+      await expect(running.pool.connect()).rejects.toBeInstanceOf(ServerLoginError);
+      expect(running.pool.totalCount).toBe(opened);
+      expect(out.find((l) => l["msg"] === "database login refused")).toBeDefined();
     } finally {
+      for (const client of held) client.release();
       await superuser.query(`revoke ${WORKER_ROLE} from ${TEST_ROLES.app}`);
     }
     try {

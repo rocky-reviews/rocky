@@ -30,11 +30,17 @@ import type { AppCheck } from "./app-check.js";
  *
  * Idempotent and resumable: an org marked erasing is listed again and goes straight to step 3
  * until it is gone. Safe with several workers: the mark and `delete_org` lock the org row; a
- * second worker finds it gone and gets `22023`, counted as skipped. Nothing runs until the app
- * check passed (M2): a wrong key must not read as "every installation is gone".
+ * second worker finds it gone and gets `22023`, counted as skipped (an org not marked erasing
+ * gets `55000`, counted as failed). Nothing runs until the app check passed (M2): a wrong key
+ * must not read as "every installation is gone".
  */
 
-const NOT_SCHEDULED = "22023"; // invalid_parameter_value: not scheduled, not due, not erasing
+/**
+ * invalid_parameter_value: not scheduled (gone: another worker erased it) or not due. An org
+ * that is not marked erasing raises 55000 instead (review round 5, N2): it means this sweep
+ * skipped its own mark, a bug, so it is a failure (logged, counted), never a skip.
+ */
+const NOT_SCHEDULED = "22023";
 
 export interface SweepDeps {
   /** Must connect as the worker login. */

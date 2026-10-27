@@ -61,11 +61,14 @@ export {
 } from "./retention.js";
 export {
   APP_ROLE,
+  checkServerLogin,
   ensureLoginRole,
   LIFECYCLE_ROLE,
   RETENTION_ROLE,
   scramSha256Verifier,
+  SERVER_FORBIDDEN_ROLES,
   WORKER_ROLE,
+  type ServerLoginRefusal,
 } from "./roles.js";
 export {
   CIPHERTEXT_PREFIX,
