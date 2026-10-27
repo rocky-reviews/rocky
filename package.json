@@ -26,7 +26,8 @@
     "schema:emit": "tsx packages/schema/scripts/emit.ts",
     "schema:fixtures": "tsx packages/schema/scripts/generate-large-fixture.ts",
     "db:migrate": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/migrate.ts",
-    "mirror:rebuild": "node scripts/ensure-env.mjs && pnpm --filter @rocky-reviews/worker mirror:rebuild"
+    "mirror:rebuild": "node scripts/ensure-env.mjs && pnpm --filter @rocky-reviews/worker mirror:rebuild",
+    "rocky": "tsx --env-file-if-exists=.env apps/worker/src/rocky.ts"
   },
   "simple-git-hooks": {
     "pre-commit": "sh scripts/precommit.sh"

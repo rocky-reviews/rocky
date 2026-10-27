@@ -156,6 +156,8 @@ export {
   RAISED_FOR_FINDINGS,
   RAISED_FOR_TRIAGE,
   RAISED_FOR_UNREVIEWED,
+  STAGE_CALLS,
+  type StageTemplate,
   type LeakDetector,
   type LeakDetectorOptions,
   DEFAULT_CONCURRENCY,

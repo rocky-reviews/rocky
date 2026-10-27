@@ -142,6 +142,10 @@ packages/schema (analysis document; shared contract)
     pre-triage. Over `ROCKY_ANALYSIS_TOKEN_LIMIT` (default 150 000) the row waits as
     `awaiting_approval` until a member says "Analyze anyway" (`approveAnalysisOverLimit`, audited,
     this revision only).
+- P4-8: `pnpm rocky analyze <owner/repo>#<n>` ([docs/cli.md](cli.md)) runs the same pipeline
+  from a terminal, with no database: a read-only repository session for the diff, the roles
+  behind a per-run token cap, and the validated document printed with untrusted text escaped. It
+  posts and stores nothing.
 
 ## Data layer
 
