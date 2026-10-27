@@ -604,6 +604,7 @@ export const createDb = (options: DbOptions): Db => {
       auditDays: read("auditDays"),
       orgDeletionGraceDays: read("orgDeletionGraceDays"),
       webhookDeliveriesDays: read("webhookDeliveriesDays"),
+      llmUsageDays: read("llmUsageDays"),
     };
   };
 

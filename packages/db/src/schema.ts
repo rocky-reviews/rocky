@@ -12,6 +12,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  smallint,
   text,
   timestamp,
   uuid,
@@ -196,18 +197,34 @@ export const auditEvents = pgTable("audit_events", {
   createdAt: createdAt(),
 });
 
+/**
+ * Append-only metering ledger (migration 0011, ADR 0016): one row per attempt of an LLM call.
+ * Ids, enums and numbers only. Token counts are null only when nothing was reported; the cost is
+ * null unless the row is priced at list price.
+ */
 export const llmUsage = pgTable("llm_usage", {
   id: identity(),
   orgId: orgIdColumn(),
   analysisId: uuid("analysis_id"),
-  role: text("role").notNull(),
+  callId: uuid("call_id").notNull(),
+  attempt: smallint("attempt").notNull(),
+  role: text("role", { enum: ["triage", "review", "graph", "ask", "embed"] }).notNull(),
   provider: text("provider").notNull(),
   model: text("model").notNull(),
-  inputTokens: integer("input_tokens").notNull(),
-  outputTokens: integer("output_tokens").notNull(),
-  cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
-  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
-  costMicroUsd: bigint("cost_micro_usd", { mode: "number" }).notNull(),
+  outcome: text("outcome", {
+    enum: ["ok", "refused", "truncated", "invalid_output", "error"],
+  }).notNull(),
+  errorKind: text("error_kind"),
+  usageStatus: text("usage_status", { enum: ["reported", "partial", "unreported"] }).notNull(),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  cacheReadTokens: integer("cache_read_tokens"),
+  cacheWrite5mTokens: integer("cache_write_5m_tokens"),
+  cacheWrite1hTokens: integer("cache_write_1h_tokens"),
+  costMicroUsd: bigint("cost_micro_usd", { mode: "number" }),
+  costStatus: text("cost_status", {
+    enum: ["priced", "no_price", "billing_unverified", "no_usage"],
+  }).notNull(),
   priceVersion: text("price_version").notNull(),
   createdAt: createdAt(),
 });

@@ -22,12 +22,15 @@ export const DEFAULT_RETENTION: RetentionConfig = {
   auditDays: 365,
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
+  llmUsageDays: 730,
 };
 
 /** Mirrors the CHECK constraint on app.retention_settings (migration 0005). */
 export const AUDIT_MIN_RETENTION_DAYS = 30;
 /** Mirrors the CHECK in migration 0006: GitHub redelivers for up to 3 days. */
 export const WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS = 7;
+/** Mirrors the CHECK in migration 0011: usage outlives a yearly billing period plus a margin. */
+export const LLM_USAGE_MIN_RETENTION_DAYS = 400;
 
 const DAY_MS = 86_400_000;
 
@@ -45,6 +48,7 @@ const ENV_KEYS: Record<keyof RetentionConfig, string> = {
   auditDays: "RETENTION_AUDIT_DAYS",
   orgDeletionGraceDays: "ORG_DELETION_GRACE_DAYS",
   webhookDeliveriesDays: "RETENTION_WEBHOOK_DELIVERIES_DAYS",
+  llmUsageDays: "RETENTION_LLM_USAGE_DAYS",
 };
 
 const MIN_DAYS: Record<keyof RetentionConfig, number> = {
@@ -53,6 +57,7 @@ const MIN_DAYS: Record<keyof RetentionConfig, number> = {
   auditDays: AUDIT_MIN_RETENTION_DAYS,
   orgDeletionGraceDays: 1,
   webhookDeliveriesDays: WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
+  llmUsageDays: LLM_USAGE_MIN_RETENTION_DAYS,
 };
 
 const SETTING_KEYS = Object.keys(MIN_DAYS) as (keyof RetentionConfig)[];
@@ -83,6 +88,7 @@ export const retentionFromEnv = (env: Record<string, string | undefined>): Reten
     auditDays: read("auditDays"),
     orgDeletionGraceDays: read("orgDeletionGraceDays"),
     webhookDeliveriesDays: read("webhookDeliveriesDays"),
+    llmUsageDays: read("llmUsageDays"),
   };
 };
 

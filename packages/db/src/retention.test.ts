@@ -10,6 +10,7 @@ import {
   retentionFromEnv,
   runRetention,
   setRetentionSettings,
+  LLM_USAGE_MIN_RETENTION_DAYS,
   WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
 } from "./retention.js";
 import * as schema from "./schema.js";
@@ -112,6 +113,7 @@ describe("retentionFromEnv", () => {
       auditDays: 365,
       orgDeletionGraceDays: 7,
       webhookDeliveriesDays: 30,
+      llmUsageDays: 730,
     });
     expect(
       retentionFromEnv({
@@ -120,6 +122,7 @@ describe("retentionFromEnv", () => {
         RETENTION_AUDIT_DAYS: "730",
         ORG_DELETION_GRACE_DAYS: "30",
         RETENTION_WEBHOOK_DELIVERIES_DAYS: "60",
+        RETENTION_LLM_USAGE_DAYS: "1000",
       }),
     ).toEqual({
       analysesDays: 7,
@@ -127,6 +130,7 @@ describe("retentionFromEnv", () => {
       auditDays: 730,
       orgDeletionGraceDays: 30,
       webhookDeliveriesDays: 60,
+      llmUsageDays: 1000,
     });
   });
 
@@ -150,6 +154,9 @@ describe("retentionFromEnv", () => {
         RETENTION_WEBHOOK_DELIVERIES_DAYS: String(WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS - 1),
       }),
     ).toThrow(/RETENTION_WEBHOOK_DELIVERIES_DAYS/);
+    expect(() =>
+      retentionFromEnv({ RETENTION_LLM_USAGE_DAYS: String(LLM_USAGE_MIN_RETENTION_DAYS - 1) }),
+    ).toThrow(/RETENTION_LLM_USAGE_DAYS/);
   });
 });
 
@@ -196,6 +203,7 @@ describe("runRetention", () => {
       "analyses",
       "logs",
       "audit",
+      "llm_usage",
       "webhook_deliveries",
     ]);
     const byCategory = Object.fromEntries(report.categories.map((c) => [c.category, c]));
@@ -256,7 +264,7 @@ describe("runRetention", () => {
 
   it("is idempotent: a second run at the same instant deletes nothing and audits nothing", async () => {
     const report = await runRetention(db, { clock: fixedClock(NOW) });
-    expect(report.categories.map((c) => c.deleted)).toEqual([0, 0, 0, 0]);
+    expect(report.categories.map((c) => c.deleted)).toEqual([0, 0, 0, 0, 0]);
     const events = await db.withOrg(orgA.orgId, ({ db: tx }) =>
       tx.select().from(schema.auditEvents),
     );
@@ -285,7 +293,10 @@ describe("runRetention", () => {
     const report = await runRetention(db, {
       clock: fixedClock(new Date(Date.now() + 365 * DAY)),
     });
-    for (const c of report.categories) expect(c.deleted, c.category).toBeGreaterThanOrEqual(2);
+    // Nothing here plants usage rows; usage.test.ts covers the llm_usage purge and its clamp.
+    for (const c of report.categories.filter((c) => c.category !== "llm_usage")) {
+      expect(c.deleted, c.category).toBeGreaterThanOrEqual(2);
+    }
     for (const org of [orgA, orgB]) {
       const left = await remaining(org);
       expect(left.analyses).toContain("clamp-fresh");

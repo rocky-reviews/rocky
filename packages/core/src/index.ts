@@ -113,6 +113,19 @@ export {
   type StructuredCompletionResult,
 } from "./llm.js";
 export {
+  isLlmMeteringError,
+  LLM_COST_STATUSES,
+  LLM_USAGE_OUTCOMES,
+  LLM_USAGE_STATUSES,
+  LlmMeteringError,
+  type LlmCostStatus,
+  type LlmUsageOutcome,
+  type LlmUsageRecord,
+  type LlmUsageSink,
+  type LlmUsageStatus,
+  type LlmUsageTokens,
+} from "./metering.js";
+export {
   FINAL_INSTRUCTION,
   PROMPT_CANARY,
   PROMPT_CANARY_MARKER,

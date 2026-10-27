@@ -282,7 +282,7 @@ describe("retention purge path", () => {
     expect(error.code).toBe("23514"); // check_violation
   });
 
-  it("is owned by a NOLOGIN role that owns only the six retention functions", async () => {
+  it("is owned by a NOLOGIN role that owns only the seven retention functions", async () => {
     const role = await pgs.migrator.query<{
       rolcanlogin: boolean;
       rolbypassrls: boolean;
@@ -304,6 +304,8 @@ describe("retention purge path", () => {
       { kind: "function", name: "purge_analyses" },
       { kind: "function", name: "purge_audit_events" },
       { kind: "function", name: "purge_jobs" },
+      // P4-5 (migration 0011): usage past its period.
+      { kind: "function", name: "purge_llm_usage" },
       { kind: "function", name: "purge_webhook_deliveries" },
     ]);
     // The schema belongs to the migrator like every other schema; the role holds no privilege
@@ -332,6 +334,9 @@ describe("retention purge path", () => {
       { table_name: "audit_events", privilege_type: "SELECT" },
       { table_name: "jobs", privilege_type: "DELETE" },
       { table_name: "jobs", privilege_type: "SELECT" },
+      // P4-5: the usage purge and the erasure delete usage rows (append-only trigger otherwise).
+      { table_name: "llm_usage", privilege_type: "DELETE" },
+      { table_name: "llm_usage", privilege_type: "SELECT" },
       // P3-3: the erasure record, written only by delete_org (append-only trigger).
       { table_name: "org_deletions", privilege_type: "INSERT" },
       { table_name: "org_deletions", privilege_type: "SELECT" },
