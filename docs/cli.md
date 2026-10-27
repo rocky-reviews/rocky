@@ -68,29 +68,46 @@ The default output is plain text, with no colour codes:
 
 **Untrusted text.** The PR title, paths and everything a model wrote can carry ANSI/OSC escape
 sequences, carriage returns or bidi controls. They are escaped before printing (`\x1b`,
-`‮`), in the text output and in `--json` (as JSON `\u` escapes, the same value). Single-line
+`\u202e`), in the text output and in `--json` (as JSON `\u` escapes, the same value). Single-line
 fields also escape newlines, so a title cannot forge a line of its own. A reviewer sees that
 something was there.
 
 ## Spend cap: `--max-tokens`
 
 Every model call goes through a token budget for the run. The default is **500,000 tokens**,
-counting input, output, cache reads and cache writes as the provider reports them. That is
-enough for a small or medium PR on the default roles, and small enough that a mistake costs
-little. The most you can ask for is 50,000,000.
+counting input, output, cache reads and cache writes as the provider reports them. The most you
+can ask for is 50,000,000.
+
+The cap is a **best-effort stop before the next call**. It is not a hard ceiling on what the
+provider bills.
 
 Before each call, the budget adds up:
 
 - the usage reported so far;
 - what calls still in flight may use. Files are analysed in parallel, so each call in flight
   holds a reservation;
-- the next call's input estimate (characters / 3, plus prompt and output schema) and its
-  `maxOutputTokens`.
+- the next call's reservation:
+  - its input ceiling: one token per UTF-8 byte of the prompt, the content and the output
+    schema. No byte-level tokenizer spends more, so dense text in the diff (CJK, emoji,
+    base64, minified code) cannot make it an underestimate. For ordinary code it is several
+    times the real count;
+  - that ceiling counted twice on the Anthropic API, because a server-side refusal fallback can
+    re-run the call and bill the input again. Not with `ROCKY_LLM_ANTHROPIC_FALLBACKS=off`;
+  - its `maxOutputTokens`.
 
 If the total is over the cap, the call is refused before it reaches the provider. Every later
 call is refused too. The run prints nothing of the briefing, prints the usage so far on stderr
-and exits with code 3. A call that fails reports no usage, so it gives its reservation back;
-the provider may still have billed part of it.
+and exits with code 3.
+
+What can still overshoot:
+
+- One call can report more than its reservation, for example from the provider's own prompt
+  overhead or a fallback chain longer than assumed. The run then stops at the next call.
+- A call that fails reports no usage, so it gives its reservation back; the provider may still
+  have billed part of it.
+
+The ceiling is pessimistic, so on large PRs (big files, a big change map) the default cap can
+stop a run whose real usage would fit.
 
 `--dry-run` shows whether a cap is enough before you spend anything.
 

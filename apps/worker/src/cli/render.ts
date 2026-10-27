@@ -8,7 +8,8 @@ import { oneLine, terminalText } from "./terminal.js";
  * The CLI's text output (P4-8): the briefing as a reviewer reads it before the diff, the dry-run
  * plan and the token usage. Plain text, no colour codes, so the output stays greppable and
  * nothing here emits a control sequence of its own. Every string from the pull request or a
- * model passes through `oneLine` (fields) or `terminalText` (bodies) on its way out.
+ * model passes through `oneLine` (fields) or `terminalText` (bodies, behind a gutter) on its way
+ * out.
  */
 
 export interface PullRequestHeader {
@@ -25,11 +26,16 @@ const SEVERITIES: readonly Finding["severity"][] = ["critical", "high", "medium"
 const fmt = (n: number): string => n.toLocaleString("en-US");
 const short = (sha: string): string => sha.slice(0, 7);
 
-/** Indents every line of a (sanitised) multi-line text. */
+/**
+ * Model-written multi-line text (a reason, the summary, a finding body), sanitised, with every
+ * line behind a fixed gutter: an injected line such as `Verdict: LOW` or `[F9] src/x.ts:1` then
+ * never starts where Rocky's own structure does (review round 1, item 5).
+ */
+const GUTTER = "\u2502 ";
 const indent = (text: string, prefix: string): string[] =>
   terminalText(text)
     .split("\n")
-    .map((line) => `${prefix}${line}`.trimEnd());
+    .map((line) => `${prefix}${GUTTER}${line}`.trimEnd());
 
 const lineRange = (finding: Finding): string =>
   finding.range.start === finding.range.end

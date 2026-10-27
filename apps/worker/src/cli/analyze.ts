@@ -7,6 +7,7 @@ import {
   type Forge,
   type ForgeDiff,
   type ForgePullRequest,
+  type LlmCompletionRole,
   type LlmRoles,
 } from "@rocky-reviews/core";
 import { parseAnalysisDocumentJson } from "@rocky-reviews/schema";
@@ -32,8 +33,9 @@ import { terminalJson } from "./terminal.js";
  *   installation), open a repository session (a token minted read-only for that one repository),
  *   read the pull request and its diff, close the session (the token is revoked). Nothing is
  *   posted, commented or stored; there is no database.
- * - **Spend cap.** Every model call goes through `withTokenCap`: the run stops before the call
- *   that could cross `--max-tokens`, exits `EXIT.capReached` and prints the usage so far.
+ * - **Spend cap.** Every model call goes through `withTokenCap`, a best-effort stop: the run
+ *   stops before the call whose reservation could cross `--max-tokens`, exits `EXIT.capReached`
+ *   and prints the usage so far. One call can still exceed its reservation (budget.ts).
  * - **Output.** The document is validated against the schema again before anything is printed.
  *   Every untrusted string is escaped for the terminal. `--json` prints the document itself.
  * - **No logging of content.** Errors go to stderr as fixed codes and fixed text; the briefing on
@@ -51,6 +53,8 @@ export interface AnalyzeCommandDeps {
   readonly err: (text: string) => void;
   readonly unitKeySalt?: string;
   readonly maxDiffBytes?: number;
+  /** Input attempts per role for the cap (refusal fallbacks); default 1. */
+  readonly inputAttempts?: (role: LlmCompletionRole) => number;
   /** P4-5 seam: prices the usage; undefined until the price table exists. */
   readonly price?: UsagePricer;
 }
@@ -129,7 +133,11 @@ export const runAnalyzeCommand = async (
     return EXIT.ok;
   }
 
-  const budget = withTokenCap(deps.llm(), args.maxTokens);
+  const budget = withTokenCap(
+    deps.llm(),
+    args.maxTokens,
+    deps.inputAttempts === undefined ? {} : { inputAttempts: deps.inputAttempts },
+  );
   const usage = () => renderUsage(budget.report(), deps.price);
   let outcome;
   try {

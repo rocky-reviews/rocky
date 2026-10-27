@@ -10,21 +10,28 @@ import {
 
 /**
  * The CLI's spend cap (P4-8): a token budget per run, wrapped around the `LlmRoles` handed to the
- * pipeline, so every model call goes through it.
+ * pipeline, so every model call goes through it. It is a **best-effort stop before the next
+ * call**, not a hard ceiling on what the provider bills.
  *
  * Before a call: refuse it when the usage reported so far, plus what calls still in flight may
- * use, plus this call's input estimate and its `maxOutputTokens`, would exceed the cap. Calls run
- * in parallel (the pipeline's per-file lanes), so in-flight calls hold a reservation until they
- * answer; without it four calls could each pass the check and overshoot together. Once one call is
- * refused, every later call is refused too, and the run stops.
+ * use, plus this call's reservation would exceed the cap. Calls run in parallel (the pipeline's
+ * per-file lanes), so in-flight calls hold their reservation until they answer; without it four
+ * calls could each pass the check and overshoot together. Once one call is refused, every later
+ * call is refused too, and the run stops.
+ *
+ * A call's reservation is its input estimate, once per attempt that could bill the input (a
+ * server-side refusal fallback re-runs the call on another model inside the same `complete()`),
+ * plus its `maxOutputTokens`. The input estimate counts one token per UTF-8 byte of everything
+ * sent (prompt, content, output schema): no byte-level tokenizer spends more, so dense text (CJK,
+ * emoji, base64, minified code) that a PR author controls cannot make it an underestimate. For
+ * ordinary code and prose it is several times the real count.
  *
  * After a call: the reservation is replaced by the usage the provider reported (input, output,
- * cache reads and writes; every attempt when a refusal fallback re-ran it). A call that throws
- * reports nothing, so it releases its reservation; the provider may still have billed part of it.
- *
- * The input estimate is deliberately rough (characters / 3, plus the fixed prompt text and the
- * output schema): prose and code average more characters per token, so it overestimates.
- * Pricing the usage is P4-5's (`UsageReport` keeps provider and models per role for it).
+ * cache reads and writes; every attempt when a refusal fallback re-ran it). One call can still
+ * exceed its reservation (the provider's own prompt overhead, a fallback chain longer than
+ * assumed), so the cap can be overshot by that call; the next call is then refused. A call that
+ * throws reports nothing, so it releases its reservation; the provider may still have billed part
+ * of it. Pricing the usage is P4-5's (`UsageReport` keeps provider and models per role for it).
  */
 
 /** Thrown at a refused call. The pipeline turns it into a failure; the CLI reads `report()`. */
@@ -55,7 +62,7 @@ export interface CapStop {
   readonly usedTokens: number;
   /** Held by calls still in flight. */
   readonly reservedTokens: number;
-  /** The refused call's input estimate plus its `maxOutputTokens`. */
+  /** The refused call's reservation: input ceiling per attempt plus `maxOutputTokens`. */
   readonly nextCallTokens: number;
   readonly cap: number;
 }
@@ -72,24 +79,22 @@ export interface TokenBudget {
   report(): UsageReport;
 }
 
-const CHARS_PER_TOKEN = 3;
-/** Rocky's delimiters around each untrusted part (ids, labels, markers). */
-const PART_OVERHEAD_CHARS = 96;
-const FIXED_PROMPT_CHARS = UNTRUSTED_PREAMBLE.length + FINAL_INSTRUCTION.length;
+/** Rocky's delimiters around each untrusted part (ids, labels, markers), in bytes. */
+const PART_OVERHEAD_BYTES = 96;
+const encoder = new TextEncoder();
+/** UTF-8 bytes: an upper bound on the tokens a byte-level tokenizer spends on `text`. */
+const bytes = (text: string): number => encoder.encode(text).byteLength;
+const FIXED_PROMPT_BYTES = bytes(UNTRUSTED_PREAMBLE) + bytes(FINAL_INSTRUCTION);
 
-/** Characters of fixed prompt and delimiters, for `estimateTokens`. */
-export const promptChars = (instructionChars: number, parts: number): number =>
-  FIXED_PROMPT_CHARS + instructionChars + parts * PART_OVERHEAD_CHARS;
-
-export const estimateTokens = (chars: number): number => Math.ceil(chars / CHARS_PER_TOKEN);
-
-/** A rough, high input estimate for one call: prompt, content and output schema. */
+/** An input ceiling for one call, in tokens: prompt, delimiters, content and output schema. */
 export const estimateInputTokens = (request: StructuredCompletionRequest<unknown>): number =>
-  estimateTokens(
-    promptChars(request.instructions.text.length, request.untrusted.length) +
-      request.untrusted.reduce((sum, part) => sum + part.label.length + part.text.length, 0) +
-      JSON.stringify(request.output.jsonSchema).length,
-  );
+  FIXED_PROMPT_BYTES +
+  bytes(request.instructions.text) +
+  request.untrusted.reduce(
+    (sum, part) => sum + PART_OVERHEAD_BYTES + bytes(part.label) + bytes(part.text),
+    0,
+  ) +
+  bytes(JSON.stringify(request.output.jsonSchema));
 
 const usageTokens = (usage: LlmUsage) => ({
   inputTokens: usage.inputTokens,
@@ -111,10 +116,30 @@ interface Tally {
 const totalOf = (tally: Omit<Tally, "calls" | "provider" | "models">): number =>
   tally.inputTokens + tally.outputTokens + tally.cacheReadInputTokens + tally.cacheWriteInputTokens;
 
-export const withTokenCap = (roles: LlmRoles, cap: number): TokenBudget => {
+export interface TokenCapOptions {
+  /**
+   * How many times a role's call can bill its input: 2 where a server-side refusal fallback can
+   * re-run it (`inputAttemptsFor` in config.ts), 1 otherwise (the default).
+   */
+  readonly inputAttempts?: (role: LlmCompletionRole) => number;
+}
+
+export const withTokenCap = (
+  roles: LlmRoles,
+  cap: number,
+  options: TokenCapOptions = {},
+): TokenBudget => {
   if (!Number.isSafeInteger(cap) || cap < 1) {
     throw new RangeError("the token cap must be a positive integer");
   }
+  const inputAttempts = (role: LlmCompletionRole): number => {
+    const attempts = options.inputAttempts?.(role) ?? 1;
+    if (!Number.isSafeInteger(attempts) || attempts < 1) {
+      throw new RangeError("input attempts must be a positive integer");
+    }
+    return attempts;
+  };
+  for (const role of LLM_COMPLETION_ROLES) inputAttempts(role);
   const tallies = new Map<LlmCompletionRole, Tally>(
     LLM_COMPLETION_ROLES.map((role) => [
       role,
@@ -140,7 +165,7 @@ export const withTokenCap = (roles: LlmRoles, cap: number): TokenBudget => {
       return {
         role,
         complete: async (request) => {
-          const next = estimateInputTokens(request) + request.maxOutputTokens;
+          const next = estimateInputTokens(request) * inputAttempts(role) + request.maxOutputTokens;
           if (stopped !== undefined || used + reserved + next > cap) {
             stopped ??= {
               role,

@@ -3,7 +3,7 @@ import { createLlmRoles, envSecrets, LlmConfigError, providerAdapters } from "@r
 import { unitKeySaltFor } from "./analysis.js";
 import { parseCliArgs, USAGE, UsageError } from "./cli/args.js";
 import { EXIT, runAnalyzeCommand } from "./cli/analyze.js";
-import { loadCliConfig, missingKeys } from "./cli/config.js";
+import { inputAttemptsFor, loadCliConfig, missingKeys } from "./cli/config.js";
 import { ConfigError } from "./config.js";
 
 /**
@@ -59,6 +59,7 @@ const main = async (): Promise<number> => {
         out,
         err,
         unitKeySalt: unitKeySaltFor(llm),
+        inputAttempts: inputAttemptsFor(llm),
       },
       args,
     );

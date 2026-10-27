@@ -79,7 +79,21 @@ describe("estimateInputTokens", () => {
     const small = estimateInputTokens(request(1, "a"));
     const large = estimateInputTokens(request(1, "a".repeat(30_000)));
     expect(small).toBeGreaterThan(0);
-    expect(large - small).toBeGreaterThanOrEqual(9_999);
+    expect(large - small).toBeGreaterThanOrEqual(29_999);
+  });
+
+  it("is a ceiling for dense text: one token per UTF-8 byte (CJK, emoji, base64)", () => {
+    const base = estimateInputTokens(request(1, ""));
+    // 10,000 CJK characters are 30,000 UTF-8 bytes; a tokenizer can spend a token per character.
+    expect(estimateInputTokens(request(1, "\u6f22".repeat(10_000))) - base).toBeGreaterThanOrEqual(
+      30_000,
+    );
+    expect(
+      estimateInputTokens(request(1, "\u{1f680}".repeat(1_000))) - base,
+    ).toBeGreaterThanOrEqual(4_000);
+    expect(estimateInputTokens(request(1, "QUJD".repeat(5_000))) - base).toBeGreaterThanOrEqual(
+      20_000,
+    );
   });
 });
 
@@ -136,11 +150,50 @@ describe("withTokenCap", () => {
     expect(reached).toHaveLength(2);
   });
 
+  it("refuses a dense CJK diff before the call reaches the provider", async () => {
+    const { roles, reached } = fakeRoles(() => ({ usage: usage(1, 1) }));
+    // 10,000 characters: under the old characters / 3 estimate this fit in 25,000 tokens.
+    const budget = withTokenCap(roles, 25_000);
+    await expect(
+      budget.roles.completion("triage").complete(request(100, "\u6f22".repeat(10_000))),
+    ).rejects.toBeInstanceOf(TokenCapReached);
+    expect(reached).toHaveLength(0);
+  });
+
+  it("a call that reports more than its reservation still stops the next call", async () => {
+    const { roles, reached } = fakeRoles(() => ({ usage: usage(45_000, 5_000) }));
+    const budget = withTokenCap(roles, 40_000);
+    const review = budget.roles.completion("review");
+    await review.complete(request(100)); // reserved ~1k, reported 50k: over the cap
+    await expect(review.complete(request(1))).rejects.toBeInstanceOf(TokenCapReached);
+    expect(reached).toHaveLength(1);
+    expect(budget.report().totalTokens).toBe(50_000);
+    expect(budget.report().stopped).toMatchObject({ usedTokens: 50_000 });
+  });
+
+  it("reserves the input once per possible attempt where a refusal fallback can re-run it", async () => {
+    const { roles, reached } = fakeRoles(() => ({ usage: usage(1, 1) }));
+    const text = "a".repeat(10_000);
+    const single = estimateInputTokens(request(0, text));
+    // Fits once, not twice: refused only for the role whose fallback may bill the input again.
+    const cap = single * 2 - 1;
+    const budget = withTokenCap(roles, cap, {
+      inputAttempts: (role) => (role === "review" ? 2 : 1),
+    });
+    await budget.roles.completion("triage").complete(request(0, text));
+    expect(reached).toEqual(["triage"]);
+    await expect(
+      budget.roles.completion("review").complete(request(0, text)),
+    ).rejects.toBeInstanceOf(TokenCapReached);
+    expect(budget.report().stopped).toMatchObject({ role: "review", nextCallTokens: single * 2 });
+    expect(() => withTokenCap(roles, 10, { inputAttempts: () => 0 })).toThrow(RangeError);
+  });
+
   it("reserves what calls in flight may use, so parallel calls cannot overshoot together", async () => {
     let open!: () => void;
     const gate = new Promise<void>((resolve) => (open = resolve));
     const { roles, reached } = fakeRoles(() => ({ usage: usage(10, 10) }), gate);
-    const budget = withTokenCap(roles, 1_500);
+    const budget = withTokenCap(roles, 3_000);
     const review = budget.roles.completion("review");
     const first = review.complete(request(1_000)); // in flight: ~1000 reserved
     await expect(review.complete(request(1_000))).rejects.toBeInstanceOf(TokenCapReached);
@@ -157,7 +210,7 @@ describe("withTokenCap", () => {
         ? { usage: usage(0, 0), error: new LlmCallError("server_error") }
         : { usage: usage(1, 1) },
     );
-    const budget = withTokenCap(roles, 1_500);
+    const budget = withTokenCap(roles, 3_000);
     const graph = budget.roles.completion("graph");
     await expect(graph.complete(request(1_000))).rejects.toBeInstanceOf(LlmCallError);
     fail = false;

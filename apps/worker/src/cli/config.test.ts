@@ -2,7 +2,7 @@ import { testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { envSecrets, llmConfigFromEnv } from "@rocky-reviews/llm";
 import { describe, expect, it } from "vitest";
 import { ConfigError } from "../config.js";
-import { cliConfigFromEnv, loadCliConfig, missingKeys } from "./config.js";
+import { cliConfigFromEnv, inputAttemptsFor, loadCliConfig, missingKeys } from "./config.js";
 
 /** P4-8: the CLI's configuration. Messages name variables, never values. */
 
@@ -68,5 +68,19 @@ describe("missingKeys", () => {
   it("asks nothing of providers whose credentials come from the platform chain", () => {
     const config = llmConfigFromEnv({ ROCKY_LLM_PROVIDER: "bedrock", AWS_REGION: "us-east-1" });
     expect(missingKeys(config, envSecrets({}))).toEqual([]);
+  });
+});
+
+describe("inputAttemptsFor", () => {
+  it("counts the input twice where a server-side refusal fallback can re-run the call", () => {
+    const anthropic = inputAttemptsFor(llmConfigFromEnv({}));
+    expect(anthropic("review")).toBe(2);
+    expect(anthropic("triage")).toBe(2);
+    const off = inputAttemptsFor(llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_FALLBACKS: "off" }));
+    expect(off("review")).toBe(1);
+    const bedrock = inputAttemptsFor(
+      llmConfigFromEnv({ ROCKY_LLM_PROVIDER: "bedrock", AWS_REGION: "us-east-1" }),
+    );
+    expect(bedrock("review")).toBe(1);
   });
 });

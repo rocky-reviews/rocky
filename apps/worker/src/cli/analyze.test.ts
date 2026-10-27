@@ -4,7 +4,6 @@ import { PR847, pr847Diff, pr847Script } from "@rocky-reviews/evals";
 import {
   createGitHubForge,
   githubEndpoints,
-  MIRROR_TOKEN_PERMISSIONS,
   parseGitHubAppAuth,
 } from "@rocky-reviews/forge-github";
 import { fakeGitHubApi, FIXTURE_APP_ID, testAppKeys } from "@rocky-reviews/forge-github/testing";
@@ -169,16 +168,14 @@ describe("pnpm rocky analyze (P4-8)", () => {
       ).toBe(true);
     }
     expect(fake.requests.every((r) => r.authorized)).toBe(true);
-    // Every token it minted was read-only, scoped to the one repository, and revoked.
-    // (Locating the repository mints one by name; the session mints one by id.)
-    expect(fake.tokens.mints.length).toBeGreaterThan(0);
-    for (const mint of fake.tokens.mints) {
-      expect(mint.body).toMatchObject({ permissions: MIRROR_TOKEN_PERMISSIONS });
-      const scope = mint.body as { repository_ids?: number[]; repositories?: string[] };
-      expect([scope.repository_ids, scope.repositories]).toContainEqual(
-        scope.repository_ids === undefined ? ["rocky"] : [501],
-      );
-    }
+    // Every token it minted was read-only and scoped to the one repository, exactly: no other
+    // permission, no other scope key. Locating the repository mints one by name (and revokes it at
+    // once); the session mints one by id. Literal values, so a widened constant fails here too.
+    const READ_ONLY = { contents: "read", pull_requests: "read" };
+    expect(fake.tokens.mints).toEqual([
+      { installationId: 31, body: { repositories: ["rocky"], permissions: READ_ONLY } },
+      { installationId: 31, body: { repository_ids: [501], permissions: READ_ONLY } },
+    ]);
     expect(fake.tokens.revoked).toBe(fake.tokens.mints.length);
     expect(fake.requests.map((r) => `${r.method} ${r.path}`)).toEqual(
       expect.arrayContaining([
@@ -261,6 +258,27 @@ describe("pnpm rocky analyze (P4-8)", () => {
     expect(stderr).not.toMatch(UNSAFE);
   });
 
+  it("refuses a dense CJK diff before any model call (the estimate is a ceiling)", async () => {
+    const lines = Array.from({ length: 300 }, () => "\u6f22".repeat(100));
+    const diff = [
+      "diff --git a/docs/zh.md b/docs/zh.md",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/docs/zh.md",
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((line) => `+${line}`),
+    ].join("\n");
+    // 30,000 characters, 90,000 UTF-8 bytes: a characters / 3 estimate fitted in this cap.
+    const { code, stdout, stderr, calls } = await run(
+      { maxTokens: 60_000 },
+      { fake: github(`${diff}\n`) },
+    );
+    expect(code).toBe(EXIT.capReached);
+    expect(calls).toHaveLength(0);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/token cap of 60,000 reached: 0 used/);
+  });
+
   it("reports a failed analysis with its code and usage, exit 1", async () => {
     const { code, stdout, stderr } = await run({}, { fake: github("not a diff\n") });
     expect(code).toBe(EXIT.failed);
@@ -276,6 +294,9 @@ describe("pnpm rocky analyze (P4-8)", () => {
     const missingPr = await run({ number: 999 });
     expect(missingPr.code).toBe(EXIT.failed);
     expect(missingPr.stderr).toMatch(/no pull request #999 in rocky-reviews\/rocky/);
+    // The session is closed on the error path too: every token minted was revoked.
+    expect(missingPr.fake.tokens.mints).toHaveLength(2);
+    expect(missingPr.fake.tokens.revoked).toBe(missingPr.fake.tokens.mints.length);
   });
 
   it("reports a forge outage by code", async () => {
@@ -284,5 +305,7 @@ describe("pnpm rocky analyze (P4-8)", () => {
     const { code, stderr } = await run({}, { fake });
     expect(code).toBe(EXIT.failed);
     expect(stderr).toMatch(/forge_http_502/);
+    expect(fake.tokens.mints).toHaveLength(2);
+    expect(fake.tokens.revoked).toBe(fake.tokens.mints.length);
   });
 });

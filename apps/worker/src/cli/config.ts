@@ -1,3 +1,4 @@
+import type { LlmCompletionRole } from "@rocky-reviews/core";
 import {
   LlmConfigError,
   llmConfigFromEnv,
@@ -71,3 +72,17 @@ export const missingKeys = (config: LlmConfig, secrets: SecretSource): string[] 
   }
   return messages;
 };
+
+/**
+ * How many times a role's call can bill its input, for the spend cap: on the Anthropic API a
+ * server-side refusal fallback (on unless `ROCKY_LLM_ANTHROPIC_FALLBACKS=off`, ADR 0013 §1) re-runs
+ * the call on one fallback model inside the same request, so the input is reserved twice. Every
+ * role on that provider counts, whether or not its model takes fallbacks: over-reserving is safe.
+ */
+export const inputAttemptsFor =
+  (config: LlmConfig) =>
+  (role: LlmCompletionRole): number => {
+    const provider = config.roles[role].provider;
+    const settings = config.providers.anthropic;
+    return provider === "anthropic" && settings?.fallbacks !== "off" ? 2 : 1;
+  };
