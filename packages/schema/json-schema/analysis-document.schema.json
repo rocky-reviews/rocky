@@ -1470,6 +1470,24 @@
           ],
           "type": "object"
         },
+        "briefingUnavailable": {
+          "additionalProperties": false,
+          "description": "Present only when the pipeline wrote the briefing itself (schema 1.1).",
+          "properties": {
+            "reason": {
+              "enum": [
+                "analysis-failed",
+                "too-large",
+                "timeout"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason"
+          ],
+          "type": "object"
+        },
         "files": {
           "description": "Every file the PR changes. The only files the rest of the document may name.",
           "items": {
@@ -1681,6 +1699,29 @@
           ],
           "type": "object"
         },
+        "readByHand": {
+          "default": [],
+          "description": "Risky files reviewed with no finding: the reviewer reads them by hand (schema 1.1).",
+          "items": {
+            "additionalProperties": false,
+            "description": "A risky file the AI reviewed and drafted nothing for: read it by hand.",
+            "properties": {
+              "path": {
+                "description": "Must be a triaged file with no finding.",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "maxItems": 1000,
+          "type": "array"
+        },
         "repo": {
           "additionalProperties": false,
           "properties": {
@@ -1755,8 +1796,8 @@
       "type": "object"
     },
     "schemaVersion": {
-      "description": "Contract version the document targets. Current: 1.0.0.",
-      "pattern": "^1\\.(0)\\.\\d+$",
+      "description": "Contract version the document targets. Current: 1.1.0.",
+      "pattern": "^1\\.(0|1)\\.\\d+$",
       "type": "string"
     },
     "triage": {
@@ -1928,5 +1969,5 @@
   ],
   "title": "Rocky Reviews analysis document",
   "type": "object",
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

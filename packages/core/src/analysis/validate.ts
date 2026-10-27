@@ -23,7 +23,10 @@ import type { ReviewFinding, TriageAnswer } from "./outputs.js";
 import { MAX_REPAIR_ISSUES } from "./outputs.js";
 
 /** The facts every unit document shares: the PR and the generator, never a model's word. */
-export type ProvenanceBase = Omit<Provenance, "files" | "unanalysed" | "graphUnavailable">;
+export type ProvenanceBase = Omit<
+  Provenance,
+  "files" | "unanalysed" | "graphUnavailable" | "briefingUnavailable" | "readByHand"
+>;
 
 export interface UnitContext {
   readonly provenance: ProvenanceBase;

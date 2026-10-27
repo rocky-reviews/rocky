@@ -32,6 +32,7 @@ describe("applyKnownFields", () => {
       generatedAt: "1999-01-01T00:00:00.000Z",
       generator: { name: "model", roles: [] },
       unanalysed: [],
+      readByHand: [],
       files: pr847().provenance.files.map((file) => ({
         ...file,
         additions: 0,

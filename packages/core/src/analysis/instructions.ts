@@ -2,8 +2,9 @@
  * Rocky's instructions for each pipeline stage (P4-3). Literal templates only (ADR 0012 §1): no
  * PR content, path, title or model output is ever interpolated here. Everything that varies per
  * call goes in `untrusted` parts under Rocky-authored labels (ADR 0012 N7), which the adapters
- * wrap in nonce-delimited `pr_content` blocks behind a fixed preamble (ADR 0013 §2). P4-4 extends
- * this with the injection corpus; nothing here weakens it.
+ * wrap in nonce-delimited `pr_content` blocks behind a fixed preamble (`prompt.ts`; ADR 0013 §2).
+ * Answers that copy this text are refused by the leak guard (`leak.ts`, ADR 0015 §3), and the
+ * injection corpus (`packages/evals`) runs against every change here.
  *
  * Changing any text here changes what a model is asked: bump `PIPELINE_VERSION` (units.ts) so no
  * stored file analysis is reused across the change.

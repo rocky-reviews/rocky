@@ -6,10 +6,12 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fixtures/*": "./fixtures/*"
   },
   "dependencies": {
     "@rocky-reviews/core": "workspace:*",
-    "@rocky-reviews/schema": "workspace:*"
+    "@rocky-reviews/schema": "workspace:*",
+    "zod": "4.6.7"
   }
 }

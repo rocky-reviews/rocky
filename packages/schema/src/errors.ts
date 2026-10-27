@@ -50,6 +50,8 @@ export type IssueCode =
   | "SUGGESTION_RANGE_OUTSIDE_FILE"
   /** A suggestion replaces lines with themselves. */
   | "SUGGESTION_NOOP"
+  /** A `provenance.readByHand` file is not triaged, or has findings (schema 1.1). */
+  | "READ_BY_HAND_MISMATCH"
   /** A total the shape could not bound (views in a tree, flags, document bytes) is over its limit. */
   | "LIMIT_EXCEEDED"
   /** The parser hit an unexpected error. Reported, never thrown. */
