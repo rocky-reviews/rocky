@@ -95,9 +95,10 @@ export interface Db {
    */
   purgeExpired(category: RetentionCategory, asOf: Date): Promise<PurgeResult[]>;
   /**
-   * Erases an org whose deletion grace period has elapsed (retention.delete_org): its audit
-   * events, the org row (cascading through every tenant table), its finished inbox rows, and a
-   * tombstone in app.org_deletions. Worker login only (migration 0007).
+   * Erases an org whose deletion grace period has elapsed and that the sweep has marked erasing
+   * (`beginOrgErasure`; retention.delete_org refuses it otherwise): its audit events, the org row
+   * (cascading through every tenant table), its finished inbox rows, and a tombstone in
+   * app.org_deletions. Worker login only (migration 0007).
    */
   deleteOrg(orgId: OrgId): Promise<OrgDeletion[]>;
   /**

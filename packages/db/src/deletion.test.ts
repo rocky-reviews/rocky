@@ -97,6 +97,14 @@ const makeDue = async (orgId: string): Promise<void> => {
   }
 };
 
+/**
+ * The sweep's point of no return (`beginOrgErasure`), which it reaches only after GitHub's
+ * re-check; it then runs the external erasers. `delete_org` refuses an org without it.
+ */
+const markErasing = async (orgId: OrgId): Promise<void> => {
+  expect(await worker.withOrg(orgId, (tx) => beginOrgErasure(tx))).not.toBe("not_due");
+};
+
 beforeAll(async () => {
   pgs = await startPostgres();
   superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
@@ -145,6 +153,25 @@ describe("retention.delete_org", () => {
       return row?.d ?? null;
     });
     expect(backdated!.getTime()).toBeGreaterThan(Date.now() + 6.9 * DAY);
+  });
+
+  it("refuses a due org that is not marked erasing, so no caller skips the sweep's re-check and the external erasers (review round 4)", async () => {
+    const orgId = await bareOrg(140);
+    await makeDue(orgId);
+    const error = await pgError(worker.deleteOrg(orgId));
+    expect(error.code).toBe("22023");
+    expect(error.message).toMatch(/not being erased/);
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(1);
+    const tombstones = await superuser.query("select 1 from app.org_deletions where org_id = $1", [
+      orgId,
+    ]);
+    expect(tombstones.rowCount).toBe(0);
+    // Once the sweep has passed its point of no return, the same call erases it.
+    await markErasing(orgId);
+    expect(await worker.deleteOrg(orgId)).toEqual(
+      expect.arrayContaining([{ table: "orgs", deleted: 1 }]),
+    );
+    expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(0);
   });
 
   it("audits scheduling and cancelling a deletion from the trigger (re-review D)", async () => {
@@ -238,6 +265,7 @@ describe("retention.delete_org", () => {
     // as the table owner, where the append-only trigger aborts the erasure.
     const orgId = await bareOrg(4);
     await makeDue(orgId);
+    await markErasing(orgId);
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let inserted = false;
@@ -278,6 +306,7 @@ describe("retention.delete_org", () => {
   it("deletes every row of a due org from every tenant table and nothing of other orgs", async () => {
     expect(tables.length).toBeGreaterThanOrEqual(13);
     await makeDue(a.orgId);
+    await markErasing(a.orgId);
     const report = await worker.deleteOrg(a.orgId);
     expect(report).toEqual(
       expect.arrayContaining([
@@ -395,6 +424,7 @@ describe("the deletion sweep's database side (P3-3)", () => {
     }
     expect(await rowsOf({ name: "orgs", tenantColumn: "id" }, orgId)).toBe(1);
     // Clean up through the real path so later tests see only their own due orgs.
+    await markErasing(orgId);
     await worker.deleteOrg(orgId);
   });
 
@@ -419,6 +449,7 @@ describe("the deletion sweep's database side (P3-3)", () => {
       erasing: false,
     });
     await expect(worker.orgsDueForDeletion(1.5)).rejects.toThrow(/integer/);
+    await markErasing(due);
     await worker.deleteOrg(due);
     expect((await worker.orgsDueForDeletion(100)).map((r) => r.orgId)).not.toContain(due);
   });
@@ -619,6 +650,7 @@ describe("the deletion sweep's database side (P3-3)", () => {
   it("keeps the erasure record append-only and out of the application's reach", async () => {
     const orgId = await bareOrg(70);
     await makeDue(orgId);
+    await markErasing(orgId);
     await worker.deleteOrg(orgId);
     for (const sql of [
       "update app.org_deletions set installation_id = 1 where org_id = $1",
@@ -884,6 +916,7 @@ describe("review round 2", () => {
         );
       }
       await makeDue(orgId);
+      await markErasing(orgId);
       const report = await worker.deleteOrg(orgId);
       expect(report).toEqual(
         expect.arrayContaining([

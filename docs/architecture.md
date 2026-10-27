@@ -61,7 +61,9 @@ packages/schema (analysis document; shared contract)
 - Database roles (ADR 0005, ADR 0009): the migrator owns the schema, runs `pnpm db:migrate` and
   writes the retention settings; the server logs in as a member of `rocky_app` (RLS enforced, no
   bypass, no TEMP objects); the worker logs in as a member of `rocky_app` and `rocky_worker` (the
-  only role that creates orgs, claims inbox rows and erases orgs); `rocky_retention` and
+  only role that creates orgs, claims inbox rows and erases orgs). Each refuses the other's
+  login: the worker starts only as a `rocky_worker` member, the server never as one (it checks
+  at boot and on every new connection); `rocky_retention` and
   `rocky_lifecycle` own the `SECURITY DEFINER` purge, deletion and inbox functions and nothing else.
 - Every table in `public` is a tenant table: `org_id NOT NULL` with `ON DELETE CASCADE` to `orgs`,
   composite foreign keys to parents, `FORCE ROW LEVEL SECURITY`, one policy for `rocky_app`.

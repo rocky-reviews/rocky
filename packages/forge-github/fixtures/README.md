@@ -1,7 +1,7 @@
 # GitHub API fixtures
 
-Sanitised responses of the GitHub REST API used by tests (P3-3, ADR 0009). They follow the shape
-GitHub documents and returns for `GET /app/installations/{installation_id}` and `GET /app` (API version `2022-11-28`), with every
+Responses of the GitHub REST API used by tests (P3-3, ADR 0009). They are **not recorded** from
+GitHub: they follow the shape GitHub documents for `GET /app/installations/{installation_id}` and `GET /app` (API version `2022-11-28`), with every
 identifier replaced by a synthetic value: account `acme` (9001), user `octo-dev` (9101),
 enterprise `acme-corp` (9201), installations 4242, 4343 and 4444, app id 123456. No tokens, keys, emails or
 real account data.
@@ -15,7 +15,10 @@ real account data.
 | `get-app.json`                         | 200    | The authenticated app (`GET /app`)             |
 
 Tests serve them through `fakeGitHubApi` (`src/testing.ts`), which may substitute ids so one
-recorded shape covers several installations. When re-recording against a real installation,
+fixture covers several installations. Webhook payloads are not fixtures: they are built by
+`installationPayload` and friends in `src/testing.ts`. Replacing these files with real recorded
+responses (and real `installation.created`/`deleted` payloads) is a follow-up (`docs/progress.md`,
+P3-3). When recording against a real installation,
 replace every id, login, URL and timestamp before committing, and keep only these fields'
 shapes; nothing from the response beyond `id`, `app_id`, `target_type`,
 `account.{id,login,type,slug}`, `suspended_at`, the 404 `message`, and the app's `id` is read by

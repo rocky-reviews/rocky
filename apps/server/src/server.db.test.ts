@@ -3,11 +3,20 @@ import {
   signedDelivery,
   TEST_WEBHOOK_SECRET,
 } from "@rocky-reviews/forge-github/testing";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { WORKER_ROLE } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
-import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "@rocky-reviews/db/testing";
+import {
+  CONTAINER_TIMEOUT_MS,
+  startPostgres,
+  TEST_ROLES,
+  type TestPostgres,
+} from "@rocky-reviews/db/testing";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startServer, type RunningServer } from "./server.js";
+import { ConfigError } from "./config.js";
+import { startServer, WorkerLoginError, type RunningServer } from "./server.js";
 
 /**
  * Review round 1, items 1 and 2, against a real Postgres: the server's single pool carries the
@@ -19,6 +28,14 @@ let pgs: TestPostgres;
 let superuser: pg.Pool;
 let server: RunningServer;
 const lines: Record<string, unknown>[] = [];
+
+const capture = () => {
+  const out: Record<string, unknown>[] = [];
+  const log = createLogger("server-test", {
+    destination: { write: (c: string) => void out.push(JSON.parse(c) as Record<string, unknown>) },
+  });
+  return { log, out };
+};
 
 beforeAll(async () => {
   pgs = await startPostgres();
@@ -112,5 +129,94 @@ describe("the server pool", () => {
     const logged = lines.find((l) => l["msg"] === "postgres idle client error");
     expect(logged).toMatchObject({ errorCode: "57P01" });
     expect((await server.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+  });
+});
+
+/**
+ * Review round 4: the internet-facing server must never hold the worker's privileges (creating
+ * orgs, claiming inbox rows, erasing orgs). An operator reusing WORKER_DATABASE_URL (or a
+ * superuser URL, which is a member of every role) as DATABASE_URL must get a refusal, not a server.
+ */
+describe("the server's database login (review round 4)", () => {
+  const env = (url: string) => ({ DATABASE_URL: url, HOST: "127.0.0.1", PORT: "0" });
+  const passwordOf = (url: string) => decodeURIComponent(new URL(url).password);
+
+  it.each([
+    ["the worker login", () => pgs.workerUrl],
+    ["a superuser", () => pgs.superUrl],
+  ])("refuses to start on %s, before listening", async (_name, url) => {
+    const { log, out } = capture();
+    const error = await startServer(env(url()), log).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorkerLoginError);
+    expect(error).toBeInstanceOf(ConfigError);
+    expect((error as Error).message).toContain(WORKER_ROLE);
+    expect(out.find((l) => l["msg"] === "server listening")).toBeUndefined();
+    // Neither the connection string nor its host and login reach the message or the log.
+    const { host, username } = new URL(url());
+    for (const secret of [url(), `${username}:`, `@${host}`]) {
+      expect((error as Error).message).not.toContain(secret);
+      expect(JSON.stringify(out)).not.toContain(secret);
+    }
+  });
+
+  it("main.ts exits 1 with a clear message that holds no credential", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", fileURLToPath(new URL("./main.ts", import.meta.url))],
+      {
+        env: { PATH: process.env["PATH"] ?? "", ...env(pgs.workerUrl) },
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(result.status).toBe(1);
+    const fatal = result.stdout
+      .split("\n")
+      .filter((l) => l.startsWith("{"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l["msg"] === "invalid configuration");
+    expect(fatal?.["err"]).toMatch(/DATABASE_URL logs in as a member of rocky_worker/);
+    expect(result.stdout).not.toContain("server listening");
+    expect(result.stdout + result.stderr).not.toContain(passwordOf(pgs.workerUrl));
+  }, 30_000);
+
+  it("starts on the application login", async () => {
+    const { log, out } = capture();
+    const running = await startServer(env(pgs.appUrl), log);
+    try {
+      expect(out.find((l) => l["msg"] === "server listening")).toBeDefined();
+      expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it("checks every new connection too: a login granted the worker role after boot gets no connection", async () => {
+    const { log, out } = capture();
+    const running = await startServer(env(pgs.appUrl), log);
+    const grant = `grant ${WORKER_ROLE} to ${TEST_ROLES.app}`;
+    try {
+      expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+      await superuser.query(grant);
+      // Existing connections end (as on a restart); the pool opens new ones on the next query.
+      await superuser.query(
+        `select pg_terminate_backend(pid) from pg_stat_activity where usename = $1`,
+        [TEST_ROLES.app],
+      );
+      await expect.poll(() => running.pool.totalCount, { timeout: 5_000 }).toBe(0);
+      await expect(running.pool.query("select 1")).rejects.toBeInstanceOf(WorkerLoginError);
+      expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(503);
+      expect(out.find((l) => l["msg"] === "database login refused")).toMatchObject({
+        role: WORKER_ROLE,
+      });
+      expect(running.pool.totalCount).toBe(0);
+    } finally {
+      await superuser.query(`revoke ${WORKER_ROLE} from ${TEST_ROLES.app}`);
+    }
+    try {
+      expect((await running.app.inject({ method: "GET", url: "/healthz" })).statusCode).toBe(200);
+    } finally {
+      await running.close();
+    }
   });
 });

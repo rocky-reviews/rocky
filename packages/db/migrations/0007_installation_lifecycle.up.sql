@@ -21,10 +21,11 @@
 --      finished at claim or failure (a verified completion collapses its earlier same-type
 --      duplicates), transient errors that do not exhaust the budget; the purge skips unprocessed
 --      rows.
---   4. The deletion sweep: list due orgs, erase each through retention.delete_org, which now also
---      removes the erased installation's inbox rows (or scrubs the ones still pending), the
---      account's finished rows under installations no live org holds, and leaves a tombstone in
---      app.org_deletions. Rows of a reinstall (another installation) are never touched.
+--   4. The deletion sweep: list due orgs, erase each through retention.delete_org (which refuses
+--      an org the sweep has not marked erasing). It now also removes the erased installation's
+--      inbox rows (or scrubs the ones still pending), the account's finished rows under
+--      installations no live org holds, and leaves a tombstone in app.org_deletions. Rows of a
+--      reinstall (another installation) are never touched.
 
 -- --- 1. Roles ----------------------------------------------------------------------------------
 
@@ -729,7 +730,9 @@ $$;
 -- finished rows of installations no live org holds (the org's own past, before a rebind). Rows
 -- of a reinstall (another installation, pending or bound to a live org) are not the erased
 -- org's and are left alone. A tombstone goes to app.org_deletions. The FOR UPDATE lock and the
--- order of deletes are unchanged (see 0005).
+-- order of deletes are unchanged (see 0005). The org must also be marked erasing: the sweep sets
+-- erasing_at only after re-verifying the uninstall with the forge, and erases the external
+-- stores after it, so no caller can reach the database erasure without both (review round 4).
 CREATE FUNCTION retention.delete_org(org uuid)
   RETURNS TABLE (table_name text, deleted bigint)
   LANGUAGE plpgsql SECURITY DEFINER
@@ -737,6 +740,7 @@ CREATE FUNCTION retention.delete_org(org uuid)
 AS $$
 DECLARE
   due timestamptz;
+  erasing timestamptz;
   inst bigint;
   acct bigint;
   frg text;
@@ -746,8 +750,8 @@ DECLARE
   n_older bigint;
   n_scrubbed bigint;
 BEGIN
-  SELECT o.delete_after, o.installation_id, o.account_id, o.forge
-    INTO due, inst, acct, frg
+  SELECT o.delete_after, o.erasing_at, o.installation_id, o.account_id, o.forge
+    INTO due, erasing, inst, acct, frg
     FROM public.orgs o WHERE o.id = org FOR UPDATE;
   IF NOT FOUND OR due IS NULL THEN
     RAISE EXCEPTION 'org % is not scheduled for deletion', org
@@ -755,6 +759,10 @@ BEGIN
   END IF;
   IF due > now() THEN
     RAISE EXCEPTION 'org % is inside its deletion grace period until %', org, due
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF erasing IS NULL THEN
+    RAISE EXCEPTION 'org % is not being erased (erasing_at is not set)', org
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 

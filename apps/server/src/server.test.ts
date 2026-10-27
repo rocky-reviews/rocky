@@ -95,6 +95,16 @@ describe("startServer (review round 1, item 5)", () => {
     expect(JSON.stringify(lines)).not.toContain(GOOD);
   });
 
+  it("boots without the database and says so by code; each connection is checked when made (review round 4)", async () => {
+    const { log, lines } = capture();
+    running = await startServer(BASE_ENV, log);
+    expect(lines.find((l) => l["msg"] === "database unreachable at boot")).toMatchObject({
+      errorCode: "ECONNREFUSED",
+    });
+    expect(JSON.stringify(lines)).not.toContain("nothing@127.0.0.1");
+    expect(running.pool.options).toHaveProperty("onConnect");
+  });
+
   it("refuses to start on Fly.io without a secret even when NODE_ENV is unset", async () => {
     const { log, lines } = capture();
     await expect(startServer({ ...BASE_ENV, FLY_APP_NAME: "rocky-cloud" }, log)).rejects.toThrow(

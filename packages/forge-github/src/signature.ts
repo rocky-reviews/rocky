@@ -35,7 +35,7 @@ export const checkWebhookSecret = (secret: unknown): string => {
   return secret;
 };
 
-/** `sha256=<hex>` for `body`, as GitHub sends it. Used by tests and recorded fixtures. */
+/** `sha256=<hex>` for `body`, as GitHub sends it. Used by tests and test fixtures. */
 export const signWebhookBody = (secret: string, body: Uint8Array): string =>
   PREFIX + createHmac("sha256", secret).update(body).digest("hex");
 

@@ -110,7 +110,7 @@ export const webhookRequest = (delivery: SignedDelivery) => ({
 
 // --- GitHub REST API fake (P3-3) ---------------------------------------------------------------
 
-/** A recorded, sanitised response body from `packages/forge-github/fixtures/`. */
+/** A documentation-shaped response body (synthetic ids) from `packages/forge-github/fixtures/`. */
 export const githubFixture = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(new URL(`../fixtures/${name}.json`, import.meta.url), "utf8")) as Record<
     string,
@@ -168,8 +168,8 @@ const json = (status: number, body: unknown): Response =>
   });
 
 /**
- * An in-memory GitHub serving `GET /app/installations/{id}` and `GET /app` from the recorded
- * fixtures (ids substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
+ * An in-memory GitHub serving `GET /app/installations/{id}` and `GET /app` from the fixtures
+ * (ids substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
  * the app's public key, `iss` = app id, unexpired, at most 10 minutes long): a bad or missing
  * token gets 401.
  */

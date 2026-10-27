@@ -34,7 +34,7 @@ import type { AppCheck } from "./app-check.js";
  * check passed (M2): a wrong key must not read as "every installation is gone".
  */
 
-const NOT_SCHEDULED = "22023"; // invalid_parameter_value: not scheduled, or no longer due
+const NOT_SCHEDULED = "22023"; // invalid_parameter_value: not scheduled, not due, not erasing
 
 export interface SweepDeps {
   /** Must connect as the worker login. */

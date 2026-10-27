@@ -7,7 +7,8 @@ import { fakeGitHubApi, FIXTURE_APP_ID, githubFixture, testAppKeys } from "./tes
 
 /**
  * P3-3: re-verification of installation events with GitHub (ADR 0007 §4, ADR 0009). Served from
- * the recorded, sanitised fixtures in `packages/forge-github/fixtures/`.
+ * the fixtures in `packages/forge-github/fixtures/`: GitHub's documented response shapes with
+ * synthetic ids, not (yet) recorded from GitHub.
  */
 
 const keys = testAppKeys();
@@ -46,7 +47,7 @@ const failure = async (promise: Promise<unknown>): Promise<ForgeReadError> => {
   throw new Error("expected a ForgeReadError");
 };
 
-describe("getInstallation with the recorded fixtures", () => {
+describe("getInstallation with the documentation-shaped fixtures", () => {
   it("reads an active organization installation (200) as the app", async () => {
     const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
     github.install(4242, { id: 9001, login: "acme", type: "Organization" });
@@ -78,7 +79,7 @@ describe("getInstallation with the recorded fixtures", () => {
     ).toBeNull();
   });
 
-  it("parses the raw fixtures exactly as recorded", async () => {
+  it("parses the raw fixtures exactly as stored", async () => {
     const org = githubFixture("get-installation.organization");
     expect(await reader(respond(200, org)).getInstallation(4242)).toEqual({
       id: 4242,
@@ -139,7 +140,7 @@ describe("getInstallation fails closed (never null on an error)", () => {
     );
   });
 
-  it("reports the recorded enterprise shape (slug and name, no login) as unsupported (review N2)", async () => {
+  it("reports the enterprise fixture shape (slug and name, no login) as unsupported (review N2)", async () => {
     const enterprise = githubFixture("get-installation.enterprise");
     const account = enterprise["account"] as Record<string, unknown>;
     expect(account["login"]).toBeUndefined();

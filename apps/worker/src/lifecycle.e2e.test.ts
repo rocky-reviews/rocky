@@ -6,6 +6,7 @@ import {
   type OrgId,
 } from "@rocky-reviews/core";
 import {
+  beginOrgErasure,
   createDb,
   insertInstallationOrg,
   schema,
@@ -45,9 +46,11 @@ import { CONTRADICTION_ATTEMPTS } from "./installations.js";
 
 /**
  * P3-3 end to end: a signed webhook into `POST /webhooks/github` → the inbox (server login) →
- * the worker claims it (worker login) → GitHub re-verification (the recorded, sanitised fixtures
- * in packages/forge-github/fixtures, served by a fake that checks the app JWT) → org created,
- * deletion scheduled, cancelled, executed. Real Postgres, real roles, real RLS.
+ * the worker claims it (worker login) → GitHub re-verification (fixtures in the shape GitHub
+ * documents, with synthetic ids, in packages/forge-github/fixtures, served by a fake that checks
+ * the app JWT; not recorded from GitHub yet) → org created, deletion scheduled, cancelled,
+ * executed. Webhook payloads are built by `packages/forge-github/src/testing.ts`. Real Postgres,
+ * real roles, real RLS.
  */
 
 const DAY = 86_400_000;
@@ -1304,6 +1307,8 @@ describe("review round 2", () => {
     expect(github.requests.slice(asked).filter((r) => r.path !== "/app")).toEqual([]);
     const { rows } = await superuser.query("select 1 from orgs where id = $1", [gitlabOrg]);
     expect(rows).toHaveLength(1);
+    // delete_org needs the sweep's mark (review round 4); this clean-up stands in for a gitlab sweep.
+    expect(await workerDb.withOrg(gitlabOrg, (tx) => beginOrgErasure(tx))).toBe("started");
     await workerDb.deleteOrg(gitlabOrg);
   });
 });

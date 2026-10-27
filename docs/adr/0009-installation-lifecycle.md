@@ -14,7 +14,9 @@
   installation-scoped erasure of inbox rows, the contradiction window counted in strikes, the
   lease budget on the worker's own clock. Review round 3: a claim whose cost does not grow with the
   backlog (a ready queue, index probes, a statement timeout), leases from `clock_timestamp()`,
-  same-type duplicates collapsed when a verified row completes, a numeric `installationId` CHECK
+  same-type duplicates collapsed when a verified row completes, a numeric `installationId` CHECK.
+  Review round 4: the server refuses a login that is a member of `rocky_worker` (L28);
+  `delete_org` requires the sweep's erasing mark (L29).
 
 ## Context
 
@@ -42,7 +44,11 @@ The worker logs in as its own LOGIN role, a member of `rocky_app` **and** `rocky
 of `rocky_app` only and `ensureLoginRole` refuses to turn a worker login into a server login or
 back. So the internet-facing process can neither create a tenant, nor claim, finish or park an
 inbox row (a compromised server cannot mark an uninstall "processed" to suppress an erasure), nor
-erase an org. The worker refuses to start on a login without `rocky_worker`.
+erase an org. The worker refuses to start on a login without `rocky_worker`. The reverse holds
+too (review round 4, L28): the server refuses to start when its login is a member of
+`rocky_worker` (an operator reusing `WORKER_DATABASE_URL`, or a superuser URL, which is a member of
+every role), and its pool checks every new connection the same way (`onConnect`), so a database
+unreachable at boot or a grant made later still gives the server no worker connection.
 
 Org creation stays inside `withOrg(newOrgId)`: `rocky_worker` has the privilege, the existing
 tenant policy (`id = app.current_org_id()`) still checks the row, plus an explicit
@@ -249,12 +255,16 @@ erasure already started) and, for each org of its forge:
    point of no return (§2). If it is no longer due (a reinstall cancelled it a moment ago), it is
    skipped.
 3. **Erases** every external store through the `OrgErasers` port (`packages/core/src/erasure.ts`:
-   named slots `object_storage` for R2 (P5) and `embeddings` for vectors outside Postgres (P8);
-   today both hold `nothingStoredYet`, so a new store without an eraser is a type error), then
-   calls `retention.delete_org`.
+   named slots `object_storage` for R2 (P5) and `embeddings` for vectors outside Postgres (P8)),
+   then calls `retention.delete_org`. The type forces each slot to exist, so adding a store to
+   `EXTERNAL_TENANT_STORES` without an eraser is a type error; it does not force a real eraser:
+   both slots hold the `nothingStoredYet` placeholder today, and a placeholder can stay after the
+   store exists (the P5/P8 follow-ups replace them).
 
 If a store fails, the org stays erasing and the next sweep resumes at step 3 without asking GitHub
-again; external erasure is idempotent. `delete_org` (re-created) locks the org row, deletes its
+again; external erasure is idempotent. `delete_org` (re-created) locks the org row, refuses
+(`22023`) an org that is not due or not marked erasing (review round 4, L29: no caller can reach
+the database erasure without the sweep's GitHub re-check and the external erasers), deletes its
 audit events as `rocky_retention`, then the org (cascading through every tenant table), and the
 inbox rows tied to it:
 
@@ -329,6 +339,8 @@ a crashed or concurrent worker; a GitHub outage or a misconfigured key.
 | L25 | Erasing an org destroys a reinstall's data (rows, installer candidate)                                                                                                 | `delete_org` matches inbox rows by the erased installation; by account only finished rows of installations no live org holds                                                                                                                                                                                                                                                                                                                                                                      | `deletion.test.ts` "is structural …" (live org e during the erasure; pending row of another installation untouched); e2e "C: erasing the old org leaves a reinstall's rows and its installer candidate alone"                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | L26 | Contradiction window used up by outages; lease budget broken by clock skew or a batch of one (hot loop)                                                                | Contradictions counted in strikes; local deadline from just before the claim; lease `(batch + 1) × budget` from `clock_timestamp()`; released rows delayed; no immediate re-loop after a full batch with releases or retries                                                                                                                                                                                                                                                                      | e2e "SF2: transient failures do not use up the contradiction window", "SF3: a skewed worker clock or a batch of one still processes rows", "S4/SF3: … without a hot loop"; `jobs.test.ts` "lease sizing", "a full batch with released or retried rows waits for the next tick (no hot loop)"; `inbox.test.ts` "leases from the moment of the claim (clock_timestamp) …"                                                                                                                                                                                                                                                                                                    |
 | L27 | A planted backlog (server credential) makes every claim slow behind the global lock, stalling all tenants' lifecycle events                                            | Ready queue `app.webhook_queue` + partial indexes: a constant number of index probes per candidate, at most `3 × limit + 10` candidates per lane; `SET LOCAL statement_timeout` (5 s) on the claim; collapse on completion drains the backlog                                                                                                                                                                                                                                                     | `inbox.test.ts` "a 20k-row backlog for one installation does not slow a claim for another", "a claim waiting on the claim lock gives up after its statement timeout"; EXPLAIN evidence in the round 3 PR notes                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| L28 | The worker's login (or a superuser) used as the internet-facing server's, handing it org creation, inbox control and erasure                                           | `startServer` refuses to start when `pg_has_role(current_user, 'rocky_worker', 'USAGE')` (`WorkerLoginError`, a `ConfigError`: exit 1, message names roles and variables only); the pool's `onConnect` hook runs the same check on every new connection and discards a worker one, so a database unreachable at boot or a later grant gives no worker connection                                                                                                                                  | `apps/server/src/server.db.test.ts` "the server's database login (review round 4)": worker login and superuser refused before listening, `main.ts` exits 1 without the credential, app login starts, a grant after boot gets no connection (healthz 503); `server.test.ts` "boots without the database …"                                                                                                                                                                                                                                                                                                                                                                  |
+| L29 | A caller other than the sweep (a future job or script) runs `retention.delete_org` on a due org and skips GitHub's re-check and the external erasers                   | `delete_org` refuses (`22023`) an org without `erasing_at`, which only `beginOrgErasure` sets, and the sweep calls it only after GitHub's JSON 404 and before the erasers                                                                                                                                                                                                                                                                                                                         | `deletion.test.ts` "refuses a due org that is not marked erasing …"; every other erasure test marks the org first                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## Consequences
 
@@ -351,24 +363,58 @@ a crashed or concurrent worker; a GitHub outage or a misconfigured key.
   compromised worker can of course skip that check.
 - **The server can no longer schedule, move or cancel a deletion** (H1). It can still change an
   org's `settings` and keys; those are tenant data, not lifecycle.
-- **A genuine but wrong 404 from GitHub** (a GitHub-side bug) would schedule a deletion after three
-  consistent answers; the 7-day grace, the `org_reinstalled` path and the sweep's re-verification
-  cover it, and nothing is erased before the grace ends.
+- **A genuine but wrong 404 from GitHub** (a GitHub-side bug) for an `installation.deleted` row
+  schedules a deletion at once: there a 404 agrees with the event, so it is not a contradiction
+  and is not retried. The 7-day grace, the `org_reinstalled` path and the sweep's re-verification
+  at the end of the grace cover it, and nothing is erased before the grace ends and GitHub
+  answers 404 again. (For a `created` row a 404 is a contradiction, retried three times; then the
+  install is not acted on.)
 - **A deadline set while the bound did not yet exist** stays until the next uninstall event for
   that installation reschedules it, or until the sweep reaches it and asks GitHub. A periodic
   reconciler that re-verifies live orgs against GitHub is a follow-up.
+- **Lost or believed-away uninstalls.** Webhooks GitHub could not deliver while the server was
+  down are not redelivered automatically, and an `installation.deleted` that GitHub's API still
+  answers 200 for throughout the contradiction window (three strikes) is ignored
+  (`installation_exists`). In both cases the org stays live until another event. Follow-up: a
+  periodic installation reconciler (`GET /app/installations`, or a re-check of each live org)
+  that schedules a deletion on GitHub's JSON 404, and possibly a longer contradiction window for
+  `deleted` only.
+- **A write between the external erase and `delete_org`.** The erasers run after the org is
+  marked erasing, and `delete_org` after them; a store write that lands in between (an R2 object,
+  P5) is not covered by either and is orphaned. Follow-up for P5: writers refuse orgs with
+  `erasing_at` set, and/or the erasers run again after `delete_org`, driven by
+  `app.org_deletions`.
+- **Eraser placeholders.** `OrgErasers` forces each slot to exist, not to be real: a deployment
+  that stores objects in R2 while `object_storage` is still `nothingStoredYet` would leave them
+  behind. Follow-up for P5: refuse to start when R2 is configured and the slot is the placeholder.
+- **Sweep starvation.** The due list is capped at 20 per sweep and ordered by `delete_after`, so
+  20 orgs whose eraser keeps failing hold back every later one. Follow-up: deprioritise repeated
+  failures or raise the cap.
+- **Future `installation.*` types stop a lane.** The claim skips a lane head whose type is not in
+  the worker's `p_event_types`, so storing a new installation event type before the worker
+  handles it stops that installation's lane (follow-up for P3-4, which adds types).
+- **The server's login check runs per connection, not per statement.** A grant of `rocky_worker`
+  to the server's login while connections are open takes effect on those connections until they
+  are recycled; new connections are refused. A server pointed at the owner (migrator) login is
+  not refused by this check (the owner is not a `rocky_worker` member); that remains a
+  deployment-docs item (Phase 10).
 - **Erasure is final once marked.** A reinstall after the mark gets a fresh, empty org; the data
   of the old one is gone even if GitHub then shows the account installed again. The mark is only
   set after GitHub confirmed the uninstall at the end of the grace period.
 - **The app check is cached for an hour**: a key rotated to the wrong app is noticed within the
   hour. Until then GitHub answers 401 for the new key (transient, no row parks) or, for a key of
-  another app, 404s, which need three consistent answers and then only schedule a deletion that
-  the sweep re-checks after the grace.
+  another app, 404s. For an `installation.deleted` row such a 404 is acted on at once (a deletion
+  is scheduled, not retried); it is bounded by the 7-day grace period and by the sweep's
+  re-check, which needs a fresh app check (an hour at most) and GitHub's 404 again before
+  anything is erased. For a `created` row the 404s are contradictions, retried three times, and
+  the install may then be dropped (the reconciler follow-up recovers it).
 - **Lease budget uses the worker's clock against the database's `lease_until`**: skew larger than
   one row's budget (30 s) could still let a lease expire mid-row; completion is lease-checked, so
   the effect is then rolled back, never applied twice.
 - **Parked rows need a human**: no tooling yet beyond SQL as the migrator (runbook follow-up).
-  Inbox depth and parked-row alerting is a follow-up too.
+  Inbox depth and parked-row alerting is a follow-up too. Parked rows are never purged and keep
+  the sender and account login; scrubbing them on park, or purging them after a longer period, is
+  part of the runbook follow-up.
 - **Per-installation delay.** Processing is serial per installation, so a target-specific flood
   still delays that one installation: rows of other types interleaved in the backlog (a planted
   `created`, `deleted`, `created`, … sequence) each still need their own decision, and a head on
@@ -391,6 +437,8 @@ a crashed or concurrent worker; a GitHub outage or a misconfigured key.
 - **A collapsed `created` row's sender** is not offered as an installer candidate; the completed
   row's sender (if its account matched GitHub's) is. The installer candidate is a hint that P7-1
   verifies anyway.
-- **Pull request rows** accumulate unprocessed until P3-4 consumes them (they are not purged).
+- **Pull request rows** accumulate unprocessed until P3-4 consumes them (the purge skips
+  unprocessed rows). Either P3-4 is scheduled next, or pending `pull_request.*` rows older than
+  the retention period are purged.
 - **Installer candidate** may be wrong or absent; P7-1 must verify before granting admin.
 - **Tombstones are kept indefinitely**: they hold no personal data (no login or account id).

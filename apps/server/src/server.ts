@@ -1,4 +1,4 @@
-import { createDb } from "@rocky-reviews/db";
+import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp } from "./app.js";
-import { githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
+import { ConfigError, githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import type { WebhookDeps } from "./webhooks.js";
 
@@ -26,16 +26,55 @@ const errorCode = (error: unknown): string | undefined => {
 };
 
 /**
- * The server's single Postgres pool. An idle client losing its connection (Postgres restart,
+ * DATABASE_URL logs in as a member of `rocky_worker` (the worker's login, or a superuser, which
+ * is a member of every role). The internet-facing server must never hold the worker's
+ * privileges: creating orgs, claiming inbox rows, erasing orgs (ADR 0009, L28). The message
+ * names roles and variables only, never the connection string.
+ */
+export class WorkerLoginError extends ConfigError {
+  constructor() {
+    super(
+      `DATABASE_URL logs in as a member of ${WORKER_ROLE}: the server needs its own rocky_app login, never the worker's (WORKER_DATABASE_URL) or a superuser`,
+    );
+  }
+}
+
+/** Fails closed: an unexpected answer is treated as membership. */
+const refuseWorkerLogin = async (client: pg.ClientBase): Promise<void> => {
+  const { rows } = await client.query<{ worker: boolean }>(
+    "select pg_has_role(current_user, $1, 'USAGE') as worker",
+    [WORKER_ROLE],
+  );
+  if (rows[0]?.worker !== false) throw new WorkerLoginError();
+};
+
+/**
+ * The server's single Postgres pool. Every new connection is checked before first use
+ * (`onConnect`): one whose login is a member of `rocky_worker` is closed and the query fails,
+ * so a role granted after boot, or a database unreachable at boot, cannot hand the server the
+ * worker's privileges. An idle client losing its connection (Postgres restart,
  * pg_terminate_backend) emits `error` on the pool; without a listener that crashes the process.
  * Only the error code is logged: driver messages can carry connection details or values.
  */
 export const createServerPool = (connectionString: string | undefined, log: Logger): pg.Pool => {
-  const pool = new pg.Pool({
+  const options: pg.PoolConfig & { onConnect: (client: pg.ClientBase) => Promise<void> } = {
     ...(connectionString === undefined ? {} : { connectionString }),
     max: 10,
     ...POOL_TIMEOUTS,
-  });
+    // pg-pool awaits the hook and discards the connection when it rejects (@types/pg types it
+    // as returning void).
+    onConnect: async (client) => {
+      try {
+        await refuseWorkerLogin(client);
+      } catch (error) {
+        if (error instanceof WorkerLoginError) {
+          log.error({ role: WORKER_ROLE }, "database login refused");
+        }
+        throw error;
+      }
+    },
+  };
+  const pool = new pg.Pool(options);
   pool.on("error", (error) =>
     log.error({ errorCode: errorCode(error) }, "postgres idle client error"),
   );
@@ -82,6 +121,17 @@ export const startServer = async (
     log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
   }
   const pool = createServerPool(env["DATABASE_URL"], log);
+  // Review round 4: refuse to start on the worker's login. Booting does not need the database
+  // (health reports it); when it is unreachable now, the pool's hook checks each connection later.
+  try {
+    await pool.query("select 1");
+  } catch (error) {
+    if (error instanceof WorkerLoginError) {
+      await pool.end();
+      throw error;
+    }
+    log.warn({ errorCode: errorCode(error) ?? "unknown" }, "database unreachable at boot");
+  }
 
   let webhooks: WebhookDeps | undefined;
   if (webhookSecret === undefined) {
