@@ -535,6 +535,7 @@ describe("observability", () => {
         allowed: true,
         reason: null,
         cached: false,
+        joined: false,
       },
       {
         orgId: ORG_A,
@@ -543,6 +544,7 @@ describe("observability", () => {
         allowed: true,
         reason: null,
         cached: true,
+        joined: false,
       },
       {
         orgId: ORG_A,
@@ -551,6 +553,7 @@ describe("observability", () => {
         allowed: false,
         reason: "not_found",
         cached: false,
+        joined: false,
       },
     ]);
     expect(Object.keys(access.entries()[0] ?? {}).sort()).toEqual([
@@ -562,5 +565,184 @@ describe("observability", () => {
       "reason",
       "repositoryId",
     ]);
+  });
+});
+
+describe("review round 1", () => {
+  const orgB1 = req(ORG_B, ALICE, 1);
+  const seeded = async () => {
+    const gh = scripted();
+    const all = [req(ORG_A, ALICE, 1), req(ORG_A, BOB, 2), orgB1];
+    for (const r of all) gh.set(r, READ);
+    const access = createRepositoryAccessCheck({ source: gh.source, clock: clock() });
+    for (const r of all) await access.check(r);
+    const orgs = () => access.entries().map((e) => (e.orgId === ORG_A ? "A" : "B"));
+    return { access, orgs, gh };
+  };
+
+  describe("C: invalidation hooks validate their input and fail closed", () => {
+    it("valid input returns true and drops only what it names", async () => {
+      const { access, orgs } = await seeded();
+      expect(access.invalidateMember(ORG_A, BOB)).toBe(true);
+      expect(orgs()).toEqual(["A", "B"]);
+    });
+
+    it("an invalid member id drops the whole org", async () => {
+      for (const bad of ["not-a-uuid", "", 42, null, undefined, {}]) {
+        const { access, orgs } = await seeded();
+        expect(access.invalidateMember(ORG_A, bad as string)).toBe(false);
+        expect(orgs()).toEqual(["B"]);
+      }
+    });
+
+    it("an invalid repository id (string, bigint, float, zero) drops the whole org", async () => {
+      for (const bad of ["1", 1n, 1.5, 0, -1, Number.NaN, null]) {
+        const { access, orgs } = await seeded();
+        expect(access.invalidateRepository(ORG_A, bad as number)).toBe(false);
+        expect(orgs()).toEqual(["B"]);
+      }
+    });
+
+    it("an invalid org id clears the whole cache, for every hook", async () => {
+      const hooks: ((a: ReturnType<typeof createRepositoryAccessCheck>) => boolean)[] = [
+        (a) => a.invalidateMember("nope", ALICE),
+        (a) => a.invalidateMember(42 as unknown as string, ALICE),
+        (a) => a.invalidateRepository("nope", 1),
+        (a) => a.invalidateRepository(undefined as unknown as string, 1),
+        (a) => a.invalidateOrg("nope"),
+        (a) => a.invalidateOrg(ORG_A.replace(/-/g, "")),
+        (a) => a.invalidateOrg(null as unknown as string),
+      ];
+      for (const hook of hooks) {
+        const { access } = await seeded();
+        expect(hook(access)).toBe(false);
+        expect(access.size).toBe(0);
+      }
+    });
+
+    it("upper-case ids are accepted and normalised", async () => {
+      const { access, orgs } = await seeded();
+      expect(access.invalidateRepository(ORG_A.toUpperCase(), 1)).toBe(true);
+      expect(access.invalidateOrg(ORG_B.toUpperCase())).toBe(true);
+      expect(orgs()).toEqual(["A"]);
+    });
+
+    it("an invalid id also stops that org's in-flight checks from caching", async () => {
+      const gh = scripted();
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (release = r));
+      gh.set(req(), async () => {
+        await gate;
+        return READ;
+      });
+      const access = createRepositoryAccessCheck({ source: gh.source, clock: clock() });
+      const pending = access.check(req());
+      access.invalidateRepository(ORG_A, "77" as unknown as number);
+      release();
+      expect((await pending).allowed).toBe(true);
+      expect(access.size).toBe(0);
+    });
+  });
+
+  describe("D: the invalidation generation is per org", () => {
+    const gated = () => {
+      const gh = scripted();
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (release = r));
+      const slow = async () => {
+        await gate;
+        return READ;
+      };
+      gh.set(req(ORG_A, ALICE), slow);
+      gh.set(req(ORG_A, BOB), slow);
+      gh.set(req(ORG_B, ALICE), slow);
+      const access = createRepositoryAccessCheck({ source: gh.source, clock: clock() });
+      return { access, release: () => release() };
+    };
+
+    it("an invalidation in org A does not stop org B's in-flight check from caching", async () => {
+      const { access, release } = gated();
+      const a = access.check(req(ORG_A, BOB));
+      const b = access.check(req(ORG_B, ALICE));
+      access.invalidateMember(ORG_A, ALICE); // another member of org A
+      release();
+      await Promise.all([a, b]);
+      // Within org A the guarantee stays org-wide; org B is untouched.
+      expect(access.entries().map((e) => e.orgId)).toEqual([ORG_B]);
+    });
+
+    it("invalidateOrg(A) and clear() keep their guarantees", async () => {
+      {
+        const { access, release } = gated();
+        const pending = [access.check(req(ORG_A, ALICE)), access.check(req(ORG_B, ALICE))];
+        access.invalidateOrg(ORG_A);
+        release();
+        await Promise.all(pending);
+        expect(access.entries().map((e) => e.orgId)).toEqual([ORG_B]);
+      }
+      {
+        const { access, release } = gated();
+        const pending = [access.check(req(ORG_A, ALICE)), access.check(req(ORG_B, ALICE))];
+        access.clear();
+        release();
+        await Promise.all(pending);
+        expect(access.size).toBe(0);
+      }
+    });
+
+    it("the per-org generation table stays bounded", async () => {
+      const gh = scripted();
+      const access = createRepositoryAccessCheck({
+        source: gh.source,
+        clock: clock(),
+        maxEntries: 4,
+      });
+      for (let i = 0; i < 50; i++) {
+        const org = `0b6f1c1e-1111-4a5b-8c9d-${String(i).padStart(12, "0")}`;
+        access.invalidateOrg(org);
+      }
+      gh.set(req(), READ);
+      expect((await access.check(req())).allowed).toBe(true);
+      expect(access.size).toBe(1);
+    });
+  });
+
+  describe("E: every caller gets a decision event", () => {
+    it("joined callers are reported with joined: true", async () => {
+      const events: AccessDecisionEvent[] = [];
+      const gh = scripted();
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((r) => (release = r));
+      gh.set(req(), async () => {
+        await gate;
+        return READ;
+      });
+      const access = createRepositoryAccessCheck({
+        source: gh.source,
+        clock: clock(),
+        onDecision: (e) => events.push(e),
+      });
+      const pending = [access.check(req()), access.check(req()), access.check(req())];
+      release();
+      await Promise.all(pending);
+      expect(events.map((e) => [e.allowed, e.cached, e.joined])).toEqual([
+        [true, false, false],
+        [true, false, true],
+        [true, false, true],
+      ]);
+    });
+  });
+
+  describe("new definitive denials", () => {
+    for (const reason of ["token_user_mismatch", "not_collaborator"] as const) {
+      it(`${reason} is a definitive deny (30 s)`, async () => {
+        const access = createRepositoryAccessCheck({
+          clock: clock(),
+          source: { readAccess: () => Promise.resolve({ access: "none", reason }) },
+        });
+        expect(await access.check(req())).toMatchObject({ allowed: false, reason });
+        expect(access.entries()[0]?.expiresAt).toEqual(new Date(T0 + DENY_TTL_MS));
+      });
+    }
   });
 });

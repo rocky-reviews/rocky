@@ -1,11 +1,13 @@
 import { inspect } from "node:util";
 import {
   ACCESS_MAX_TTL_MS,
+  DENY_TTL_MS,
   type OrgId,
   type RepositoryAccessCheck,
   type RepositoryAccessRequest,
 } from "@rocky-reviews/core";
 import {
+  decodeWrappedDataKey,
   encodeWrappedDataKey,
   generateLocalKek,
   generateWrappedDataKey,
@@ -16,6 +18,7 @@ import {
 import {
   createDb,
   loadForgeToken,
+  loadOrgDataKey,
   schema,
   storeForgeToken,
   storeOrgDataKey,
@@ -205,7 +208,9 @@ describe("P3-6 criterion", () => {
     await access.check(asAlice(A));
     await access.check(asAlice(A));
     expect(unwraps - before).toBe(1);
+    // A private repository: the identity call and one repository call, no collaborator call.
     expect(github.requests.slice(requests)).toEqual([
+      { method: "GET", path: "/user", authorized: true },
       { method: "GET", path: `/repos/${A.fullName}`, authorized: true },
     ]);
   });
@@ -246,11 +251,45 @@ describe("tenant separation", () => {
     });
   });
 
-  it("an allow cached for org A does not answer for org B", async () => {
-    expect((await access.check(asAlice(A))).allowed).toBe(true);
-    // Org B's row for 2001 names `org-52/api`, which GitHub does not know.
-    expect(await access.check(asAlice(B))).toMatchObject({ allowed: false, cached: false });
-    expect((await access.check(asAlice(B, ORG_B_REPO))).allowed).toBe(true);
+  it("an allow cached for org A does not answer for org B, even for a name GitHub resolves", async () => {
+    // Org C's row for the same forge id names A's repository, which GitHub resolves; C's own
+    // token is revoked. Only a key that includes the org keeps A's allow away from C.
+    const C = await provision(54, 5401);
+    await db.withOrg(C.orgId, (tx) =>
+      tx.query("update repos set full_name = $1 where forge_repo_id = $2", [
+        A.fullName,
+        SHARED_REPO,
+      ]),
+    );
+    github.revokeUserToken(C.aliceToken);
+    expect(await access.check(asAlice(A))).toMatchObject({ allowed: true, cached: false });
+    const before = github.requests.length;
+    expect(await access.check(asAlice(C))).toEqual({
+      allowed: false,
+      reason: "token_rejected",
+      cached: false,
+    });
+    expect(github.requests.length).toBeGreaterThan(before);
+    expect(await access.check(asAlice(A))).toMatchObject({ allowed: true, cached: true });
+  });
+
+  it("a ciphertext moved to another org's member row does not decrypt (other org key, AAD)", async () => {
+    const stolen = await db.withOrg(A.orgId, (tx) => loadForgeToken(tx, A.aliceId));
+    await db.withOrg(B.orgId, (tx) =>
+      storeForgeToken(tx, B.bobId, stolen!.ciphertext, stolen!.keyVersion),
+    );
+    try {
+      expect(
+        await access.check({ orgId: B.orgId, memberId: B.bobId, repositoryId: ORG_B_REPO }),
+      ).toMatchObject({ allowed: false, reason: "token_unreadable" });
+    } finally {
+      await db.withOrg(B.orgId, (tx) =>
+        tx.query(
+          "update members set forge_token_ciphertext = null, forge_token_key_version = null where id = $1",
+          [B.bobId],
+        ),
+      );
+    }
   });
 
   it("a token copied to another member's row does not decrypt (AAD binds the member)", async () => {
@@ -370,6 +409,113 @@ describe("fail closed", () => {
   });
 });
 
+/** Encrypts `token` under the org's own key for `memberId` and stores it on that row. */
+const storeToken = async (org: Org, memberId: string, token: string): Promise<void> => {
+  await db.withOrg(org.orgId, async (tx) => {
+    const dataKey = await loadOrgDataKey(tx);
+    const keyring = await OrgKeyring.open(keys, org.orgId, [
+      decodeWrappedDataKey(dataKey!.ciphertext),
+    ]);
+    try {
+      const ciphertext = keyring.encrypt(token, {
+        purpose: MEMBER_TOKEN_PURPOSE,
+        recordId: memberId,
+      });
+      ciphertexts.push(ciphertext);
+      await storeForgeToken(tx, memberId, ciphertext, keyring.currentVersion);
+    } finally {
+      keyring.destroy();
+    }
+  });
+};
+
+describe("review round 1, B: the token is bound to the member's GitHub identity", () => {
+  it("a valid token of another GitHub user stored on the member's row is denied", async () => {
+    const org = await provision(55, 5501);
+    github.addRepository(org.installationId, { id: 5501, fullName: "org-55/extra" });
+    const other = github.addUser({ id: 7777, login: "someone-else" });
+    github.setPermission(7777, 5501, "admin");
+    github.setPermission(GITHUB_USER, 5501, "read");
+    await storeToken(org, org.aliceId, other);
+    expect(await access.check(asAlice(org, 5501))).toEqual({
+      allowed: false,
+      reason: "token_user_mismatch",
+      cached: false,
+    });
+    expect(access.entries()[0]?.expiresAt).toEqual(new Date(T0 + DENY_TTL_MS));
+  });
+});
+
+describe("review round 1, A: public and internal repositories require collaborator status", () => {
+  for (const visibility of ["public", "internal"] as const) {
+    it(`${visibility}: a removed collaborator loses access within exactly 5 minutes`, async () => {
+      github.setVisibility(SHARED_REPO, visibility);
+      try {
+        expect(await access.check(asAlice(A))).toEqual({
+          allowed: true,
+          cached: false,
+          expiresAt: new Date(T0 + ACCESS_MAX_TTL_MS),
+        });
+        now.ms = T0 + 10_000;
+        // Removed as a collaborator; GitHub still answers `pull: true` (everyone can read it).
+        github.setPermission(GITHUB_USER, SHARED_REPO, null);
+        now.ms = T0 + ACCESS_MAX_TTL_MS - 1;
+        expect(await access.check(asAlice(A))).toMatchObject({ allowed: true, cached: true });
+        now.ms = T0 + ACCESS_MAX_TTL_MS;
+        expect(await access.check(asAlice(A))).toEqual({
+          allowed: false,
+          reason: "not_collaborator",
+          cached: false,
+        });
+        for (const later of [1, 29_999, 30_000, ACCESS_MAX_TTL_MS, 86_400_000]) {
+          now.ms = T0 + ACCESS_MAX_TTL_MS + later;
+          expect((await access.check(asAlice(A))).allowed).toBe(false);
+        }
+      } finally {
+        github.setVisibility(SHARED_REPO, "private");
+      }
+    });
+
+    it(`${visibility}: a non-collaborator is denied although GitHub says pull: true`, async () => {
+      github.setVisibility(SHARED_REPO, visibility);
+      github.setPermission(GITHUB_USER, SHARED_REPO, null);
+      try {
+        const before = github.requests.length;
+        expect(await access.check(asAlice(A))).toMatchObject({
+          allowed: false,
+          reason: "not_collaborator",
+        });
+        expect(github.requests.slice(before).map((r) => r.path)).toEqual([
+          "/user",
+          `/repos/${A.fullName}`,
+          `/repos/${A.fullName}/collaborators/alice/permission`,
+        ]);
+      } finally {
+        github.setVisibility(SHARED_REPO, "private");
+      }
+    });
+  }
+
+  it("every error of the collaborator call denies", async () => {
+    github.setVisibility(SHARED_REPO, "public");
+    try {
+      for (const status of [500, 502, 429, 403, 401]) {
+        const fresh = createRepositoryAccess({
+          db,
+          keys,
+          reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+          clock,
+          log,
+        });
+        github.failRoute("collaborator", status);
+        expect((await fresh.check(asAlice(A))).allowed).toBe(false);
+      }
+    } finally {
+      github.setVisibility(SHARED_REPO, "private");
+    }
+  });
+});
+
 describe("hygiene: tokens never in logs, errors or the cache", () => {
   it("logs carry ids and fixed codes only; no token or ciphertext anywhere", async () => {
     await access.check(asAlice(A));
@@ -391,7 +537,16 @@ describe("hygiene: tokens never in logs, errors or the cache", () => {
       void [level, time, pid, hostname, name];
       expect(msg).toBe("repository access");
       expect(Object.keys(rest).sort()).toEqual(
-        ["allowed", "cached", "event", "memberId", "orgId", "reason", "repositoryId"].sort(),
+        [
+          "allowed",
+          "cached",
+          "event",
+          "joined",
+          "memberId",
+          "orgId",
+          "reason",
+          "repositoryId",
+        ].sort(),
       );
     }
 

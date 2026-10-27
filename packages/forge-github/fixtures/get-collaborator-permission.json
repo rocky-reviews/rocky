@@ -1,0 +1,22 @@
+{
+  "permission": "write",
+  "role_name": "write",
+  "user": {
+    "login": "octo-dev",
+    "id": 9101,
+    "node_id": "U_kgDOAAAjjQ",
+    "avatar_url": "https://avatars.githubusercontent.com/u/9101?v=4",
+    "url": "https://api.github.com/users/octo-dev",
+    "html_url": "https://github.com/octo-dev",
+    "type": "User",
+    "site_admin": false,
+    "permissions": {
+      "admin": false,
+      "maintain": false,
+      "push": true,
+      "triage": true,
+      "pull": true
+    },
+    "role_name": "write"
+  }
+}

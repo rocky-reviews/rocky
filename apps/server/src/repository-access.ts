@@ -21,7 +21,8 @@ import type { Logger } from "@rocky-reviews/log";
  *    repository's name, the member's encrypted token and the org's wrapped data key;
  * 2. after the transaction (no transaction is held across an HTTP call), opens the org keyring,
  *    decrypts the token (purpose `github_token`, record id = member id), and destroys the keyring;
- * 3. asks the forge as the member; the token lives in this call's frame only.
+ * 3. asks the forge as the member, bound to the member's `forge_user_id`; the token lives in this
+ *    call's frame only.
  *
  * Logs carry ids and fixed reason codes; the token, its ciphertext and any error text never.
  */
@@ -43,7 +44,7 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
     const context = await options.db.withOrg(orgId, (tx) =>
       loadRepositoryAccessContext(tx, { memberId, forgeRepoId: repositoryId }),
     );
-    if (!context.member) return none("not_member");
+    if (!context.member || context.forgeUserId === null) return none("not_member");
     if (context.repositoryFullName === null) return none("unknown_repository");
     if (context.token === null) return none("no_token");
     if (context.dataKey === null) return none("token_unreadable");
@@ -64,7 +65,8 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
       keyring?.destroy();
     }
     return options.reader.readUserRepositoryAccess(
-      { token },
+      // The reader checks that GitHub says this token is `forge_user_id`'s (token_user_mismatch).
+      { token, userId: context.forgeUserId },
       { id: repositoryId, fullName: context.repositoryFullName },
     );
   },
@@ -94,6 +96,7 @@ export const createRepositoryAccess = (options: RepositoryAccessOptions): Reposi
         allowed: event.allowed,
         reason: event.reason,
         cached: event.cached,
+        joined: event.joined,
       };
       if (event.cached) options.log.debug(fields, "repository access");
       else options.log.info(fields, "repository access");

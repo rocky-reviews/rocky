@@ -371,6 +371,11 @@ export interface Forge extends InstallationReader {
  */
 export interface ForgeUserCredential {
   readonly token: string;
+  /**
+   * The forge user id the token must belong to (`members.forge_user_id`). The reader asks the
+   * forge who the token is and denies (`token_user_mismatch`) when it is someone else.
+   */
+  readonly userId: ForgeNumericId;
 }
 
 /** The repository to ask about: the id is the identity, the name only addresses the request. */
@@ -391,13 +396,22 @@ export type UserRepositoryDenial =
   /** The forge refuses the request (SSO enforcement, IP allow list, rate limit). */
   | "forbidden"
   /** The answer is about another repository (deleted and recreated, renamed onto). */
-  | "repository_mismatch";
+  | "repository_mismatch"
+  /** The credential belongs to another forge user than the member it is stored for. */
+  | "token_user_mismatch"
+  /**
+   * The repository is not private (public, internal) and the user is not a collaborator on it:
+   * read access that every forge (or enterprise) user has does not count (ADR 0011 §3).
+   */
+  | "not_collaborator";
 
 export type UserRepositoryAccess =
   { readonly access: "read" } | { readonly access: "none"; readonly reason: UserRepositoryDenial };
 
 /**
- * Asks the forge, as the user, whether the user can read one repository (P3-6). Any failure other
+ * Asks the forge, as the user, whether the user can read one repository (P3-6): the token must
+ * belong to `credential.userId`, the user must be able to read the repository, and for a
+ * repository that is not private the user must be a collaborator (any role). Any failure other
  * than the documented denials throws `ForgeReadError`; a caller must treat that as "deny".
  */
 export interface UserAccessReader {

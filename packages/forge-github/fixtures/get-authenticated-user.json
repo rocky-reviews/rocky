@@ -1,0 +1,20 @@
+{
+  "login": "octo-dev",
+  "id": 9101,
+  "node_id": "U_kgDOAAAjjQ",
+  "avatar_url": "https://avatars.githubusercontent.com/u/9101?v=4",
+  "url": "https://api.github.com/users/octo-dev",
+  "html_url": "https://github.com/octo-dev",
+  "type": "User",
+  "site_admin": false,
+  "name": "Synthetic User",
+  "company": null,
+  "blog": "",
+  "location": null,
+  "bio": null,
+  "public_repos": 0,
+  "followers": 0,
+  "following": 0,
+  "created_at": "2026-10-01T00:00:00Z",
+  "updated_at": "2026-10-26T09:00:00Z"
+}

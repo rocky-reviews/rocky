@@ -22,6 +22,8 @@ placeholder; the fake issues random test values), keys, emails or real account d
 | `compare.diff`                                      | 200    | A small unified diff (`application/vnd.github.diff`), synthetic (P3-4)                                                                    |
 | `get-repository.json`                               | 200    | `GET /repos/{owner}/{repo}` as a user, with that user's `permissions` (P3-6)                                                              |
 | `get-repository.unauthorized.json`                  | 401    | A rejected (expired or revoked) user token (P3-6)                                                                                         |
+| `get-authenticated-user.json`                       | 200    | `GET /user`: whose user token it is (P3-6)                                                                                                |
+| `get-collaborator-permission.json`                  | 200    | `GET /repos/{owner}/{repo}/collaborators/{username}/permission` (P3-6)                                                                    |
 
 Tests serve them through `fakeGitHubApi` (`src/testing.ts`), which may substitute ids so one
 fixture covers several installations. Webhook payloads are not fixtures: they are built by
@@ -36,8 +38,9 @@ the installation reader. The repository reader (P3-4) reads, from a token answer
 pull request, `number`, `state`, `title`, `user.login`, `head.sha`, `base.{sha,repo.id}`,
 `created_at`, `updated_at`, `closed_at`, `merged_at`, `additions`, `deletions`, `changed_files`
 (the list page: `number`, `head.sha`, `base.repo.id`, `updated_at`); from a 406, `errors[].code`.
-The user access reader (P3-6, ADR 0011) reads, from a repository, `id` and `permissions.pull`,
-and from a 404 its `message`.
+The user access reader (P3-6, ADR 0011) reads, from `GET /user`, `id` and `login`; from a
+repository, `id`, `private`, `visibility` and `permissions.pull`; from a collaborator permission,
+`permission`, `role_name` and `user.{id,login}`; and from a 404 its `message`.
 Not yet verified against a live installation: the exact 406 body of an oversized compare diff and
 the permissions GitHub requires for `compare` diffs of private repositories (ADR 0010, residual
 risks).

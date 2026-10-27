@@ -174,7 +174,8 @@ export interface FakePullRequest {
 }
 
 /** Routes `failRoute` can make fail. */
-export type FakeRoute = "installation" | "token" | "pull" | "list" | "compare" | "repository";
+export type FakeRoute =
+  "installation" | "token" | "pull" | "list" | "compare" | "repository" | "user" | "collaborator";
 
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
@@ -230,7 +231,8 @@ export interface FakeGitHubApi {
   ): void;
   /**
    * A GitHub user signed in to the app (P3-6): returns a fresh user access token (a random test
-   * value, also listed in `userTokens`), valid on `GET /repos/{owner}/{repo}` until revoked.
+   * value, also listed in `userTokens`), valid on `GET /user`, `GET /repos/{owner}/{repo}` and
+   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission` until revoked.
    */
   addUser(user: { readonly id: number; readonly login: string }): string;
   /** Every user token issued, so a test can prove none of them leaked. */
@@ -239,8 +241,13 @@ export interface FakeGitHubApi {
   setPermission(userId: number, repositoryId: number, permission: FakePermission | null): void;
   /** The token is revoked or expired: GitHub answers 401 from now on. */
   revokeUserToken(token: string): void;
-  /** Make the repository public or private (a public one is readable by every user). */
-  setVisibility(repositoryId: number, visibility: "public" | "private"): void;
+  /**
+   * The repository's visibility. A public repository is readable by every user, an internal one
+   * by every member of the enterprise (modelled as every user); both answer `pull: true` to
+   * non-collaborators, which is why the reader also asks for collaborator status. An internal
+   * repository is reported with `private: true` and `visibility: "internal"`.
+   */
+  setVisibility(repositoryId: number, visibility: "public" | "internal" | "private"): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -258,6 +265,16 @@ const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
 const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
 const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
+const COLLABORATOR_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/;
+const ROLES: readonly FakePermission[] = ["read", "triage", "write", "maintain", "admin"];
+/** `permission` is the legacy base role: maintain reads as write, triage as read. */
+const LEGACY: Readonly<Record<FakePermission, string>> = {
+  read: "read",
+  triage: "read",
+  write: "write",
+  maintain: "write",
+  admin: "admin",
+};
 const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/;
 
 /**
@@ -269,9 +286,12 @@ const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9
  * (RS256 signature with the app's public key, `iss` = app id, unexpired, at most 10 minutes long)
  * on `/app/...` routes, and on repository routes a live token minted for that repository (a
  * token for another repository gets a 404, as on GitHub). A bad or missing credential gets 401.
- * P3-6: `GET /repos/{owner}/{repo}` for user access tokens (`addUser`): a JSON 404 unless the user
- * has a role on the repository (`setPermission`) or it is public, and the repository is one an
- * installation of the app can access; otherwise the repository with that user's `permissions`.
+ * P3-6: for user access tokens (`addUser`), `GET /user`; `GET /repos/{owner}/{repo}` (a JSON 404
+ * unless the user has a role on the repository (`setPermission`) or it is public or internal, and
+ * the repository is one an installation of the app can access; otherwise the repository with
+ * that user's `permissions`); and `GET /repos/{owner}/{repo}/collaborators/{username}/permission`
+ * (a JSON 404 unless `username` has a role). Fixtures: `get-repository.json`,
+ * `get-authenticated-user.json`, `get-collaborator-permission.json`.
  */
 export const fakeGitHubApi = (options: {
   appId: number;
@@ -300,7 +320,29 @@ export const fakeGitHubApi = (options: {
   const userTokens: string[] = [];
   const users = new Map<string, { id: number; login: string; revoked: boolean }>();
   const permissions = new Map<string, FakePermission>();
-  const publicRepositories = new Set<number>();
+  const visibilities = new Map<number, "public" | "internal">();
+
+  const flags = (role: FakePermission | undefined, readable: boolean) => {
+    const rank = role === undefined ? -1 : ROLES.indexOf(role);
+    return {
+      admin: rank >= 4,
+      maintain: rank >= 3,
+      push: rank >= 2,
+      triage: rank >= 1,
+      pull: rank >= 0 || readable,
+    };
+  };
+
+  /** The repository as `userId` can see it, or `undefined` (GitHub's 404). */
+  const visibleTo = (owner: string, name: string, userId: number) => {
+    const entry = repositoryByName(owner, name);
+    // A GitHub App user token sees only repositories the app's installation can access.
+    if (entry === undefined || !installed.has(entry.installationId)) return undefined;
+    const role = permissions.get(`${userId}:${entry.repo.id}`);
+    const visibility = visibilities.get(entry.repo.id) ?? "private";
+    if (role === undefined && visibility === "private") return undefined;
+    return { entry, role, visibility };
+  };
 
   const userOf = (header: string | null) => {
     const match = /^(?:Bearer|token) (\S+)$/.exec(header ?? "");
@@ -312,28 +354,62 @@ export const fakeGitHubApi = (options: {
   const repositoryAsUser = (owner: string, name: string, userId: number): Response => {
     const failure = takeRouteFailure("repository");
     if (failure !== undefined) return json(failure, { message: "Injected failure" });
-    const entry = repositoryByName(owner, name);
-    // A GitHub App user token sees only repositories the app's installation can access.
-    if (entry === undefined || !installed.has(entry.installationId)) {
-      return json(404, githubFixture("get-installation.not-found"));
-    }
-    const role = permissions.get(`${userId}:${entry.repo.id}`);
-    const isPublic = publicRepositories.has(entry.repo.id);
-    if (role === undefined && !isPublic) {
-      return json(404, githubFixture("get-installation.not-found"));
-    }
-    const rank = ["read", "triage", "write", "maintain", "admin"].indexOf(role ?? "");
+    const seen = visibleTo(owner, name, userId);
+    if (seen === undefined) return json(404, githubFixture("get-installation.not-found"));
     return json(200, {
       ...githubFixture("get-repository"),
-      ...repositoryJson(entry.repo),
-      private: !isPublic,
-      visibility: isPublic ? "public" : "private",
-      permissions: {
-        admin: rank >= 4,
-        maintain: rank >= 3,
-        push: rank >= 2,
-        triage: rank >= 1,
-        pull: rank >= 0 || isPublic,
+      ...repositoryJson(seen.entry.repo),
+      private: seen.visibility !== "public",
+      visibility: seen.visibility,
+      permissions: flags(seen.role, true),
+    });
+  };
+
+  /** `GET /user`: who the token belongs to. */
+  const authenticatedUser = (user: { id: number; login: string }): Response => {
+    const failure = takeRouteFailure("user");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    return json(200, {
+      ...githubFixture("get-authenticated-user"),
+      id: user.id,
+      login: user.login,
+    });
+  };
+
+  /**
+   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission`, asked by `callerId`: 404
+   * unless the caller can see the repository and `username` is a collaborator (has a role).
+   */
+  const collaboratorPermission = (
+    owner: string,
+    name: string,
+    username: string,
+    callerId: number,
+  ): Response => {
+    const failure = takeRouteFailure("collaborator");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const seen = visibleTo(owner, name, callerId);
+    const target = [...users.values()].find(
+      (u) => u.login.toLowerCase() === decodeURIComponent(username).toLowerCase(),
+    );
+    const role =
+      seen === undefined || target === undefined
+        ? undefined
+        : permissions.get(`${target.id}:${seen.entry.repo.id}`);
+    if (seen === undefined || target === undefined || role === undefined) {
+      return json(404, githubFixture("get-installation.not-found"));
+    }
+    const fixture = githubFixture("get-collaborator-permission");
+    return json(200, {
+      ...fixture,
+      permission: LEGACY[role],
+      role_name: role,
+      user: {
+        ...(fixture["user"] as Record<string, unknown>),
+        id: target.id,
+        login: target.login,
+        permissions: flags(role, false),
+        role_name: role,
       },
     });
   };
@@ -610,9 +686,19 @@ export const fakeGitHubApi = (options: {
         id: entry.installationId,
       });
     }
+    if (method === "GET" && path === "user" && user !== undefined) return authenticatedUser(user);
     const repositoryMatch = REPOSITORY_ROUTE.exec(path);
     if (method === "GET" && repositoryMatch !== null && user !== undefined) {
       return repositoryAsUser(group(repositoryMatch, 1), group(repositoryMatch, 2), user.id);
+    }
+    const collaboratorMatch = COLLABORATOR_ROUTE.exec(path);
+    if (method === "GET" && collaboratorMatch !== null && user !== undefined) {
+      return collaboratorPermission(
+        group(collaboratorMatch, 1),
+        group(collaboratorMatch, 2),
+        group(collaboratorMatch, 3),
+        user.id,
+      );
     }
     const routed = repoRoute(method, path, url, token);
     if (routed !== undefined) return routed;
@@ -707,8 +793,8 @@ export const fakeGitHubApi = (options: {
       if (user !== undefined) user.revoked = true;
     },
     setVisibility: (repositoryId, visibility) => {
-      if (visibility === "public") publicRepositories.add(repositoryId);
-      else publicRepositories.delete(repositoryId);
+      if (visibility === "private") visibilities.delete(repositoryId);
+      else visibilities.set(repositoryId, visibility);
     },
   };
 };

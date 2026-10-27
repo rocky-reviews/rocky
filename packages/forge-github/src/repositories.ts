@@ -74,7 +74,8 @@ const Count = z.int().min(0).max(2_147_483_647);
 const Sha = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 /** Users and GitHub Apps (`name[bot]`), as in webhook senders. */
 const ActorLogin = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/);
-const FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+/** `owner/name`; a name of `.` or `..` would address another path (review round 1, F). */
+const FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 const FullName = z.string().regex(FULL_NAME);
 /** A git branch name as GitHub reports it: no control characters or spaces; bounded. */
 const Branch = z

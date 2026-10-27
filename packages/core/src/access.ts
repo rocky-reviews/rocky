@@ -66,6 +66,8 @@ export const ACCESS_DENY_REASONS: readonly AccessDenyReason[] = [
   "token_rejected",
   "forbidden",
   "repository_mismatch",
+  "token_user_mismatch",
+  "not_collaborator",
   "invalid_request",
   "not_member",
   "unknown_repository",
@@ -115,6 +117,8 @@ export interface AccessDecisionEvent {
   readonly allowed: boolean;
   readonly reason: AccessDenyReason | null;
   readonly cached: boolean;
+  /** This caller waited for another caller's forge question (one event per caller). */
+  readonly joined: boolean;
 }
 
 /** A cache entry as `entries()` lists it: no credential is ever part of one. */
@@ -128,15 +132,22 @@ export interface AccessCacheEntry {
   readonly expiresAt: Date;
 }
 
+/**
+ * Invalidation hooks must be called **after** the transaction that changed the token,
+ * membership or repository has committed: called before, a concurrent check could read the old
+ * row and cache it again. Each returns `true` when its ids were valid. Invalid ids fail closed:
+ * an invalid member or repository id drops every entry of the org, an invalid org id clears the
+ * whole cache (and `false` is returned so the caller's bug is visible in tests).
+ */
 export interface RepositoryAccessCheck {
   /** Allow or deny; never throws. */
   check(request: RepositoryAccessRequest): Promise<AccessDecision>;
   /** Login, logout, token refresh, role change or removal of one member. */
-  invalidateMember(orgId: string, memberId: string): void;
+  invalidateMember(orgId: string, memberId: string): boolean;
   /** A repository left the installation, was transferred, renamed or made private. */
-  invalidateRepository(orgId: string, repositoryId: number): void;
+  invalidateRepository(orgId: string, repositoryId: number): boolean;
   /** The org was uninstalled, suspended or erased. */
-  invalidateOrg(orgId: string): void;
+  invalidateOrg(orgId: string): boolean;
   clear(): void;
   /** Current entries (diagnostics and tests). */
   entries(): AccessCacheEntry[];
@@ -149,7 +160,10 @@ export interface RepositoryAccessCheckOptions {
   /** How long an allow is reused; 1 ms … `ACCESS_MAX_TTL_MS` (default: the maximum). */
   readonly allowTtlMs?: number;
   readonly maxEntries?: number;
-  /** Called once per decision. Errors it throws are ignored. */
+  /**
+   * Called once per caller: a cache hit, the caller that asked the forge, and each caller that
+   * joined that question (`joined: true`). Errors it throws are ignored.
+   */
   readonly onDecision?: (event: AccessDecisionEvent) => void;
 }
 
@@ -230,8 +244,23 @@ export const createRepositoryAccessCheck = (
   /** Insertion order = recency: the first key is the least recently used. */
   const entries = new Map<string, Entry>();
   const inflight = new Map<string, Promise<AccessDecision>>();
-  /** Bumped by every invalidation: a check that started before one does not write. */
-  let generation = 0;
+  /**
+   * Invalidation generations: `clear()` (and an invalid org id) bumps the global one, any other
+   * invalidation only its org's. A check writes its answer only if neither changed since it
+   * started, so an invalidation in one org never stops another org's checks from caching.
+   */
+  let globalGeneration = 0;
+  const orgGenerations = new Map<string, number>();
+  const generationOf = (orgId: string): string =>
+    `${globalGeneration}:${orgGenerations.get(orgId) ?? 0}`;
+  const bumpOrg = (orgId: string): void => {
+    // Bounded like the cache: past the bound, a global bump is the safe way to forget.
+    if (!orgGenerations.has(orgId) && orgGenerations.size >= maxEntries) {
+      orgGenerations.clear();
+      globalGeneration++;
+    }
+    orgGenerations.set(orgId, (orgGenerations.get(orgId) ?? 0) + 1);
+  };
 
   const now = (): number => {
     const value = clock.now().getTime();
@@ -239,7 +268,12 @@ export const createRepositoryAccessCheck = (
     return Number.isFinite(value) ? value : Number.NaN;
   };
 
-  const emit = (key: Key, reason: AccessDenyReason | null, cached: boolean): void => {
+  const emit = (
+    key: Key,
+    reason: AccessDenyReason | null,
+    cached: boolean,
+    joined = false,
+  ): void => {
     try {
       options.onDecision?.({
         orgId: key.orgId,
@@ -248,6 +282,7 @@ export const createRepositoryAccessCheck = (
         allowed: reason === null,
         reason,
         cached,
+        joined,
       });
     } catch {
       // An observer never changes a decision.
@@ -281,7 +316,7 @@ export const createRepositoryAccessCheck = (
   };
 
   const ask = async (key: Key): Promise<AccessDecision> => {
-    const startedGeneration = generation;
+    const startedGeneration = generationOf(key.orgId);
     // Expiry counts from before the question: the answer describes the forge at or after this.
     const checkedAt = now();
     if (Number.isNaN(checkedAt)) return deny(key, "error");
@@ -302,7 +337,7 @@ export const createRepositoryAccessCheck = (
     const entry: Entry = { ...key, reason, checkedAt, expiresAt: checkedAt + ttl };
     // An answer that took longer than its own lifetime is not an allow.
     if (!fresh(entry, now())) return deny(key, reason ?? "forge_unavailable");
-    if (generation === startedGeneration) store(key, entry);
+    if (generationOf(key.orgId) === startedGeneration) store(key, entry);
     return decision(entry, key, false);
   };
 
@@ -324,7 +359,11 @@ export const createRepositoryAccessCheck = (
         }
       }
       const running = inflight.get(key.text);
-      if (running !== undefined) return await running;
+      if (running !== undefined) {
+        const joined = await running;
+        emit(key, joined.allowed ? null : joined.reason, false, true);
+        return joined;
+      }
       const flight = ask(key);
       inflight.set(key.text, flight);
       try {
@@ -337,10 +376,9 @@ export const createRepositoryAccessCheck = (
     }
   };
 
-  const invalidate = (
-    match: (entry: Pick<Entry, "orgId" | "memberId" | "repositoryId">) => boolean,
-  ) => {
-    generation++;
+  type Match = (entry: Pick<Entry, "orgId" | "memberId" | "repositoryId">) => boolean;
+
+  const drop = (match: Match): void => {
     for (const [text, entry] of entries) if (match(entry)) entries.delete(text);
     for (const text of inflight.keys()) {
       const [orgId = "", memberId = "", repositoryId = ""] = text.split(" ");
@@ -348,26 +386,37 @@ export const createRepositoryAccessCheck = (
     }
   };
 
-  const lower = (value: string): string => (typeof value === "string" ? value.toLowerCase() : "");
+  const clearAll = (): void => {
+    globalGeneration++;
+    orgGenerations.clear();
+    drop(() => true);
+  };
+
+  /** Invalidates within one (valid) org; `false` after dropping the whole org. */
+  const invalidateIn = (orgId: unknown, match: Match | null): boolean => {
+    if (!isUuid(orgId)) {
+      clearAll();
+      return false;
+    }
+    const org = orgId.toLowerCase();
+    bumpOrg(org);
+    drop((e) => e.orgId === org && (match === null || match(e)));
+    return true;
+  };
 
   return {
     check,
     invalidateMember: (orgId, memberId) => {
-      const org = lower(orgId);
-      const member = lower(memberId);
-      invalidate((e) => e.orgId === org && e.memberId === member);
+      if (!isUuid(memberId)) return invalidateIn(orgId, null) && false;
+      const member = memberId.toLowerCase();
+      return invalidateIn(orgId, (e) => e.memberId === member);
     },
     invalidateRepository: (orgId, repositoryId) => {
-      const org = lower(orgId);
-      invalidate((e) => e.orgId === org && e.repositoryId === repositoryId);
+      if (!isId(repositoryId)) return invalidateIn(orgId, null) && false;
+      return invalidateIn(orgId, (e) => e.repositoryId === repositoryId);
     },
-    invalidateOrg: (orgId) => {
-      const org = lower(orgId);
-      invalidate((e) => e.orgId === org);
-    },
-    clear: () => {
-      invalidate(() => true);
-    },
+    invalidateOrg: (orgId) => invalidateIn(orgId, null),
+    clear: clearAll,
     entries: () =>
       [...entries.values()].map((e) => ({
         orgId: e.orgId,
