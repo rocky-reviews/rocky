@@ -43,6 +43,8 @@ try {
 }
 
 const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 2 });
+// An idle client losing its connection must not crash the command; the next query reconnects.
+pool.on("error", (error) => log.error({ errorCode: codeOf(error) }, "postgres idle client error"));
 let exitCode = 1;
 try {
   const { rows } = await pool.query<{ worker: boolean }>(
