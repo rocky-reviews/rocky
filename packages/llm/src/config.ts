@@ -28,6 +28,11 @@ export interface AnthropicSettings {
   readonly kind: "anthropic";
   readonly apiKeyEnv: string;
   readonly baseUrl?: string;
+  /**
+   * Server-side refusal fallbacks (ADR 0013 §1). Omitted: on, for the models that take them.
+   * `off` for a gateway at `baseUrl` that rejects the beta.
+   */
+  readonly fallbacks?: "on" | "off";
 }
 export interface BedrockSettings {
   readonly kind: "bedrock";
@@ -105,6 +110,21 @@ const RESOURCE_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
 const PLATFORM_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$/;
 const PLATFORM_MODEL_PROVIDERS: readonly ProviderKind[] = ["bedrock", "vertex", "foundry"];
+/**
+ * Per-platform shapes on top of `PLATFORM_MODEL` (P4-2, ADR 0013 T4). Vertex puts the model in the
+ * URL path, so one segment only; Foundry takes a deployment name. Bedrock keeps the general shape:
+ * ARNs need `:` and `/`, and Mantle sends the model in the body.
+ */
+const PLATFORM_MODEL_SHAPES: Partial<Record<ProviderKind, { pattern: RegExp; message: string }>> = {
+  vertex: {
+    pattern: /^[A-Za-z0-9][A-Za-z0-9._@-]{0,199}$/,
+    message: "must be a Vertex model id (letters, digits, . _ @ -; no / or :)",
+  },
+  foundry: {
+    pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/,
+    message: "must be a Foundry deployment name (letters, digits, . _ -; at most 64 characters)",
+  },
+};
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const SAFE_KEY = /^[a-z][A-Za-z0-9]{0,23}(?:-[a-z0-9]{1,16})?$/;
 export const MAX_EMBEDDING_DIMENSIONS = 16_000;
@@ -159,6 +179,7 @@ const providerSettings = z.discriminatedUnion("kind", [
     baseUrl: baseUrl
       .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
       .optional(),
+    fallbacks: z.enum(["on", "off"], { error: "must be on or off" }).optional(),
   }),
   z.strictObject({ kind: z.literal("bedrock"), region }),
   z.strictObject({ kind: z.literal("vertex"), projectId: resourceName, region }),
@@ -334,11 +355,21 @@ const semanticIssues = (input: unknown): LlmConfigIssue[] => {
     if (providers !== undefined && providers[kind] === undefined) {
       issues.push({ path: `${path}.provider`, message: `provider ${kind} is not configured` });
     }
-    if (role["platformModel"] !== undefined && !PLATFORM_MODEL_PROVIDERS.includes(kind)) {
+    const platformModel = role["platformModel"];
+    if (platformModel !== undefined && !PLATFORM_MODEL_PROVIDERS.includes(kind)) {
       issues.push({
         path: `${path}.platformModel`,
         message: "only bedrock, vertex and foundry take a platform model id",
       });
+    }
+    const shape = PLATFORM_MODEL_SHAPES[kind];
+    if (
+      shape !== undefined &&
+      typeof platformModel === "string" &&
+      PLATFORM_MODEL.test(platformModel) &&
+      !shape.pattern.test(platformModel)
+    ) {
+      issues.push({ path: `${path}.platformModel`, message: shape.message });
     }
     const model = role["model"];
     if (typeof model !== "string" || !checkModel(path, kind, model)) return;

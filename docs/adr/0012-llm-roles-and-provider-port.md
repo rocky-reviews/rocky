@@ -15,6 +15,12 @@
   - the Bedrock region fallback;
   - key-shaped variable names refused;
   - notes N4, N5, N7, N9.
+- **Revised:** P4-2 ([ADR 0013](0013-llm-provider-adapters.md)):
+  - optional `attempts` on results (refusal fallbacks);
+  - `instructions` typed as `RockyInstructions` (review round 1, N4);
+  - Bedrock catalogue limited to the models Mantle serves;
+  - per-platform `platformModel` shapes for Vertex and Foundry;
+  - the Foundry model form confirmed.
 
 ## Context
 
@@ -46,6 +52,20 @@ a role to another provider never needs a code change.
     lifetime: `cacheWrite5mInputTokens` and `cacheWrite1hInputTokens`. They mirror Anthropic's
     `usage.cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, which are
     priced differently. Providers without a cache report zeros.
+  - `attempts` (P4-2) lists the model and usage of every attempt the provider reported when a
+    server-side refusal fallback re-ran the call on another model. `usage` is then the attempt
+    that produced the answer, and `model` names the model that served it. A reported attempt is
+    not necessarily billed at list price (a decline before any output, credit-style cache
+    repricing on the fallback), so metering (P4-5) prices `attempts` by the provider's refusal
+    billing rules instead of summing them. Without it, metering would not see the declined
+    attempt at all.
+  - `instructions` is a `RockyInstructions` value, not a string (P4-2 review round 1, N4). Only
+    the `rockyInstructions` template tag issues one, from literal text with no substitutions (a
+    direct call, a forged template array or an interpolation throws), and `joinInstructions`
+    composes them. Values are frozen and recorded in a module-private `WeakSet`, so an object
+    shaped like one is refused; adapters answer `invalid_request` before building a request. ESLint
+    bans calling the tag as a function outside tests. This keeps PR text out of the system slot by
+    construction; P4-4 adds the injection corpus and verdict invariants on top.
 - `LlmRoles.embedding()`: an embedding client, or `undefined` when embeddings are off.
 - `LlmProvider`: what an adapter implements: `completeStructured` and/or `embed`. It receives the
   request plus the role's target: `role`, `model`, `platformModel`, `effort` (`dimensions` for
@@ -152,8 +172,9 @@ Claude Mythos (access program only) is left out.
 
 An id outside the catalogue is refused. The catalogue id is the _capability key_: effort
 validation and defaults read it. The literal string sent to a platform is either derived by the
-adapter in P4-2 (Bedrock adds the `anthropic.` prefix; Vertex uses the bare id; Foundry's form is
-confirmed in P4-2), or set per role as `platformModel` (`ROCKY_LLM_<ROLE>_PLATFORM_MODEL`). That
+adapter (P4-2, ADR 0013: Bedrock adds the `anthropic.` prefix; Vertex uses the bare id, or the
+dated id for Opus 4.5 and Haiku 4.5; Foundry uses the canonical id, its default deployment name),
+or set per role as `platformModel` (`ROCKY_LLM_<ROLE>_PLATFORM_MODEL`). That
 override covers:
 
 - a Bedrock inference profile (`eu.anthropic.claude-opus-5-5`) or ARN;
@@ -161,7 +182,15 @@ override covers:
 - a Foundry deployment name.
 
 `platformModel` is allowed only on bedrock, vertex and foundry. It is shape-checked only, since
-platforms mint these strings, and the credential check applies to it as to every field. An
+platforms mint these strings, and the credential check applies to it as to every field. P4-2 adds
+two per-platform shapes:
+
+- **Vertex** puts the model in the URL path, so one path segment only (no `/` or `:`).
+- **Foundry** takes a deployment name: letters, digits, `.`, `_` and `-`, at most 64 characters.
+
+**Bedrock catalogue (P4-2).** Bedrock's catalogue is the Claude catalogue less Opus 4.6, Opus 4.5
+and Sonnet 4.6. The adapter uses Bedrock's Messages API endpoint (Mantle), and those three models
+exist only on the legacy `InvokeModel` integration (ADR 0013 §1). An
 OpenAI-compatible server serves whatever it has loaded, so any well-formed id is accepted there,
 and it needs no override.
 
@@ -171,6 +200,7 @@ what the provider and model support. Each adapter maps it to its own parameter (
 | Provider             | Accepted levels                 | Maps to (P4-2)                                 |
 | -------------------- | ------------------------------- | ---------------------------------------------- |
 | Claude, current gen. | all five                        | `output_config.effort`, with adaptive thinking |
+| `claude-opus-4-5`    | `low`, `medium`, `high`         | `output_config.effort`, no thinking            |
 | `claude-haiku-4-5`   | none (the API rejects `effort`) | not sent                                       |
 | `openai-compatible`  | `low`, `medium`, `high`         | `reasoning_effort`                             |
 

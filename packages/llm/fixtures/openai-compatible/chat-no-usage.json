@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-fixture",
+  "object": "chat.completion",
+  "created": 1761523200,
+  "model": "qwen2.5-coder:32b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"verdict\":\"comment\",\"summary\":\"Adds a retry loop; one error path is unchecked.\"}"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

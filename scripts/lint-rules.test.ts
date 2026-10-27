@@ -63,3 +63,62 @@ describe("core imports no forge SDK or adapter (P3-7)", () => {
     ).not.toContain("no-restricted-imports");
   });
 });
+
+describe("rockyInstructions only as a literal tagged template (P4-2, ADR 0012 §1)", () => {
+  const file = "packages/llm/src/planted.ts";
+  const head =
+    'import { rockyInstructions } from "@rocky-reviews/core";\ndeclare const pr: string;\n';
+
+  it.each([
+    ["a direct call", `${head}export const i = rockyInstructions(pr as never);\n`],
+    [
+      "a call through .call",
+      `${head}export const i = rockyInstructions.call(undefined, pr as never);\n`,
+    ],
+    [
+      "a sequence-expression call",
+      `${head}export const i = (0, rockyInstructions)(pr as never);\n`,
+    ],
+    ["an interpolation", `${head}export const i = rockyInstructions\`Review \${pr}\`;\n`],
+    ["passing the tag as a value", `${head}export const tag = rockyInstructions;\n`],
+    [
+      "an aliased import",
+      'import { rockyInstructions as ri } from "@rocky-reviews/core";\nexport const i = ri`x`;\n',
+    ],
+    [
+      "a namespace member",
+      'import * as core from "@rocky-reviews/core";\nexport const i = core.rockyInstructions(["x"] as never);\n',
+    ],
+    [
+      "a namespace member as a tag",
+      'import * as core from "@rocky-reviews/core";\nexport const i = core.rockyInstructions`x`;\n',
+    ],
+    ["an aliased re-export", 'export { rockyInstructions as ri } from "@rocky-reviews/core";\n'],
+  ])("fails on %s", async (_, code) => {
+    expect(await ruleIds(file, code)).toContain("no-restricted-syntax");
+  });
+
+  it("fails in core too, outside the definition", async () => {
+    expect(
+      await ruleIds(
+        "packages/core/src/planted.ts",
+        'import { rockyInstructions } from "./llm.js";\nexport const i = rockyInstructions(["x"] as never);\n',
+      ),
+    ).toContain("no-restricted-syntax");
+  });
+
+  it("allows a literal tagged template and a plain re-export", async () => {
+    expect(
+      await ruleIds(
+        file,
+        `${head}export const i = rockyInstructions\`You review pull requests.\`;\n`,
+      ),
+    ).not.toContain("no-restricted-syntax");
+    expect(
+      await ruleIds(
+        "packages/core/src/planted.ts",
+        'export { rockyInstructions, joinInstructions } from "./llm.js";\n',
+      ),
+    ).not.toContain("no-restricted-syntax");
+  });
+});

@@ -58,13 +58,82 @@ export interface LlmUntrustedText {
   readonly text: string;
 }
 
+declare const rockyAuthored: unique symbol;
+
+/**
+ * Instructions Rocky wrote (P4-2 review round 1, N4; ADR 0012 §1). Only `rockyInstructions` and
+ * `joinInstructions` issue one, so a PR title or diff cannot become a system prompt by accident:
+ * PR content goes in `untrusted`, where adapters delimit it. P4-4 builds the full defence.
+ */
+export interface RockyInstructions {
+  readonly text: string;
+  readonly [rockyAuthored]: true;
+}
+
+const issued = new WeakSet<object>();
+
+const issue = (text: string): RockyInstructions => {
+  const instructions = Object.freeze({ text }) as RockyInstructions;
+  issued.add(instructions);
+  return instructions;
+};
+
+/** A literal-only tagged template: `rockyInstructions\`You review pull requests.\``. */
+export const rockyInstructions = (strings: TemplateStringsArray): RockyInstructions => {
+  // A template literal passes a frozen array with a frozen `raw`; anything else is a direct call.
+  const raw: unknown = Array.isArray(strings) ? (strings as { raw?: unknown }).raw : undefined;
+  const literal =
+    Array.isArray(strings) &&
+    Array.isArray(raw) &&
+    Object.isFrozen(strings) &&
+    Object.isFrozen(raw) &&
+    strings.length === 1 &&
+    raw.length === 1 &&
+    typeof strings[0] === "string" &&
+    typeof raw[0] === "string" &&
+    // Without escapes, the cooked text is the raw text.
+    (raw[0].includes("\\") || raw[0] === strings[0]);
+  if (!literal)
+    throw new TypeError("rockyInstructions takes one literal template, no substitutions");
+  return issue(strings[0] as string);
+};
+
+export const isRockyInstructions = (value: unknown): value is RockyInstructions =>
+  typeof value === "object" && value !== null && issued.has(value);
+
+/** Rocky pieces joined by a blank line; any other part is refused. */
+export const joinInstructions = (parts: readonly RockyInstructions[]): RockyInstructions => {
+  if (!parts.every(isRockyInstructions)) throw new TypeError("not Rocky-authored instructions");
+  return issue(parts.map((part) => part.text).join("\n\n"));
+};
+
 export interface StructuredCompletionRequest<T> {
-  /** Rocky-authored instructions. Never contains PR content. */
-  readonly instructions: string;
+  /** Rocky-authored instructions; never PR content (that goes in `untrusted`). */
+  readonly instructions: RockyInstructions;
   readonly untrusted: readonly LlmUntrustedText[];
   readonly output: LlmOutputSchema<T>;
   readonly maxOutputTokens: number;
   readonly signal?: AbortSignal;
+}
+
+/** One attempt the provider reported for a call it ran on more than one model (P4-2, ADR 0013). */
+export interface LlmAttemptUsage {
+  readonly model: string;
+  readonly usage: LlmUsage;
+}
+
+interface ProviderResultBase {
+  /** The model that produced the answer (a refusal fallback may have switched it). */
+  readonly model: string;
+  /** Usage of the attempt that produced the answer. */
+  readonly usage: LlmUsage;
+  /**
+   * Every attempt the provider reported, in order, when a server-side refusal fallback re-ran the
+   * call on another model; absent otherwise. Reported is not billed at list price: a decline
+   * before any output and the fallback's cache repricing follow the provider's refusal billing
+   * rules, so metering (P4-5) prices these by those rules rather than summing them.
+   */
+  readonly attempts?: readonly LlmAttemptUsage[];
 }
 
 /**
@@ -73,24 +142,13 @@ export interface StructuredCompletionRequest<T> {
  * An input that cannot fit at all is thrown as `LlmCallError("context_too_long")` instead.
  */
 export type ProviderCompletionResult<T> =
-  | {
-      readonly status: "ok";
-      readonly value: T;
-      readonly model: string;
-      readonly usage: LlmUsage;
-    }
-  | {
-      readonly status: "refused" | "truncated";
-      readonly model: string;
-      readonly usage: LlmUsage;
-    }
-  | {
+  | (ProviderResultBase & { readonly status: "ok"; readonly value: T })
+  | (ProviderResultBase & { readonly status: "refused" | "truncated" })
+  | (ProviderResultBase & {
       readonly status: "invalid_output";
-      readonly model: string;
-      readonly usage: LlmUsage;
       /** Schema paths and issue codes only (see `LlmParseResult`). */
       readonly issues?: readonly string[];
-    };
+    });
 
 /** What a role returns: the adapter's result, stamped by the registry with the provider kind. */
 export type StructuredCompletionResult<T> = ProviderCompletionResult<T> & {

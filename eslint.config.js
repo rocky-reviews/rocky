@@ -12,6 +12,41 @@ const CORE_ALLOWED_IMPORTS = ["zod", "@rocky-reviews/schema"];
 const CORE_MESSAGE =
   "packages/core holds domain logic and ports only: import zod, @rocky-reviews/schema or core's own files; inject I/O through a port (ADR-0002).";
 
+/**
+ * Instructions come from literal templates only (ADR 0012 §1): any other use of the tag (a call,
+ * `.call`, `(0, tag)(x)`, an alias, a namespace member, an interpolation) could pass PR text. So
+ * the name may appear only as a template tag or a same-name import/export. The runtime check in
+ * core is the control; this catches it at review time.
+ */
+const ROCKY_MESSAGE =
+  "Use rockyInstructions only as a literal tagged template (no substitutions, no alias) (ADR 0012 §1).";
+const rockyInstructionsRules = (allowDefinition = false) => [
+  {
+    selector: `Identifier[name='rockyInstructions']:not(TaggedTemplateExpression > Identifier.tag, ImportSpecifier > Identifier, ExportSpecifier > Identifier${allowDefinition ? ", VariableDeclarator > Identifier.id" : ""})`,
+    message: ROCKY_MESSAGE,
+  },
+  { selector: "MemberExpression[property.name='rockyInstructions']", message: ROCKY_MESSAGE },
+  {
+    selector: "TaggedTemplateExpression[tag.name='rockyInstructions'][quasi.expressions.length>0]",
+    message: ROCKY_MESSAGE,
+  },
+  {
+    selector: "ImportSpecifier[imported.name='rockyInstructions'][local.name!='rockyInstructions']",
+    message: ROCKY_MESSAGE,
+  },
+  {
+    selector: "ExportSpecifier[local.name='rockyInstructions'][exported.name!='rockyInstructions']",
+    message: ROCKY_MESSAGE,
+  },
+];
+const CORE_SYNTAX = [
+  { selector: "ImportExpression", message: `No dynamic import in core. ${CORE_MESSAGE}` },
+  {
+    selector: "CallExpression[callee.name='require']",
+    message: `No require in core. ${CORE_MESSAGE}`,
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -30,6 +65,7 @@ export default tseslint.config(
     rules: {
       "no-console": "error",
       "@typescript-eslint/consistent-type-imports": "error",
+      "no-restricted-syntax": ["error", ...rockyInstructionsRules()],
     },
   },
   {
@@ -50,14 +86,7 @@ export default tseslint.config(
           ],
         },
       ],
-      "no-restricted-syntax": [
-        "error",
-        { selector: "ImportExpression", message: `No dynamic import in core. ${CORE_MESSAGE}` },
-        {
-          selector: "CallExpression[callee.name='require']",
-          message: `No require in core. ${CORE_MESSAGE}`,
-        },
-      ],
+      "no-restricted-syntax": ["error", ...CORE_SYNTAX, ...rockyInstructionsRules()],
       "no-restricted-globals": [
         "error",
         ...["fetch", "process", "require", "XMLHttpRequest", "WebSocket", "Deno", "Bun"].map(
@@ -67,14 +96,22 @@ export default tseslint.config(
     },
   },
   {
+    // The tag's own definition.
+    files: ["packages/core/src/llm.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", ...CORE_SYNTAX, ...rockyInstructionsRules(true)],
+    },
+  },
+  {
     files: ["scripts/**/*.{ts,mjs}", "packages/*/scripts/**/*.ts"],
     rules: { "no-console": "off" },
   },
   {
     // Tests index into fixtures under noUncheckedIndexedAccess; a `!` there is an assertion
     // about the fixture, and a wrong one fails the test loudly. Production code keeps the rule.
+    // Tests also forge instructions on purpose, to check the runtime refusal.
     files: ["**/*.test.ts"],
-    rules: { "@typescript-eslint/no-non-null-assertion": "off" },
+    rules: { "@typescript-eslint/no-non-null-assertion": "off", "no-restricted-syntax": "off" },
   },
   prettier,
 );

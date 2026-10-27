@@ -437,3 +437,79 @@ describe("review round 1: catalogue, platform model ids, URLs, regions", () => {
     expect(() => llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_API_KEY_ENV: "ACME_KEY_2" })).not.toThrow();
   });
 });
+
+describe("platform constraints the adapters rely on (P4-2, ADR 0013)", () => {
+  const bedrock = { ROCKY_LLM_PROVIDER: "bedrock", ROCKY_LLM_BEDROCK_REGION: "us-east-1" };
+  const vertex = {
+    ROCKY_LLM_PROVIDER: "vertex",
+    ROCKY_LLM_VERTEX_PROJECT_ID: "acme-ai",
+    ROCKY_LLM_VERTEX_REGION: "global",
+  };
+  const foundry = { ROCKY_LLM_PROVIDER: "foundry", ROCKY_LLM_FOUNDRY_RESOURCE: "acme-foundry" };
+
+  it("refuses on Bedrock the models that only the legacy InvokeModel integration serves", () => {
+    for (const model of ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6"]) {
+      expect(messageOf({ ...bedrock, ROCKY_LLM_REVIEW_MODEL: model }), model).toContain(
+        "ROCKY_LLM_REVIEW_MODEL: unknown model for provider bedrock",
+      );
+      // The same model stays valid on the platforms that serve it.
+      expect(
+        llmConfigFromEnv({ ...vertex, ROCKY_LLM_REVIEW_MODEL: model }).roles.review.model,
+      ).toBe(model);
+    }
+    for (const model of ["claude-opus-4-7", "claude-haiku-4-5", "claude-fable-5-1"]) {
+      expect(llmConfigFromEnv({ ...bedrock, ROCKY_LLM_GRAPH_MODEL: model }).roles.graph.model).toBe(
+        model,
+      );
+    }
+  });
+
+  it("keeps a Vertex model id to one URL path segment (T4)", () => {
+    for (const bad of ["claude-opus-5-5/../../x", "models:streamRawPredict", "a/b"]) {
+      expect(messageOf({ ...vertex, ROCKY_LLM_REVIEW_PLATFORM_MODEL: bad }), bad).toContain(
+        "ROCKY_LLM_REVIEW_PLATFORM_MODEL: must be a Vertex model id",
+      );
+    }
+    expect(
+      llmConfigFromEnv({ ...vertex, ROCKY_LLM_REVIEW_PLATFORM_MODEL: "claude-opus-4-5@20251101" })
+        .roles.review.platformModel,
+    ).toBe("claude-opus-4-5@20251101");
+  });
+
+  it("keeps a Foundry platform model to a deployment name (T4)", () => {
+    for (const bad of ["dep/../x", "dep:1", "d".repeat(65), "a@b"]) {
+      expect(messageOf({ ...foundry, ROCKY_LLM_REVIEW_PLATFORM_MODEL: bad }), bad).toContain(
+        "ROCKY_LLM_REVIEW_PLATFORM_MODEL: must be a Foundry deployment name",
+      );
+    }
+    expect(
+      llmConfigFromEnv({ ...foundry, ROCKY_LLM_REVIEW_PLATFORM_MODEL: "opus.prod_eu-1" }).roles
+        .review.platformModel,
+    ).toBe("opus.prod_eu-1");
+  });
+
+  it("still takes Bedrock ARNs and inference profiles, which need : and /", () => {
+    const arn =
+      "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-opus-5-5";
+    expect(
+      llmConfigFromEnv({ ...bedrock, ROCKY_LLM_REVIEW_PLATFORM_MODEL: arn }).roles.review
+        .platformModel,
+    ).toBe(arn);
+  });
+});
+
+describe("Anthropic server-side fallbacks switch (P4-2 review round 1, item 11)", () => {
+  it("reads ROCKY_LLM_ANTHROPIC_FALLBACKS as on or off", () => {
+    for (const value of ["on", "off"] as const) {
+      expect(
+        llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_FALLBACKS: value }).providers.anthropic,
+      ).toEqual({ kind: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY", fallbacks: value });
+    }
+  });
+
+  it("rejects any other value, naming the variable", () => {
+    expect(messageOf({ ROCKY_LLM_ANTHROPIC_FALLBACKS: "yes" })).toContain(
+      "ROCKY_LLM_ANTHROPIC_FALLBACKS",
+    );
+  });
+});

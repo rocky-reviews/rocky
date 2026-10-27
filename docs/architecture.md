@@ -10,7 +10,8 @@ Decisions behind this page:
 [ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md),
 [ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md),
 [ADR 0011 repository access check](adr/0011-repository-access-check.md),
-[ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md).
+[ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md),
+[ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md).
 
 ## Runtime
 
@@ -50,7 +51,7 @@ packages/schema (analysis document; shared contract)
 | `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                          |
 | `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                |
 | `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                              |
-| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry; later providers, validate-and-repair, metering hooks                                                                            |
+| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible); later validate-and-repair, metering hooks           |
 | `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                           |
 | `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                               |
 | `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                 |
@@ -67,10 +68,28 @@ packages/schema (analysis document; shared contract)
   (`llmConfigFromEnv`, `ROCKY_LLM_*` in `.env.example`) against each provider's capabilities and
   fails fast. Defaults: triage Haiku 5.5, review Opus 5.5, graph and ask Sonnet 5.5, all on the
   Anthropic API. Embeddings stay off until configured. `createLlmRoles` resolves each role to the
-  adapter factory of its provider (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible;
-  adapters in P4-2), so switching provider is a config change.
+  adapter factory of its provider, so switching provider is a config change.
 - The config names credentials by variable (`apiKeyEnv`) and never holds them. Adapters read
   keys through a `SecretSource` at call time (env today, per-org BYOK later).
+- ADR 0013: `providerAdapters()` supplies those factories.
+  - **Claude platforms:** one Messages core with four platform clients: the Anthropic API,
+    Bedrock (Mantle), Vertex and Foundry, all on the official SDKs.
+    - Every request is streamed, uses structured outputs (`output_config.format`), and maps
+      effort to `output_config.effort` with adaptive thinking.
+    - It has one cache breakpoint, on Rocky's instructions. PR content sits in nonce-delimited
+      `pr_content` blocks in the user turn. No tools are sent.
+    - On the Anthropic API, server-side refusal fallbacks run (`fallbacks: "default"`) on the
+      models that take them; `ROCKY_LLM_ANTHROPIC_FALLBACKS=off` turns them off.
+    - Each call has one deadline covering the whole stream and a 16 MiB cap on response bodies.
+      Platform SDKs are imported on first use.
+  - **OpenAI-compatible:** `fetch` to `/chat/completions` (`response_format: json_schema`, with
+    the schema in the prompt as the fallback) and `/embeddings`.
+  - **Clients:** each one pins its host from config, so no `ANTHROPIC_*_BASE_URL` variable or
+    redirect moves it. Clients have SDK logging and OpenTelemetry off. The worker refuses to start
+    with `ANTHROPIC_CUSTOM_HEADERS` (or, for Vertex, `GOOGLE_SDK_NODE_LOGGING`) set. Every failure
+    becomes a body-free `LlmCallError`.
+  - **Instructions** are a `RockyInstructions` value from the `rockyInstructions` template tag
+    (literal text only), never a string, so PR content cannot reach the system slot.
 
 ## Data layer
 

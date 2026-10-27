@@ -1,0 +1,8 @@
+{
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "prompt is too long: 1048600 tokens > 1048576 maximum"
+  },
+  "request_id": "req_fixture000000000000000000"
+}
