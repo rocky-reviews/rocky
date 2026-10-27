@@ -1,6 +1,8 @@
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
+import { registerCsrfGuard } from "./auth/csrf.js";
+import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
@@ -14,6 +16,11 @@ export interface AppDeps {
   webhooks?: WebhookDeps;
   /** GitHub App manifest setup (P3-1). Only when requested, outside production, unconfigured. */
   githubAppSetup?: GitHubAppSetupDeps;
+  /**
+   * GitHub login and sessions (P7-1, ADR 0020). Without it no session can exist, so every
+   * state-changing route except the signed webhook receiver is refused by the CSRF guard.
+   */
+  auth?: AuthDeps;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -51,6 +58,17 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       ? Fastify({ logger: false, ...timeouts })
       : Fastify({ ...fastifyLoggerOptions(deps.log), ...timeouts });
   if (deps.log !== undefined) addRequestIdHeader(app);
+  // Before any route: every state-changing route is CSRF-checked unless it opts out (ADR 0020 §5).
+  registerCsrfGuard(
+    app,
+    deps.auth === undefined
+      ? undefined
+      : {
+          origin: deps.auth.publicUrl.origin,
+          secret: deps.auth.secret,
+          cookieSecure: deps.auth.cookieSecure,
+        },
+  );
 
   // Health probes arrive every few seconds; log them only when something is wrong.
   app.get("/healthz", { logLevel: "warn" }, async (_req, reply) => {
@@ -60,6 +78,14 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
 
   if (deps.webhooks !== undefined) registerWebhooks(app, deps.webhooks);
   if (deps.githubAppSetup !== undefined) registerGitHubAppSetup(app, deps.githubAppSetup);
+  if (deps.auth !== undefined) app.decorate("sessionAuth", registerAuth(app, deps.auth));
 
   return app;
 };
+
+declare module "fastify" {
+  interface FastifyInstance {
+    /** Session lookups for routes (P7-1); present when login is configured. */
+    sessionAuth?: SessionAuth;
+  }
+}

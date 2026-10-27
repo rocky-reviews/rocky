@@ -465,6 +465,31 @@ describe("the deletion sweep's database side (P3-3)", () => {
   it("is structural: every column that holds an org id, in any schema, is emptied for the erased org", async () => {
     const c = await seedOrg(worker, newOrgId(), { installationId: 60, accountId: 60_060 });
     const d = await seedOrg(worker, newOrgId(), { installationId: 61, accountId: 61_061 });
+    // P7-1: a session of the same person in both orgs, active in c. Erasing c must remove c's
+    // link and clear the active org, and leave d's link alone.
+    const { userId } = await db.sessions.upsertUser("github", 1001, new Date());
+    const now = new Date();
+    const { sessionId } = await db.sessions.createSession({
+      tokenSha256: randomBytes(32),
+      userId,
+      orgs: [
+        { orgId: c.orgId, memberId: c.memberId },
+        { orgId: d.orgId, memberId: d.memberId },
+      ],
+      activeOrgId: c.orgId,
+      now,
+      idleTimeoutSeconds: 3600,
+      expiresAt: new Date(now.getTime() + 3_600_000),
+    });
+    const second = await db.sessions.createSession({
+      tokenSha256: randomBytes(32),
+      userId,
+      orgs: [{ orgId: d.orgId, memberId: d.memberId }],
+      activeOrgId: d.orgId,
+      now,
+      idleTimeoutSeconds: 3600,
+      expiresAt: new Date(now.getTime() + 3_600_000),
+    });
     // Inbox rows: finished ones for c (by installation, and by account under an older,
     // unbound installation), a pending redelivery for c's installation (kept: work not yet done,
     // but loses the sender and the login, review round 1 L4), a pending pull request of c's
@@ -594,6 +619,14 @@ describe("the deletion sweep's database side (P3-3)", () => {
       ]),
     );
 
+    const sessions = await superuser.query<{ id: string; active_org_id: string | null }>(
+      "select id, active_org_id from app.sessions where id = any($1) order by created_at, id",
+      [[sessionId, second.sessionId]],
+    );
+    expect(Object.fromEntries(sessions.rows.map((r) => [r.id, r.active_org_id]))).toEqual({
+      [sessionId]: null,
+      [second.sessionId]: d.orgId,
+    });
     for (const h of holders) {
       expect(await count(h, c.orgId), `${h.table}.${h.column} after`).toBe(0);
       if (h.column === "org_id" || h.table === "public.orgs") {

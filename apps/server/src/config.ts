@@ -4,6 +4,7 @@ import {
   buildGitHubAppManifest,
   checkWebhookSecret,
   githubEndpoints,
+  type GitHubEndpoints,
 } from "@rocky-reviews/forge-github";
 import type { GitHubAppSetupConfig } from "./github-app-setup.js";
 
@@ -177,4 +178,119 @@ const pathExists = (path: string): boolean => {
   } catch {
     return false;
   }
+};
+
+/** At least 256 bits of key material for the session secret (HMAC-SHA256). */
+export const MIN_SESSION_SECRET_LENGTH = 32;
+const SESSION_SECRET_SHAPE = /^[\x21-\x7e]+$/;
+
+export interface AuthConfig {
+  /** Where browsers reach Rocky; its origin is the only one CSRF checks accept. */
+  readonly publicUrl: URL;
+  /** false only for http on loopback outside production (the documented dev exception). */
+  readonly cookieSecure: boolean;
+  readonly clientId: string;
+  readonly clientSecret: string;
+  /** `GITHUB_APP_ID`, when set: installations of other apps are ignored at login. */
+  readonly appId: number | undefined;
+  readonly endpoints: GitHubEndpoints;
+  /** `ROCKY_SESSION_SECRET`, or undefined in development (the server generates one per boot). */
+  readonly sessionSecret: string | undefined;
+}
+
+export type AuthSetup = { enabled: false } | { enabled: true; config: AuthConfig };
+
+/**
+ * GitHub login (P7-1, ADR 0020). Needs `GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`
+ * (both or neither) and is required in production, where `ROCKY_PUBLIC_URL` must be https and
+ * `ROCKY_SESSION_SECRET` must be set. In development, http is accepted on a loopback address
+ * only, with non-Secure cookies without the `__Host-` prefix (browsers drop Secure cookies on
+ * plain http); an unset session secret is generated per boot. Messages never contain values.
+ */
+export const authFromEnv = (env: Env): AuthSetup => {
+  const clientId = nonEmpty(env, "GITHUB_APP_CLIENT_ID");
+  const clientSecret = nonEmpty(env, "GITHUB_APP_CLIENT_SECRET");
+  const production = isProduction(env);
+  if (clientId === undefined && clientSecret === undefined) {
+    if (production) {
+      throw new ConfigError(
+        "GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET are required in production (GitHub login)",
+      );
+    }
+    return { enabled: false };
+  }
+  if (clientId === undefined || clientSecret === undefined) {
+    throw new ConfigError("set both GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET, or neither");
+  }
+  if (!/^[A-Za-z0-9._-]{8,64}$/.test(clientId)) {
+    throw new ConfigError("GITHUB_APP_CLIENT_ID is malformed");
+  }
+  if (!/^[\x21-\x7e]{20,256}$/.test(clientSecret)) {
+    throw new ConfigError("GITHUB_APP_CLIENT_SECRET is malformed");
+  }
+
+  const host = env["HOST"] ?? "0.0.0.0";
+  const publicRaw =
+    nonEmpty(env, "ROCKY_PUBLIC_URL") ??
+    (production
+      ? undefined
+      : `http://${host.includes(":") ? `[${host}]` : host}:${env["PORT"] ?? "4310"}`);
+  if (publicRaw === undefined) throw new ConfigError("ROCKY_PUBLIC_URL is required in production");
+  const publicUrl = urlFrom(publicRaw, "ROCKY_PUBLIC_URL");
+  if (publicUrl.pathname !== "/") throw new ConfigError("ROCKY_PUBLIC_URL must not have a path");
+  const loopbackHttp = publicUrl.protocol === "http:" && LOOPBACK.has(publicUrl.hostname);
+  if (publicUrl.protocol !== "https:") {
+    if (production) throw new ConfigError("ROCKY_PUBLIC_URL must be https in production");
+    if (!loopbackHttp) {
+      throw new ConfigError(
+        "ROCKY_PUBLIC_URL must be https, or http on 127.0.0.1/localhost in development (set it explicitly when HOST is 0.0.0.0)",
+      );
+    }
+  }
+
+  const sessionSecret = nonEmpty(env, "ROCKY_SESSION_SECRET");
+  if (sessionSecret === undefined) {
+    if (production) throw new ConfigError("ROCKY_SESSION_SECRET is required in production");
+  } else if (
+    sessionSecret.length < MIN_SESSION_SECRET_LENGTH ||
+    !SESSION_SECRET_SHAPE.test(sessionSecret)
+  ) {
+    throw new ConfigError(
+      `ROCKY_SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} printable characters without spaces (e.g. openssl rand -hex 32)`,
+    );
+  }
+
+  const appIdRaw = nonEmpty(env, "GITHUB_APP_ID");
+  let appId: number | undefined;
+  if (appIdRaw !== undefined) {
+    if (!/^[1-9][0-9]{0,15}$/.test(appIdRaw) || !Number.isSafeInteger(Number(appIdRaw))) {
+      throw new ConfigError("GITHUB_APP_ID must be a positive integer");
+    }
+    appId = Number(appIdRaw);
+  }
+
+  const webUrl = nonEmpty(env, "GITHUB_URL");
+  const apiUrl = nonEmpty(env, "GITHUB_API_URL");
+  let endpoints: GitHubEndpoints;
+  try {
+    endpoints = githubEndpoints({
+      ...(webUrl === undefined ? {} : { webUrl }),
+      ...(apiUrl === undefined ? {} : { apiUrl }),
+    });
+  } catch (error) {
+    throw new ConfigError(`GITHUB_URL/GITHUB_API_URL: ${(error as Error).message}`);
+  }
+
+  return {
+    enabled: true,
+    config: {
+      publicUrl,
+      cookieSecure: publicUrl.protocol === "https:",
+      clientId,
+      clientSecret,
+      appId,
+      endpoints,
+      sessionSecret,
+    },
+  };
 };

@@ -69,6 +69,8 @@ export const members = pgTable("members", {
     .default("member"),
   forgeTokenCiphertext: bytea("forge_token_ciphertext"),
   forgeTokenKeyVersion: integer("forge_token_key_version"),
+  /** When the stored user token expires (P7-1); null for a non-expiring token or none stored. */
+  forgeAccessExpiresAt: timestamp("forge_access_expires_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

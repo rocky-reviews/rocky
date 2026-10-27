@@ -1,12 +1,14 @@
 import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
-import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
+import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
+import { createGitHubLogin, createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp } from "./app.js";
-import { ConfigError, githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
+import type { AuthDeps } from "./auth/routes.js";
+import { authFromEnv, ConfigError, githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import type { WebhookDeps } from "./webhooks.js";
 
@@ -93,6 +95,8 @@ export interface RunningServer {
   readonly app: FastifyInstance;
   readonly pool: pg.Pool;
   readonly webhooks: boolean;
+  /** Whether GitHub login and the session API are registered (P7-1). */
+  readonly auth: boolean;
   /** Whether the GitHub App manifest setup routes are registered (P3-1). */
   readonly githubAppSetup: boolean;
   close(): Promise<void>;
@@ -122,6 +126,18 @@ export const startServer = async (
 ): Promise<RunningServer> => {
   const webhookSecret = webhookSecretFromEnv(env);
   const setup = githubAppSetupFromEnv(env, homedir());
+  const authSetup = authFromEnv(env);
+  let keys;
+  if (authSetup.enabled) {
+    try {
+      keys = localKeyWrapperFromEnv(env);
+    } catch (error) {
+      if (!(error instanceof CryptoError)) throw error;
+      throw new ConfigError(
+        "GitHub login stores user tokens encrypted: set ROCKY_KEK_KEYS (and ROCKY_KEK_CURRENT) (ADR 0006)",
+      );
+    }
+  }
   let githubAppSetup: GitHubAppSetupDeps | undefined;
   if (setup.enabled) {
     githubAppSetup = { ...setup.config, token: randomBytes(32).toString("base64url") };
@@ -153,11 +169,43 @@ export const startServer = async (
     };
   }
 
+  let auth: AuthDeps | undefined;
+  if (authSetup.enabled && keys !== undefined) {
+    const { config } = authSetup;
+    if (config.sessionSecret === undefined) {
+      log.warn("ROCKY_SESSION_SECRET is not set: generated for this process (development only)");
+    }
+    if (!config.cookieSecure) {
+      log.warn(
+        "ROCKY_PUBLIC_URL is http on loopback: session cookies are not Secure (development only)",
+      );
+    }
+    auth = {
+      publicUrl: config.publicUrl,
+      cookieSecure: config.cookieSecure,
+      secret:
+        config.sessionSecret === undefined
+          ? randomBytes(32)
+          : Buffer.from(config.sessionSecret, "utf8"),
+      login: createGitHubLogin({
+        endpoints: config.endpoints,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        ...(config.appId === undefined ? {} : { appId: config.appId }),
+      }),
+      db: createDb({ pool }),
+      keys,
+    };
+  } else {
+    log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
+  }
+
   const app = buildApp({
     checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,
     log,
     ...(webhooks === undefined ? {} : { webhooks }),
     ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
+    ...(auth === undefined ? {} : { auth }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
@@ -170,7 +218,13 @@ export const startServer = async (
     throw error;
   }
   log.info(
-    { host, port, webhooks: webhooks !== undefined, githubAppSetup: githubAppSetup !== undefined },
+    {
+      host,
+      port,
+      webhooks: webhooks !== undefined,
+      auth: auth !== undefined,
+      githubAppSetup: githubAppSetup !== undefined,
+    },
     "server listening",
   );
   if (githubAppSetup !== undefined) {
@@ -188,6 +242,7 @@ export const startServer = async (
     app,
     pool,
     webhooks: webhooks !== undefined,
+    auth: auth !== undefined,
     githubAppSetup: githubAppSetup !== undefined,
     close: () => {
       closing ??= (async () => {

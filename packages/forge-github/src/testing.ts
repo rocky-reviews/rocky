@@ -5,6 +5,7 @@
  */
 import { readFileSync } from "node:fs";
 import {
+  createHash,
   createPublicKey,
   generateKeyPairSync,
   randomUUID,
@@ -183,7 +184,8 @@ export type FakeRoute =
   | "repository"
   | "user"
   | "collaborator"
-  | "membership";
+  | "membership"
+  | "installations";
 
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
@@ -256,6 +258,11 @@ export interface FakeGitHubApi {
    * repository is reported with `private: true` and `visibility: "internal"`.
    */
   setVisibility(repositoryId: number, visibility: "public" | "internal" | "private"): void;
+  /**
+   * P7-1: whether `GET /user/installations` lists this installation for the user (GitHub: the
+   * user has explicit access to it). Default: not granted.
+   */
+  grantInstallation(userId: number, installationId: number, granted?: boolean): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -332,6 +339,7 @@ export const fakeGitHubApi = (options: {
   const users = new Map<string, { id: number; login: string; revoked: boolean }>();
   const permissions = new Map<string, FakePermission>();
   const visibilities = new Map<number, "public" | "internal">();
+  const installationGrants = new Set<string>();
 
   const flags = (role: FakePermission | undefined, readable: boolean) => {
     const rank = role === undefined ? -1 : ROLES.indexOf(role);
@@ -722,6 +730,38 @@ export const fakeGitHubApi = (options: {
       });
     }
     if (method === "GET" && path === "user" && user !== undefined) return authenticatedUser(user);
+    if (method === "GET" && path === "user/installations" && user !== undefined) {
+      const failure = takeRouteFailure("installations");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const perPage = Math.min(Number(url.searchParams.get("per_page") ?? "30"), 100);
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const fixture = githubFixture("list-user-installations")["installations"] as Record<
+        string,
+        unknown
+      >[];
+      const item = fixture[0] ?? {};
+      const all = [...installed]
+        .filter(([id]) => installationGrants.has(`${user.id}:${id}`))
+        .sort(([x], [y]) => x - y)
+        .map(([id, entry]) => ({
+          ...item,
+          id,
+          app_id: options.appId,
+          target_id: entry.account.id,
+          target_type: entry.account.type,
+          account: {
+            ...(item["account"] as Record<string, unknown>),
+            id: entry.account.id,
+            login: entry.account.login,
+            type: entry.account.type,
+          },
+          suspended_at: entry.suspended ? "2026-10-26T10:00:00Z" : null,
+        }));
+      return json(200, {
+        total_count: all.length,
+        installations: all.slice((page - 1) * perPage, page * perPage),
+      });
+    }
     const repositoryMatch = REPOSITORY_ROUTE.exec(path);
     if (method === "GET" && repositoryMatch !== null && user !== undefined) {
       return repositoryAsUser(group(repositoryMatch, 1), group(repositoryMatch, 2), user.id);
@@ -827,9 +867,168 @@ export const fakeGitHubApi = (options: {
       const user = users.get(value);
       if (user !== undefined) user.revoked = true;
     },
+    grantInstallation: (userId, installationId, granted = true) => {
+      if (granted) installationGrants.add(`${userId}:${installationId}`);
+      else installationGrants.delete(`${userId}:${installationId}`);
+    },
     setVisibility: (repositoryId, visibility) => {
       if (visibility === "private") visibilities.delete(repositoryId);
       else visibilities.set(repositoryId, visibility);
+    },
+  };
+};
+
+// --- GitHub OAuth web flow fake (P7-1) ----------------------------------------------------------
+
+export interface FakeGitHubOAuth {
+  /** Serves `POST /login/oauth/access_token` on the web host; everything else goes to `api`. */
+  readonly fetch: typeof fetch;
+  /**
+   * The person clicks "Authorize" on GitHub's page at `authorizeUrl` (what Rocky redirected
+   * to): checks the client id, the redirect URI and the S256 challenge like GitHub, and returns
+   * the callback URL GitHub would redirect to, with a fresh single-use code and the state.
+   */
+  approve(authorizeUrl: string | URL, user: { id: number; login: string }): URL;
+  /** Every user token issued (a test can prove none of them leaked). */
+  readonly issued: string[];
+  /** Every token request seen: whether it carried the right secret and verifier. Never values. */
+  readonly exchanges: { clientOk: boolean; verifierOk: boolean; outcome: string }[];
+  /** The next exchanges answer this OAuth error (200 + `error`), or this HTTP status. */
+  failExchange(failure: string | number, times?: number): void;
+}
+
+/**
+ * A GitHub web host for the user-authorization flow (documentation-shaped answers from
+ * `post-oauth-access-token*.json`). Codes live 10 minutes and work once; the exchange checks the
+ * client id and secret, the redirect URI and the PKCE verifier (S256), like GitHub does, and
+ * answers errors with a 200 and an `error` field. Issued tokens are user tokens of `api`
+ * (`addUser`), so `GET /user` and `GET /user/installations` answer for them.
+ */
+export const fakeGitHubOAuth = (options: {
+  api: FakeGitHubApi;
+  clientId: string;
+  clientSecret: string;
+  web?: string;
+  now?: () => number;
+  /** `expires_in` of issued tokens; `null` for non-expiring tokens. Default 8 hours. */
+  expiresInSeconds?: number | null;
+}): FakeGitHubOAuth => {
+  const now = options.now ?? Date.now;
+  const web = new URL(options.web ?? "https://github.com/");
+  const codes = new Map<
+    string,
+    {
+      user: { id: number; login: string };
+      challenge: string;
+      redirectUri: string;
+      expiresAt: number;
+      used: boolean;
+    }
+  >();
+  const issued: string[] = [];
+  const exchanges: FakeGitHubOAuth["exchanges"] = [];
+  const failures: (string | number)[] = [];
+  const s256 = (verifier: string) => createHash("sha256").update(verifier).digest("base64url");
+
+  const answer = (body: unknown) => json(200, body);
+  const oauthError = (error: string) => ({
+    ...githubFixture("post-oauth-access-token.bad-verification-code"),
+    error,
+  });
+
+  const exchange = (body: URLSearchParams): Response => {
+    const clientOk =
+      body.get("client_id") === options.clientId &&
+      body.get("client_secret") === options.clientSecret;
+    const code = codes.get(body.get("code") ?? "");
+    const verifier = body.get("code_verifier") ?? "";
+    const verifierOk = code !== undefined && verifier !== "" && s256(verifier) === code.challenge;
+    const record = (outcome: string) => exchanges.push({ clientOk, verifierOk, outcome });
+    const failure = failures.shift();
+    if (typeof failure === "number") {
+      record(`status_${failure}`);
+      return json(failure, { message: "Injected failure" });
+    }
+    if (typeof failure === "string") {
+      record(failure);
+      return answer(oauthError(failure));
+    }
+    if (!clientOk) {
+      record("incorrect_client_credentials");
+      return answer(oauthError("incorrect_client_credentials"));
+    }
+    if (code === undefined || code.used || now() >= code.expiresAt || !verifierOk) {
+      // GitHub spends a code on any presentation.
+      if (code !== undefined) code.used = true;
+      record("bad_verification_code");
+      return answer(oauthError("bad_verification_code"));
+    }
+    code.used = true;
+    if (body.get("redirect_uri") !== code.redirectUri) {
+      record("redirect_uri_mismatch");
+      return answer(oauthError("redirect_uri_mismatch"));
+    }
+    const value = options.api.addUser(code.user);
+    issued.push(value);
+    record("issued");
+    const expiresIn = options.expiresInSeconds === undefined ? 28_800 : options.expiresInSeconds;
+    const fixture = githubFixture("post-oauth-access-token");
+    return answer({
+      ...fixture,
+      access_token: value,
+      refresh_token: `test-refresh-token-${randomUUID()}`,
+      ...(expiresIn === null
+        ? { expires_in: undefined, refresh_token_expires_in: undefined }
+        : { expires_in: expiresIn }),
+    });
+  };
+
+  const fakeFetch = async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (url.origin !== web.origin) return options.api.fetch(input, init);
+    if (init?.redirect !== "error")
+      return json(400, { message: "test: redirects must be refused" });
+    if (init.method === "POST" && url.pathname === `${web.pathname}login/oauth/access_token`) {
+      const headers = new Headers(init.headers);
+      if (headers.get("accept") !== "application/json") {
+        return new Response("access_token=x", { status: 200 });
+      }
+      return exchange(new URLSearchParams(String(init.body ?? "")));
+    }
+    return json(404, githubFixture("get-installation.not-found"));
+  };
+
+  return {
+    fetch: fakeFetch as typeof fetch,
+    issued,
+    exchanges,
+    failExchange: (failure, times = 1) => {
+      for (let i = 0; i < times; i++) failures.push(failure);
+    },
+    approve: (authorizeUrl, user) => {
+      const url = new URL(authorizeUrl);
+      if (url.origin !== web.origin || url.pathname !== `${web.pathname}login/oauth/authorize`) {
+        throw new Error("fake GitHub: not the authorize endpoint");
+      }
+      const p = url.searchParams;
+      if (p.get("client_id") !== options.clientId) throw new Error("fake GitHub: unknown client");
+      if (p.get("code_challenge_method") !== "S256")
+        throw new Error("fake GitHub: PKCE S256 required");
+      const challenge = p.get("code_challenge") ?? "";
+      const state = p.get("state") ?? "";
+      const redirectUri = p.get("redirect_uri") ?? "";
+      if (!/^[A-Za-z0-9_-]{43}$/.test(challenge) || state === "" || redirectUri === "") {
+        throw new Error("fake GitHub: missing parameters");
+      }
+      const code = randomUUID().replaceAll("-", "").slice(0, 20);
+      codes.set(code, { user, challenge, redirectUri, expiresAt: now() + 600_000, used: false });
+      const callback = new URL(redirectUri);
+      callback.searchParams.set("code", code);
+      callback.searchParams.set("state", state);
+      return callback;
     },
   };
 };
