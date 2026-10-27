@@ -6,14 +6,26 @@ export {
   type RepositoryAccessTarget,
 } from "./access.js";
 export {
+  ANALYSIS_CLAIM_STATEMENT_TIMEOUT_MS,
+  ANALYSIS_MAX_ATTEMPTS,
+  ANALYSIS_MAX_RETRY_DELAY_MS,
   AnalysisStoreError,
+  approveAnalysisOverLimit,
   completeAnalysis,
   enqueueAnalysis,
+  enqueueHeadAnalysis,
   failAnalysis,
+  holdAnalysis,
+  loadAnalysisTarget,
   loadPreviousAnalysis,
+  renewAnalysisLease,
   requeueAnalysis,
-  startAnalysis,
+  type AnalysisApproval,
+  type AnalysisApprover,
+  type AnalysisClaimOptions,
+  type AnalysisLease,
   type AnalysisTarget,
+  type ClaimedAnalysis,
 } from "./analyses.js";
 export { audit, AUDIT_METADATA_MAX_BYTES, type AuditActor, type AuditTarget } from "./audit.js";
 export {

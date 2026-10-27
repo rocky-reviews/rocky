@@ -621,6 +621,44 @@ describe("pull request events: GitHub's answer, not the event, is what is mirror
     expect(mirrored!.diff_sha256).toBe(createHash("sha256").update(prefix).digest("hex"));
   });
 
+  it("P4-6: a new head of an open pull request queues one analysis; replays, merges and unreadable diffs none", async () => {
+    const analyses = async (orgId: OrgId) =>
+      (
+        await superuser.query<{ number: number; head_sha: string; status: string }>(
+          `select p.number, r.head_sha, a.status from analyses a
+             join pr_revisions r on r.org_id = a.org_id and r.id = a.revision_id
+             join pull_requests p on p.org_id = r.org_id and p.id = r.pull_request_id
+            where a.org_id = $1 order by p.number, a.created_at`,
+          [orgId],
+        )
+      ).rows;
+    const t = await tenant();
+    await change(t, "opened", { number: 20, headSha: HEAD_1, baseSha: BASE });
+    await drainAll();
+    expect(await analyses(t.orgId)).toEqual([{ number: 20, head_sha: HEAD_1, status: "queued" }]);
+    await change(t, "synchronize", { number: 20, headSha: HEAD_1B, baseSha: BASE });
+    await drainAll();
+    // A replay of the first head, and the merge of the second: nothing new to analyse.
+    await change(t, "synchronize", { number: 20, headSha: HEAD_1B, baseSha: BASE });
+    await change(t, "closed", { number: 20, headSha: HEAD_1B, baseSha: BASE, merged: true });
+    await drainAll();
+    expect(await analyses(t.orgId)).toEqual([
+      { number: 20, head_sha: HEAD_1, status: "queued" },
+      { number: 20, head_sha: HEAD_1B, status: "queued" },
+    ]);
+    // A diff GitHub cannot give yet is not analysed; once the rebuild reads it, it is (once).
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "missing");
+    await change(t, "opened", { number: 21, headSha: HEAD_2, baseSha: BASE });
+    await drainAll();
+    expect((await analyses(t.orgId)).filter((a) => a.number === 21)).toEqual([]);
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "+back\n");
+    await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
+    await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
+    expect((await analyses(t.orgId)).filter((a) => a.number === 21)).toEqual([
+      { number: 21, head_sha: HEAD_2, status: "queued" },
+    ]);
+  });
+
   it("a merge records the state without reading the unchanged head's diff again", async () => {
     const t = await tenant();
     await change(t, "opened", { number: 7, headSha: HEAD_2, baseSha: BASE });

@@ -121,7 +121,15 @@ export {
 } from "./prompt.js";
 export {
   analyzePullRequest,
+  ANALYSIS_STAGES,
   belowVerdictFloor,
+  CHARS_PER_TOKEN,
+  DEFAULT_ANALYSIS_TOKEN_LIMIT,
+  estimateAnalysisTokens,
+  FILE_CALL_OVERHEAD_TOKENS,
+  STAGE_OVERHEAD_TOKENS,
+  type EstimateOptions,
+  type TokenEstimate,
   createLeakDetector,
   INSTRUCTION_LEAK,
   instructionLeaks,

@@ -1,37 +1,48 @@
 import { createHash } from "node:crypto";
 import {
   analyzePullRequest,
+  DEFAULT_ANALYSIS_TOKEN_LIMIT,
+  estimateAnalysisTokens,
   ForgeReadError,
   isLlmCallError,
   type Clock,
   type Forge,
   type ForgeDiff,
   type LlmRoles,
-  type OrgId,
 } from "@rocky-reviews/core";
 import {
+  ANALYSIS_MAX_ATTEMPTS,
+  ANALYSIS_MAX_RETRY_DELAY_MS,
   completeAnalysis,
   failAnalysis,
+  holdAnalysis,
+  loadAnalysisTarget,
   loadPreviousAnalysis,
   requeueAnalysis,
-  startAnalysis,
+  type ClaimedAnalysis,
   type Db,
 } from "@rocky-reviews/db";
 import type { LlmConfig } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 
 /**
- * Runs one queued analysis (P4-3, ADR 0014 §7): claim the row, read the revision's diff from the
- * forge on a repository-scoped, read-only session, run the pipeline, store the outcome.
+ * Runs one claimed analysis (P4-3, ADR 0014 §7; the queue lane and the token limit P4-6, ADR
+ * 0017): load the row this lease holds, read the revision's diff from the forge on a
+ * repository-scoped, read-only session, estimate its tokens, run the pipeline, store the outcome.
  *
  * - Everything tenant-scoped happens inside `withOrg` for the analysis's org.
  * - The forge is only read: `RepositorySession` has no write methods, and nothing here posts.
  *   Model output ends in `analyses.document` as data for a human (ADR 0004 §5).
  * - Logs carry ids, counts, sizes and fixed codes; never the title, a path, the diff, a prompt or
  *   model output.
+ * - Before any model call, the diff after rules pre-triage is estimated (`estimateAnalysisTokens`);
+ *   over the per-PR limit, and over what a person approved for this row ("Analyze anyway"), the
+ *   row waits as `awaiting_approval` with the estimate and nothing is sent to a model.
  * - Retryable failures (LLM outages, cancellation, forge outages) put the row back in the queue
- *   and return the provider's retry hint; the lane that calls this (with the queue's org
- *   concurrency cap, P4-6) schedules the retry. Everything else stores a failure code.
+ *   after a backoff that honours the provider's retry hint, up to ANALYSIS_MAX_ATTEMPTS claims;
+ *   then the failure code is stored. Everything else stores a failure code at once.
+ * - Every write needs the claim's lease: a run whose lease expired (and was reclaimed by another
+ *   worker) writes nothing (`lease_lost`).
  */
 
 /** The longest diff read for an analysis; a longer one fails as `diff_truncated` (P4-6). */
@@ -48,13 +59,49 @@ export interface AnalysisRunnerDeps {
   readonly unitKeySalt: string;
   readonly version?: string;
   readonly maxDiffBytes?: number;
+  /** The per-PR token limit (`ROCKY_ANALYSIS_TOKEN_LIMIT`, default 150 000). */
+  readonly tokenLimit?: number;
+  /**
+   * Seam for metering (P4-5): wraps the roles of one run and reports what it used, logged next
+   * to the estimate so the estimate can be checked against real usage. Optional.
+   */
+  readonly meter?: (llm: LlmRoles, claim: ClaimedAnalysis) => MeteredRun;
+}
+
+/** What one run used, as the meter counted it. Counts only. */
+export interface RunUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface MeteredRun {
+  readonly llm: LlmRoles;
+  totals(): RunUsage;
 }
 
 export type AnalysisRun =
   | { readonly outcome: "done" }
   | { readonly outcome: "failed"; readonly code: string }
-  | { readonly outcome: "not_queued" }
-  | { readonly outcome: "retry"; readonly code: string; readonly retryAfterMs?: number };
+  | {
+      readonly outcome: "awaiting_approval";
+      readonly estimatedTokens: number;
+      readonly tokenLimit: number;
+    }
+  /** The lease is no longer held (expired and reclaimed, or not this org's): nothing written. */
+  | { readonly outcome: "lease_lost" }
+  | { readonly outcome: "retry"; readonly code: string; readonly retryAfterMs: number };
+
+/** First retry after 30 s, doubling, at most an hour; never sooner than the provider asks. */
+export const analysisRetryDelayMs = (attempts: number, retryAfterMs?: number): number =>
+  Math.min(
+    Math.max(
+      Math.min(30_000 * 2 ** Math.max(0, attempts - 1), 60 * 60_000),
+      Math.ceil(retryAfterMs ?? 0),
+    ),
+    ANALYSIS_MAX_RETRY_DELAY_MS,
+  );
+
+const MAX_STORED_ESTIMATE = 2 ** 31 - 1;
 
 const sha256Hex = (text: string): string => createHash("sha256").update(text).digest("hex");
 
@@ -90,22 +137,32 @@ class RunFailed extends Error {
 
 export const runAnalysis = async (
   deps: AnalysisRunnerDeps,
-  orgId: OrgId,
-  analysisId: string,
+  claim: ClaimedAnalysis,
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<AnalysisRun> => {
   const { db, log } = deps;
-  const target = await db.withOrg(orgId, (tx) => startAnalysis(tx, analysisId));
-  if (target === undefined) return { outcome: "not_queued" };
+  const { orgId, analysisId } = claim;
+  const target = await db.withOrg(orgId, (tx) => loadAnalysisTarget(tx, claim));
+  if (target === undefined) return { outcome: "lease_lost" };
 
+  const lost = (): AnalysisRun => {
+    log.warn({ analysisId, attempt: claim.attempts }, "analysis lease lost");
+    return { outcome: "lease_lost" };
+  };
   const fail = async (code: string): Promise<AnalysisRun> => {
-    await db.withOrg(orgId, (tx) => failAnalysis(tx, analysisId, code));
-    log.warn({ analysisId, code }, "analysis failed");
+    if (!(await db.withOrg(orgId, (tx) => failAnalysis(tx, claim, code)))) return lost();
+    log.warn({ analysisId, code, attempt: claim.attempts }, "analysis failed");
     return { outcome: "failed", code };
   };
-  const retry = async (code: string, retryAfterMs?: number): Promise<AnalysisRun> => {
-    await db.withOrg(orgId, (tx) => requeueAnalysis(tx, analysisId));
-    log.warn({ analysisId, code, retryAfterMs }, "analysis requeued");
-    return { outcome: "retry", code, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
+  const retry = async (code: string, hintMs?: number): Promise<AnalysisRun> => {
+    // Bounded: the last attempt stores the code as the failure.
+    if (claim.attempts >= ANALYSIS_MAX_ATTEMPTS) return fail(code);
+    const retryAfterMs = analysisRetryDelayMs(claim.attempts, hintMs);
+    if (!(await db.withOrg(orgId, (tx) => requeueAnalysis(tx, claim, code, retryAfterMs)))) {
+      return lost();
+    }
+    log.warn({ analysisId, code, attempt: claim.attempts, retryAfterMs }, "analysis requeued");
+    return { outcome: "retry", code, retryAfterMs };
   };
 
   try {
@@ -142,6 +199,37 @@ export const runAnalysis = async (
     const previous = await db.withOrg(orgId, (tx) =>
       loadPreviousAnalysis(tx, target.pullRequestId, analysisId),
     );
+
+    // The per-PR token limit, before any model call. A truncated diff is refused by the pipeline
+    // itself (no model call), so it is not held for approval first.
+    const tokenLimit = deps.tokenLimit ?? DEFAULT_ANALYSIS_TOKEN_LIMIT;
+    const estimate = diff.truncated
+      ? undefined
+      : estimateAnalysisTokens(text, { previous, sha256Hex, unitKeySalt: deps.unitKeySalt });
+    if (
+      estimate !== undefined &&
+      estimate.tokens > Math.max(tokenLimit, target.approvedTokens ?? 0)
+    ) {
+      const estimatedTokens = Math.min(estimate.tokens, MAX_STORED_ESTIMATE);
+      const held = await db.withOrg(orgId, (tx) =>
+        holdAnalysis(tx, claim, { estimatedTokens, tokenLimit }),
+      );
+      if (!held) return lost();
+      log.info(
+        // `estimate`, not `estimatedTokens`: the logger redacts unknown *tokens keys (a safety net).
+        {
+          analysisId,
+          estimate: estimatedTokens,
+          tokenLimit,
+          files: estimate.files,
+          sent: estimate.sent,
+        },
+        "analysis awaiting approval",
+      );
+      return { outcome: "awaiting_approval", estimatedTokens, tokenLimit };
+    }
+
+    const metered = deps.meter?.(deps.llm, claim);
     const outcome = await analyzePullRequest(
       {
         repo: { owner, name },
@@ -151,9 +239,10 @@ export const runAnalysis = async (
         diff: text,
         diffTruncated: diff.truncated,
         previous,
+        signal: options.signal,
       },
       {
-        llm: deps.llm,
+        llm: metered?.llm ?? deps.llm,
         clock: deps.clock,
         sha256Hex,
         generator: {
@@ -164,15 +253,22 @@ export const runAnalysis = async (
       },
     );
     log.info(
-      { analysisId, outcome: outcome.status, diffBytes: diff.bytes.byteLength, ...outcome.stats },
+      {
+        analysisId,
+        outcome: outcome.status,
+        diffBytes: diff.bytes.byteLength,
+        estimate: estimate?.tokens,
+        ...(metered === undefined ? {} : metered.totals()),
+        ...outcome.stats,
+      },
       "analysis ran",
     );
     if (outcome.status === "failed") return await fail(outcome.code);
     const stored = await db.withOrg(orgId, (tx) =>
-      completeAnalysis(tx, analysisId, outcome.document, outcome.units),
+      completeAnalysis(tx, claim, outcome.document, outcome.units),
     );
-    // Lost the row (another worker requeued and finished it): nothing of ours was written.
-    return stored ? { outcome: "done" } : { outcome: "not_queued" };
+    // The lease expired and another worker holds the row now: nothing of ours was written.
+    return stored ? { outcome: "done" } : lost();
   } catch (error) {
     if (error instanceof RunFailed) return fail(error.code);
     if (isLlmCallError(error)) {

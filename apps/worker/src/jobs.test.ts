@@ -127,6 +127,39 @@ describe("startJobs", () => {
   });
 });
 
+describe("the analysis lane (P4-6)", () => {
+  const analysis = {
+    llm: { completion: () => undefined, embedding: () => undefined } as never,
+    unitKeySalt: "salt",
+    tokenLimit: 150_000,
+    concurrency: 3,
+    orgConcurrency: 2,
+  };
+
+  it("claims analyses only when configured and with app credentials, into its free slots", async () => {
+    const claims: unknown[] = [];
+    const claimAnalyses = (options: unknown) => {
+      claims.push(options);
+      return Promise.resolve([]);
+    };
+    const { log } = capture();
+    const intervals = { ...base.intervals, analysisMs: 5 };
+    for (const deps of [{ forge: undefined, analysis }, { forge }]) {
+      const { db } = stubDb({ claimAnalyses } as Partial<Db>);
+      const jobs = startJobs({ ...base, intervals, db, log, ...deps });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await jobs.stop();
+    }
+    expect(claims).toEqual([]);
+
+    const { db } = stubDb({ claimAnalyses } as Partial<Db>);
+    const jobs = startJobs({ ...base, intervals, db, log, forge, analysis });
+    await expect.poll(() => claims.length).toBeGreaterThan(2);
+    await jobs.stop();
+    expect(claims[0]).toEqual({ limit: 3, leaseSeconds: 600, orgConcurrency: 2 });
+  });
+});
+
 describe("the inbox re-loop rule (review round 3)", () => {
   const fullBatch = (size: number, eventType: string) =>
     Array.from({ length: size }, (_, i) => ({

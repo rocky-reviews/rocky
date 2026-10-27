@@ -121,13 +121,27 @@ export const analyses = pgTable("analyses", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: orgIdColumn(),
   revisionId: uuid("revision_id").notNull(),
-  status: text("status", { enum: ["queued", "running", "done", "failed"] }).notNull(),
+  status: text("status", {
+    enum: ["queued", "running", "awaiting_approval", "done", "failed"],
+  }).notNull(),
   document: jsonb("document").$type<AnalysisDocument | Record<string, unknown>>(),
   errorCode: text("error_code"),
   createdAt: createdAt(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   /** Unit keys of the files a finished analysis analysed (P4-3, migration 0010). */
   fileUnits: jsonb("file_units").$type<{ path: string; key: string; reviewMinutes: number }[]>(),
+  /** The queue lane (P4-6, migration 0012): claims so far, backoff, the lease while running. */
+  attempts: integer("attempts").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  leaseId: uuid("lease_id"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  /** The per-PR token limit: the estimate, the limit it exceeded, and "Analyze anyway". */
+  estimatedTokens: integer("estimated_tokens"),
+  limitTokens: integer("limit_tokens"),
+  approvedTokens: integer("approved_tokens"),
+  approvedBy: uuid("approved_by"),
+  approvedAt: timestamp("approved_at", { withTimezone: true }),
 });
 
 export const findingsState = pgTable("findings_state", {

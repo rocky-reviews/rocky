@@ -49,6 +49,8 @@ const ALLOWED_WORKER_SECURITY_DEFINER = [
   ...ALLOWED_SECURITY_DEFINER,
   "retention.delete_org",
   "retention.orgs_due_for_deletion",
+  // The analysis queue's claim (P4-6, migration 0012, ADR 0017): cross-tenant, worker only.
+  "worker.claim_analyses",
   "worker.claim_webhook_deliveries",
   "worker.complete_webhook_delivery",
   "worker.fail_webhook_delivery",
@@ -111,6 +113,21 @@ const ORGS_COLUMN_PRIVILEGES = [
 ];
 
 /**
+ * The analysis claim (P4-6, migration 0012) updates exactly the queue columns of `analyses`, as
+ * rocky_lifecycle; never a document, the units, the estimate or an approval.
+ */
+const ANALYSES_COLUMN_PRIVILEGES = [
+  "rocky_lifecycle:UPDATE:attempts",
+  "rocky_lifecycle:UPDATE:available_at",
+  "rocky_lifecycle:UPDATE:claimed_at",
+  "rocky_lifecycle:UPDATE:completed_at",
+  "rocky_lifecycle:UPDATE:error_code",
+  "rocky_lifecycle:UPDATE:lease_id",
+  "rocky_lifecycle:UPDATE:lease_until",
+  "rocky_lifecycle:UPDATE:status",
+];
+
+/**
  * Privileges held directly by the two P3-3 roles (ADR 0009); every relation not listed holds
  * none. rocky_worker adds exactly one table privilege to what a worker login inherits from
  * rocky_app; rocky_lifecycle owns the worker functions and reads/updates exactly what they need.
@@ -119,6 +136,8 @@ const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
   [WORKER_ROLE]: { "public.orgs": ["INSERT"] },
   [LIFECYCLE_ROLE]: {
     "app.webhook_deliveries": ["SELECT", "UPDATE"],
+    // The analysis claim reads the queue; it updates only the queue columns (below).
+    "public.analyses": ["SELECT"],
     "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
     "public.orgs": ["SELECT"],
   },
@@ -744,16 +763,23 @@ describe("other catalog objects (review #8)", () => {
     for (const r of rows) {
       expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
       // The matrix above is the whole story: no column-level grants widen or narrow it, except
-      // the orgs UPDATE columns pinned exactly below.
-      if (r.name !== "public.orgs") expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
+      // the orgs and analyses UPDATE columns pinned exactly below.
+      if (r.name !== "public.orgs" && r.name !== "public.analyses") {
+        expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
+      }
     }
-    const columnGrants = await pgs.migrator.query<{ g: string }>(
-      `select format('%s:%s:%s', x.grantee::regrole, x.privilege_type, a.attname) as g
-         from pg_attribute a, aclexplode(a.attacl) x
-        where a.attrelid = 'public.orgs'::regclass and a.attacl is not null
-        order by 1`,
-    );
-    expect(columnGrants.rows.map((r) => r.g)).toEqual(ORGS_COLUMN_PRIVILEGES);
+    const columnGrants = async (table: string) =>
+      (
+        await pgs.migrator.query<{ g: string }>(
+          `select format('%s:%s:%s', x.grantee::regrole, x.privilege_type, a.attname) as g
+             from pg_attribute a, aclexplode(a.attacl) x
+            where a.attrelid = $1::regclass and a.attacl is not null
+            order by 1`,
+          [table],
+        )
+      ).rows.map((r) => r.g);
+    expect(await columnGrants("public.orgs")).toEqual(ORGS_COLUMN_PRIVILEGES);
+    expect(await columnGrants("public.analyses")).toEqual(ANALYSES_COLUMN_PRIVILEGES);
   });
 
   it("lets the app role read but not change the retention settings", async () => {

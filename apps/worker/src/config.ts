@@ -4,6 +4,7 @@ import {
   parseGitHubAppAuth,
   type GitHubAppAuth,
 } from "@rocky-reviews/forge-github";
+import { DEFAULT_ANALYSIS_TOKEN_LIMIT } from "@rocky-reviews/core";
 import { LlmConfigError, llmConfigFromEnv, type LlmConfig } from "@rocky-reviews/llm";
 
 /**
@@ -45,7 +46,56 @@ export interface WorkerConfig {
    * before it claims work. Holds variable names, never keys.
    */
   readonly llm: LlmConfig;
+  /** The analysis queue lane (P4-6, ADR 0017). */
+  readonly analysis: AnalysisConfig;
 }
+
+export interface AnalysisConfig {
+  /** Per-PR token estimate above which an analysis waits for "Analyze anyway". */
+  readonly tokenLimit: number;
+  /** Analyses this worker runs at once. */
+  readonly concurrency: number;
+  /** Analyses one org runs at once, across every worker. */
+  readonly orgConcurrency: number;
+}
+
+export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
+  tokenLimit: DEFAULT_ANALYSIS_TOKEN_LIMIT,
+  concurrency: 4,
+  orgConcurrency: 2,
+};
+
+const ANALYSIS_BOUNDS = {
+  ROCKY_ANALYSIS_TOKEN_LIMIT: [1_000, 10_000_000],
+  ROCKY_ANALYSIS_CONCURRENCY: [1, 32],
+  ROCKY_ANALYSIS_ORG_CONCURRENCY: [1, 32],
+} as const;
+
+const boundedInteger = (env: Env, name: keyof typeof ANALYSIS_BOUNDS, fallback: number): number => {
+  const raw = nonEmpty(env, name);
+  if (raw === undefined) return fallback;
+  const [min, max] = ANALYSIS_BOUNDS[name];
+  const value = /^[0-9]{1,9}$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new ConfigError(`${name} must be an integer from ${min} to ${max}`);
+  }
+  return value;
+};
+
+/** `ROCKY_ANALYSIS_*` (P4-6); messages name the variable and its bounds, never the value. */
+export const analysisConfigFromEnv = (env: Env): AnalysisConfig => ({
+  tokenLimit: boundedInteger(env, "ROCKY_ANALYSIS_TOKEN_LIMIT", DEFAULT_ANALYSIS_CONFIG.tokenLimit),
+  concurrency: boundedInteger(
+    env,
+    "ROCKY_ANALYSIS_CONCURRENCY",
+    DEFAULT_ANALYSIS_CONFIG.concurrency,
+  ),
+  orgConcurrency: boundedInteger(
+    env,
+    "ROCKY_ANALYSIS_ORG_CONCURRENCY",
+    DEFAULT_ANALYSIS_CONFIG.orgConcurrency,
+  ),
+});
 
 export const githubAppFromEnv = (env: Env): GitHubAppConfig | undefined => {
   const appId = nonEmpty(env, "GITHUB_APP_ID");
@@ -97,7 +147,12 @@ export const workerConfigFromEnv = (env: Env): WorkerConfig => {
     if (error instanceof LlmConfigError) throw new ConfigError(error.message);
     throw new ConfigError("ROCKY_LLM_*: invalid LLM configuration");
   }
-  return { databaseUrl, githubApp: githubAppFromEnv(env), llm };
+  return {
+    databaseUrl,
+    githubApp: githubAppFromEnv(env),
+    llm,
+    analysis: analysisConfigFromEnv(env),
+  };
 };
 
 /**
