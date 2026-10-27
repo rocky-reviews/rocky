@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OrgId } from "@rocky-reviews/core";
 import type pg from "pg";
-import type { Db } from "../client.js";
+import { createDb, type Db } from "../client.js";
 import * as schema from "../schema.js";
 
 export interface SeededOrg {
@@ -34,24 +34,36 @@ const first = <T>(rows: T[]): T => {
 };
 
 /**
- * Inserts one row in every tenant table for `orgId`, inside `withOrg`. Used by the isolation
+ * Inserts one row in every tenant table for `orgId`, inside `withOrg`. `db` must connect as the
+ * worker login (`TestPostgres.workerUrl`): only the worker creates orgs (migration 0007). Used
+ * by the isolation
  * suite (which also asserts that every table in the database received exactly one row, so a
  * new table without a fixture here fails that suite) and by the audit/retention tests.
  */
 export const seedOrg = async (
   db: Db,
   orgId: OrgId,
-  options: { installationId?: number; createdAt?: Date } = {},
+  options: {
+    installationId?: number;
+    accountId?: number;
+    createdAt?: Date;
+    /** The org row already exists (created by the installation lifecycle): fill the rest. */
+    orgExists?: boolean;
+  } = {},
 ): Promise<SeededOrg> => {
   const installationId = options.installationId ?? nextInstallationId++;
+  const accountId = options.accountId ?? 1_000_000 + installationId;
   const createdAt = options.createdAt ?? new Date();
   return db.withOrg(orgId, async ({ db: tx }) => {
-    await tx.insert(schema.orgs).values({
-      id: orgId,
-      installationId,
-      login: `org-${installationId}`,
-      kind: "organization",
-    });
+    if (options.orgExists !== true) {
+      await tx.insert(schema.orgs).values({
+        id: orgId,
+        installationId,
+        accountId,
+        login: `org-${installationId}`,
+        kind: "organization",
+      });
+    }
     const member = first(
       await tx
         .insert(schema.members)
@@ -204,6 +216,22 @@ export const seedOrg = async (
 export const newOrgId = (): OrgId => randomUUID() as OrgId;
 
 /**
+ * Runs `fn` with a short-lived Db on the worker login (the only one allowed to create orgs,
+ * migration 0007), e.g. `await asWorker(pgs.workerUrl, (w) => seedOrg(w, id))`.
+ */
+export const asWorker = async <T>(
+  workerUrl: string,
+  fn: (worker: Db) => Promise<T>,
+): Promise<T> => {
+  const worker = createDb({ connectionString: workerUrl, max: 2 });
+  try {
+    return await fn(worker);
+  } finally {
+    await worker.close();
+  }
+};
+
+/**
  * Inserts an audit event with an explicit `created_at`, which the stamp trigger (0004) refuses
  * for every role. Tests of retention boundaries need old rows, so this runs as the superuser
  * with the trigger disabled for the duration of one transaction. Never used by product code.
@@ -238,8 +266,14 @@ export const plantAuditEvent = async (
  */
 export const plantWebhookDelivery = async (
   superuser: pg.Pool,
-  options: { deliveryId: string; at: Date },
+  options: {
+    deliveryId: string;
+    at: Date;
+    /** Default: processed at `at` (only processed rows are purged, migration 0007). */
+    state?: "processed" | "pending" | "parked";
+  },
 ): Promise<void> => {
+  const state = options.state ?? "processed";
   const client = await superuser.connect();
   const event = {
     type: "pull_request.opened",
@@ -256,9 +290,14 @@ export const plantWebhookDelivery = async (
     );
     await client.query(
       `insert into app.webhook_deliveries
-         (forge, delivery_id, payload_sha256, event_type, installation_id, event, received_at)
-       values ('github', $1, sha256(convert_to($1, 'utf8')), $2, 1, $3::jsonb, $4)`,
-      [options.deliveryId, event.type, JSON.stringify(event), options.at],
+         (forge, delivery_id, payload_sha256, event_type, installation_id, event, received_at,
+          processed_at, outcome, parked_at, attempts)
+       values ('github', $1, sha256(convert_to($1, 'utf8')), $2, 1, $3::jsonb, $4,
+               case when $5 = 'processed' then $4::timestamptz end,
+               case when $5 = 'processed' then 'planted' end,
+               case when $5 = 'parked' then $4::timestamptz end,
+               case when $5 = 'pending' then 0 else 1 end)`,
+      [options.deliveryId, event.type, JSON.stringify(event), options.at, state],
     );
     await client.query(
       "alter table app.webhook_deliveries enable trigger webhook_deliveries_stamp",

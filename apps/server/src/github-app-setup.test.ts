@@ -429,10 +429,11 @@ describe("callback", () => {
       CODE,
       state,
       h.token,
-      "98765",
     ]) {
       expect(everything, secret.slice(0, 12)).not.toContain(secret);
     }
+    // The app id as a whole number: log timestamps (epoch ms) can contain its digits.
+    expect(everything).not.toMatch(/(?<!\d)98765(?!\d)/);
     expect(h.logs.join("\n")).toContain('"outcome":"created"');
   });
 

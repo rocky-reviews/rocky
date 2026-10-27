@@ -5,6 +5,9 @@
   "description": "HTTP API, GitHub webhook receiver, and static host for the web app.",
   "license": "AGPL-3.0-only",
   "type": "module",
+  "exports": {
+    "./app": "./src/app.ts"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/main.ts"
   },

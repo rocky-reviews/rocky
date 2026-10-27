@@ -4,10 +4,36 @@ export {
   TenantContextError,
   type Db,
   type DbOptions,
+  type DueOrg,
   type OrgDeletion,
   type PurgeResult,
   type TenantTx,
 } from "./client.js";
+export {
+  completeInTenantTx,
+  decodeClaimedDelivery,
+  isErrorCode,
+  isOutcomeCode,
+  LeaseLostError,
+  WEBHOOK_MAX_STRIKES,
+  WEBHOOK_TRANSIENT_PARK_HOURS,
+  CLAIM_STATEMENT_TIMEOUT_MS,
+  type ClaimedDelivery,
+  type ClaimOptions,
+  type DecodedDelivery,
+  type InboxFailure,
+  type InboxLease,
+} from "./inbox.js";
+export {
+  auditLifecycle,
+  beginOrgErasure,
+  bindInstallation,
+  cancelOrgDeletion,
+  insertInstallationOrg,
+  scheduleOrgDeletion,
+  type InstallationOrg,
+  type NewInstallationOrg,
+} from "./installations.js";
 export {
   appliedMigrations,
   checksumOf,
@@ -33,7 +59,17 @@ export {
   type RetentionConfig,
   type RetentionReport,
 } from "./retention.js";
-export { APP_ROLE, ensureLoginRole, RETENTION_ROLE, scramSha256Verifier } from "./roles.js";
+export {
+  APP_ROLE,
+  checkServerLogin,
+  ensureLoginRole,
+  LIFECYCLE_ROLE,
+  RETENTION_ROLE,
+  scramSha256Verifier,
+  SERVER_FORBIDDEN_ROLES,
+  WORKER_ROLE,
+  type ServerLoginRefusal,
+} from "./roles.js";
 export {
   CIPHERTEXT_PREFIX,
   loadForgeToken,

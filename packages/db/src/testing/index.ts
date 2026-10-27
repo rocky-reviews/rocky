@@ -7,6 +7,7 @@ export {
   type TestPostgres,
 } from "./postgres.js";
 export {
+  asWorker,
   newOrgId,
   plantAuditEvent,
   plantWebhookDelivery,

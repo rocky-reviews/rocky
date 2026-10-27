@@ -24,12 +24,18 @@ export const devPostgresImage = (): string => {
 export const TEST_ROLES = {
   /** Owns the database and every table; runs migrations. CREATEROLE, not superuser. */
   migrator: "rocky_migrator",
-  /** LOGIN member of `rocky_app`: what the server and worker connect as. */
+  /** LOGIN member of `rocky_app`: what the server connects as. */
   app: "rocky_app_test",
+  /** LOGIN member of `rocky_app` and `rocky_worker`: what the worker connects as (P3-3). */
+  worker: "rocky_worker_test",
 } as const;
 
 // Test-only credentials for roles inside a throwaway container.
-const PASSWORDS = { migrator: "migrator-test-only", app: "app-test-only" } as const;
+const PASSWORDS = {
+  migrator: "migrator-test-only",
+  app: "app-test-only",
+  worker: "worker-test-only",
+} as const;
 
 /** Superuser-only statements every deployment runs before the first migration (keep in step with deploy/dev/init.sql). */
 export const PROVISIONING_REVOKES: readonly string[] = [
@@ -53,6 +59,11 @@ export interface TestPostgres {
   readonly migratorUrl: string;
   /** The application role: RLS enforced, no bypass. */
   readonly appUrl: string;
+  /**
+   * The worker login (`rocky_app` + `rocky_worker`): the only one that creates orgs, claims inbox
+   * rows and runs the deletion sweep. Tests that seed orgs use it.
+   */
+  readonly workerUrl: string;
   readonly migrator: pg.Pool;
   /**
    * `pg_dump --format=plain` of the whole database, run inside the container as the superuser
@@ -131,12 +142,18 @@ export const startPostgres = async (options: { migrate?: boolean } = {}): Promis
   if (options.migrate !== false) {
     await migrate(migrator);
     await ensureLoginRole(migrator, { name: TEST_ROLES.app, password: PASSWORDS.app });
+    await ensureLoginRole(migrator, {
+      name: TEST_ROLES.worker,
+      password: PASSWORDS.worker,
+      worker: true,
+    });
   }
 
   return {
     superUrl,
     migratorUrl,
     appUrl: connectionUrl(container, TEST_ROLES.app, PASSWORDS.app),
+    workerUrl: connectionUrl(container, TEST_ROLES.worker, PASSWORDS.worker),
     migrator,
     dump: (options = {}) => dumpDatabase(container, options),
     stop: async () => {

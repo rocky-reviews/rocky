@@ -35,6 +35,7 @@ import {
   WRAPPED_KEY_PREFIX,
 } from "./secrets.js";
 import {
+  asWorker,
   CONTAINER_TIMEOUT_MS,
   newOrgId,
   seedOrg,
@@ -177,10 +178,12 @@ beforeAll(async () => {
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   kek = Buffer.from(generateLocalKek(), "base64");
   wrapper = new LocalKeyWrapper([[KEK_VERSION, kek]]);
-  a = await seedOrg(db, newOrgId());
-  b = await seedOrg(db, newOrgId());
-  c = await seedOrg(db, newOrgId());
-  d = await seedOrg(db, newOrgId());
+  [a, b, c, d] = await asWorker(pgs.workerUrl, async (w) => [
+    await seedOrg(w, newOrgId()),
+    await seedOrg(w, newOrgId()),
+    await seedOrg(w, newOrgId()),
+    await seedOrg(w, newOrgId()),
+  ]);
   bSecondMemberId = await db.withOrg(b.orgId, async (tx) => {
     const [row] = await tx.db
       .insert(schema.members)

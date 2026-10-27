@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { OrgId, WebhookDelivery } from "@rocky-reviews/core";
+import type { ForgeKind, OrgId, WebhookDelivery } from "@rocky-reviews/core";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import {
@@ -9,6 +9,24 @@ import {
   type RetentionCategory,
   type RetentionConfig,
 } from "./retention-sql.js";
+import {
+  claimedFromRow,
+  CLAIM_STATEMENT_TIMEOUT_MS,
+  claimSql,
+  completeSql,
+  failSql,
+  type ClaimedDelivery,
+  type ClaimOptions,
+  type ClaimRow,
+  type InboxFailure,
+  type InboxLease,
+} from "./inbox.js";
+import {
+  INSTALLATION_ORGS_SQL,
+  installationOrgFromRow,
+  type InstallationOrg,
+  type InstallationOrgRow,
+} from "./installations.js";
 import * as schema from "./schema.js";
 import {
   inboxDatabaseError,
@@ -34,6 +52,14 @@ export interface TenantTx {
     text: string,
     values?: readonly unknown[],
   ): Promise<pg.QueryResult<R>>;
+}
+
+export interface DueOrg {
+  readonly orgId: OrgId;
+  readonly forge: ForgeKind;
+  readonly installationId: number;
+  /** An earlier sweep already started erasing it (no more re-verification or cancelling). */
+  readonly erasing: boolean;
 }
 
 export interface PurgeResult {
@@ -68,8 +94,42 @@ export interface Db {
    * cutoff into the past (the database clamps it to its clock). Returns rows deleted per org.
    */
   purgeExpired(category: RetentionCategory, asOf: Date): Promise<PurgeResult[]>;
-  /** Erases an org whose deletion grace period has elapsed (retention.delete_org). */
+  /**
+   * Erases an org whose deletion grace period has elapsed and that the sweep has marked erasing
+   * (`beginOrgErasure`; retention.delete_org refuses it otherwise): its audit events, the org row
+   * (cascading through every tenant table), its finished inbox rows, and a tombstone in
+   * app.org_deletions. Worker login only (migration 0007).
+   */
   deleteOrg(orgId: OrgId): Promise<OrgDeletion[]>;
+  /**
+   * Orgs past their deletion grace period by the database clock, with what the sweep needs to
+   * re-verify the uninstall and to resume an erasure in progress (worker login only).
+   */
+  orgsDueForDeletion(limit: number): Promise<DueOrg[]>;
+  /**
+   * The orgs bound to a forge installation, or to its account (a reinstall gets a new
+   * installation id). Cross-tenant, ids only; worker login only.
+   */
+  installationOrgs(
+    forge: ForgeKind,
+    installationId: number,
+    accountId: number | null,
+  ): Promise<InstallationOrg[]>;
+  /**
+   * Claims pending inbox rows with a lease (FOR UPDATE SKIP LOCKED; worker login only). The rows
+   * are returned as stored: decode them with `decodeClaimedDelivery` before acting.
+   */
+  claimWebhookDeliveries(options: ClaimOptions): Promise<ClaimedDelivery[]>;
+  /**
+   * Marks a claimed row processed outside any tenant transaction (for outcomes with no tenant
+   * effect). False when the lease is no longer held. See `completeInTenantTx` for the atomic form.
+   */
+  completeWebhookDelivery(lease: InboxLease, outcome: string): Promise<boolean>;
+  /** Records a failed attempt: `retry` later, `parked` for a human, or `stale` (lease lost). */
+  failWebhookDelivery(
+    lease: InboxLease,
+    failure: InboxFailure,
+  ): Promise<"retry" | "parked" | "stale">;
   /** The configured periods (read-only for the application role). */
   retentionSettings(): Promise<RetentionConfig>;
   /**
@@ -386,6 +446,89 @@ export const createDb = (options: DbOptions): Db => {
     return rows.map((row) => ({ table: row.table_name, deleted: Number(row.deleted) }));
   };
 
+  const orgsDueForDeletion = async (limit: number): Promise<DueOrg[]> => {
+    if (!Number.isInteger(limit)) throw new Error("orgsDueForDeletion: limit must be an integer");
+    const { rows } = await pool.query<{
+      org_id: string;
+      forge: ForgeKind;
+      installation_id: string;
+      erasing: boolean;
+    }>(
+      "select org_id, forge, installation_id::text, erasing from retention.orgs_due_for_deletion($1)",
+      [limit],
+    );
+    return rows.map((r) => ({
+      orgId: r.org_id as OrgId,
+      forge: r.forge,
+      installationId: Number(r.installation_id),
+      erasing: r.erasing,
+    }));
+  };
+
+  const installationOrgs = async (
+    forge: ForgeKind,
+    installationId: number,
+    accountId: number | null,
+  ): Promise<InstallationOrg[]> => {
+    const isId = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+    if (!isId(installationId) || (accountId !== null && !isId(accountId))) {
+      throw new Error("installationOrgs: ids must be positive integers");
+    }
+    const { rows } = await pool.query<InstallationOrgRow>(INSTALLATION_ORGS_SQL, [
+      forge,
+      installationId,
+      accountId,
+    ]);
+    return rows.map(installationOrgFromRow);
+  };
+
+  /** Inbox calls reduce database errors to their SQLSTATE (driver text can echo values). */
+  const inboxQuery = async <R extends pg.QueryResultRow>(statement: {
+    readonly text: string;
+    readonly values: unknown[];
+  }): Promise<R[]> => {
+    try {
+      return (await pool.query<R>(statement.text, statement.values)).rows;
+    } catch (error) {
+      throw inboxDatabaseError(error);
+    }
+  };
+
+  /**
+   * The claim runs in its own transaction with `SET LOCAL statement_timeout`, so a claim stuck
+   * behind the claim lock (or a pathological backlog) gives up instead of handing out leases that
+   * are already short (review round 3). A function-level SET would not bound the calling
+   * statement, which is why it is set here.
+   */
+  const claimWebhookDeliveries = async (options: ClaimOptions): Promise<ClaimedDelivery[]> => {
+    const statement = claimSql(options);
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await pool.connect();
+      await client.query("begin");
+      await client.query(`set local statement_timeout = ${CLAIM_STATEMENT_TIMEOUT_MS}`);
+      const { rows } = await client.query<ClaimRow>(statement.text, statement.values);
+      await client.query("commit");
+      return rows.map(claimedFromRow);
+    } catch (error) {
+      await client?.query("rollback").catch(() => undefined);
+      throw inboxDatabaseError(error);
+    } finally {
+      client?.release();
+    }
+  };
+
+  const completeWebhookDelivery = async (lease: InboxLease, outcome: string): Promise<boolean> =>
+    (await inboxQuery<{ ok: boolean }>(completeSql(lease, outcome)))[0]?.ok === true;
+
+  const failWebhookDelivery = async (
+    lease: InboxLease,
+    failure: InboxFailure,
+  ): Promise<"retry" | "parked" | "stale"> => {
+    const result = (await inboxQuery<{ result: string }>(failSql(lease, failure)))[0]?.result;
+    return result === "retry" || result === "parked" ? result : "stale";
+  };
+
   const recordWebhookDelivery = async (
     delivery: WebhookDelivery,
   ): Promise<"queued" | "duplicate"> => {
@@ -459,6 +602,11 @@ export const createDb = (options: DbOptions): Db => {
     withOrg,
     purgeExpired,
     deleteOrg,
+    orgsDueForDeletion,
+    installationOrgs,
+    claimWebhookDeliveries,
+    completeWebhookDelivery,
+    failWebhookDelivery,
     retentionSettings,
     recordWebhookDelivery,
     purgeWebhookDeliveries,

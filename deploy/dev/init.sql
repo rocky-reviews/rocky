@@ -29,3 +29,7 @@ FROM PUBLIC;
 CREATE ROLE rocky_app NOLOGIN INHERIT;
 -- The application's dev login. Development-only password; .env.example uses it.
 CREATE ROLE rocky_app_dev LOGIN PASSWORD 'rocky-dev-only' INHERIT IN ROLE rocky_app;
+-- The worker's group (migration 0007 verifies it and adds the grants) and its dev login, a
+-- member of both groups (ADR 0009). Older volumes get the login from `pnpm seed`.
+CREATE ROLE rocky_worker NOLOGIN INHERIT;
+CREATE ROLE rocky_worker_dev LOGIN PASSWORD 'rocky-dev-only' INHERIT IN ROLE rocky_app, rocky_worker;

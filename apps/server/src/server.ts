@@ -1,4 +1,4 @@
-import { createDb } from "@rocky-reviews/db";
+import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
 import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp } from "./app.js";
-import { githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
+import { ConfigError, githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import type { WebhookDeps } from "./webhooks.js";
 
@@ -26,16 +26,63 @@ const errorCode = (error: unknown): string | undefined => {
 };
 
 /**
- * The server's single Postgres pool. An idle client losing its connection (Postgres restart,
+ * DATABASE_URL does not log in as a plain member of `rocky_app` (ADR 0009, L28): the owner or
+ * migrator, a superuser or BYPASSRLS login, the worker's login, or a login that can reach
+ * `rocky_worker`, `rocky_lifecycle` or `rocky_retention` by any grant option. The
+ * internet-facing server must never hold those privileges: creating orgs, claiming inbox rows,
+ * erasing orgs, disabling triggers. The message names roles, checks and variables only, never
+ * the connection string or the login.
+ */
+export class ServerLoginError extends ConfigError {
+  readonly refusals: readonly string[];
+  constructor(refusals: readonly string[]) {
+    super(
+      `DATABASE_URL must log in as a plain member of ${APP_ROLE} (refused: ${refusals.join(", ")}): not the database owner or migrator (DATABASE_ADMIN_URL), a superuser, a BYPASSRLS login, the worker's login (WORKER_DATABASE_URL), or a member of ${SERVER_FORBIDDEN_ROLES.join(", ")}`,
+    );
+    this.refusals = refusals;
+  }
+}
+
+/** Connections live at most this long, bounding a grant made after the check (S4). */
+export const POOL_MAX_LIFETIME_SECONDS = 300;
+
+/**
+ * The server's single Postgres pool. Each new connection is checked before first use
+ * (`onConnect`, `checkServerLogin`): anything but a plain `rocky_app` login is closed and the
+ * query fails, and so is any error or unexpected answer from the check (fail closed). This
+ * covers new connections only: a role granted to the login takes effect at once on connections
+ * already open, which keep it until they are recycled (`maxLifetimeSeconds`, 5 minutes; a
+ * checked-out connection ends when released). A database unreachable at boot is checked on the
+ * first connection that succeeds. An idle client losing its connection (Postgres restart,
  * pg_terminate_backend) emits `error` on the pool; without a listener that crashes the process.
- * Only the error code is logged: driver messages can carry connection details or values.
+ * Only codes are logged: driver messages can carry connection details or values.
  */
 export const createServerPool = (connectionString: string | undefined, log: Logger): pg.Pool => {
-  const pool = new pg.Pool({
+  const options: pg.PoolConfig & { onConnect: (client: pg.ClientBase) => Promise<void> } = {
     ...(connectionString === undefined ? {} : { connectionString }),
     max: 10,
     ...POOL_TIMEOUTS,
-  });
+    maxLifetimeSeconds: POOL_MAX_LIFETIME_SECONDS,
+    // pg-pool awaits the hook and discards the connection when it rejects (@types/pg types it
+    // as returning void).
+    onConnect: async (client) => {
+      let refusals: readonly string[];
+      let code: string | undefined;
+      try {
+        refusals = await checkServerLogin(client);
+      } catch (error) {
+        refusals = ["check_failed"];
+        code = errorCode(error) ?? "unknown";
+      }
+      if (refusals.length === 0) return;
+      log.error(
+        { refusals, ...(code === undefined ? {} : { errorCode: code }) },
+        "database login refused",
+      );
+      throw new ServerLoginError(refusals);
+    },
+  };
+  const pool = new pg.Pool(options);
   pool.on("error", (error) =>
     log.error({ errorCode: errorCode(error) }, "postgres idle client error"),
   );
@@ -82,6 +129,18 @@ export const startServer = async (
     log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
   }
   const pool = createServerPool(env["DATABASE_URL"], log);
+  // Review rounds 4 and 5: refuse to start on anything but a plain rocky_app login. Booting does
+  // not need the database (health reports it); when it is unreachable now, the pool's hook checks
+  // each new connection later.
+  try {
+    await pool.query("select 1");
+  } catch (error) {
+    if (error instanceof ServerLoginError) {
+      await pool.end();
+      throw error;
+    }
+    log.warn({ errorCode: errorCode(error) ?? "unknown" }, "database unreachable at boot");
+  }
 
   let webhooks: WebhookDeps | undefined;
   if (webhookSecret === undefined) {

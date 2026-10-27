@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   FORGE_EVENT_TYPES,
+  ForgeReadError,
   isForgeEventType,
   isInstallationEvent,
   type ForgeEvent,
@@ -87,5 +88,49 @@ describe("core forge neutrality (P3-7)", () => {
       .flatMap((k) => Object.keys((manifest[k] as Record<string, string> | undefined) ?? {}))
       .join(" ");
     expect(deps).not.toMatch(/octokit|forge-github|github|gitlab|gitea/i);
+  });
+});
+
+describe("ForgeReadError (P3-3)", () => {
+  it("carries a fixed code and never anything else", () => {
+    expect(new ForgeReadError("timeout").code).toBe("forge_timeout");
+    expect(new ForgeReadError("http_status", 502).code).toBe("forge_http_502");
+    expect(new ForgeReadError("http_status").code).toBe("forge_http_status");
+    expect(new ForgeReadError("unsupported_account_type").code).toBe(
+      "forge_unsupported_account_type",
+    );
+    const error = new ForgeReadError("http_status", 401);
+    expect(error.message).toBe("forge read failed: http_status 401");
+    expect(Object.keys(error).sort()).toEqual(["name", "reason", "status"]);
+  });
+
+  it("tells an outage from a bad answer (review round 1, S3)", () => {
+    // Transient: the forge or the path to it is unavailable, or our credentials are (a rotated
+    // or revoked key is an operator problem, not a property of the event).
+    for (const error of [
+      new ForgeReadError("timeout"),
+      new ForgeReadError("network"),
+      new ForgeReadError("http_status", 401),
+      new ForgeReadError("http_status", 403),
+      new ForgeReadError("http_status", 429),
+      new ForgeReadError("http_status", 500),
+      new ForgeReadError("http_status", 502),
+      new ForgeReadError("http_status", 503),
+      new ForgeReadError("app_mismatch"),
+    ]) {
+      expect(error.transient, error.code).toBe(true);
+    }
+    // Not transient: the answer itself is wrong or unusable; retrying it forever would not help.
+    for (const error of [
+      new ForgeReadError("invalid_response"),
+      new ForgeReadError("unsupported_account_type"),
+      new ForgeReadError("http_status", 302),
+      new ForgeReadError("http_status", 410),
+      new ForgeReadError("http_status", 422),
+      new ForgeReadError("http_status"),
+    ]) {
+      expect(error.transient, error.code).toBe(false);
+    }
+    expect(new ForgeReadError("app_mismatch").code).toBe("forge_app_mismatch");
   });
 });

@@ -2,8 +2,9 @@ import type { OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
-import { APP_ROLE, RETENTION_ROLE } from "./roles.js";
+import { APP_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE, WORKER_ROLE } from "./roles.js";
 import {
+  asWorker,
   CONTAINER_TIMEOUT_MS,
   newOrgId,
   seedOrg,
@@ -19,22 +20,39 @@ import {
 
 /**
  * The only non-tenant tables allowed to exist (migrator-owned, in `app`). Everything else is a
- * tenant table. The webhook inbox precedes orgs (ADR 0007); webhooks.test.ts covers it.
+ * tenant table. The webhook inbox precedes orgs (ADR 0007); webhooks.test.ts covers it. The
+ * erasure record outlives its org by design (ADR 0009); deletion.test.ts covers it.
  */
 const ALLOWED_NON_TENANT_TABLES = [
-  "app.schema_migrations",
+  "app.org_deletions",
   "app.retention_settings",
+  "app.schema_migrations",
   "app.webhook_deliveries",
+  // The claim queue (review round 3): one row per installation lane with pending work; ids only.
+  "app.webhook_queue",
 ];
 
-/** SECURITY DEFINER functions the application role may execute (ADR 0005 §5). */
+/**
+ * SECURITY DEFINER functions the application role may execute (ADR 0005 §5): the period-bounded
+ * purges. Erasure moved to the worker in P3-3 (ADR 0009).
+ */
 const ALLOWED_SECURITY_DEFINER = [
-  "retention.delete_org",
   "retention.purge_analyses",
   "retention.purge_audit_events",
   "retention.purge_jobs",
   "retention.purge_webhook_deliveries",
 ];
+
+/** What a worker login (rocky_app + rocky_worker) may execute on top (ADR 0009). */
+const ALLOWED_WORKER_SECURITY_DEFINER = [
+  ...ALLOWED_SECURITY_DEFINER,
+  "retention.delete_org",
+  "retention.orgs_due_for_deletion",
+  "worker.claim_webhook_deliveries",
+  "worker.complete_webhook_delivery",
+  "worker.fail_webhook_delivery",
+  "worker.installation_orgs",
+].sort();
 
 /**
  * Every privilege `rocky_app` holds, per relation (final review #2). A stray grant anywhere,
@@ -42,10 +60,14 @@ const ALLOWED_SECURITY_DEFINER = [
  */
 const DML = ["DELETE", "INSERT", "SELECT", "UPDATE"];
 const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
+  // The erasure record is not the application's: only retention.delete_org writes it.
+  "app.org_deletions": [],
   "app.retention_settings": ["SELECT"],
   "app.schema_migrations": [],
   // Insert-only: the receiver records deliveries; it can neither read nor remove them (ADR 0007).
   "app.webhook_deliveries": ["INSERT"],
+  // The claim queue is the worker functions' alone (its triggers run as rocky_lifecycle).
+  "app.webhook_queue": [],
   "public.analyses": DML,
   "public.audit_events": ["INSERT", "SELECT"],
   "public.audit_events_id_seq": [],
@@ -58,10 +80,47 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.members": DML,
   "public.memory_entries": DML,
   // The tenant root is never deleted by the application; only retention.delete_org removes it.
-  "public.orgs": ["INSERT", "SELECT", "UPDATE"],
+  // Only the worker creates it (rocky_worker, below; ADR 0009). Since review round 1 (H1) the
+  // app updates only the columns in ORGS_COLUMN_PRIVILEGES, never the identity or the schedule.
+  "public.orgs": ["SELECT"],
   "public.pr_revisions": DML,
   "public.pull_requests": DML,
   "public.repos": DML,
+};
+
+/**
+ * The only column-level grants in the database (review round 1, H1): who may UPDATE which
+ * columns of `orgs`. The server writes settings and its encrypted keys; the deletion schedule,
+ * the installation binding, the installer and the display fields are the worker's.
+ */
+const ORGS_COLUMN_PRIVILEGES = [
+  "rocky_app:UPDATE:data_key_ciphertext",
+  "rocky_app:UPDATE:data_key_version",
+  "rocky_app:UPDATE:llm_api_key_ciphertext",
+  "rocky_app:UPDATE:llm_api_key_version",
+  "rocky_app:UPDATE:settings",
+  "rocky_app:UPDATE:updated_at",
+  "rocky_worker:UPDATE:delete_after",
+  "rocky_worker:UPDATE:erasing_at",
+  "rocky_worker:UPDATE:installation_id",
+  "rocky_worker:UPDATE:installer_forge_user_id",
+  "rocky_worker:UPDATE:kind",
+  "rocky_worker:UPDATE:login",
+  "rocky_worker:UPDATE:updated_at",
+];
+
+/**
+ * Privileges held directly by the two P3-3 roles (ADR 0009); every relation not listed holds
+ * none. rocky_worker adds exactly one table privilege to what a worker login inherits from
+ * rocky_app; rocky_lifecycle owns the worker functions and reads/updates exactly what they need.
+ */
+const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
+  [WORKER_ROLE]: { "public.orgs": ["INSERT"] },
+  [LIFECYCLE_ROLE]: {
+    "app.webhook_deliveries": ["SELECT", "UPDATE"],
+    "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
+    "public.orgs": ["SELECT"],
+  },
 };
 
 /**
@@ -93,6 +152,7 @@ interface TenantTable {
 
 let pgs: Awaited<ReturnType<typeof startPostgres>>;
 let appPool: pg.Pool;
+let workerPool: pg.Pool;
 let db: Db;
 let tables: TenantTable[];
 let a: SeededOrg;
@@ -111,6 +171,7 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 beforeAll(async () => {
   pgs = await startPostgres();
   appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 });
+  workerPool = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 });
   db = createDb({ pool: appPool });
 
   const { rows } = await pgs.migrator.query<{
@@ -140,12 +201,15 @@ beforeAll(async () => {
       qualified: `"${r.schema}"."${r.name}"`,
     }));
 
-  a = await seedOrg(db, newOrgId(), { installationId: 1 });
-  b = await seedOrg(db, newOrgId(), { installationId: 2 });
+  [a, b] = await asWorker(pgs.workerUrl, async (w) => [
+    await seedOrg(w, newOrgId(), { installationId: 1 }),
+    await seedOrg(w, newOrgId(), { installationId: 2 }),
+  ]);
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
   await db?.close();
+  await workerPool?.end();
   await pgs?.stop();
 });
 
@@ -164,7 +228,7 @@ const countAs = async (orgId: OrgId, table: TenantTable, where = ""): Promise<nu
   });
 
 describe("every table in the database", () => {
-  it("is a tenant table in public (only the ledger, retention settings and webhook inbox are exempt)", () => {
+  it("is a tenant table in public (only the ledger, retention settings, webhook inbox and erasure record are exempt)", () => {
     expect(tables.length).toBeGreaterThanOrEqual(13);
     for (const t of tables) expect(t.schema).toBe("public");
     const names = tables.map((t) => t.name);
@@ -307,18 +371,19 @@ describe("org A against org B's rows, per table", () => {
   it("update of foreign rows affects nothing and leaves them unchanged", async () => {
     for (const t of tables) {
       if (t.name === "audit_events") continue; // append-only: covered in audit.test.ts
+      // The app may not update orgs.id at all (column grants, review round 1 H1): touch a column
+      // it may write instead, so this still proves RLS hides the foreign row.
+      const set = t.name === "orgs" ? "settings" : t.tenantColumn;
       const affected = await db.withOrg(a.orgId, async (tx) => {
         const r = await tx.query(
-          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}" where "${t.tenantColumn}" = $1`,
+          `update ${t.qualified} set "${set}" = "${set}" where "${t.tenantColumn}" = $1`,
           [b.orgId],
         );
         return r.rowCount;
       });
       expect(affected, t.name).toBe(0);
       const unconditional = await db.withOrg(a.orgId, async (tx) => {
-        const r = await tx.query(
-          `update ${t.qualified} set "${t.tenantColumn}" = "${t.tenantColumn}"`,
-        );
+        const r = await tx.query(`update ${t.qualified} set "${set}" = "${set}"`);
         return r.rowCount;
       });
       expect(unconditional, t.name).toBe(1);
@@ -552,22 +617,96 @@ describe("other catalog objects (review #8)", () => {
   });
 
   it("SECURITY DEFINER functions executable by the app role are exactly the retention allow-list", async () => {
-    const { rows } = await pgs.migrator.query<{ name: string }>(
-      `select n.nspname || '.' || p.proname as name
-         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-        where p.prosecdef
-          and n.nspname not in ('pg_catalog', 'information_schema')
-          and has_function_privilege($1, p.oid, 'EXECUTE')
-        order by 1`,
-      [APP_ROLE],
-    );
-    expect(rows.map((r) => r.name)).toEqual(ALLOWED_SECURITY_DEFINER);
+    const executable = async (role: string) =>
+      (
+        await pgs.migrator.query<{ name: string }>(
+          `select n.nspname || '.' || p.proname as name
+             from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+            where p.prosecdef
+              and n.nspname not in ('pg_catalog', 'information_schema')
+              and has_function_privilege($1, p.oid, 'EXECUTE')
+            order by 1`,
+          [role],
+        )
+      ).rows.map((r) => r.name);
+    expect(await executable(APP_ROLE)).toEqual(ALLOWED_SECURITY_DEFINER);
+    // The server's login reaches exactly the same; the worker's login the worker allow-list.
+    expect(await executable(TEST_ROLES.app)).toEqual(ALLOWED_SECURITY_DEFINER);
+    expect(await executable(TEST_ROLES.worker)).toEqual(ALLOWED_WORKER_SECURITY_DEFINER);
     // And none of them is reachable by PUBLIC.
     const pub = await pgs.migrator.query<{ name: string }>(
       `select p.proname as name from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-        where p.prosecdef and n.nspname = 'retention' and has_function_privilege(0, p.oid, 'EXECUTE')`,
+        where p.prosecdef and n.nspname not in ('pg_catalog', 'information_schema')
+          and has_function_privilege(0, p.oid, 'EXECUTE')`,
     );
     expect(pub.rows).toEqual([]);
+    // Each SECURITY DEFINER function is owned by its dedicated NOLOGIN role and pins search_path.
+    const owners = await pgs.migrator.query<{ name: string; owner: string; config: string[] }>(
+      `select n.nspname || '.' || p.proname as name, p.proowner::regrole::text as owner,
+              coalesce(p.proconfig, '{}') as config
+         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where p.prosecdef and n.nspname not in ('pg_catalog', 'information_schema')
+        order by 1`,
+    );
+    for (const f of owners.rows) {
+      expect(f.owner, f.name).toBe(f.name.startsWith("worker.") ? LIFECYCLE_ROLE : RETENTION_ROLE);
+      expect(f.config, f.name).toContain("search_path=pg_catalog");
+    }
+  });
+
+  it("the P3-3 roles hold exactly their listed privileges, and never log in (ADR 0009)", async () => {
+    for (const [role, expected] of Object.entries(ROLE_TABLE_PRIVILEGES)) {
+      const { rows } = await pgs.migrator.query<{ name: string; privs: string[] }>(
+        `select n.nspname || '.' || c.relname as name,
+                array(select privilege_type from aclexplode(c.relacl) where grantee = $1::regrole order by 1) as privs
+           from pg_class c join pg_namespace n on n.oid = c.relnamespace
+          where c.relkind in ('r', 'p', 'v', 'm', 'S', 'f')
+            and n.nspname not in ('pg_catalog', 'information_schema')
+            and n.nspname not like 'pg_toast%'
+          order by 1`,
+        [role],
+      );
+      const held = Object.fromEntries(
+        rows.filter((r) => r.privs.length > 0).map((r) => [r.name, r.privs]),
+      );
+      expect(held, role).toEqual(expected);
+      const attrs = await pgs.migrator.query(
+        `select rolcanlogin, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb
+           from pg_roles where rolname = $1`,
+        [role],
+      );
+      expect(attrs.rows[0], role).toEqual({
+        rolcanlogin: false,
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreaterole: false,
+        rolcreatedb: false,
+      });
+    }
+  });
+
+  it("a worker login is a member of rocky_app and rocky_worker only, and owns nothing", async () => {
+    const groups = await workerPool.query<{ rolname: string }>(
+      `select r.rolname from pg_roles r
+        where pg_has_role(current_user, r.oid, 'MEMBER') and r.rolname <> current_user
+        order by 1`,
+    );
+    expect(groups.rows.map((g) => g.rolname)).toEqual([APP_ROLE, WORKER_ROLE]);
+    const owned = await workerPool.query(
+      "select relname from pg_class where relowner in (select oid from pg_roles where pg_has_role(current_user, oid, 'MEMBER'))",
+    );
+    expect(owned.rowCount).toBe(0);
+    for (const sql of [
+      `set role ${LIFECYCLE_ROLE}`,
+      `set role ${RETENTION_ROLE}`,
+      "select * from app.webhook_deliveries",
+      "update app.webhook_deliveries set processed_at = now()",
+      "delete from app.webhook_deliveries",
+      "delete from orgs",
+    ]) {
+      const error = await pgError(workerPool.query(sql));
+      expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+    }
   });
 
   it("has no default ACLs that could grant future objects automatically", async () => {
@@ -600,9 +739,17 @@ describe("other catalog objects (review #8)", () => {
     expect(actual).toEqual(APP_TABLE_PRIVILEGES);
     for (const r of rows) {
       expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
-      // The matrix above is the whole story: no column-level grants widen or narrow it.
-      expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
+      // The matrix above is the whole story: no column-level grants widen or narrow it, except
+      // the orgs UPDATE columns pinned exactly below.
+      if (r.name !== "public.orgs") expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
     }
+    const columnGrants = await pgs.migrator.query<{ g: string }>(
+      `select format('%s:%s:%s', x.grantee::regrole, x.privilege_type, a.attname) as g
+         from pg_attribute a, aclexplode(a.attacl) x
+        where a.attrelid = 'public.orgs'::regclass and a.attacl is not null
+        order by 1`,
+    );
+    expect(columnGrants.rows.map((r) => r.g)).toEqual(ORGS_COLUMN_PRIVILEGES);
   });
 
   it("lets the app role read but not change the retention settings", async () => {
@@ -751,12 +898,23 @@ describe("procedural code and indirect set_config (final review #1)", () => {
       [APP_ROLE],
     );
     expect(schemas.rows.map((s) => s.name)).toEqual(
-      expect.arrayContaining(["public", "app", "retention"]),
+      expect.arrayContaining(["public", "app", "retention", "worker"]),
     );
     for (const s of schemas.rows) {
       expect(s.app, `CREATE on ${s.name} for ${APP_ROLE}`).toBe(false);
       expect(s.pub, `CREATE on ${s.name} for PUBLIC`).toBe(false);
     }
+    // The worker login holds no language and no CREATE anywhere either.
+    const worker = await pgs.migrator.query<{ name: string; create: boolean }>(
+      "select nspname as name, has_schema_privilege($1, oid, 'CREATE') as create from pg_namespace",
+      [TEST_ROLES.worker],
+    );
+    for (const s of worker.rows) expect(s.create, `CREATE on ${s.name} for the worker`).toBe(false);
+    const workerLanguages = await pgs.migrator.query<{ name: string; usable: boolean }>(
+      "select lanname as name, has_language_privilege($1, oid, 'USAGE') as usable from pg_language where lanpltrusted",
+      [TEST_ROLES.worker],
+    );
+    for (const l of workerLanguages.rows) expect(l.usable, `${l.name} for the worker`).toBe(false);
 
     const settings = await pgs.migrator.query<{
       app_update: boolean;

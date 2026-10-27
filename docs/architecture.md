@@ -6,7 +6,8 @@ Decisions behind this page:
 [ADR 0005 migrations and roles](adr/0005-migrations-and-roles.md),
 [ADR 0006 envelope encryption](adr/0006-envelope-encryption.md),
 [ADR 0007 forge port and webhook inbox](adr/0007-webhook-inbox.md),
-[ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md).
+[ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md),
+[ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md).
 
 ## Runtime
 
@@ -40,7 +41,7 @@ packages/schema (analysis document; shared contract)
 | Path                         | Role                                                                                                                                   |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                        |
-| `apps/worker`                | pg-boss consumers: analysis, posting reviews, retention, indexing                                                                      |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations), org deletion sweep, retention; later analysis, posting, indexing              |
 | `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                             |
 | `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, later `LlmProvider`, `Storage`, `Billing`) |
 | `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                              |
@@ -57,17 +58,38 @@ packages/schema (analysis document; shared contract)
 
 ## Data layer
 
-- Three database roles (ADR 0005): the migrator owns the schema, runs `pnpm db:migrate` and
-  writes the retention settings; the application logs in as a member of `rocky_app` (RLS
-  enforced, no bypass, no TEMP objects); `rocky_retention` owns the `SECURITY DEFINER` purge and
-  org-deletion functions and nothing else.
+- Database roles (ADR 0005, ADR 0009): the migrator owns the schema, runs `pnpm db:migrate` and
+  writes the retention settings; the server logs in as a member of `rocky_app` (RLS enforced, no
+  bypass, no TEMP objects); the worker logs in as a member of `rocky_app` and `rocky_worker` (the
+  only role that creates orgs, claims inbox rows and erases orgs). Each refuses the other's
+  login: the worker starts only as a `rocky_worker` member; the server starts only on a plain
+  `rocky_app` login (an allow-list for both session and current user: no privilege attribute, no
+  other membership by any grant option, owns nothing, cannot reach `rocky_worker`,
+  `rocky_lifecycle`, `rocky_retention` or the owner), checked at boot and on each new connection;
+  connections are recycled every 5 minutes, which bounds a grant made while one is open;
+  `rocky_retention` and
+  `rocky_lifecycle` own the `SECURITY DEFINER` purge, deletion and inbox functions and nothing else.
 - Every table in `public` is a tenant table: `org_id NOT NULL` with `ON DELETE CASCADE` to `orgs`,
   composite foreign keys to parents, `FORCE ROW LEVEL SECURITY`, one policy for `rocky_app`.
 - Webhooks (ADR 0007): `POST /webhooks/github` verifies `X-Hub-Signature-256` over the raw body
   before parsing, decodes the few fields the domain needs and inserts one row into
   `app.webhook_deliveries`, a non-tenant inbox (installations precede orgs) that the app role can
   only `INSERT` into, deduplicated by delivery id and body sha256 in the database. The worker
-  consumes it and re-reads state from the forge before acting.
+  claims rows of its forge with a lease, one live lease per installation (oldest first, at a cost per
+  claim that does not grow with the backlog; a row is finished by its own lease holder, whose
+  verified completion also collapses earlier same-type duplicates of its installation), re-validates them and re-reads state from the forge before acting.
+  Outages back off and wait; rows that keep failing for their own reasons are parked.
+- Installation lifecycle (ADR 0009): nothing is claimed or erased until `GET /app` proves the
+  key belongs to `GITHUB_APP_ID`. `installation.created` creates an org only if
+  `GET /app/installations/{id}` (app JWT, RS256 via `node:crypto`) says it exists; orgs bind by
+  installation id and the immutable account id, never by login. `installation.deleted` schedules
+  deletion only on GitHub's own JSON 404; contradictions are retried before they are believed.
+  Only the worker can write the deadline, which the database bounds to the 7-day grace (+1 h). A
+  reinstall within the grace period rebinds the org and cancels the deletion. The worker's sweep
+  asks GitHub again (still installed → cancel), marks the org erasing (a reinstall from then on
+  gets a fresh org), erases external stores (`OrgErasers`: object storage, embeddings), then
+  `retention.delete_org`, which cascades through every tenant table, deletes or scrubs the
+  installation's inbox rows and leaves a tombstone in `app.org_deletions`.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); four permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event

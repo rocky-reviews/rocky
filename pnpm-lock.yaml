@@ -99,6 +99,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@rocky-reviews/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@rocky-reviews/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@rocky-reviews/forge-github':
+        specifier: workspace:*
+        version: link:../../packages/forge-github
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../../packages/log
@@ -106,6 +115,9 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
+      '@rocky-reviews/server':
+        specifier: workspace:*
+        version: link:../server
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1

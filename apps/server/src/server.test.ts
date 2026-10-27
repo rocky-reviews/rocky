@@ -2,7 +2,13 @@ import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config.js";
-import { createServerPool, POOL_TIMEOUTS, startServer, type RunningServer } from "./server.js";
+import {
+  createServerPool,
+  POOL_TIMEOUTS,
+  ServerLoginError,
+  startServer,
+  type RunningServer,
+} from "./server.js";
 import { INBOX_RECORD_TIMEOUT_MS } from "./webhooks.js";
 
 const GOOD = "0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -34,7 +40,12 @@ describe("createServerPool (review round 1, items 1 and 2)", () => {
     const { log } = capture();
     const pool = createServerPool(BASE_ENV.DATABASE_URL, log);
     try {
-      expect(pool.options).toMatchObject({ connectionTimeoutMillis: 2_000 });
+      // Review round 5, S4: the login check runs on new connections only; recycling every
+      // connection after 5 minutes bounds how long a grant made after connecting can last.
+      expect(pool.options).toMatchObject({
+        connectionTimeoutMillis: 2_000,
+        maxLifetimeSeconds: 300,
+      });
       expect(pool.options).not.toHaveProperty("statement_timeout");
       expect(pool.options).not.toHaveProperty("query_timeout");
       // connect + insert bound + margin stay under the route guard, and that under GitHub's 10 s.
@@ -67,6 +78,98 @@ describe("createServerPool (review round 1, items 1 and 2)", () => {
   });
 });
 
+describe("the pool's login check fails closed (review round 5)", () => {
+  type Hook = (client: unknown) => Promise<void>;
+  const hookOf = (pool: { options: unknown }): Hook =>
+    (pool.options as { onConnect: Hook }).onConnect;
+  const plain = (who: string) => ({
+    who,
+    privileged: false,
+    groups: ["rocky_app"],
+    admin: false,
+    owner: false,
+    reaches: false,
+  });
+  const clientAnswering = (answer: () => Promise<{ rows: unknown[] }>) => ({ query: answer });
+
+  it.each([
+    ["no rows", () => Promise.resolve({ rows: [] })],
+    ["one row", () => Promise.resolve({ rows: [plain("session_user")] })],
+    [
+      "a null where a boolean belongs",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), owner: null }],
+        }),
+    ],
+    [
+      "a missing admin_option answer (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), admin: undefined }],
+        }),
+    ],
+    [
+      "a grant with ADMIN OPTION (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), admin: true }],
+        }),
+    ],
+    [
+      "no membership at all (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), groups: [] }],
+        }),
+    ],
+    [
+      "groups that are not an array",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), groups: "{}" }],
+        }),
+    ],
+    [
+      "a second membership",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), groups: ["rocky_app", "x"] }],
+        }),
+    ],
+    [
+      "a query error (its message never logged)",
+      () =>
+        Promise.reject(
+          Object.assign(new Error("permission denied for user=rocky_app_dev"), { code: "42501" }),
+        ),
+    ],
+  ])("refuses on %s", async (_case, answer) => {
+    const { log, lines } = capture();
+    const pool = createServerPool(BASE_ENV.DATABASE_URL, log);
+    try {
+      await expect(hookOf(pool)(clientAnswering(answer))).rejects.toBeInstanceOf(ServerLoginError);
+      expect(lines.find((l) => l["msg"] === "database login refused")).toBeDefined();
+      expect(JSON.stringify(lines)).not.toMatch(/permission denied|rocky_app_dev/);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("accepts two plain rocky_app rows", async () => {
+    const { log, lines } = capture();
+    const pool = createServerPool(BASE_ENV.DATABASE_URL, log);
+    try {
+      const answer = () =>
+        Promise.resolve({ rows: [plain("session_user"), plain("current_user")] });
+      await expect(hookOf(pool)(clientAnswering(answer))).resolves.toBeUndefined();
+      expect(lines).toHaveLength(0);
+    } finally {
+      await pool.end();
+    }
+  });
+});
+
 describe("startServer (review round 1, item 5)", () => {
   it("logs webhooks: false when no secret is configured outside production", async () => {
     const { log, lines } = capture();
@@ -93,6 +196,16 @@ describe("startServer (review round 1, item 5)", () => {
     });
     expect(res.statusCode).toBe(401);
     expect(JSON.stringify(lines)).not.toContain(GOOD);
+  });
+
+  it("boots without the database and says so by code (review round 4)", async () => {
+    const { log, lines } = capture();
+    running = await startServer(BASE_ENV, log);
+    expect(lines.find((l) => l["msg"] === "database unreachable at boot")).toMatchObject({
+      errorCode: "ECONNREFUSED",
+    });
+    expect(lines.find((l) => l["msg"] === "database login refused")).toBeUndefined();
+    expect(JSON.stringify(lines)).not.toContain("nothing@127.0.0.1");
   });
 
   it("refuses to start on Fly.io without a secret even when NODE_ENV is unset", async () => {

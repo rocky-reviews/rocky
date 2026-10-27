@@ -193,14 +193,25 @@ describe("recordWebhookDelivery", () => {
       `select column_name from information_schema.columns
         where table_schema = 'app' and table_name = 'webhook_deliveries' order by 1`,
     );
+    // P3-3 added the processing state: ids, timestamps, counters and fixed codes only.
     expect(columns.map((c) => c.column_name)).toEqual([
+      "attempts",
+      "available_at",
       "delivery_id",
       "event",
       "event_type",
       "forge",
       "installation_id",
+      "last_error",
+      "lease_token",
+      "lease_until",
+      "leased_at",
+      "outcome",
+      "parked_at",
       "payload_sha256",
+      "processed_at",
       "received_at",
+      "strikes",
     ]);
   });
 
