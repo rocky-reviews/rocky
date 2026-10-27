@@ -296,5 +296,6 @@ describe("purity", () => {
     expect(renderChangeMap(source).svg).toBe(first);
     expect(first.match(/class="cm-card"/g)).toHaveLength(256);
     expect(first.match(/data-edge="e\d+" d=/g)).toHaveLength(512);
-  });
+    // Two renders under coverage on a CI runner take ~7 s; the budget above is per render.
+  }, 30_000);
 });
