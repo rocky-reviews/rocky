@@ -112,6 +112,8 @@ describe("analyses store", () => {
         fullName: expect.stringMatching(/\/api$/) as unknown as string,
         diffTruncation: null,
         approvedTokens: null,
+        // The seeded pull request's head is this revision, and it is open.
+        superseded: false,
       });
       expect(await loadAnalysisTarget(tx, { ...lease, leaseId: UNKNOWN })).toBeUndefined();
     });

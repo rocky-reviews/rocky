@@ -56,18 +56,23 @@ afterAll(async () => {
   await pgs?.stop();
 });
 
-// Every test starts with an empty queue: the claim is global.
+// Every test starts with an empty queue and orgs never served (the round tie-break): the claim
+// is global.
 beforeEach(async () => {
   await superuser.query(
     `update analyses set status = 'failed', error_code = 'test_reset', completed_at = now(),
             lease_id = null, lease_until = null
       where status in ('queued', 'running', 'awaiting_approval')`,
   );
+  await superuser.query("update analyses set claimed_at = null");
 });
 
 let nextHead = 1;
 
-/** `n` new revisions of the org's pull request, each with a queued analysis; ids in order. */
+/**
+ * `n` new revisions (pushes) of the org's pull request, each with a queued analysis; ids in
+ * order. The pull request's head moves to the last one.
+ */
 const queue = async (org: SeededOrg, n: number): Promise<string[]> => {
   const ids: string[] = [];
   for (let i = 0; i < n; i++) {
@@ -79,6 +84,10 @@ const queue = async (org: SeededOrg, n: number): Promise<string[]> => {
            returning id`,
           [org.pullRequestId, head, "b".repeat(40)],
         );
+        await tx.query("update pull_requests set head_sha = $2, state = 'open' where id = $1", [
+          org.pullRequestId,
+          head,
+        ]);
         return enqueueAnalysis(tx, rows[0]!.id);
       }),
     );
@@ -191,6 +200,49 @@ describe("claim (worker.claim_analyses)", () => {
     const next = await claim(3, 3);
     expect(next.map((x) => x.orgId)).toEqual([B.orgId, A.orgId, A.orgId]);
     expect(next[0]!.analysisId).toBe(b4);
+  });
+
+  /** One claim at a time, each finished before the next (one worker with one slot). */
+  const singleClaims = async (n: number): Promise<string[]> => {
+    const order: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const [c] = await claim(1, 2);
+      if (c === undefined) break;
+      order.push(c.orgId === A.orgId ? "A" : c.orgId === B.orgId ? "B" : "C");
+      await done([c]);
+    }
+    return order;
+  };
+
+  it("review round 1, SF1: single claims alternate by least recent service, not row age", async () => {
+    await queue(A, 10);
+    await queue(B, 1);
+    const order = await singleClaims(11);
+    expect(order).toHaveLength(11);
+    // B's only row is older than none of A's, yet it goes within the first two claims.
+    expect(order.indexOf("B")).toBeLessThanOrEqual(1);
+  });
+
+  it("review round 1, SF1 (mutation check): row age as the tie-break would fail that bound", async () => {
+    // Swap the claim for one whose only change is the tie-break (row age instead of the org's
+    // last service), run the same scenario, and expect B to wait behind A's whole backlog.
+    const { rows } = await superuser.query<{ def: string }>(
+      "select pg_get_functiondef('worker.claim_analyses(integer, integer, integer)'::regprocedure) as def",
+    );
+    const original = rows[0]!.def;
+    const fifo = original.replace(
+      "ORDER BY k.round, k.served NULLS FIRST, k.available_at, k.created_at, k.id",
+      "ORDER BY k.round, k.available_at, k.created_at, k.id",
+    );
+    expect(fifo).not.toBe(original);
+    await superuser.query(fifo);
+    try {
+      await queue(A, 10);
+      await queue(B, 1);
+      expect((await singleClaims(11)).indexOf("B")).toBe(10);
+    } finally {
+      await superuser.query(original);
+    }
   });
 
   it("skips orgs scheduled for deletion, and rows waiting for approval or a retry", async () => {
@@ -384,6 +436,42 @@ describe("per-PR token limit and Analyze anyway", () => {
       [c.analysisId],
     );
     expect(audited.rowCount).toBe(0);
+  });
+
+  it("review round 1, SF3: refused once the revision is superseded by a push, or the PR is closed", async () => {
+    const old = await hold(A);
+    // A push: the pull request's head moves on.
+    await queue(A, 1);
+    expect(
+      await app.withOrg(A.orgId, (tx) =>
+        approveAnalysisOverLimit(tx, old.analysisId, { memberId: A.memberId }),
+      ),
+    ).toBeUndefined();
+    expect((await stateOf(old.analysisId)).status).toBe("awaiting_approval");
+    await superuser.query(
+      "update analyses set status = 'failed', completed_at = now() where org_id = $1 and status = 'queued'",
+      [A.orgId],
+    );
+    const head = await hold(A);
+    await superuser.query("update pull_requests set state = 'closed' where id = $1", [
+      A.pullRequestId,
+    ]);
+    try {
+      expect(
+        await app.withOrg(A.orgId, (tx) =>
+          approveAnalysisOverLimit(tx, head.analysisId, { memberId: A.memberId }),
+        ),
+      ).toBeUndefined();
+    } finally {
+      await superuser.query("update pull_requests set state = 'open' where id = $1", [
+        A.pullRequestId,
+      ]);
+    }
+    expect(
+      await app.withOrg(A.orgId, (tx) =>
+        approveAnalysisOverLimit(tx, head.analysisId, { memberId: A.memberId }),
+      ),
+    ).toBeDefined();
   });
 
   it("a held row is not claimable, and blocks a second analysis of its revision", async () => {

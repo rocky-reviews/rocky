@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Forge, OrgId } from "@rocky-reviews/core";
+import { scriptedRoles } from "@rocky-reviews/core/testing";
 import { createDb, type Db } from "@rocky-reviews/db";
 import {
   CONTAINER_TIMEOUT_MS,
+  plantAnalysisLease,
   startPostgres,
   type TestPostgres,
   ignoreIdleError,
@@ -29,6 +31,7 @@ import { createLogger } from "@rocky-reviews/log";
 import { buildApp } from "@rocky-reviews/server/app";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runAnalysis } from "./analysis.js";
 import { createAppCheck, type AppCheck } from "./app-check.js";
 import { drainInstallationEvents, drainPullRequestEvents } from "./inbox.js";
 import { CONTRADICTION_ATTEMPTS } from "./installations.js";
@@ -94,8 +97,16 @@ const drainInstallations = () =>
     newOrgId: () => randomUUID() as OrgId,
     batchSize: 10,
   });
-const drainPullRequests = () =>
-  drainPullRequestEvents({ db: workerDb, forge, appCheck, log, batchSize: 5 });
+/** With automatic analysis on (P4-6, `ROCKY_ANALYSIS_AUTO`) unless said otherwise. */
+const drainPullRequests = (options: { enqueueAnalyses?: boolean } = {}) =>
+  drainPullRequestEvents({
+    db: workerDb,
+    forge,
+    appCheck,
+    log,
+    batchSize: 5,
+    enqueueAnalyses: options.enqueueAnalyses ?? true,
+  });
 
 const makeRetriesDue = () =>
   superuser.query(
@@ -621,42 +632,110 @@ describe("pull request events: GitHub's answer, not the event, is what is mirror
     expect(mirrored!.diff_sha256).toBe(createHash("sha256").update(prefix).digest("hex"));
   });
 
-  it("P4-6: a new head of an open pull request queues one analysis; replays, merges and unreadable diffs none", async () => {
-    const analyses = async (orgId: OrgId) =>
-      (
-        await superuser.query<{ number: number; head_sha: string; status: string }>(
-          `select p.number, r.head_sha, a.status from analyses a
-             join pr_revisions r on r.org_id = a.org_id and r.id = a.revision_id
-             join pull_requests p on p.org_id = r.org_id and p.id = r.pull_request_id
-            where a.org_id = $1 order by p.number, a.created_at`,
-          [orgId],
-        )
-      ).rows;
+  const analysesOf = async (orgId: OrgId) =>
+    (
+      await superuser.query<{ number: number; head_sha: string; status: string }>(
+        `select p.number, r.head_sha, a.status from analyses a
+           join pr_revisions r on r.org_id = a.org_id and r.id = a.revision_id
+           join pull_requests p on p.org_id = r.org_id and p.id = r.pull_request_id
+          where a.org_id = $1 order by p.number, a.created_at`,
+        [orgId],
+      )
+    ).rows;
+
+  it("P4-6: a new head of an open pull request queues one analysis; replays and merges none", async () => {
     const t = await tenant();
     await change(t, "opened", { number: 20, headSha: HEAD_1, baseSha: BASE });
     await drainAll();
-    expect(await analyses(t.orgId)).toEqual([{ number: 20, head_sha: HEAD_1, status: "queued" }]);
+    expect(await analysesOf(t.orgId)).toEqual([{ number: 20, head_sha: HEAD_1, status: "queued" }]);
     await change(t, "synchronize", { number: 20, headSha: HEAD_1B, baseSha: BASE });
     await drainAll();
-    // A replay of the first head, and the merge of the second: nothing new to analyse.
+    // A replay of the second head, and the merge: nothing new to analyse.
     await change(t, "synchronize", { number: 20, headSha: HEAD_1B, baseSha: BASE });
     await change(t, "closed", { number: 20, headSha: HEAD_1B, baseSha: BASE, merged: true });
     await drainAll();
-    expect(await analyses(t.orgId)).toEqual([
+    expect(await analysesOf(t.orgId)).toEqual([
       { number: 20, head_sha: HEAD_1, status: "queued" },
       { number: 20, head_sha: HEAD_1B, status: "queued" },
     ]);
-    // A diff GitHub cannot give yet is not analysed; once the rebuild reads it, it is (once).
+
+    // Review round 1, SF3: neither is worth paying for now. The first head was replaced by the
+    // push, the second belongs to a merged pull request: both fail as superseded, with no forge
+    // read and no model call.
+    const llm = scriptedRoles(() => {
+      throw new Error("no model call expected");
+    });
+    const { rows } = await superuser.query<{ id: string }>(
+      "select id from analyses where org_id = $1 and status = 'queued' order by created_at",
+      [t.orgId],
+    );
+    const reads = github.requests.length;
+    for (const { id } of rows) {
+      const lease = await plantAnalysisLease(superuser, id);
+      const outcome = await runAnalysis(
+        {
+          db: workerDb,
+          forge,
+          llm: llm.roles,
+          clock: { now: () => new Date() },
+          log,
+          unitKeySalt: "",
+        },
+        { ...lease, orgId: t.orgId, attempts: 1, leaseUntil: new Date(Date.now() + 600_000) },
+      );
+      expect(outcome).toEqual({ outcome: "failed", code: "superseded" });
+    }
+    expect(github.requests.length).toBe(reads);
+    expect(llm.calls).toEqual([]);
+  });
+
+  it("P4-6, review round 1: an unreadable diff queues nothing; the rebuild never queues (SF4); off by default", async () => {
+    const t = await tenant();
     github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "missing");
     await change(t, "opened", { number: 21, headSha: HEAD_2, baseSha: BASE });
     await drainAll();
-    expect((await analyses(t.orgId)).filter((a) => a.number === 21)).toEqual([]);
+    expect(await analysesOf(t.orgId)).toEqual([]);
+    // The rebuild reads the diff now, and mirrors two pull requests no webhook told it about:
+    // a restored or unmirrored repository must not queue every open pull request.
     github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "+back\n");
-    await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
-    await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
-    expect((await analyses(t.orgId)).filter((a) => a.number === 21)).toEqual([
-      { number: 21, head_sha: HEAD_2, status: "queued" },
+    github.putPullRequest(t.repositoryId, {
+      number: 22,
+      headSha: HEAD_3,
+      baseSha: BASE,
+      updatedAt: tick(),
+    });
+    const report = await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
+    expect(report).toMatchObject({ revisionsRecorded: 2 });
+    expect(await analysesOf(t.orgId)).toEqual([]);
+    // Without ROCKY_ANALYSIS_AUTO (the default) a webhook-driven new head queues nothing either.
+    const off = await tenant();
+    github.putPullRequest(off.repositoryId, {
+      number: 23,
+      headSha: HEAD_4,
+      baseSha: BASE,
+      updatedAt: tick(),
+    });
+    await post(
+      "pull_request",
+      pullRequestPayload("opened", {
+        installationId: off.installationId,
+        repositoryId: off.repositoryId,
+        number: 23,
+        headSha: HEAD_4,
+        merged: false,
+      }),
+    );
+    for (
+      let i = 0;
+      i < 5 && (await drainPullRequests({ enqueueAnalyses: false })).claimed > 0;
+      i++
+    ) {
+      await makeRetriesDue();
+    }
+    expect((await mirrorState(off.orgId, off.repositoryId)).pullRequests).toMatchObject([
+      { number: 23, head_sha: HEAD_4 },
     ]);
+    expect(await analysesOf(off.orgId)).toEqual([]);
   });
 
   it("a merge records the state without reading the unchanged head's diff again", async () => {

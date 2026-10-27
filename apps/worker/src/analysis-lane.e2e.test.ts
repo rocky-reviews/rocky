@@ -170,18 +170,22 @@ const queuePullRequests = async (org: SeededOrg, n: number): Promise<string[]> =
   return ids;
 };
 
-/** A new head revision of an existing pull request, queued (a push). */
+/** A new head revision of an existing pull request, queued (a push): the PR's head moves. */
 const push = async (org: SeededOrg, analysisId: string): Promise<string> => {
   const head = (nextHead++).toString(16).padStart(40, "0");
   return worker.withOrg(org.orgId, async (tx) => {
-    const { rows } = await tx.query<{ id: string }>(
+    const { rows } = await tx.query<{ id: string; pull_request_id: string }>(
       `insert into pr_revisions (pull_request_id, head_sha, base_sha)
        select r.pull_request_id, $2, $3 from analyses a
          join pr_revisions r on r.org_id = a.org_id and r.id = a.revision_id
         where a.id = $1
-       returning id`,
+       returning id, pull_request_id`,
       [analysisId, head, "b".repeat(40)],
     );
+    await tx.query("update pull_requests set head_sha = $2 where id = $1", [
+      rows[0]!.pull_request_id,
+      head,
+    ]);
     return enqueueAnalysis(tx, rows[0]!.id);
   });
 };
@@ -226,10 +230,11 @@ const steppedForge = (clock: { now(): Date }, diffFor: () => string) => {
     calls,
     started,
     pending: () => waiting.length,
-    release: () => {
-      const all = waiting;
-      waiting = [];
-      for (const resolve of all) resolve();
+    /** Lets the oldest `n` reads (default: all) finish. */
+    release: (n = Number.POSITIVE_INFINITY) => {
+      const now = waiting.slice(0, n);
+      waiting = waiting.slice(now.length);
+      for (const resolve of now) resolve();
     },
   };
 };
@@ -308,6 +313,7 @@ const runStep = async (
   world: ReturnType<typeof setup>,
   lane: AnalysisLane,
   orgConcurrency: number,
+  finish = Number.POSITIVE_INFINITY,
 ): Promise<number> => {
   const started = await lane.tick();
   await vi.waitFor(() => expect(world.forge.pending()).toBe(lane.inFlight), {
@@ -316,8 +322,11 @@ const runStep = async (
   for (const n of Object.values(await runningByOrg())) {
     expect(n).toBeLessThanOrEqual(orgConcurrency);
   }
-  world.forge.release();
-  await lane.idle();
+  // Staggered finishes: only the oldest `finish` runs end in this step; the rest go on.
+  const ending = Math.min(finish, lane.inFlight);
+  const remaining = lane.inFlight - ending;
+  world.forge.release(ending);
+  await vi.waitFor(() => expect(lane.inFlight).toBe(remaining), { timeout: 10_000 });
   world.advance();
   return started;
 };
@@ -326,44 +335,60 @@ const runStep = async (
 
 describe("load test: one org with 50 pull requests cannot starve another (P4-6)", () => {
   it.each([
-    { slots: 4, orgConcurrency: 2 },
-    { slots: 2, orgConcurrency: 2 },
-    { slots: 6, orgConcurrency: 3 },
+    { slots: 4, orgConcurrency: 2, finish: Infinity },
+    { slots: 2, orgConcurrency: 2, finish: Infinity },
+    { slots: 6, orgConcurrency: 3, finish: Infinity },
+    // Review round 1, SF1: one slot (ROCKY_ANALYSIS_CONCURRENCY=1), and runs that finish one
+    // at a time, so every claim hands out a single row.
+    { slots: 1, orgConcurrency: 2, finish: Infinity },
+    { slots: 4, orgConcurrency: 2, finish: 1 },
+    { slots: 3, orgConcurrency: 3, finish: 2 },
   ])(
-    "slots $slots, org cap $orgConcurrency: B's analyses start within its fair share of steps",
-    async ({ slots, orgConcurrency }) => {
+    "slots $slots, org cap $orgConcurrency, $finish finishing per step: B is never starved",
+    async ({ slots, orgConcurrency, finish }) => {
       // A's 50 are all older than B's 3: a first-come queue would start B only after A's 50.
       await queuePullRequests(A, 50);
       await queuePullRequests(B, 3);
       const world = setup({ slots, orgConcurrency });
       let steps = 0;
-      while (steps < 200) {
-        const started = await runStep(world, world.lane, orgConcurrency);
+      while (steps < 400) {
+        const started = await runStep(world, world.lane, orgConcurrency, finish);
         steps++;
-        if (started === 0) break;
+        if (started === 0 && world.lane.inFlight === 0) break;
       }
       const startedOf = (org: "A" | "B") => world.forge.started.filter((s) => s.org === org);
       expect(startedOf("A")).toHaveLength(50);
       expect(startedOf("B")).toHaveLength(3);
       expect(world.outcomes.every((o) => o.outcome === "done")).toBe(true);
 
-      // The bound: with two orgs waiting, B gets min(cap, ⌊slots / 2⌋) slots in every step until
-      // it is done, so its i-th analysis (0-based) starts by step ⌊i / perStep⌋, whatever A's
-      // backlog. A first-come queue would have started B's first at step ⌈50 / min(slots, cap)⌉.
-      const perStep = Math.min(orgConcurrency, Math.floor(slots / 2));
-      startedOf("B").forEach((s, i) => {
-        expect(s.step, `B's analysis ${i}`).toBeLessThanOrEqual(Math.floor(i / perStep));
-      });
-      const fifoFirstStepOfB = Math.ceil(50 / Math.min(slots, orgConcurrency));
-      expect(startedOf("B")[0]!.step).toBeLessThan(fifoFirstStepOfB);
-      // Nor was A starved: it started analyses in every step until its backlog ran out, never
-      // more than its cap at once (the cap itself is checked inside every step).
-      const stepsOfA = startedOf("A").map((s) => s.step);
-      const lastOfA = Math.max(...stepsOfA);
-      for (let step = 0; step <= lastOfA; step++) {
-        const n = stepsOfA.filter((x) => x === step).length;
-        expect(n, `A in step ${step}`).toBeGreaterThan(0);
-        expect(n, `A in step ${step}`).toBeLessThanOrEqual(orgConcurrency);
+      // The bound, in the order analyses were handed out: with two orgs waiting they take turns,
+      // so B's i-th analysis (0-based) is among the first 2(i + 1) started, whatever A's backlog
+      // and however the slots free up. A first-come queue would start B's first as the 51st.
+      const order = world.forge.started.map((s) => s.org);
+      order
+        .map((org, at) => ({ org, at }))
+        .filter((x) => x.org === "B")
+        .forEach((x, i) => {
+          expect(x.at, `B's analysis ${i} in ${order.join("")}`).toBeLessThanOrEqual(2 * i + 1);
+        });
+      if (finish === Infinity && slots >= 2) {
+        // In whole steps: B gets min(cap, ⌊slots / 2⌋) slots per step until it is done.
+        const perStep = Math.min(orgConcurrency, Math.floor(slots / 2));
+        startedOf("B").forEach((s, i) => {
+          expect(s.step, `B's analysis ${i}`).toBeLessThanOrEqual(Math.floor(i / perStep));
+        });
+      }
+      // Nor was A starved: once B was done, every analysis handed out was A's, up to its cap
+      // at once (the cap itself is checked inside every step).
+      const lastOfB = order.lastIndexOf("B");
+      expect(order.slice(lastOfB + 1).every((org) => org === "A")).toBe(true);
+      if (finish === Infinity && slots >= 2) {
+        const stepsOfA = startedOf("A").map((s) => s.step);
+        for (let step = 0; step <= Math.max(...stepsOfA); step++) {
+          const n = stepsOfA.filter((x) => x === step).length;
+          expect(n, `A in step ${step}`).toBeGreaterThan(0);
+          expect(n, `A in step ${step}`).toBeLessThanOrEqual(orgConcurrency);
+        }
       }
     },
     120_000,
@@ -449,6 +474,24 @@ describe("a 200k-token pull request waits for user action (P4-6)", () => {
     expect(again.rows[0]).toEqual({ status: "awaiting_approval", approved_tokens: null });
   }, 120_000);
 
+  it("review round 1, SF2: a 1 MiB CJK pull request is held too (non-ASCII counts by bytes)", async () => {
+    const cjk = Array.from({ length: 6 }, (_, f) =>
+      addedFile(
+        `src/i18n/part${f}.ts`,
+        Array.from({ length: 950 }, () => `"${"漢字".repeat(29)}",`),
+      ),
+    ).join("\n");
+    expect(new TextEncoder().encode(cjk).byteLength).toBeGreaterThan(900_000);
+    expect(new TextEncoder().encode(cjk).byteLength).toBeLessThan(1024 * 1024);
+    await queuePullRequests(B, 1);
+    const world = setup({ slots: 1, orgConcurrency: 1, diff: () => cjk });
+    await runStep(world, world.lane, 1);
+    expect(world.outcomes).toEqual([
+      { outcome: "awaiting_approval", estimatedTokens: expect.any(Number), tokenLimit: 150_000 },
+    ]);
+    expect(world.llm.calls).toEqual([]);
+  });
+
   it("a pull request under the limit is not held", async () => {
     await queuePullRequests(B, 1);
     const world = setup({ slots: 1, orgConcurrency: 1 });
@@ -525,22 +568,43 @@ describe("the lease (ADR 0014 R3)", () => {
     await lane.stop();
   });
 
-  it("stopping aborts runs in progress; an aborted run is requeued, not lost", async () => {
+  const stateOf = async (id: string) =>
+    (
+      await superuser.query<{ status: string; attempts: number; due: boolean }>(
+        "select status, attempts, available_at <= now() as due from analyses where id = $1",
+        [id],
+      )
+    ).rows[0]!;
+
+  it("review round 1, SF5: stopping releases runs in progress without spending an attempt", async () => {
     const [id] = await queuePullRequests(A, 1);
+    // Six shutdowns in a row, one more than ANALYSIS_MAX_ATTEMPTS: the row is never failed.
+    for (let shutdown = 1; shutdown <= 6; shutdown++) {
+      const world = setup({ slots: 1, orgConcurrency: 1 });
+      expect(await world.lane.tick()).toBe(1);
+      await vi.waitFor(() => expect(world.forge.pending()).toBe(1));
+      const stopping = world.lane.stop();
+      world.forge.release();
+      await stopping;
+      expect(world.outcomes).toEqual([{ outcome: "released" }]);
+      expect(await stateOf(id!)).toEqual({ status: "queued", attempts: 0, due: true });
+      expect(await world.lane.tick()).toBe(0);
+    }
     const world = setup({ slots: 1, orgConcurrency: 1 });
-    expect(await world.lane.tick()).toBe(1);
-    await vi.waitFor(() => expect(world.forge.pending()).toBe(1));
+    await runStep(world, world.lane, 1);
+    expect(world.outcomes).toEqual([{ outcome: "done" }]);
+    expect(await stateOf(id!)).toMatchObject({ status: "done", attempts: 1 });
+  });
+
+  it("review round 1, SF5: a row claimed while stopping is handed back without spending an attempt", async () => {
+    const [id] = await queuePullRequests(B, 1);
+    const world = setup({ slots: 1, orgConcurrency: 1 });
+    // The claim is in flight when the stop begins.
+    const tick = world.lane.tick();
     const stopping = world.lane.stop();
-    world.forge.release();
+    expect(await tick).toBe(0);
     await stopping;
-    expect(world.outcomes).toEqual([
-      { outcome: "retry", code: "llm_cancelled", retryAfterMs: 30_000 },
-    ]);
-    const { rows } = await superuser.query<{ status: string }>(
-      "select status from analyses where id = $1",
-      [id],
-    );
-    expect(rows[0]!.status).toBe("queued");
-    expect(await world.lane.tick()).toBe(0);
+    expect(world.forge.started).toEqual([]);
+    expect(await stateOf(id!)).toEqual({ status: "queued", attempts: 0, due: true });
   });
 });

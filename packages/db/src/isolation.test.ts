@@ -113,10 +113,21 @@ const ORGS_COLUMN_PRIVILEGES = [
 ];
 
 /**
- * The analysis claim (P4-6, migration 0012) updates exactly the queue columns of `analyses`, as
- * rocky_lifecycle; never a document, the units, the estimate or an approval.
+ * The analysis claim (P4-6, migration 0012) reads and updates exactly the queue columns of
+ * `analyses`, as rocky_lifecycle; never a document, the units, the estimate or an approval
+ * (review round 1, N1: no table-level SELECT).
  */
 const ANALYSES_COLUMN_PRIVILEGES = [
+  "rocky_lifecycle:SELECT:attempts",
+  "rocky_lifecycle:SELECT:available_at",
+  "rocky_lifecycle:SELECT:claimed_at",
+  "rocky_lifecycle:SELECT:created_at",
+  "rocky_lifecycle:SELECT:error_code",
+  "rocky_lifecycle:SELECT:id",
+  "rocky_lifecycle:SELECT:lease_id",
+  "rocky_lifecycle:SELECT:lease_until",
+  "rocky_lifecycle:SELECT:org_id",
+  "rocky_lifecycle:SELECT:status",
   "rocky_lifecycle:UPDATE:attempts",
   "rocky_lifecycle:UPDATE:available_at",
   "rocky_lifecycle:UPDATE:claimed_at",
@@ -136,8 +147,6 @@ const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
   [WORKER_ROLE]: { "public.orgs": ["INSERT"] },
   [LIFECYCLE_ROLE]: {
     "app.webhook_deliveries": ["SELECT", "UPDATE"],
-    // The analysis claim reads the queue; it updates only the queue columns (below).
-    "public.analyses": ["SELECT"],
     "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
     "public.orgs": ["SELECT"],
   },

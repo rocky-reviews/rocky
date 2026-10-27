@@ -142,8 +142,13 @@ const deps = (forge: Forge, script: Script = pr847Script) => {
   return { runner, calls: llm.calls, lines };
 };
 
+/** A push: a new head revision of the org's pull request, with a queued analysis. */
 const newRevision = (org: SeededOrg, head: string): Promise<string> =>
   worker.withOrg(org.orgId, async (tx) => {
+    await tx.query("update pull_requests set head_sha = $2, state = 'open' where id = $1", [
+      org.pullRequestId,
+      head,
+    ]);
     const { rows } = await tx.query<{ id: string }>(
       `insert into pr_revisions (pull_request_id, head_sha, base_sha) values ($1, $2, $3)
        on conflict (org_id, pull_request_id, head_sha) do update set base_sha = excluded.base_sha
@@ -285,6 +290,30 @@ describe("runAnalysis (P4-3)", () => {
     });
     expect(await runAnalysis(runner, await claimed(A, id))).toEqual({ outcome: "lease_lost" });
     expect(await stored(id)).toMatchObject({ status: "running", document: null });
+  });
+
+  it("review round 1, SF3: a superseded head or a closed PR fails as superseded before any read", async () => {
+    const old = await newRevision(B, "9".repeat(40));
+    await newRevision(B, "a1".repeat(20));
+    const forge = recordingForge({ ["9".repeat(40)]: diffOf(pr847Diff()) });
+    const { runner, calls } = deps(forge.forge);
+    expect(await runAnalysis(runner, await claimed(B, old))).toEqual({
+      outcome: "failed",
+      code: "superseded",
+    });
+    const head = await newRevision(B, "a2".repeat(20));
+    await superuser.query("update pull_requests set state = 'merged' where id = $1", [
+      B.pullRequestId,
+    ]);
+    expect(await runAnalysis(runner, await claimed(B, head))).toEqual({
+      outcome: "failed",
+      code: "superseded",
+    });
+    await superuser.query("update pull_requests set state = 'open' where id = $1", [
+      B.pullRequestId,
+    ]);
+    expect(forge.calls).toEqual([]);
+    expect(calls).toEqual([]);
   });
 
   it("a fatal LLM error stores a failure code and no document", async () => {

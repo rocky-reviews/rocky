@@ -1,12 +1,12 @@
 import {
+  releaseAnalysis,
   renewAnalysisLease,
-  requeueAnalysis,
   type AnalysisStoreError,
   type ClaimedAnalysis,
   type Db,
 } from "@rocky-reviews/db";
 import type { Logger } from "@rocky-reviews/log";
-import type { AnalysisRun } from "./analysis.js";
+import { WorkerStopping, type AnalysisRun } from "./analysis.js";
 
 /**
  * The analysis queue lane (P4-6, ADR 0017). Each tick claims as many queued analyses as this
@@ -14,8 +14,9 @@ import type { AnalysisRun } from "./analysis.js";
  * running rows across every worker, round-robin across orgs, expired leases reclaimed first),
  * and starts each one without waiting for it. While a run lasts its lease is renewed; a renewal
  * that finds the lease gone aborts the run (another worker may hold the row now, and nothing of
- * this run can be written anyway). Stopping aborts every run and waits for them: an aborted run
- * is requeued by `runAnalysis` (a retry), or left to its lease.
+ * this run can be written anyway). Stopping aborts every run with `WorkerStopping` and waits for
+ * them: `runAnalysis` hands the row back without spending an attempt (review round 1, SF5), or
+ * it is left to its lease.
  *
  * Logs carry ids, counts and codes; `runAnalysis` logs each outcome.
  */
@@ -127,11 +128,9 @@ export const createAnalysisLane = (
     const released: Promise<unknown>[] = [];
     for (const claim of claims) {
       if (stopped) {
-        // Claimed while stopping: handed back at once (or, if that fails, left to its lease).
+        // Claimed while stopping: handed back at once, attempt returned (or left to its lease).
         released.push(
-          deps.db
-            .withOrg(claim.orgId, (tx) => requeueAnalysis(tx, claim, "worker_stopping", 0))
-            .catch(() => undefined),
+          deps.db.withOrg(claim.orgId, (tx) => releaseAnalysis(tx, claim)).catch(() => undefined),
         );
         continue;
       }
@@ -163,7 +162,7 @@ export const createAnalysisLane = (
       stopping ??= (async () => {
         stopped = true;
         await claiming?.catch(() => undefined);
-        for (const { controller } of runs.values()) controller.abort();
+        for (const { controller } of runs.values()) controller.abort(new WorkerStopping());
         await Promise.allSettled([...runs.values()].map((r) => r.done));
       })();
       return stopping;

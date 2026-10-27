@@ -137,6 +137,11 @@ export interface AnalysisTarget {
    * none). It covers this revision only; a new push is a new row.
    */
   readonly approvedTokens: number | null;
+  /**
+   * The revision is no longer the pull request's head (a later push), or the pull request is not
+   * open: analysing it would spend on something nobody will review (review round 1, SF3).
+   */
+  readonly superseded: boolean;
 }
 
 const LIVE = "status in ('queued', 'running', 'awaiting_approval')";
@@ -212,9 +217,11 @@ export const loadAnalysisTarget = async (
     full_name: string;
     diff_truncation: string | null;
     approved_tokens: number | null;
+    superseded: boolean;
   }>(
     `select r.id as revision_id, p.id as pull_request_id, p.number, p.title, r.head_sha,
-            r.base_sha, rp.forge_repo_id, rp.full_name, r.diff_truncation, a.approved_tokens
+            r.base_sha, rp.forge_repo_id, rp.full_name, r.diff_truncation, a.approved_tokens,
+            (p.head_sha <> r.head_sha or p.state <> 'open') as superseded
        from analyses a
        join pr_revisions r on r.org_id = $1 and r.id = a.revision_id
        join pull_requests p on p.org_id = $1 and p.id = r.pull_request_id
@@ -242,6 +249,7 @@ export const loadAnalysisTarget = async (
     fullName: row.full_name,
     diffTruncation: row.diff_truncation as DiffTruncation | null,
     approvedTokens: row.approved_tokens,
+    superseded: row.superseded,
   };
 };
 
@@ -373,6 +381,21 @@ export const requeueAnalysis = async (
 };
 
 /**
+ * Hands a running row back untouched (the worker is stopping, review round 1, SF5): queued,
+ * claimable now, and the attempt this claim spent is given back, so restarts never fail a row.
+ * False when the lease is no longer held.
+ */
+export const releaseAnalysis = async (tx: TenantTx, lease: AnalysisLease): Promise<boolean> => {
+  checkLease(lease);
+  return finish(
+    tx,
+    lease,
+    "status = 'queued', attempts = greatest(attempts - 1, 0), available_at = now()",
+    [],
+  );
+};
+
+/**
  * The per-PR token limit (P4-6): the row waits for a person, with the estimate and the limit it
  * exceeded. Nothing was sent to a model. False when the lease is no longer held.
  */
@@ -439,7 +462,8 @@ export interface AnalysisApproval {
  * explicit (a member id; P7-2 adds the role check in front of it), applies to this row, that is
  * this revision, only (a new push is a new row, estimated again), and resets the attempts: the
  * hold was not a failure. Returns undefined when the row is not waiting (already approved,
- * finished, unknown, or another org's: RLS), or when the approver is not a member of the org.
+ * finished, unknown, or another org's: RLS), when its revision is no longer the head of an open
+ * pull request (review round 1, SF3), or when the approver is not a member of the org.
  */
 export const approveAnalysisOverLimit = async (
   tx: TenantTx,
@@ -463,6 +487,11 @@ export const approveAnalysisOverLimit = async (
         set status = 'queued', approved_tokens = estimated_tokens, approved_by = $3,
             approved_at = now(), available_at = now(), attempts = 0
       where org_id = $1 and id = $2 and status = 'awaiting_approval'
+        and exists (
+          select 1 from pr_revisions r
+            join pull_requests p on p.org_id = r.org_id and p.id = r.pull_request_id
+           where r.org_id = $1 and r.id = analyses.revision_id
+             and p.head_sha = r.head_sha and p.state = 'open')
       returning revision_id, estimated_tokens, limit_tokens`,
     [tx.orgId, analysisId, approver.memberId],
   );

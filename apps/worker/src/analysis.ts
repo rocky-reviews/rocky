@@ -18,6 +18,7 @@ import {
   holdAnalysis,
   loadAnalysisTarget,
   loadPreviousAnalysis,
+  releaseAnalysis,
   requeueAnalysis,
   type ClaimedAnalysis,
   type Db,
@@ -89,17 +90,32 @@ export type AnalysisRun =
     }
   /** The lease is no longer held (expired and reclaimed, or not this org's): nothing written. */
   | { readonly outcome: "lease_lost" }
+  /** The worker is stopping: handed back, claimable now, no attempt spent (review round 1, SF5). */
+  | { readonly outcome: "released" }
   | { readonly outcome: "retry"; readonly code: string; readonly retryAfterMs: number };
 
-/** First retry after 30 s, doubling, at most an hour; never sooner than the provider asks. */
-export const analysisRetryDelayMs = (attempts: number, retryAfterMs?: number): number =>
-  Math.min(
-    Math.max(
-      Math.min(30_000 * 2 ** Math.max(0, attempts - 1), 60 * 60_000),
-      Math.ceil(retryAfterMs ?? 0),
-    ),
+/**
+ * First retry after 30 s, doubling, at most an hour; never sooner than the provider asks. A hint
+ * that is not a finite number is ignored (review round 1, N5).
+ */
+export const analysisRetryDelayMs = (attempts: number, retryAfterMs?: number): number => {
+  const hint = retryAfterMs !== undefined && Number.isFinite(retryAfterMs) ? retryAfterMs : 0;
+  return Math.min(
+    Math.max(Math.min(30_000 * 2 ** Math.max(0, attempts - 1), 60 * 60_000), Math.ceil(hint)),
     ANALYSIS_MAX_RETRY_DELAY_MS,
   );
+};
+
+/**
+ * The abort reason the lane gives when the worker stops (review round 1, SF5): the run hands
+ * its row back instead of spending a retry on it.
+ */
+export class WorkerStopping extends Error {
+  override readonly name = "WorkerStopping";
+  constructor() {
+    super("worker stopping");
+  }
+}
 
 const MAX_STORED_ESTIMATE = 2 ** 31 - 1;
 
@@ -154,6 +170,13 @@ export const runAnalysis = async (
     log.warn({ analysisId, code, attempt: claim.attempts }, "analysis failed");
     return { outcome: "failed", code };
   };
+  const stopping = (): boolean =>
+    options.signal?.aborted === true && options.signal.reason instanceof WorkerStopping;
+  const release = async (): Promise<AnalysisRun> => {
+    if (!(await db.withOrg(orgId, (tx) => releaseAnalysis(tx, claim)))) return lost();
+    log.info({ analysisId, attempt: claim.attempts }, "analysis released");
+    return { outcome: "released" };
+  };
   const retry = async (code: string, hintMs?: number): Promise<AnalysisRun> => {
     // Bounded: the last attempt stores the code as the failure.
     if (claim.attempts >= ANALYSIS_MAX_ATTEMPTS) return fail(code);
@@ -166,6 +189,9 @@ export const runAnalysis = async (
   };
 
   try {
+    // Review round 1, SF3: a revision a later push replaced, or of a pull request that is no
+    // longer open, is not analysed at all (no forge read, no estimate, no model call).
+    if (target.superseded) throw new RunFailed("superseded");
     const installation = await db.withOrg(orgId, (tx) =>
       tx.query<{ installation_id: string }>("select installation_id from orgs where id = $1", [
         tx.orgId,
@@ -229,6 +255,7 @@ export const runAnalysis = async (
       return { outcome: "awaiting_approval", estimatedTokens, tokenLimit };
     }
 
+    if (stopping()) return await release();
     const metered = deps.meter?.(deps.llm, claim);
     const outcome = await analyzePullRequest(
       {
@@ -270,6 +297,8 @@ export const runAnalysis = async (
     // The lease expired and another worker holds the row now: nothing of ours was written.
     return stored ? { outcome: "done" } : lost();
   } catch (error) {
+    // Whatever the stop interrupted (a cancelled call, a forge read), the row goes back as it was.
+    if (stopping()) return release();
     if (error instanceof RunFailed) return fail(error.code);
     if (isLlmCallError(error)) {
       // Fatal kinds came back as failure codes from the pipeline; only these reach here.

@@ -1,11 +1,13 @@
 DROP FUNCTION IF EXISTS worker.claim_analyses(integer, integer, integer);
 DROP POLICY IF EXISTS analyses_lifecycle_update ON analyses;
 DROP POLICY IF EXISTS analyses_lifecycle_select ON analyses;
-REVOKE ALL ON analyses FROM rocky_lifecycle;
+REVOKE SELECT (id, org_id, status, attempts, available_at, created_at, claimed_at, lease_id,
+               lease_until, error_code) ON analyses FROM rocky_lifecycle;
 REVOKE UPDATE (status, attempts, available_at, claimed_at, lease_id, lease_until, error_code,
                completed_at) ON analyses FROM rocky_lifecycle;
 
 DROP INDEX IF EXISTS analyses_lease_until_idx;
+DROP INDEX IF EXISTS analyses_org_claimed_idx;
 DROP INDEX IF EXISTS analyses_running_org_idx;
 DROP INDEX IF EXISTS analyses_queued_idx;
 DROP INDEX IF EXISTS analyses_live_revision_unique;

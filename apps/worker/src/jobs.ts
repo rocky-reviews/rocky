@@ -46,7 +46,10 @@ export interface JobDeps {
    * in the inbox and no org is erased (the sweep re-verifies every uninstall with GitHub first).
    */
   readonly forge: Forge | undefined;
-  /** The analysis lane (P4-6); without it, queued analyses wait. Needs `forge`. */
+  /**
+   * The analysis lane (P4-6), only with `ROCKY_ANALYSIS_AUTO=on`. Without it the mirror queues
+   * nothing and nothing is claimed. Needs `forge`.
+   */
   readonly analysis?: AnalysisJobConfig;
   readonly intervals?: Partial<JobIntervals>;
 }
@@ -146,6 +149,8 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
         clock: deps.clock,
         log: deps.log,
         batchSize: prBatchSize,
+        // New heads are queued for analysis only with the lane configured (ROCKY_ANALYSIS_AUTO).
+        enqueueAnalyses: deps.analysis !== undefined,
       });
       if (report.claimed > 0) deps.log.info({ job: "pull_requests", ...report }, "inbox drained");
       return report.claimed === prBatchSize && report.processed + report.parked === prBatchSize;

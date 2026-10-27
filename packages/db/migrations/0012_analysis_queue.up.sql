@@ -17,11 +17,13 @@
 --   4. The claim: worker.claim_analyses, SECURITY DEFINER owned by rocky_lifecycle, executable by
 --      rocky_worker only (the server cannot claim). Fair across orgs: a per-org cap on running
 --      rows, and a round-robin order (an org's k-th waiting row goes after every other org's
---      (k-1)-th), so one org's backlog cannot starve another. One claim at a time (advisory
---      lock), so the cap holds across workers; bounded work per claim (orgs with work × cap).
+--      (k-1)-th; within a round, the org served least recently goes first), so one org's backlog
+--      cannot starve another, even one claim at a time. One claim at a time (advisory lock), so
+--      the cap holds across workers; bounded work per claim (orgs with work × cap).
 --
 -- No new grants for rocky_app (it already has DML on analyses under its tenant policy, 0003).
--- rocky_lifecycle reads analyses and updates only the queue columns, through the claim alone.
+-- rocky_lifecycle reads and updates only the queue columns (never a document), through the
+-- claim alone.
 
 -- --- 1, 2. Columns ------------------------------------------------------------------------------
 
@@ -66,13 +68,17 @@ CREATE UNIQUE INDEX analyses_live_revision_unique ON analyses (org_id, revision_
 -- The claim: orgs with waiting rows (a skip scan on the leading org_id) and each org's oldest.
 CREATE INDEX analyses_queued_idx ON analyses (org_id, available_at, created_at, id)
   WHERE status = 'queued';
+-- An org's last service (the round tie-break: one index probe per org).
+CREATE INDEX analyses_org_claimed_idx ON analyses (org_id, claimed_at)
+  WHERE claimed_at IS NOT NULL;
 -- Running rows per org (the cap) and expired leases (the reclaim).
 CREATE INDEX analyses_running_org_idx ON analyses (org_id) WHERE status = 'running';
 CREATE INDEX analyses_lease_until_idx ON analyses (lease_until) WHERE status = 'running';
 
 -- --- 4. The claim -------------------------------------------------------------------------------
 
-GRANT SELECT ON analyses TO rocky_lifecycle;
+GRANT SELECT (id, org_id, status, attempts, available_at, created_at, claimed_at, lease_id,
+              lease_until, error_code) ON analyses TO rocky_lifecycle;
 GRANT UPDATE (status, attempts, available_at, claimed_at, lease_id, lease_until, error_code,
               completed_at) ON analyses TO rocky_lifecycle;
 CREATE POLICY analyses_lifecycle_select ON analyses FOR SELECT TO rocky_lifecycle USING (true);
@@ -87,9 +93,11 @@ CREATE POLICY analyses_lifecycle_update ON analyses FOR UPDATE TO rocky_lifecycl
 --     `lease_expired` once ANALYSIS_MAX_ATTEMPTS (5) claims have been used;
 --   * candidates: for each org with waiting rows (not being erased, not scheduled for deletion),
 --     its oldest claimable rows, as many as its free slots (cap − running). Each gets a round:
---     running + its rank in the org. Rows are handed out by round, then age: every org's next
---     row comes before any org's row after it, so a backlog of 50 in one org delays another
---     org's first row by at most one row per org with work;
+--     running + its rank in the org. Rows are handed out by round, then by the org's last claim
+--     (least recently served first, never served before all), and only then by age: every org's
+--     next row comes before any org's row after it, and orgs tied on the round take turns, so
+--     a backlog of 50 in one org delays another org's first row by at most one row per org with
+--     work, also when claims hand out one row at a time (review round 1, SF1);
 --   * exactly the candidate row, or nothing (FOR UPDATE SKIP LOCKED: a row an approval or a
 --     finishing worker holds is left for the next claim);
 --   * the lease runs from clock_timestamp(), the moment of the claim.
@@ -134,7 +142,9 @@ BEGIN
     ready AS (
       SELECT w.org,
              (SELECT count(*) FROM public.analyses x
-               WHERE x.org_id = w.org AND x.status = 'running')::integer AS busy
+               WHERE x.org_id = w.org AND x.status = 'running')::integer AS busy,
+             (SELECT max(x.claimed_at) FROM public.analyses x
+               WHERE x.org_id = w.org AND x.claimed_at IS NOT NULL) AS served
         FROM waiting w
         JOIN public.orgs o ON o.id = w.org
        WHERE w.org IS NOT NULL AND o.erasing_at IS NULL AND o.delete_after IS NULL
@@ -142,13 +152,13 @@ BEGIN
     SELECT k.id AS c_id, k.round AS c_round
       FROM ready r
       CROSS JOIN LATERAL (
-        SELECT q.id, q.available_at, q.created_at,
+        SELECT q.id, q.available_at, q.created_at, r.served,
                r.busy + row_number() OVER (ORDER BY q.available_at, q.created_at, q.id) AS round
           FROM public.analyses q
          WHERE q.org_id = r.org AND q.status = 'queued' AND q.available_at <= v_start
          ORDER BY q.available_at, q.created_at, q.id
          LIMIT least(greatest(v_cap - r.busy, 0), v_limit)) k
-     ORDER BY k.round, k.available_at, k.created_at, k.id
+     ORDER BY k.round, k.served NULLS FIRST, k.available_at, k.created_at, k.id
   LOOP
     EXIT WHEN v_claimed >= v_limit;
     PERFORM 1 FROM public.analyses a WHERE a.id = c.c_id AND a.status = 'queued'

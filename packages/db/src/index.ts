@@ -18,6 +18,7 @@ export {
   holdAnalysis,
   loadAnalysisTarget,
   loadPreviousAnalysis,
+  releaseAnalysis,
   renewAnalysisLease,
   requeueAnalysis,
   type AnalysisApproval,

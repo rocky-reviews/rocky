@@ -51,6 +51,11 @@ export interface WorkerConfig {
 }
 
 export interface AnalysisConfig {
+  /**
+   * `ROCKY_ANALYSIS_AUTO=on`: new head revisions are queued and the lane claims them. Off by
+   * default: nothing is analysed (and nothing spends) until an operator turns it on.
+   */
+  readonly auto: boolean;
   /** Per-PR token estimate above which an analysis waits for "Analyze anyway". */
   readonly tokenLimit: number;
   /** Analyses this worker runs at once. */
@@ -60,6 +65,7 @@ export interface AnalysisConfig {
 }
 
 export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
+  auto: false,
   tokenLimit: DEFAULT_ANALYSIS_TOKEN_LIMIT,
   concurrency: 4,
   orgConcurrency: 2,
@@ -83,7 +89,15 @@ const boundedInteger = (env: Env, name: keyof typeof ANALYSIS_BOUNDS, fallback: 
 };
 
 /** `ROCKY_ANALYSIS_*` (P4-6); messages name the variable and its bounds, never the value. */
+const onOff = (env: Env, name: string, fallback: boolean): boolean => {
+  const raw = nonEmpty(env, name);
+  if (raw === undefined) return fallback;
+  if (raw !== "on" && raw !== "off") throw new ConfigError(`${name} must be on or off`);
+  return raw === "on";
+};
+
 export const analysisConfigFromEnv = (env: Env): AnalysisConfig => ({
+  auto: onOff(env, "ROCKY_ANALYSIS_AUTO", DEFAULT_ANALYSIS_CONFIG.auto),
   tokenLimit: boundedInteger(env, "ROCKY_ANALYSIS_TOKEN_LIMIT", DEFAULT_ANALYSIS_CONFIG.tokenLimit),
   concurrency: boundedInteger(
     env,

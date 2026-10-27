@@ -4,7 +4,8 @@
  * it reads nothing but the diff. It counts what the pipeline would send:
  *
  * - the patch of every file left after rules pre-triage (noise excluded), except binary and
- *   too-large files (never sent) and files whose unit the previous analysis will be reused for;
+ *   too-large files (never sent) and files whose unit the previous analysis will be reused for:
+ *   ASCII at CHARS_PER_TOKEN, any other text one token per UTF-8 byte (`patchTokens`);
  * - a fixed overhead per file call (instructions, labels, the answer) and per stage.
  *
  * It is a size, not a bill: the review and the change map read parts of the diff again, so spend
@@ -15,8 +16,39 @@ import { parseUnifiedDiff } from "./diff.js";
 import { preTriage } from "./rules.js";
 import { unitKey, type PreviousAnalysis, type Sha256Hex } from "./units.js";
 
-/** Characters per token: conservative for code (English prose is nearer 4). */
+/** ASCII characters per token: conservative for code (English prose is nearer 4). */
 export const CHARS_PER_TOKEN = 3;
+
+/**
+ * An upper bound for any text (review round 1, SF2): ASCII at CHARS_PER_TOKEN, and every UTF-8
+ * byte of anything else as one token. Tokenizers spend at most about one token per byte on text
+ * outside their common vocabulary (byte fallback), so CJK, emoji or a padding of look-alikes
+ * cannot make a large diff look small, as counting UTF-16 units would.
+ */
+export const patchTokens = (text: string): number => {
+  let ascii = 0;
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit < 0x80) {
+      ascii++;
+    } else if (unit < 0x800) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        // A surrogate pair is one code point of 4 bytes.
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return Math.ceil(ascii / CHARS_PER_TOKEN) + bytes;
+};
 /** One triage call's instructions, labels and answer, on top of the file's patch. */
 export const FILE_CALL_OVERHEAD_TOKENS = 2_000;
 /** Per stage (triage, review, graph, briefing): instructions, preamble and the stage's answer. */
@@ -66,7 +98,7 @@ export const estimateAnalysisTokens = (
   const keys = new Set(
     previous === undefined ? [] : previous.units.map((unit) => `${unit.path}\0${unit.key}`),
   );
-  let chars = 0;
+  let patch = 0;
   let sent = 0;
   let noise = 0;
   let skipped = 0;
@@ -84,14 +116,11 @@ export const estimateAnalysisTokens = (
       reused++;
     } else {
       sent++;
-      chars += file.patch.length;
+      patch += patchTokens(file.patch);
     }
   }
   return {
-    tokens:
-      Math.ceil(chars / CHARS_PER_TOKEN) +
-      sent * FILE_CALL_OVERHEAD_TOKENS +
-      ANALYSIS_STAGES * STAGE_OVERHEAD_TOKENS,
+    tokens: patch + sent * FILE_CALL_OVERHEAD_TOKENS + ANALYSIS_STAGES * STAGE_OVERHEAD_TOKENS,
     files: parsed.files.length,
     sent,
     noise,

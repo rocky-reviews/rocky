@@ -130,10 +130,12 @@ packages/schema (analysis document; shared contract)
   row, reads the diff on a read-only session, runs the pipeline and stores `done` (the document
   is re-validated at the write) or `failed` (a code).
 - ADR 0017 (P4-6): the analysis queue lane.
-  - **Enqueue:** the mirror queues an analysis when it reads a new head revision of an open pull
-    request.
+  - **Enqueue:** only with `ROCKY_ANALYSIS_AUTO=on` (off by default). The webhook-driven mirror
+    queues an analysis when it reads a new head revision of an open pull request; the rebuild
+    never does. A revision that is no longer the open PR's head fails as `superseded` unrun.
   - **Claim:** `worker.claim_analyses` (`rocky_worker` only) leases rows fairly: a per-org cap on
-    running rows across workers, a round-robin order across orgs, and expired leases reclaimed.
+    running rows across workers, a round-robin order across orgs (ties go to the org served least recently), and expired leases
+    reclaimed.
   - **Writes:** every write needs the lease, and the lane renews it while the run lasts.
   - **Retries:** with backoff (the provider's hint at least), at most 5 attempts.
   - **Token limit:** before any model call, `estimateAnalysisTokens` sizes the diff after rules

@@ -79,13 +79,18 @@ const jobs = startJobs({
   clock,
   erasers,
   newOrgId: () => randomUUID() as OrgId,
-  analysis: {
-    llm,
-    unitKeySalt: unitKeySaltFor(config.llm),
-    tokenLimit: config.analysis.tokenLimit,
-    concurrency: config.analysis.concurrency,
-    orgConcurrency: config.analysis.orgConcurrency,
-  },
+  // Off by default (ROCKY_ANALYSIS_AUTO): no lane, and the mirror queues nothing.
+  ...(config.analysis.auto
+    ? {
+        analysis: {
+          llm,
+          unitKeySalt: unitKeySaltFor(config.llm),
+          tokenLimit: config.analysis.tokenLimit,
+          concurrency: config.analysis.concurrency,
+          orgConcurrency: config.analysis.orgConcurrency,
+        },
+      }
+    : {}),
   forge:
     config.githubApp === undefined
       ? undefined
@@ -99,7 +104,7 @@ log.info(
   {
     installationEvents: config.githubApp !== undefined,
     pullRequestEvents: config.githubApp !== undefined,
-    analyses: config.githubApp !== undefined,
+    analyses: config.githubApp !== undefined && config.analysis.auto,
     analysisConcurrency: config.analysis.concurrency,
     analysisOrgConcurrency: config.analysis.orgConcurrency,
     tokenLimit: config.analysis.tokenLimit,

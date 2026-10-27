@@ -3,6 +3,14 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P4-6
+- **Revised:** review round 1:
+  - fair turns for single-row claims (SF1);
+  - a byte-based estimate bound for non-ASCII text (SF2);
+  - superseded heads and closed pull requests are not analysed (SF3);
+  - the rebuild never enqueues (SF4);
+  - shutdowns hand rows back without spending attempts (SF5);
+  - column-scoped reads for `rocky_lifecycle` (N1);
+  - automatic analysis off by default (`ROCKY_ANALYSIS_AUTO`).
 - **Builds on:** [ADR 0014](0014-analysis-pipeline.md) (`runAnalysis`, §7 storage, R3: the lease is
   a merge gate for the queue lane), [ADR 0009](0009-installation-lifecycle.md) (`rocky_worker`,
   `rocky_lifecycle`, the inbox claim with leases and `FOR UPDATE SKIP LOCKED`),
@@ -28,21 +36,34 @@ forever.
 
 ### 1. Who enqueues
 
-The mirror enqueues. When a `pull_request` inbox row (or the rebuild) records a head revision
-whose diff it has just read, and the pull request is open, the same `withOrg` transaction queues
-an analysis of that revision (`enqueueHeadAnalysis`). The inbox row is completed in that
-transaction too, so a lost inbox lease rolls the enqueue back with the rest.
+Automatic analysis is **off by default** (`ROCKY_ANALYSIS_AUTO`, §7). While it is off, the
+mirror queues nothing and the worker starts no lane, so nothing spends until an operator turns it
+on.
+
+When it is on, webhooks enqueue. When a `pull_request` inbox row records a head revision whose
+diff it has just read, and the pull request is open, the same `withOrg` transaction queues an
+analysis of that revision (`enqueueHeadAnalysis`). The inbox row is completed in that transaction
+too, so a lost inbox lease rolls the enqueue back with the rest.
+
+**The rebuild never enqueues** (review round 1, SF4). Rebuilding a repository that was never
+mirrored, or restoring one, would otherwise queue every open pull request, up to the rebuild's
+limit of 1 000. A head first read by the rebuild is analysed at its next push.
 
 Each revision is queued at most once:
 
 - a revision with any analysis is skipped;
-- a diff GitHub could not give (`unavailable`) is not queued until a later reading repairs it;
+- a diff GitHub could not give (`unavailable`) is not queued until a later webhook reading
+  repairs it;
 - a partial unique index allows one live analysis per revision (`queued`, `running` or
-  `awaiting_approval`). So the mirror, the rebuild and `enqueueAnalysis` can race without paying
-  twice, and `enqueueAnalysis` is idempotent (it returns the live row).
+  `awaiting_approval`). So concurrent writers cannot pay twice, and `enqueueAnalysis` is
+  idempotent (it returns the live row).
 
-Revisions mirrored before P4-6 are not analysed until their next push. A first rebuild never
-queues a backlog of old pull requests.
+Revisions mirrored before P4-6 are not analysed until their next push.
+
+**Superseded work is not done** (review round 1, SF3). A queued analysis can wait while its pull
+request moves on. When the run starts, `runAnalysis` checks the revision against the pull
+request. If the revision is no longer its head (a later push), or the pull request is no longer
+open, the row fails with `superseded` before any forge read, estimate or model call.
 
 ### 2. The queue lives on `analyses`
 
@@ -80,7 +101,9 @@ which RLS hides from `rocky_app`, so it runs as `rocky_lifecycle`.
 
 `rocky_lifecycle` gets:
 
-- `SELECT` on `analyses`;
+- `SELECT` on the columns the claim reads only (`id`, `org_id`, `status`, `attempts`,
+  `available_at`, `created_at`, `claimed_at`, `lease_id`, `lease_until`, `error_code`), never a
+  document (review round 1, N1);
 - `UPDATE` on the queue columns only (`status`, `attempts`, `available_at`, `claimed_at`,
   `lease_id`, `lease_until`, `error_code`, `completed_at`). It can never touch a document, the
   units, an estimate or an approval;
@@ -106,8 +129,8 @@ Everything after the claim runs under `withOrg(claim.orgId)` as `rocky_app`, and
 guarded by `status = 'running' and lease_id = $lease`:
 
 - `loadAnalysisTarget` also requires a live lease;
-- `completeAnalysis`, `failAnalysis`, `requeueAnalysis`, `holdAnalysis` and `renewAnalysisLease`
-  return false when the lease is no longer held.
+- `completeAnalysis`, `failAnalysis`, `requeueAnalysis`, `releaseAnalysis`, `holdAnalysis` and
+  `renewAnalysisLease` return false when the lease is no longer held.
 
 A run whose lease expired and was handed to another worker therefore writes nothing
 (`lease_lost`).
@@ -117,13 +140,16 @@ lease gone aborts the run through its `AbortSignal`.
 
 **Retries.** A retryable error (an LLM outage, cancellation, a forge outage) requeues the row:
 
-- the delay is `max(30 s × 2^(attempt − 1), the provider's hint)`;
+- the delay is `max(30 s × 2^(attempt − 1), the provider's hint)`; a hint that is not a finite
+  number is ignored (N5);
 - the backoff part stops at 1 h, and the total is capped at 6 h;
 - the delay is enforced by `available_at`;
 - on the fifth attempt the error's code is stored as the failure instead.
 
-Stopping the worker aborts runs in progress, and they are requeued. A row claimed while the lane
-is stopping is handed back at once.
+**Stopping** (review round 1, SF5). Stopping the worker aborts runs in progress with a
+`WorkerStopping` reason. `runAnalysis` then hands the row back through `releaseAnalysis`: queued,
+claimable now, and with the claim's attempt given back (`attempts − 1`). Restarts therefore never
+fail a row. A row claimed while the lane is stopping is handed back the same way.
 
 ### 4. Fairness
 
@@ -133,13 +159,23 @@ For each org with waiting rows, the claim takes:
 - excluding orgs being erased or scheduled for deletion.
 
 Each candidate gets a **round**: the org's running count plus the row's rank within the org.
-Rows are handed out by round, then by age.
+Rows are handed out in this order:
+
+1. by round;
+2. by the org's **last service** (`max(claimed_at)` over its rows), least recently served first,
+   never served before all;
+3. only then by age.
+
+Why the second key matters: with age as the tie-break, a backlogged org won every claim that
+handed out a single row (one slot, or orgs finishing at different times). The order was then
+first-come, first-served: AAAAAAAAAAB (review round 1, SF1).
 
 - Every org's next row comes before any org's row after it. An org with nothing running goes
-  before a busy one, whatever the ages.
+  before a busy one, whatever the ages, and orgs tied on the round take turns.
 - **The bound:** with `k` orgs waiting, an org's next analysis is among the next `k` rows handed
-  out, whatever another org's backlog. With two orgs and `s` slots, each gets
-  `min(cap, ⌊s/2⌋)` slots per round until one runs out.
+  out, whatever another org's backlog and however the slots free up. With two orgs, B's i-th
+  analysis is among the first `2(i + 1)` started. With `s` slots freeing together, each org gets
+  `min(cap, ⌊s/2⌋)` slots per step until one runs out.
 - The per-org cap is global across workers. It counts `running` rows in the database. The lane
   sets it (`ROCKY_ANALYSIS_ORG_CONCURRENCY`, default 2); a worker's own slots are
   `ROCKY_ANALYSIS_CONCURRENCY` (default 4).
@@ -149,6 +185,7 @@ Rows are handed out by round, then by age.
 - a skip scan over the partial index `analyses_queued_idx (org_id, available_at, created_at, id)
 WHERE status = 'queued'` finds the orgs with waiting rows, one index probe per org;
 - a lateral read takes each org's first rows from the same index;
+- `analyses_org_claimed_idx` gives an org's last service in one probe;
 - `analyses_running_org_idx` serves the cap, and `analyses_lease_until_idx` the reclaim.
 
 ### 5. The per-PR token limit and "Analyze anyway"
@@ -157,9 +194,12 @@ WHERE status = 'queued'` finds the orgs with waiting rows, one index probe per o
 function of the diff and the previous analysis. It runs in `runAnalysis` after the diff is read
 and before any model call. It counts:
 
-- the patch characters of every file the pipeline would send, divided by 3 (conservative for
-  code). Noise from rules pre-triage, binary and too-large files, and files whose unit the
-  previous analysis covers (same path and unit key) are left out;
+- the patch of every file the pipeline would send: ASCII characters divided by 3 (conservative
+  for code), and **every UTF-8 byte of any other character as one token**. That is an upper
+  bound for any tokenizer with byte fallback (review round 1, SF2). Counting UTF-16 units / 3,
+  as the first version did, let a 1 MiB CJK diff estimate at about 140k and pass. Noise from
+  rules pre-triage, binary and too-large files, and files whose unit the previous analysis
+  covers (same path and unit key) are left out;
 - a fixed overhead of 2 000 tokens per file call;
 - a fixed overhead of 4 000 tokens for each of the 4 stages.
 
@@ -181,6 +221,8 @@ without a model call.
 It is the database half of the action P6/P7 will expose. In one transaction it:
 
 - checks that the approver is a member of the org;
+- checks that the revision is still the head of an open pull request; an old head or a closed
+  pull request is refused (SF3);
 - moves the row from `awaiting_approval` to `queued`;
 - sets `approved_tokens` to the estimate, with `approved_by`, `approved_at` and `attempts = 0`
   (the hold was not a failure);
@@ -206,8 +248,9 @@ redacts unknown `*tokens` keys. Never titles, paths, diffs or model text.
 
 ### 7. Configuration
 
-`ROCKY_ANALYSIS_TOKEN_LIMIT` (1 000 to 10 000 000), `ROCKY_ANALYSIS_CONCURRENCY` (1 to 32) and
-`ROCKY_ANALYSIS_ORG_CONCURRENCY` (1 to 32) are validated at boot. A bad value stops the worker,
+`ROCKY_ANALYSIS_AUTO` (`on` or `off`, default `off`), `ROCKY_ANALYSIS_TOKEN_LIMIT` (1 000 to
+10 000 000), `ROCKY_ANALYSIS_CONCURRENCY` (1 to 32) and `ROCKY_ANALYSIS_ORG_CONCURRENCY` (1 to 32)
+are validated at boot. A bad value stops the worker,
 and the message names the variable, never the value. Per-org limits are a follow-up (C-5/P10).
 
 ### 8. Metering seam (P4-5)
@@ -218,36 +261,46 @@ does not depend on P4-5's code.
 
 ## Threat model
 
-| #   | What can go wrong                                                                   | Prevention                                                                                       | Test                                                                                                                                                                           |
-| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Q1  | A crash or a failure in the error path leaves a row `running` forever (ADR 0014 R3) | Lease with deadline; the claim reclaims expired leases; after 5 claims `failed`/`lease_expired`  | `analysis-queue.test.ts` "reclaims an expired lease…", "fails a row as lease_expired…"; `analysis-lane.e2e.test.ts` "a worker that dies mid-run…"                              |
-| Q2  | Two workers run and write the same row (a slow worker after its lease expired)      | Every write matches the lease id; renewal aborts a run whose lease is gone                       | `analysis.e2e.test.ts` "a run whose lease expired and was handed to another worker writes nothing"; `analysis-lane.e2e.test.ts` "renews the lease … aborts the run…"           |
-| Q3  | One org's backlog starves another                                                   | Per-org cap, global across workers (advisory lock); round-robin by round then age                | `analysis-queue.test.ts` "hands rows out round-robin…"; `analysis-lane.e2e.test.ts` load test (50 vs 3, three slot/cap settings)                                               |
-| Q4  | Unbounded spend on a huge PR                                                        | Estimate before any model call; held as `awaiting_approval`; approval explicit, audited, one row | `analysis-lane.e2e.test.ts` "a 200k-token pull request waits for user action"; `analysis-queue.test.ts` "Analyze anyway…"                                                      |
-| Q5  | Approval by someone outside the org, for another org's row, or twice                | `withOrg` + RLS; member check; only from `awaiting_approval`                                     | `analysis-queue.test.ts` "is refused for another org's row, a non-member, or a row that is not waiting"                                                                        |
-| Q6  | The server (or a compromised server) claims across tenants or bypasses the cap      | The claim is `rocky_worker`-only; `rocky_lifecycle` updates only queue columns                   | `analysis-queue.test.ts` "only the worker login may claim"; `isolation.test.ts` (definer allow-list, lifecycle privileges, pinned column grants)                               |
-| Q7  | Retry storms (an outage requeues everything at once, forever)                       | Exponential backoff honouring the provider hint, enforced by `available_at`; 5 attempts          | `analyses.test.ts` "a retryable failure puts the row back in the queue, after its delay…"; `analysis.e2e.test.ts` "retries are bounded…"                                       |
-| Q8  | The same revision is analysed (and paid for) twice                                  | Partial unique index on live analyses per revision; the mirror enqueues a revision only once     | `analysis-queue.test.ts` "a held row … blocks a second analysis…", `enqueueHeadAnalysis`; `mirror.e2e.test.ts` "P4-6: a new head of an open pull request queues one analysis…" |
-| Q9  | PR content in logs                                                                  | Ids, counts and codes only                                                                       | `analysis-lane.e2e.test.ts` (no title or path marker in the logs)                                                                                                              |
+| #   | What can go wrong                                                                   | Prevention                                                                                                            | Test                                                                                                                                                                                                                             |
+| --- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | A crash or a failure in the error path leaves a row `running` forever (ADR 0014 R3) | Lease with deadline; the claim reclaims expired leases; after 5 claims `failed`/`lease_expired`                       | `analysis-queue.test.ts` "reclaims an expired lease…", "fails a row as lease_expired…"; `analysis-lane.e2e.test.ts` "a worker that dies mid-run…"                                                                                |
+| Q2  | Two workers run and write the same row (a slow worker after its lease expired)      | Every write matches the lease id; renewal aborts a run whose lease is gone                                            | `analysis.e2e.test.ts` "a run whose lease expired and was handed to another worker writes nothing"; `analysis-lane.e2e.test.ts` "renews the lease … aborts the run…"                                                             |
+| Q3  | One org's backlog starves another                                                   | Per-org cap, global across workers (advisory lock); round-robin by round, then least recent service, then age         | `analysis-queue.test.ts` "hands rows out round-robin…", "SF1: single claims alternate…", its mutation check; `analysis-lane.e2e.test.ts` load test (50 vs 3, six slot/cap/finish settings incl. one slot and staggered finishes) |
+| Q4  | Unbounded spend on a huge PR                                                        | Estimate before any model call (non-ASCII by bytes); held as `awaiting_approval`; approval explicit, audited, one row | `analysis-lane.e2e.test.ts` "a 200k-token pull request waits for user action", "SF2: a 1 MiB CJK pull request is held too"; `estimate.test.ts` (CJK, emoji); `analysis-queue.test.ts` "Analyze anyway…"                          |
+| Q5  | Approval by someone outside the org, for another org's row, or twice                | `withOrg` + RLS; member check; only from `awaiting_approval`                                                          | `analysis-queue.test.ts` "is refused for another org's row, a non-member, or a row that is not waiting"                                                                                                                          |
+| Q6  | The server (or a compromised server) claims across tenants or bypasses the cap      | The claim is `rocky_worker`-only; `rocky_lifecycle` updates only queue columns                                        | `analysis-queue.test.ts` "only the worker login may claim"; `isolation.test.ts` (definer allow-list, lifecycle privileges, pinned column grants)                                                                                 |
+| Q7  | Retry storms (an outage requeues everything at once, forever)                       | Exponential backoff honouring the provider hint, enforced by `available_at`; 5 attempts                               | `analyses.test.ts` "a retryable failure puts the row back in the queue, after its delay…"; `analysis.e2e.test.ts` "retries are bounded…"                                                                                         |
+| Q8  | The same revision is analysed (and paid for) twice                                  | Partial unique index on live analyses per revision; the mirror enqueues a revision only once                          | `analysis-queue.test.ts` "a held row … blocks a second analysis…", `enqueueHeadAnalysis`; `mirror.e2e.test.ts` "P4-6: a new head of an open pull request queues one analysis…"                                                   |
+| Q10 | Spend on work nobody will review (a replaced head, a merged PR)                     | `superseded` before any read when the revision is not the open PR's head; approval refused too                        | `analysis.e2e.test.ts` "SF3: a superseded head or a closed PR…"; `mirror.e2e.test.ts` (synchronize, then merge); `analysis-queue.test.ts` "SF3: refused once…"                                                                   |
+| Q11 | A rebuild or a first install queues a backlog of every open PR; spend before opt-in | The rebuild never enqueues; `ROCKY_ANALYSIS_AUTO` off by default                                                      | `mirror.e2e.test.ts` "…the rebuild never queues (SF4); off by default"; `config.test.ts` "defaults: automatic analysis off…"                                                                                                     |
+| Q12 | Restarts burn attempts and fail rows                                                | Shutdown releases with the attempt given back                                                                         | `analysis-lane.e2e.test.ts` "SF5: stopping releases runs…" (six shutdowns), "…claimed while stopping…"                                                                                                                           |
+| Q9  | PR content in logs                                                                  | Ids, counts and codes only                                                                                            | `analysis-lane.e2e.test.ts` (no title or path marker in the logs)                                                                                                                                                                |
 
 ### Residual risks
 
 - **R1:** the estimate can be beaten on purpose. A PR author can keep the estimate under the limit
   and still cost several times it, because review and graph re-read parts of the diff, and each
-  file is capped at `MAX_FILE_PATCH_CHARS`. The limit bounds size, not spend exactly. P4-5's totals
-  through the `meter` seam make the gap visible. A hard spend guard on actual usage is a follow-up.
+  file is capped at `MAX_FILE_PATCH_CHARS`. The limit bounds size, not spend exactly. Text cannot
+  shrink the estimate: non-ASCII counts one token per UTF-8 byte (SF2), an upper bound for
+  tokenizers with byte fallback, and ASCII at 3 characters per token is conservative for code.
+  P4-5's totals through the `meter` seam make the gap visible. A hard spend guard on actual usage
+  is a follow-up.
 - **R2:** reused units lower the estimate. A file whose unit is reused is not counted, but the
   pipeline may still re-analyse it, for example when reuse fails a check (a leak, changed facts).
-  The overrun is bounded by the files that changed between two analyses of the same PR.
-- **R3:** stopping costs attempts. A run aborted by a shutdown, or a run whose renewal failed
-  during a database outage, uses one of its 5 attempts.
+  The overrun is bounded by the size of the files counted as reused: files whose path and unit
+  key match the previous analysis, so unchanged since it.
+- **R3:** a run whose renewal failed during a database outage uses one of its 5 attempts (a
+  shutdown no longer does, SF5). If the outage outlasts the lease, another worker may claim the
+  row while the first still runs. Nothing of the first is written, but its model calls are
+  spent. A local lease deadline is a follow-up (N2 in `docs/progress.md`).
 - **R4:** the claim reads the orgs with work. Fine at expected scale; a very large number of orgs
   with work would need sharding of the claim.
 
 ## Consequences
 
-- The worker now analyses every new head revision of an open pull request automatically, within
-  the token limit and the org cap.
+- With `ROCKY_ANALYSIS_AUTO=on`, the worker analyses every new webhook-reported head revision of
+  an open pull request automatically, within the token limit and the org cap. Off, nothing is
+  analysed.
 - P6/P7 get the state they need to show "waiting for approval" and to offer "Analyze anyway".
 - A migration (0012) touches `analyses` only. No new grants for `rocky_app`; one function and
   queue-column grants for `rocky_lifecycle`.

@@ -78,6 +78,31 @@ describe("estimateAnalysisTokens (P4-6)", () => {
     );
   });
 
+  it("review round 1, SF2: non-ASCII text counts one token per UTF-8 byte (CJK, emoji)", () => {
+    const line = (text: string) => addedFile("src/t.ts", [text]);
+    const base = estimateAnalysisTokens(line(""))!.tokens;
+    // 300 CJK characters: 3 UTF-8 bytes each, so 900 tokens on top of the ASCII part.
+    expect(estimateAnalysisTokens(line("漢".repeat(300)))!.tokens).toBe(base + 900);
+    // 100 emoji: 4 UTF-8 bytes each (a surrogate pair is one character, not two halves).
+    expect(estimateAnalysisTokens(line("😀".repeat(100)))!.tokens).toBe(base + 400);
+    // Accented Latin: 2 bytes each.
+    expect(estimateAnalysisTokens(line("é".repeat(30)))!.tokens).toBe(base + 60);
+  });
+
+  it("review round 1, SF2: a 1 MiB CJK diff is far over the default limit", () => {
+    // About 1 MiB of UTF-8 over 6 files, each under the per-file caps.
+    const diff = Array.from({ length: 6 }, (_, f) =>
+      addedFile(
+        `src/i18n/part${f}.ts`,
+        Array.from({ length: 1_000 }, () => `"${"漢字".repeat(29)}",`),
+      ),
+    ).join("\n");
+    expect(new TextEncoder().encode(diff).byteLength).toBeGreaterThan(1_000_000);
+    const estimate = estimateAnalysisTokens(diff)!;
+    expect(estimate.sent).toBe(6);
+    expect(estimate.tokens).toBeGreaterThan(DEFAULT_ANALYSIS_TOKEN_LIMIT * 5);
+  });
+
   it("files the previous analysis will be reused for are not counted again (a push re-estimates)", () => {
     const a = fileOf("src/a.ts", 30_000);
     const b = fileOf("src/b.ts", 30_000);
