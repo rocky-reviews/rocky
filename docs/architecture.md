@@ -107,7 +107,7 @@ packages/schema (analysis document; shared contract)
   reads the member, the repository's name and the encrypted token inside `withOrg`, decrypts the
   token for one call and asks GitHub as the user: `GET /user` (the token must be the member's
   `forge_user_id`), `GET /repos/{owner}/{repo}` (`permissions.pull`, same repository id) and, for a
-  repository that is not private, the collaborator permission endpoint (any role). An allow is cached per org + member + repository for at most 5 minutes from the
+  repository that is not private, membership (`GET /repos/{o}/{r}/collaborators/{login}`, 204/404) on an installation token minted for that one repository with `metadata: read` and revoked after use, never the effective-role `/permission` endpoint. An allow is cached per org + member + repository for at most 5 minutes from the
   question and never extended (an outage after that is a deny); denies for 30 s (5 s when
   transient); bounded LRU; invalidation hooks. Every failure denies. P7-2 must call it on every
   route that touches a repository's data, after resolving the repository with

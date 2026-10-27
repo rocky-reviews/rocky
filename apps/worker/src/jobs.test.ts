@@ -74,6 +74,7 @@ const forge = {
   verifyApp: () => Promise.resolve(),
   openRepository: () => Promise.resolve(null),
   locateRepository: () => Promise.resolve(null),
+  isCollaborator: () => Promise.reject(new Error("must not be called")),
 };
 
 describe("startJobs", () => {

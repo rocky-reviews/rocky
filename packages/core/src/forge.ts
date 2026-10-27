@@ -345,10 +345,24 @@ export interface RepositorySession {
 }
 
 /**
+ * Collaborator status by membership (P3-6, ADR 0011 §2 step 3), asked on behalf of the
+ * installation, not the user. Never effective access: on a public repository every user can read,
+ * which is not membership.
+ */
+export interface CollaboratorReader {
+  /**
+   * `true` when `login` is a collaborator of the repository (any role). `false` when the forge
+   * positively says it is not, or the installation cannot access the repository; any other
+   * failure throws `ForgeReadError`.
+   */
+  isCollaborator(ref: RepositoryRef, login: string): Promise<boolean>;
+}
+
+/**
  * Read access to one forge (P3-3, P3-4). Grows with the tasks that need it (posting reviews
  * P3-5, access checks P3-6).
  */
-export interface Forge extends InstallationReader {
+export interface Forge extends InstallationReader, CollaboratorReader {
   /**
    * Opens a session on one repository of an installation. `null` when the forge positively says
    * the installation is gone or the repository is not one it can access; any other failure
@@ -380,6 +394,8 @@ export interface ForgeUserCredential {
 
 /** The repository to ask about: the id is the identity, the name only addresses the request. */
 export interface RepositoryLocator {
+  /** The org's installation (`orgs.installation_id`): the membership check runs on its behalf. */
+  readonly installationId: ForgeNumericId;
   readonly id: ForgeNumericId;
   /** `owner/name` as last mirrored (display data; the answer's id must match `id`). */
   readonly fullName: string;

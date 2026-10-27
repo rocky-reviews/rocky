@@ -1,5 +1,6 @@
 import {
   ForgeReadError,
+  type CollaboratorReader,
   type ForgeUserCredential,
   type RepositoryLocator,
   type UserAccessReader,
@@ -11,30 +12,31 @@ import { isAbort, readCapped } from "./http.js";
 import { isRepositoryFullName } from "./repositories.js";
 
 /**
- * Whether a GitHub user can read a repository (P3-6, ADR 0011), asked as that user with the
- * user's own token:
+ * Whether a GitHub user can read a repository (P3-6, ADR 0011):
  *
- * 1. `GET /user`: who the token belongs to. Its `id` must be the member's `forge_user_id`
- *    (`token_user_mismatch` otherwise), and its `login` is the one used in step 3: the login comes
- *    from GitHub for this token, never from the request or the database.
- * 2. `GET /repos/{owner}/{repo}`: GitHub answers with what this token can see. A JSON 404 means
- *    the user (or, for a GitHub App user token, the installation) cannot see it. Otherwise read
- *    access is `permissions.pull === true` on a repository whose `id` is the one asked about.
+ * 1. `GET /user` with the user's token: who the token belongs to. Its `id` must be the member's
+ *    `forge_user_id` (`token_user_mismatch` otherwise), and its `login` is the one used in step 3:
+ *    the login comes from GitHub for this token, never from the request or the database.
+ * 2. `GET /repos/{owner}/{repo}` with the user's token: GitHub answers with what this token can
+ *    see. A JSON 404 means the user (or, for a GitHub App user token, the installation) cannot see
+ *    it. Otherwise read access is `permissions.pull === true` on a repository whose `id` is the
+ *    one asked about.
  * 3. Only for a repository that is not private (`private !== true` or `visibility !==
- *    "private"`: public, internal, or anything unexpected):
- *    `GET /repos/{owner}/{repo}/collaborators/{login}/permission`. Every GitHub user can read a
- *    public repository and every enterprise member an internal one, so `pull` proves nothing
- *    there. The user must be a collaborator with any role: `permission` `admin`, `write` or
- *    `read`, for this user's `id`. `none` or GitHub's JSON 404 is `not_collaborator`.
+ *    "private"`: public, internal, or anything unexpected): **membership**, through
+ *    `collaborators.isCollaborator` (GitHub: `GET /repos/{owner}/{repo}/collaborators/{login}` on
+ *    an installation token scoped to the repository with `metadata: read`, 204 or 404). Every
+ *    GitHub user can read a public repository and every enterprise member an internal one, so
+ *    neither `pull` nor an effective role (the `/collaborators/{login}/permission` endpoint
+ *    answers `read` for them: review round 2, B1) proves anything there; only membership does.
+ *    Anything but a positive `true` is a deny.
  *
- * Fail closed. 401 is `token_rejected` and 403 is `forbidden` on any call (SSO enforcement, IP
- * allow list, rate limit, or an endpoint that refuses app user tokens). Any other status, a
- * non-JSON or oversized body, a missing or mistyped field (including `visibility`), a redirect (a
- * renamed repository: refused, not followed), a timeout or a network failure throws
- * `ForgeReadError`, which the access check turns into a deny. The token goes into the
- * `authorization` header of these requests and nowhere else: it is never logged, kept, or put in
- * an error. A token that is not a plausible bearer value is rejected without a request, so it
- * cannot inject a header.
+ * Fail closed: 401 is `token_rejected` and 403 `forbidden` on the user's calls (SSO enforcement,
+ * IP allow list, rate limit); any other status, a non-JSON or oversized body, a missing or
+ * mistyped field (including `visibility`), a redirect (a renamed repository: refused, not
+ * followed), a timeout or a network failure throws `ForgeReadError`, which the access check
+ * turns into a deny. The user's token goes into the `authorization` header of these two requests
+ * and nowhere else: never logged, kept, or put in an error. A token that is not a plausible bearer
+ * value is rejected without a request (no header injection).
  */
 
 export const USER_ACCESS_TIMEOUT_MS = 10_000;
@@ -50,11 +52,6 @@ const RepositoryJson = z.object({
   visibility: z.string().max(32),
   permissions: z.object({ pull: z.boolean() }),
 });
-const CollaboratorJson = z.object({
-  permission: z.enum(["admin", "write", "read", "none"]),
-  role_name: z.string().min(1).max(125),
-  user: z.object({ id: ForgeId, login: Login }),
-});
 const NotFound = z.object({ message: z.literal("Not Found") });
 const TOKEN = /^[\x21-\x7e]{16,512}$/;
 const JSON_TYPE = /^application\/(?:vnd\.github\+)?json\b/i;
@@ -62,6 +59,8 @@ const JSON_TYPE = /^application\/(?:vnd\.github\+)?json\b/i;
 export interface GitHubUserAccessReaderOptions {
   /** API base from `githubEndpoints` (https, ends with `/`). */
   readonly api: URL;
+  /** Membership for step 3 (the GitHub `Forge`: `isCollaborator` on an installation token). */
+  readonly collaborators: CollaboratorReader;
   readonly fetch?: typeof fetch;
   readonly timeoutMs?: number;
 }
@@ -153,8 +152,14 @@ export const createGitHubUserAccessReader = (
     credential: ForgeUserCredential,
     repository: RepositoryLocator,
   ): Promise<UserRepositoryAccess> => {
-    const { id, fullName } = repository;
-    if (!Number.isSafeInteger(id) || id < 1 || !isRepositoryFullName(fullName)) {
+    const { installationId, id, fullName } = repository;
+    if (
+      !Number.isSafeInteger(installationId) ||
+      installationId < 1 ||
+      !Number.isSafeInteger(id) ||
+      id < 1 ||
+      !isRepositoryFullName(fullName)
+    ) {
       throw new Error("readUserRepositoryAccess: invalid repository");
     }
     const { token, userId } = credential;
@@ -186,21 +191,12 @@ export const createGitHubUserAccessReader = (
     if (!parsed.data.permissions.pull) return { access: "none", reason: "no_read_permission" };
     if (parsed.data.private && parsed.data.visibility === "private") return { access: "read" };
 
-    // 3. Not private: read access is everyone's, so require a collaborator role.
-    const collaborator = await get(
-      `${base}/collaborators/${segment(user.data.login)}/permission`,
-      token,
+    // 3. Not private: read access is everyone's, so require membership (never effective access).
+    const member = await options.collaborators.isCollaborator(
+      { installationId, repositoryId: id },
+      user.data.login,
     );
-    const collaboratorDenied = denial(collaborator);
-    if (collaboratorDenied !== null) return collaboratorDenied;
-    if (isNotFound(collaborator)) return { access: "none", reason: "not_collaborator" };
-    const role = CollaboratorJson.safeParse(collaborator.body);
-    if (!role.success || role.data.user.id !== user.data.id) {
-      throw new ForgeReadError("invalid_response");
-    }
-    return role.data.permission === "none"
-      ? { access: "none", reason: "not_collaborator" }
-      : { access: "read" };
+    return member === true ? { access: "read" } : { access: "none", reason: "not_collaborator" };
   };
 
   return { kind: "github", readUserRepositoryAccess };

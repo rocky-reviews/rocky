@@ -1,4 +1,5 @@
 export {
+  AccessInputError,
   loadRepositoryAccessContext,
   resolveRepositoryForAccess,
   type RepositoryAccessContext,

@@ -47,6 +47,8 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
     if (!context.member || context.forgeUserId === null) return none("not_member");
     if (context.repositoryFullName === null) return none("unknown_repository");
     if (context.token === null) return none("no_token");
+    // No installation to ask membership on behalf of: nothing can be verified.
+    if (context.installationId === null) return none("unknown_repository");
     if (context.dataKey === null) return none("token_unreadable");
 
     let token: string;
@@ -67,7 +69,11 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
     return options.reader.readUserRepositoryAccess(
       // The reader checks that GitHub says this token is `forge_user_id`'s (token_user_mismatch).
       { token, userId: context.forgeUserId },
-      { id: repositoryId, fullName: context.repositoryFullName },
+      {
+        installationId: context.installationId,
+        id: repositoryId,
+        fullName: context.repositoryFullName,
+      },
     );
   },
 });

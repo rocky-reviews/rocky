@@ -1,8 +1,11 @@
 import type { OrgId } from "@rocky-reviews/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadRepositoryAccessContext, resolveRepositoryForAccess } from "./access.js";
+import {
+  AccessInputError,
+  loadRepositoryAccessContext,
+  resolveRepositoryForAccess,
+} from "./access.js";
 import { createDb, type Db } from "./client.js";
-import { SecretStoreError } from "./secrets.js";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
@@ -49,12 +52,28 @@ describe("resolveRepositoryForAccess", () => {
     });
   });
 
-  it("another org's repository or pull request, or an unknown id, is null (RLS)", async () => {
+  it("another org's repository or pull request, or an unknown id, is null (explicit org filter)", async () => {
     await db.withOrg(A.orgId, async (tx) => {
       expect(await resolveRepositoryForAccess(tx, { repoId: B.repoId })).toBeNull();
       expect(await resolveRepositoryForAccess(tx, { pullRequestId: B.pullRequestId })).toBeNull();
       expect(await resolveRepositoryForAccess(tx, { repoId: UNKNOWN })).toBeNull();
       expect(await resolveRepositoryForAccess(tx, { pullRequestId: UNKNOWN })).toBeNull();
+    });
+  });
+
+  it("RLS alone hides another org's rows (no org_id predicate in the query)", async () => {
+    await db.withOrg(A.orgId, async (tx) => {
+      const repos = await tx.query("select id, forge_repo_id from repos where id = $1", [B.repoId]);
+      const pulls = await tx.query(
+        `select r.forge_repo_id from pull_requests p join repos r on r.id = p.repo_id
+          where p.id = $1`,
+        [B.pullRequestId],
+      );
+      const members = await tx.query("select id from members where id = $1", [B.memberId]);
+      expect([repos.rowCount, pulls.rowCount, members.rowCount]).toEqual([0, 0, 0]);
+      // Positive control: the same queries see the org's own rows.
+      const own = await tx.query("select id from repos where id = $1", [A.repoId]);
+      expect(own.rowCount).toBe(1);
     });
   });
 
@@ -69,7 +88,7 @@ describe("resolveRepositoryForAccess", () => {
       ]) {
         await expect(
           resolveRepositoryForAccess(tx, bad as { repoId: string }),
-        ).rejects.toBeInstanceOf(SecretStoreError);
+        ).rejects.toBeInstanceOf(AccessInputError);
       }
     });
   });
@@ -83,6 +102,7 @@ describe("loadRepositoryAccessContext", () => {
     expect(context).toMatchObject({
       member: true,
       forgeUserId: 1001,
+      installationId: 61,
       repositoryFullName: "org-61/api",
       token: null,
     });

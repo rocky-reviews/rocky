@@ -32,7 +32,12 @@ import {
   startPostgres,
   type TestPostgres,
 } from "@rocky-reviews/db/testing";
-import { createGitHubUserAccessReader, githubEndpoints } from "@rocky-reviews/forge-github";
+import {
+  createGitHubForge,
+  createGitHubUserAccessReader,
+  githubEndpoints,
+  parseGitHubAppAuth,
+} from "@rocky-reviews/forge-github";
 import {
   fakeGitHubApi,
   FIXTURE_APP_ID,
@@ -67,6 +72,25 @@ let keys: KeyWrapper;
 let unwraps = 0;
 const appKeys = testAppKeys();
 const { api } = githubEndpoints({});
+const appAuth = parseGitHubAppAuth({
+  appId: String(FIXTURE_APP_ID),
+  privateKey: appKeys.privateKeyPem,
+});
+/**
+ * The user reader with the real membership check (installation tokens). The app JWT needs the
+ * real clock: the fake checks it against `Date.now`.
+ */
+const readerFor = () =>
+  createGitHubUserAccessReader({
+    api,
+    fetch: github.fetch,
+    collaborators: createGitHubForge({
+      auth: appAuth,
+      api,
+      clock: { now: () => new Date() },
+      fetch: github.fetch,
+    }),
+  });
 const lines: string[] = [];
 const log = createLogger("access-test", {
   level: "debug",
@@ -163,7 +187,7 @@ beforeEach(() => {
   access = createRepositoryAccess({
     db,
     keys,
-    reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+    reader: readerFor(),
     clock,
     log,
   });
@@ -345,7 +369,7 @@ describe("fail closed", () => {
     const wrong = createRepositoryAccess({
       db,
       keys: other,
-      reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+      reader: readerFor(),
       clock,
       log,
     });
@@ -367,7 +391,7 @@ describe("fail closed", () => {
         }),
       } as unknown as Db,
       keys,
-      reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+      reader: readerFor(),
     });
     expect(await source.readAccess(asAlice(A))).toEqual({
       access: "none",
@@ -383,7 +407,7 @@ describe("fail closed", () => {
         withOrg: () => Promise.reject(new Error(`connection lost ${A.aliceToken}`)),
       } as unknown as Db,
       keys,
-      reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+      reader: readerFor(),
       clock,
       log,
     });
@@ -403,7 +427,7 @@ describe("fail closed", () => {
         }),
       } as unknown as Db,
       keys,
-      reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+      reader: readerFor(),
     });
     expect(await source.readAccess(asAlice(A))).toMatchObject({ reason: "token_unreadable" });
   });
@@ -485,10 +509,20 @@ describe("review round 1, A: public and internal repositories require collaborat
           allowed: false,
           reason: "not_collaborator",
         });
-        expect(github.requests.slice(before).map((r) => r.path)).toEqual([
-          "/user",
-          `/repos/${A.fullName}`,
-          `/repos/${A.fullName}/collaborators/alice/permission`,
+        const calls = github.requests.slice(before).map((r) => `${r.method} ${r.path}`);
+        // B1: GitHub's effective-role endpoint says `read` for this non-collaborator …
+        const effective = await github.fetch(
+          `https://api.github.com/repos/${A.fullName}/collaborators/alice/permission`,
+          { headers: { authorization: `Bearer ${A.aliceToken}` }, redirect: "error" },
+        );
+        expect(((await effective.json()) as { permission: string }).permission).toBe("read");
+        // … so membership is asked on an installation token instead, which says no.
+        expect(calls).toEqual([
+          "GET /user",
+          `GET /repos/${A.fullName}`,
+          `POST /app/installations/${A.installationId}/access_tokens`,
+          `GET /repos/${A.fullName}/collaborators/alice`,
+          "DELETE /installation/token",
         ]);
       } finally {
         github.setVisibility(SHARED_REPO, "private");
@@ -503,11 +537,11 @@ describe("review round 1, A: public and internal repositories require collaborat
         const fresh = createRepositoryAccess({
           db,
           keys,
-          reader: createGitHubUserAccessReader({ api, fetch: github.fetch }),
+          reader: readerFor(),
           clock,
           log,
         });
-        github.failRoute("collaborator", status);
+        github.failRoute("membership", status);
         expect((await fresh.check(asAlice(A))).allowed).toBe(false);
       }
     } finally {

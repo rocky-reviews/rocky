@@ -33,6 +33,7 @@ export {
   isInstallationEvent,
   isPullRequestEvent,
   PULL_REQUEST_EVENT_TYPES,
+  type CollaboratorReader,
   type DiffTruncation,
   type Forge,
   type ForgeAccount,

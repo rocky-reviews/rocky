@@ -51,6 +51,13 @@ export const MIRROR_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object
   contents: "read",
   pull_requests: "read",
 });
+/**
+ * The membership check (P3-6, ADR 0011 §2 step 3): `GET /repos/{owner}/{repo}/collaborators/
+ * {username}` needs repository permission Metadata: read, and nothing else.
+ */
+export const COLLABORATOR_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object.freeze({
+  metadata: "read",
+});
 /** GitHub adds `metadata: read` to every installation token. */
 const IMPLIED_PERMISSIONS: Readonly<Record<string, "read">> = { metadata: "read" };
 
@@ -77,6 +84,8 @@ const ActorLogin = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?
 /** `owner/name`; a name of `.` or `..` would address another path (review round 1, F). */
 const FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
 const FullName = z.string().regex(FULL_NAME);
+/** A GitHub user login: what `GET /user` returns for a user token (no `[bot]`). */
+const USER_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 /** A git branch name as GitHub reports it: no control characters or spaces; bounded. */
 const Branch = z
   .string()
@@ -301,12 +310,15 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     };
   };
 
-  /** True when the granted permissions are within what was asked for. */
-  const withinScope = (granted: Record<string, string>): boolean =>
+  /** True when the granted permissions are within what was asked for (read only). */
+  const withinScope = (
+    granted: Record<string, string>,
+    asked: Readonly<Record<string, "read">>,
+  ): boolean =>
     Object.entries(granted).every(
       ([name, level]) =>
         level === "read" &&
-        (Object.hasOwn(MIRROR_TOKEN_PERMISSIONS, name) || Object.hasOwn(IMPLIED_PERMISSIONS, name)),
+        (Object.hasOwn(asked, name) || Object.hasOwn(IMPLIED_PERMISSIONS, name)),
     );
 
   /**
@@ -316,6 +328,7 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
   const mint = async (
     installationId: number,
     scope: { readonly repositoryId: number } | { readonly name: string },
+    permissions: Readonly<Record<string, "read">> = MIRROR_TOKEN_PERMISSIONS,
   ): Promise<Minted | null> => {
     const answer = await exchange(
       "POST",
@@ -327,7 +340,7 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
           ...("repositoryId" in scope
             ? { repository_ids: [scope.repositoryId] }
             : { repositories: [scope.name] }),
-          permissions: MIRROR_TOKEN_PERMISSIONS,
+          permissions,
         },
       },
     );
@@ -346,8 +359,8 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     try {
       const parsed = TokenJson.safeParse(body);
       if (!parsed.success) throw new ForgeReadError("invalid_response");
-      const { permissions, repositories } = parsed.data;
-      if (!withinScope(permissions) || repositories.length !== 1) {
+      const { repositories } = parsed.data;
+      if (!withinScope(parsed.data.permissions, permissions) || repositories.length !== 1) {
         throw new ForgeReadError("invalid_response");
       }
       repository = decodeRepository(repositories[0]);
@@ -559,5 +572,43 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     return { installationId: installation.data.id, repositoryId: minted.repository.id };
   };
 
-  return { ...installations, openRepository, locateRepository };
+  /**
+   * Membership, not effective access (P3-6 review round 2, ADR 0011 §2 step 3): is `login` a
+   * collaborator of the repository? Asked with an installation token minted for this one
+   * repository with `metadata: read` only (checked like every mint: exactly this repository, no
+   * wider permission, or revoked and refused), revoked as soon as the answer is read. The URL
+   * uses the name GitHub gave for this repository id in the mint answer, never Rocky's copy.
+   * GitHub answers 204 for a collaborator (any role, any affiliation) and its JSON 404 otherwise.
+   * `false` also when the installation is gone or cannot access the repository; anything else
+   * throws `ForgeReadError`.
+   */
+  const isCollaborator = async (ref: RepositoryRef, login: string): Promise<boolean> => {
+    if (!isId(ref.installationId) || !isId(ref.repositoryId)) {
+      throw new Error("isCollaborator: invalid ids");
+    }
+    if (typeof login !== "string" || !USER_LOGIN.test(login)) {
+      throw new Error("isCollaborator: invalid login");
+    }
+    const minted = await mint(
+      ref.installationId,
+      { repositoryId: ref.repositoryId },
+      COLLABORATOR_TOKEN_PERMISSIONS,
+    );
+    if (minted === null) return false;
+    try {
+      const answer = await exchange(
+        "GET",
+        `repos/${repoPath(minted.repository.fullName)}/collaborators/${encodeURIComponent(login)}`,
+        { kind: "token", token: minted.token },
+        MAX_TOKEN_RESPONSE_BYTES,
+      );
+      if (answer.status === 204) return true;
+      if (isNotFound(answer)) return false;
+      throw new ForgeReadError("http_status", answer.status);
+    } finally {
+      await revoke(minted.token);
+    }
+  };
+
+  return { ...installations, openRepository, locateRepository, isCollaborator };
 };

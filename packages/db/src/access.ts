@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { TenantTx } from "./client.js";
-import { members, repos } from "./schema.js";
+import { members, orgs, repos } from "./schema.js";
 import { loadForgeToken, loadOrgDataKey, SecretStoreError, type StoredSecret } from "./secrets.js";
 
 /**
@@ -17,12 +17,25 @@ export interface RepositoryAccessContext {
    * member. The reader checks that the token belongs to this user.
    */
   readonly forgeUserId: number | null;
+  /**
+   * The org's forge installation (`orgs.installation_id`), on whose behalf membership is checked
+   * for repositories that are not private; `null` when the org row is not visible.
+   */
+  readonly installationId: number | null;
   /** `owner/name` of the org's repository with this forge id, or `null`. */
   readonly repositoryFullName: string | null;
   /** The member's encrypted forge token (`rk1:…`), or `null` when none is stored. */
   readonly token: StoredSecret | null;
   /** The org's wrapped data key (`rkw1:…`), or `null` when none is provisioned. */
   readonly dataKey: StoredSecret | null;
+}
+
+/**
+ * A caller passed input that names nothing valid (a bug in the caller, not a database or secret
+ * failure). Fixed message; carries no values.
+ */
+export class AccessInputError extends Error {
+  override readonly name = "AccessInputError";
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,10 +60,15 @@ export const loadRepositoryAccessContext = async (
       .select({ fullName: repos.fullName })
       .from(repos)
       .where(and(eq(repos.orgId, tx.orgId), eq(repos.forgeRepoId, forgeRepoId)));
+    const [org] = await tx.db
+      .select({ installationId: orgs.installationId })
+      .from(orgs)
+      .where(eq(orgs.id, tx.orgId));
     const exists = member !== undefined;
     return {
       member: exists,
       forgeUserId: member?.forgeUserId ?? null,
+      installationId: org?.installationId ?? null,
       repositoryFullName: repo?.fullName ?? null,
       token: exists ? await loadForgeToken(tx, memberId) : null,
       dataKey: exists ? await loadOrgDataKey(tx) : null,
@@ -81,7 +99,7 @@ export const resolveRepositoryForAccess = async (
   const byRepo = repoId !== undefined;
   const id = byRepo ? repoId : pullRequestId;
   if ((byRepo && pullRequestId !== undefined) || typeof id !== "string" || !UUID.test(id)) {
-    throw new SecretStoreError("access: name exactly one repository or pull request by uuid");
+    throw new AccessInputError("access: name exactly one repository or pull request by uuid");
   }
   let rows: { forge_repo_id: string | number }[];
   try {

@@ -76,6 +76,7 @@ describe("the pull request lane", () => {
         verifyApp: () => Promise.resolve(),
         openRepository: () => Promise.reject(new Error("must not be called")),
         locateRepository: () => Promise.reject(new Error("must not be called")),
+        isCollaborator: () => Promise.reject(new Error("must not be called")),
       },
       appCheck: { ready: () => Promise.resolve(true) },
       log: createLogger("lane-test", { destination: { write: () => undefined } }),

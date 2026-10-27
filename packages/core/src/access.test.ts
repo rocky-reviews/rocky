@@ -690,6 +690,39 @@ describe("review round 1", () => {
       }
     });
 
+    const orgN = (i: number) => `0b6f1c1e-3333-4a5b-8c9d-${String(i).padStart(12, "0")}`;
+
+    it("S1 (ABA): a table reset never lets an in-flight check cache across an invalidation", async () => {
+      for (const reinvalidate of [false, true]) {
+        const gh = scripted();
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((r) => (release = r));
+        gh.set(req(), async () => {
+          await gate;
+          return READ;
+        });
+        const maxEntries = 3;
+        const access = createRepositoryAccessCheck({
+          source: gh.source,
+          clock: clock(),
+          maxEntries,
+        });
+        const pending = access.check(req()); // in flight in org A (generation 0)
+        access.invalidateOrg(ORG_A); // A → 1
+        // More than maxEntries other orgs: the table is reset, so A's counter is forgotten and
+        // would read 0 again, its value when the check started.
+        for (let i = 0; i <= maxEntries; i++) {
+          access.invalidateOrg(orgN(i));
+          expect(access.generationTableSize).toBeLessThanOrEqual(maxEntries);
+        }
+        if (reinvalidate) access.invalidateOrg(ORG_A); // A → 1 again
+        release();
+        expect((await pending).allowed).toBe(true);
+        expect(access.size).toBe(0);
+        expect(access.generationTableSize).toBeLessThanOrEqual(maxEntries);
+      }
+    });
+
     it("the per-org generation table stays bounded", async () => {
       const gh = scripted();
       const access = createRepositoryAccessCheck({
@@ -700,6 +733,7 @@ describe("review round 1", () => {
       for (let i = 0; i < 50; i++) {
         const org = `0b6f1c1e-1111-4a5b-8c9d-${String(i).padStart(12, "0")}`;
         access.invalidateOrg(org);
+        expect(access.generationTableSize).toBeLessThanOrEqual(4);
       }
       gh.set(req(), READ);
       expect((await access.check(req())).allowed).toBe(true);

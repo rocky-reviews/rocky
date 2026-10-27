@@ -152,6 +152,8 @@ export interface RepositoryAccessCheck {
   /** Current entries (diagnostics and tests). */
   entries(): AccessCacheEntry[];
   readonly size: number;
+  /** Orgs with a stored invalidation generation (diagnostics and tests): ≤ `maxEntries`. */
+  readonly generationTableSize: number;
 }
 
 export interface RepositoryAccessCheckOptions {
@@ -162,7 +164,8 @@ export interface RepositoryAccessCheckOptions {
   readonly maxEntries?: number;
   /**
    * Called once per caller: a cache hit, the caller that asked the forge, and each caller that
-   * joined that question (`joined: true`). Errors it throws are ignored.
+   * joined that question (`joined: true`). A request rejected as `invalid_request` emits no event:
+   * it has no ids that could be reported. Errors it throws are ignored.
    */
   readonly onDecision?: (event: AccessDecisionEvent) => void;
 }
@@ -429,6 +432,9 @@ export const createRepositoryAccessCheck = (
       })),
     get size() {
       return entries.size;
+    },
+    get generationTableSize() {
+      return orgGenerations.size;
     },
   };
 };

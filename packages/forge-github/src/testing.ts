@@ -175,7 +175,15 @@ export interface FakePullRequest {
 
 /** Routes `failRoute` can make fail. */
 export type FakeRoute =
-  "installation" | "token" | "pull" | "list" | "compare" | "repository" | "user" | "collaborator";
+  | "installation"
+  | "token"
+  | "pull"
+  | "list"
+  | "compare"
+  | "repository"
+  | "user"
+  | "collaborator"
+  | "membership";
 
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
@@ -266,6 +274,7 @@ const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
 const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
 const COLLABORATOR_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/;
+const MEMBERSHIP_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)$/;
 const ROLES: readonly FakePermission[] = ["read", "triage", "write", "maintain", "admin"];
 /** `permission` is the legacy base role: maintain reads as write, triage as read. */
 const LEGACY: Readonly<Record<FakePermission, string>> = {
@@ -290,7 +299,9 @@ const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9
  * unless the user has a role on the repository (`setPermission`) or it is public or internal, and
  * the repository is one an installation of the app can access; otherwise the repository with
  * that user's `permissions`); and `GET /repos/{owner}/{repo}/collaborators/{username}/permission`
- * (a JSON 404 unless `username` has a role). Fixtures: `get-repository.json`,
+ * (the effective role: `read` for anyone on a public or internal repository). For installation
+ * tokens, `GET /repos/{owner}/{repo}/collaborators/{username}` answers 204 for a user with a role
+ * on the repository and a JSON 404 otherwise. Fixtures: `get-repository.json`,
  * `get-authenticated-user.json`, `get-collaborator-permission.json`.
  */
 export const fakeGitHubApi = (options: {
@@ -376,9 +387,23 @@ export const fakeGitHubApi = (options: {
     });
   };
 
+  const userByLogin = (username: string) => {
+    let login: string;
+    try {
+      login = decodeURIComponent(username).toLowerCase();
+    } catch {
+      return undefined;
+    }
+    return [...users.values()].find((u) => u.login.toLowerCase() === login);
+  };
+
   /**
-   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission`, asked by `callerId`: 404
-   * unless the caller can see the repository and `username` is a collaborator (has a role).
+   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission`, asked by `callerId`. It
+   * reports the **effective** legacy role, as GitHub most likely does (review round 2, B1): a
+   * collaborator gets their role, and anyone else gets `read` on a public repository (and, for
+   * an internal one, every enterprise member, modelled as every user). 404 only when the caller
+   * cannot see the repository or `username` is not a user. Rocky must never read this as
+   * membership.
    */
   const collaboratorPermission = (
     owner: string,
@@ -389,27 +414,24 @@ export const fakeGitHubApi = (options: {
     const failure = takeRouteFailure("collaborator");
     if (failure !== undefined) return json(failure, { message: "Injected failure" });
     const seen = visibleTo(owner, name, callerId);
-    const target = [...users.values()].find(
-      (u) => u.login.toLowerCase() === decodeURIComponent(username).toLowerCase(),
-    );
-    const role =
-      seen === undefined || target === undefined
-        ? undefined
-        : permissions.get(`${target.id}:${seen.entry.repo.id}`);
-    if (seen === undefined || target === undefined || role === undefined) {
+    const target = userByLogin(username);
+    if (seen === undefined || target === undefined) {
       return json(404, githubFixture("get-installation.not-found"));
     }
+    const role: FakePermission | undefined =
+      permissions.get(`${target.id}:${seen.entry.repo.id}`) ??
+      (seen.visibility === "private" ? undefined : "read");
     const fixture = githubFixture("get-collaborator-permission");
     return json(200, {
       ...fixture,
-      permission: LEGACY[role],
-      role_name: role,
+      permission: role === undefined ? "none" : LEGACY[role],
+      role_name: role ?? "none",
       user: {
         ...(fixture["user"] as Record<string, unknown>),
         id: target.id,
         login: target.login,
         permissions: flags(role, false),
-        role_name: role,
+        role_name: role ?? "none",
       },
     });
   };
@@ -564,6 +586,19 @@ export const fakeGitHubApi = (options: {
         return out;
       });
       return json(200, slice);
+    }
+    m = MEMBERSHIP_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("membership");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      // Membership, not effective access: 204 only for a user with a role on the repository.
+      const target = userByLogin(group(m, 3));
+      const role =
+        target === undefined ? undefined : permissions.get(`${target.id}:${entry.repo.id}`);
+      if (role === undefined) return json(404, githubFixture("get-installation.not-found"));
+      return new Response(null, { status: 204 });
     }
     m = COMPARE_ROUTE.exec(path);
     if (method === "GET" && m !== null) {
