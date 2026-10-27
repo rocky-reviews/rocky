@@ -64,7 +64,14 @@ import {
   type ReviewFinding,
 } from "./outputs.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
-import { applyFloor, NOISE_SUMMARIES, preTriage } from "./rules.js";
+import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
+import {
+  belowUnanalysedRuleFloor,
+  findingsFloor,
+  maxRisk,
+  unreviewedFloor,
+  type UnreviewedRisk,
+} from "./verdict.js";
 import {
   reusableUnit,
   unitKey,
@@ -167,6 +174,13 @@ const SEVERITY_RANK: Readonly<Record<Finding["severity"], number>> = {
 };
 const RISK_RANK: Readonly<Record<RiskLevel, number>> = { low: 0, medium: 1, high: 2, critical: 3 };
 
+/**
+ * Fixed text for a critical or important file with only deleted lines (review round 1, Fix B):
+ * findings sit on new-side lines, so there is nothing the review can point at.
+ */
+export const DELETION_ONLY_DETAIL =
+  "Only deleted lines: Rocky reviews new-side lines, so this file was not reviewed. Read the deletion by hand.";
+
 const REVIEWED_LEVELS: ReadonlySet<TriagedFile["level"]> = new Set(["critical", "important"]);
 
 const UNANALYSED_REASON: Readonly<Record<UnitFailure, UnanalysedReason>> = {
@@ -234,11 +248,13 @@ const mapBounded = async <T, R>(
   return results;
 };
 
-interface UnitOutcome {
+interface UnitOutcome extends UnreviewedRisk {
   readonly path: string;
   readonly triage?: TriagedFile;
   readonly findings: readonly ReviewFinding[];
   readonly unanalysed?: UnanalysedReason;
+  /** Fixed, pipeline-written text only. */
+  readonly detail?: string;
   readonly unit?: FileUnit;
 }
 
@@ -250,12 +266,6 @@ const fitMinutes = (files: readonly TriagedFile[]): TriagedFile[] => {
     ...file,
     reviewMinutes: Math.floor((file.reviewMinutes * limits.MAX_REVIEW_MINUTES) / sum),
   }));
-};
-
-const verdictFloor = (findings: readonly Finding[]): RiskLevel => {
-  if (findings.some((finding) => finding.severity === "critical")) return "critical";
-  if (findings.some((finding) => finding.severity === "high")) return "medium";
-  return "low";
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -302,17 +312,20 @@ const run = async (
   // --- Rules pre-triage --------------------------------------------------------------------
   const noise: NoiseFile[] = [];
   const unanalysed: UnanalysedFile[] = [];
-  const work: { file: DiffFile; floor: ReturnType<typeof preTriage> }[] = [];
+  /** Files that were not reviewed, with what is known of their risk (Fix A). */
+  const unreviewed: UnreviewedRisk[] = [];
+  const work: { file: DiffFile; floor: FloorLevel | undefined }[] = [];
   for (const file of files) {
     const rule = preTriage(file.path);
     if (rule.kind === "noise") {
       noise.push({ path: file.path, summary: NOISE_SUMMARIES[rule.rule] });
-    } else if (file.binary) {
-      unanalysed.push({ path: file.path, reason: "binary" });
-    } else if (file.tooLarge) {
-      unanalysed.push({ path: file.path, reason: "too-large" });
+      continue;
+    }
+    if (file.binary || file.tooLarge) {
+      unanalysed.push({ path: file.path, reason: file.binary ? "binary" : "too-large" });
+      unreviewed.push({ ruleFloor: rule.floor });
     } else {
-      work.push({ file, floor: rule });
+      work.push({ file, floor: rule.floor });
     }
   }
   stats.noise = noise.length;
@@ -323,8 +336,7 @@ const run = async (
     item: (typeof work)[number],
     unitSignal: AbortSignal,
   ): Promise<UnitOutcome> => {
-    const { file } = item;
-    const floor = item.floor.kind === "analyse" ? item.floor.floor : undefined;
+    const { file, floor } = item;
     const fileFacts = facts(file);
     const key = unitKey(deps.sha256Hex, salt, file);
     const reused = reusableUnit(request.previous, fileFacts, key);
@@ -334,7 +346,7 @@ const run = async (
         path: file.path,
         triage: applyFloor(reused.triage, floor),
         findings: reused.findings,
-        unit: { path: file.path, key },
+        unit: { path: file.path, key, reviewMinutes: reused.triage.reviewMinutes },
       };
     }
     const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
@@ -358,11 +370,29 @@ const run = async (
       unitSignal,
     );
     if (!triaged.ok) {
-      return { path: file.path, findings: [], unanalysed: UNANALYSED_REASON[triaged.reason] };
+      return {
+        path: file.path,
+        findings: [],
+        unanalysed: UNANALYSED_REASON[triaged.reason],
+        ruleFloor: floor,
+      };
     }
     const triage = applyFloor({ ...triaged.value, path: file.path }, floor);
-    if (!REVIEWED_LEVELS.has(triage.level) || !hasNewSide(file)) {
-      return { path: file.path, triage, findings: [], unit: { path: file.path, key } };
+    // The unit keeps the model's minutes; the document's may be scaled to fit (Fix E).
+    const unit = { path: file.path, key, reviewMinutes: triaged.value.reviewMinutes };
+    if (!REVIEWED_LEVELS.has(triage.level)) {
+      return { path: file.path, triage, findings: [], unit };
+    }
+    if (!hasNewSide(file)) {
+      // Nothing to review on the new side: it must not look reviewed and clean (Fix B).
+      return {
+        path: file.path,
+        findings: [],
+        unanalysed: "analysis-failed",
+        detail: DELETION_ONLY_DETAIL,
+        ruleFloor: floor,
+        level: triage.level,
+      };
     }
     stats.reviewed++;
     const reviewed = await completeWithRepair(
@@ -379,15 +409,17 @@ const run = async (
       unitSignal,
     );
     if (!reviewed.ok) {
-      // A file that should have been reviewed and was not must not look reviewed and clean.
-      return { path: file.path, findings: [], unanalysed: UNANALYSED_REASON[reviewed.reason] };
+      // A file that should have been reviewed and was not must not look reviewed and clean, and
+      // its risk still counts toward the verdict (Fix A).
+      return {
+        path: file.path,
+        findings: [],
+        unanalysed: UNANALYSED_REASON[reviewed.reason],
+        ruleFloor: floor,
+        level: triage.level,
+      };
     }
-    return {
-      path: file.path,
-      triage,
-      findings: reviewed.value.findings,
-      unit: { path: file.path, key },
-    };
+    return { path: file.path, triage, findings: reviewed.value.findings, unit };
   };
   const outcomes = await mapBounded(
     work,
@@ -402,7 +434,12 @@ const run = async (
   const units: FileUnit[] = [];
   for (const outcome of outcomes) {
     if (outcome.unanalysed !== undefined) {
-      unanalysed.push({ path: outcome.path, reason: outcome.unanalysed });
+      unanalysed.push({
+        path: outcome.path,
+        reason: outcome.unanalysed,
+        ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
+      });
+      unreviewed.push(outcome);
       continue;
     }
     if (outcome.triage !== undefined) triaged.push(outcome.triage);
@@ -525,7 +562,7 @@ const run = async (
     graph !== undefined ? "drawn" : graphUnavailable !== undefined ? "unavailable" : "none";
 
   // --- Briefing ------------------------------------------------------------------------------
-  const floor = verdictFloor(findings);
+  const floor = maxRisk(findingsFloor(findings), unreviewedFloor(unreviewed));
   const minutes = Math.max(
     limits.MIN_REVIEW_MINUTES,
     triageFiles.reduce((total, file) => total + file.reviewMinutes, 0),
@@ -533,7 +570,8 @@ const run = async (
   const toBriefing = (answer: BriefingAnswer): Briefing => ({
     summary: answer.summary,
     verdict: {
-      // The verdict never sits below what the findings say, whatever the model answered.
+      // The verdict never sits below what the findings say, nor below the risk of a file that
+      // was not reviewed, whatever the model answered (Fix A).
       level: RISK_RANK[answer.verdict.level] >= RISK_RANK[floor] ? answer.verdict.level : floor,
       reason: answer.verdict.reason,
     },
@@ -592,7 +630,7 @@ const run = async (
 
   // --- Final validation: the whole document, as it will be stored ----------------------------
   const final = assemble(toBriefing(briefed.value), graph, graphUnavailable);
-  if (!final.ok) throw new Failed("document_invalid");
+  if (!final.ok || belowUnanalysedRuleFloor(final.value)) throw new Failed("document_invalid");
   return { status: "done", document: final.value, units, stats };
 };
 

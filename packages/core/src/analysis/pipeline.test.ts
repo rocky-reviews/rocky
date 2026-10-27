@@ -552,3 +552,179 @@ describe("A6 bounds", () => {
     expect(outcome).toMatchObject({ status: "failed", code: "internal_error" });
   });
 });
+
+describe("A15 a stage failure cannot lower the verdict below the file's risk (review round 1, Fix A)", () => {
+  const verdictOf = (outcome: AnalysisOutcome) => done(outcome).document.briefing.verdict.level;
+  // The default briefing answers "low", as an injected PR would ask it to.
+
+  it("a refused review on an auth path stores at least high, not low", async () => {
+    const { outcome } = await analyze(
+      script((call) =>
+        is("review", "src/auth/session.ts")(call) ? { status: "refused" } : undefined,
+      ),
+    );
+    expect(done(outcome).document.provenance.unanalysed.map((f) => f.path)).toEqual([
+      "src/auth/session.ts",
+    ]);
+    expect(verdictOf(outcome)).toBe("high");
+  });
+
+  it("a refused triage on an auth path stores at least high", async () => {
+    const { outcome } = await analyze(
+      script((call) =>
+        is("triage", "src/auth/session.ts")(call) ? { status: "refused" } : undefined,
+      ),
+    );
+    expect(verdictOf(outcome)).toBe("high");
+  });
+
+  it.each([
+    [
+      "a too-large auth file",
+      addedFile(
+        "src/auth/big.ts",
+        Array.from({ length: 5_001 }, () => "x"),
+      ),
+    ],
+    [
+      "a too-large migration",
+      addedFile(
+        "db/migrations/0002.sql",
+        Array.from({ length: 5_001 }, () => "x"),
+      ),
+    ],
+    [
+      "a binary auth file",
+      [
+        "diff --git a/src/auth/keys.bin b/src/auth/keys.bin",
+        "new file mode 100644",
+        "Binary files /dev/null and b/src/auth/keys.bin differ",
+      ].join("\n"),
+    ],
+  ])("%s stores at least high", async (_name, risky) => {
+    const diff = [risky, addedFile("src/util/format.ts", LINES)].join("\n");
+    const { outcome } = await analyze(script(), { diff });
+    expect(verdictOf(outcome)).toBe("high");
+  });
+
+  it("a file triaged critical whose review fails stores at least high; important at least medium", async () => {
+    const diff = addedFile("src/billing/charge.ts", LINES);
+    const level = (lvl: "critical" | "important", score: number) =>
+      script((call) =>
+        call.role === "triage"
+          ? { value: triage(lvl, score) }
+          : is("review", "src/billing/charge.ts")(call)
+            ? { status: "refused" }
+            : undefined,
+      );
+    expect(verdictOf((await analyze(level("critical", 90), { diff })).outcome)).toBe("high");
+    expect(verdictOf((await analyze(level("important", 60), { diff })).outcome)).toBe("medium");
+  });
+
+  it("a model's higher verdict is kept", async () => {
+    const { outcome } = await analyze(
+      script((call) =>
+        is("review", "src/auth/session.ts")(call)
+          ? { status: "refused" }
+          : is("review")(call) && call.part("file_path") === undefined
+            ? { value: { ...briefingFor(call), verdict: { level: "critical", reason: "x" } } }
+            : undefined,
+      ),
+    );
+    expect(verdictOf(outcome)).toBe("critical");
+  });
+});
+
+describe("A16 a deletion-only risky file is not shown as reviewed (review round 1, Fix B)", () => {
+  const deleted = (path: string) =>
+    [
+      `diff --git a/${path} b/${path}`,
+      "deleted file mode 100644",
+      `--- a/${path}`,
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-a",
+      "-b",
+    ].join("\n");
+
+  it.each(["src/auth/guard.ts", "src/core/engine.ts"])(
+    "a deleted %s triaged critical is unanalysed with a fixed detail and raises the verdict",
+    async (path) => {
+      const crit = script((call) =>
+        call.role === "triage" ? { value: triage("critical", 95) } : undefined,
+      );
+      const diff = [deleted(path), addedFile("src/util/format.ts", LINES)].join("\n");
+      const { outcome, calls } = await analyze(crit, { diff });
+      const { document } = done(outcome);
+      expect(calls.filter(is("review", path))).toHaveLength(0);
+      expect(document.triage.files.map((f) => f.path)).not.toContain(path);
+      expect(document.provenance.unanalysed).toEqual([
+        { path, reason: "analysis-failed", detail: expect.stringMatching(/not reviewed/) },
+      ]);
+      expect(document.briefing.verdict.level).toBe("high");
+    },
+  );
+
+  it("a deleted file triaged normal stays triaged (not a review candidate)", async () => {
+    const normal = script((call) =>
+      call.role === "triage" ? { value: triage("normal", 30) } : undefined,
+    );
+    const { outcome } = await analyze(normal, { diff: deleted("src/util/old.ts") });
+    expect(done(outcome).document.triage.files.map((f) => f.path)).toEqual(["src/util/old.ts"]);
+  });
+});
+
+describe("A17 reused units keep raw review minutes (review round 1, Fix E)", () => {
+  it("a PR over the cap pushed twice keeps the unchanged file's minutes", async () => {
+    const slow = script((call) =>
+      call.role === "triage"
+        ? { value: { ...triage("normal", 30), reviewMinutes: 400 } }
+        : undefined,
+    );
+    const first = done(
+      (
+        await analyze(slow, {
+          diff: [addedFile("a.ts", LINES), addedFile("b.ts", LINES)].join("\n"),
+        })
+      ).outcome,
+    );
+    expect(first.units.map((u) => u.reviewMinutes)).toEqual([400, 400]);
+    const second = done(
+      (
+        await analyze(slow, {
+          diff: [
+            addedFile("a.ts", LINES),
+            addedFile("b.ts", [...LINES.slice(0, 2), "export {};"]),
+          ].join("\n"),
+          previous: { document: first.document, units: first.units },
+        })
+      ).outcome,
+    );
+    expect(second.stats).toMatchObject({ analysed: 1, reused: 1 });
+    const minutes = (d: typeof first.document) =>
+      d.triage.files.map((f) => [f.path, f.reviewMinutes]);
+    expect(minutes(second.document)).toEqual(minutes(first.document));
+    expect(second.units.map((u) => u.reviewMinutes)).toEqual([400, 400]);
+  });
+});
+
+describe("A5b reuse refuses a file the previous analysis listed as unanalysed (review round 1, N3)", () => {
+  it("even when a hand-crafted previous document also lists it as triaged", async () => {
+    const { outcome } = await analyze();
+    const previous = done(outcome);
+    const crafted = {
+      units: previous.units,
+      document: {
+        ...previous.document,
+        provenance: {
+          ...previous.document.provenance,
+          unanalysed: [{ path: "src/util/format.ts", reason: "analysis-failed" as const }],
+        },
+      },
+    };
+    const { calls } = await analyze(script(), { previous: crafted });
+    expect(calls.filter(is("triage")).map((c) => c.part("file_path"))).toEqual([
+      "src/util/format.ts",
+    ]);
+  });
+});

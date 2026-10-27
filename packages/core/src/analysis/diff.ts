@@ -109,7 +109,14 @@ const headerPaths = (rest: string): { old: string; new: string } | undefined => 
     const next = sidePath(quoted[2] ?? "", "b/");
     return old === undefined || next === undefined ? undefined : { old, new: next };
   }
-  // Unquoted: only the symmetric form `a/P b/P` splits unambiguously.
+  // Unquoted: one space splits unambiguously; otherwise only the symmetric form `a/P b/P` does.
+  const parts = rest.split(" ");
+  if (parts.length === 2) {
+    const [left = "", right = ""] = parts;
+    return left.startsWith("a/") && right.startsWith("b/")
+      ? { old: left.slice(2), new: right.slice(2) }
+      : undefined;
+  }
   if (rest.length % 2 === 0) return undefined;
   const half = (rest.length - 1) / 2;
   const left = rest.slice(0, half);
@@ -123,10 +130,20 @@ const HUNK_HEADER = /^@@ -(\d{1,9})(?:,(\d{1,9}))? \+(\d{1,9})(?:,(\d{1,9}))? @@
 
 /** Header lines git writes between `diff --git` and the first hunk. Anything else fails. */
 const HEADER_LINE =
-  /^(?:index [0-9a-f]+\.\.[0-9a-f]+(?: [0-7]{6})?|(?:old|new|deleted file|new file) mode [0-7]{6}|(?:dis)?similarity index \d{1,3}%|copy (?:from|to) .*)$/;
+  /^(?:index [0-9a-f]+\.\.[0-9a-f]+(?: [0-7]{6})?|(?:old|new|deleted file|new file) mode [0-7]{6}|(?:dis)?similarity index \d{1,3}%)$/;
 
-/** `rename from <path>` / `rename to <path>`: git writes the path unquoted here. */
-const RENAME = /^rename (from|to) (.+)$/;
+/**
+ * `rename from|to <path>` and `copy from|to <path>`. Git C-quotes the path (`quote_c_style`) when
+ * it needs to, and writes it without an `a/` or `b/` prefix.
+ */
+const MOVE = /^(rename|copy) (from|to) (.+)$/;
+
+const movePath = (raw: string): string =>
+  raw.startsWith('"')
+    ? raw.length >= 2 && raw.endsWith('"')
+      ? unquote(raw)
+      : fail("diff_unsupported_path")
+    : raw;
 
 const checkPath = (path: string): string => {
   if (!RepositoryPath.safeParse(path).success) fail("diff_unsupported_path");
@@ -140,6 +157,11 @@ interface Draft {
   headerNew: string | undefined;
   renameFrom: string | undefined;
   renameTo: string | undefined;
+  copyFrom: string | undefined;
+  copyTo: string | undefined;
+  /** A `---` / `+++` line was read (its path may be /dev/null, i.e. undefined). */
+  sawMinus: boolean;
+  sawPlus: boolean;
   created: boolean;
   deleted: boolean;
   binary: boolean;
@@ -150,20 +172,36 @@ interface Draft {
   start: number;
 }
 
+/** Every source that names one side must name the same path (review round 1, Fix D). */
+const oneSide = (...candidates: (string | undefined)[]): string | undefined => {
+  const named = candidates.filter((c): c is string => c !== undefined);
+  if (named.some((c) => c !== named[0])) fail("diff_unparseable");
+  return named[0];
+};
+
 const finish = (draft: Draft, lines: readonly string[], end: number): DiffFile => {
+  if (draft.sawMinus !== draft.sawPlus) fail("diff_unparseable");
   const renamed = draft.renameFrom !== undefined || draft.renameTo !== undefined;
-  const status: FileStatus = draft.created
-    ? "added"
-    : draft.deleted
-      ? "removed"
-      : renamed
-        ? "renamed"
-        : "modified";
-  const newPath =
-    status === "removed"
-      ? (draft.oldPath ?? draft.renameFrom ?? draft.headerOld)
-      : (draft.newPath ?? draft.renameTo ?? draft.headerNew);
-  const oldPath = draft.oldPath ?? draft.renameFrom ?? draft.headerOld;
+  const copied = draft.copyFrom !== undefined || draft.copyTo !== undefined;
+  if ([draft.created, draft.deleted, renamed, copied].filter(Boolean).length > 1) {
+    fail("diff_unparseable");
+  }
+  // A new file has no base side and a deleted one no head side.
+  if (draft.created && draft.oldPath !== undefined) fail("diff_unparseable");
+  if (draft.deleted && draft.newPath !== undefined) fail("diff_unparseable");
+  const oldSide = oneSide(draft.headerOld, draft.renameFrom, draft.copyFrom, draft.oldPath);
+  const newSide = oneSide(draft.headerNew, draft.renameTo, draft.copyTo, draft.newPath);
+  // A copy creates its target; the source is unchanged, so the diff is a new file's.
+  const status: FileStatus =
+    draft.created || copied
+      ? "added"
+      : draft.deleted
+        ? "removed"
+        : renamed
+          ? "renamed"
+          : "modified";
+  const newPath = status === "removed" ? oldSide : newSide;
+  const oldPath = oldSide;
   if (newPath === undefined) return fail("diff_unparseable");
   const path = checkPath(newPath);
   const previousPath =
@@ -258,6 +296,10 @@ const newDraft = (start: number, header: string): Draft => {
     headerNew: paths?.new,
     renameFrom: undefined,
     renameTo: undefined,
+    copyFrom: undefined,
+    copyTo: undefined,
+    sawMinus: false,
+    sawPlus: false,
     created: false,
     deleted: false,
     binary: false,
@@ -280,7 +322,6 @@ const parse = (text: string): DiffFile[] => {
     if (files.length >= limits.MAX_FILES) fail("too_many_files");
     const draft = newDraft(i, header.slice("diff --git ".length));
     i++;
-    let sawMinus = false;
     // Extended header lines, up to the first hunk or the next file.
     while (
       i < lines.length &&
@@ -290,16 +331,22 @@ const parse = (text: string): DiffFile[] => {
       const line = lines[i] ?? "";
       if (line.startsWith("new file mode ")) draft.created = true;
       else if (line.startsWith("deleted file mode ")) draft.deleted = true;
-      else if (RENAME.test(line)) {
-        const [, side, path] = RENAME.exec(line) ?? [];
-        if (side === "to") draft.renameTo = path;
-        else draft.renameFrom = path;
+      else if (MOVE.test(line)) {
+        const [, kind, side, raw] = MOVE.exec(line) ?? [];
+        const path = movePath(raw ?? "");
+        const target = side === "to";
+        if (kind === "rename" && target) draft.renameTo = path;
+        else if (kind === "rename") draft.renameFrom = path;
+        else if (target) draft.copyTo = path;
+        else draft.copyFrom = path;
       } else if (line.startsWith("--- ")) {
+        if (draft.sawMinus) fail("diff_unparseable");
         draft.oldPath = sidePath(line.slice(4), "a/");
-        sawMinus = true;
+        draft.sawMinus = true;
       } else if (line.startsWith("+++ ")) {
-        if (!sawMinus) fail("diff_unparseable");
+        if (!draft.sawMinus || draft.sawPlus) fail("diff_unparseable");
         draft.newPath = sidePath(line.slice(4), "b/");
+        draft.sawPlus = true;
       } else if (line.startsWith("Binary files ") || line === "GIT binary patch") {
         draft.binary = true;
         // A binary patch's payload runs to the next file.

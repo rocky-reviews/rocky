@@ -130,6 +130,25 @@ describe("parseUnifiedDiff", () => {
     expect(ok(text)[0]!.path).toBe("café.ts");
   });
 
+  it("unquotes git's C-quoted rename and copy paths (review round 1, Fix C)", () => {
+    const rename = [
+      'diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251 v2.ts"',
+      "similarity index 100%",
+      'rename from "caf\\303\\251.ts"',
+      'rename to "caf\\303\\251 v2.ts"',
+    ].join("\n");
+    expect(ok(rename).map((f) => [f.path, f.previousPath, f.status])).toEqual([
+      ["café v2.ts", "café.ts", "renamed"],
+    ]);
+    const copy = [
+      'diff --git "a/caf\\303\\251.ts" "b/t\\303\\251.ts"',
+      "similarity index 100%",
+      'copy from "caf\\303\\251.ts"',
+      'copy to "t\\303\\251.ts"',
+    ].join("\n");
+    expect(ok(copy).map((f) => [f.path, f.status])).toEqual([["té.ts", "added"]]);
+  });
+
   it("an empty diff has no files", () => {
     expect(ok("")).toEqual([]);
   });
@@ -197,6 +216,79 @@ describe("parseUnifiedDiff", () => {
         "diff_unsupported_path",
       ],
       ["a header with no paths", "diff --git\n", "diff_unparseable"],
+      // Review round 1, Fix D: the header, ---/+++ and rename/copy paths must agree.
+      [
+        "a +++ path that disagrees with the header",
+        [
+          "diff --git a/src/auth/x.ts b/src/auth/x.ts",
+          "--- a/src/auth/x.ts",
+          "+++ b/docs/readme.md",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a --- path that disagrees with the header",
+        [
+          "diff --git a/src/auth/x.ts b/src/auth/x.ts",
+          "--- a/docs/readme.md",
+          "+++ b/src/auth/x.ts",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a rename that disagrees with the header",
+        ["diff --git a/a.ts b/b.ts", "rename from a.ts", "rename to c.ts"].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a rename that disagrees with +++",
+        [
+          "diff --git a/a b.ts b/c d.ts",
+          "rename from a b.ts",
+          "rename to c d.ts",
+          "--- a/a b.ts",
+          "+++ b/elsewhere.ts",
+          "@@ -1 +1 @@",
+          "-1",
+          "+2",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a --- line with no +++ line",
+        ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "@@ -1 +1 @@", "-a", "+b"].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a new file whose --- side is not /dev/null",
+        [
+          "diff --git a/a.ts b/a.ts",
+          "new file mode 100644",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -0,0 +1 @@",
+          "+x",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a deleted file whose +++ side is not /dev/null",
+        [
+          "diff --git a/a.ts b/a.ts",
+          "deleted file mode 100644",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +0,0 @@",
+          "-x",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
     ];
     it.each(cases)("%s", (_name, text, code) => {
       const result = parseUnifiedDiff(text);

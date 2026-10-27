@@ -33,6 +33,11 @@ const SHA256_HEX = /^[0-9a-f]{64}$/;
 export const FileUnit = z.strictObject({
   path: RepositoryPath,
   key: z.string().regex(SHA256_HEX),
+  /**
+   * The triage model's own estimate, before the document scales minutes to fit its cap (review
+   * round 1, Fix E): a reused unit must not be scaled twice.
+   */
+  reviewMinutes: z.int().min(0).max(limits.MAX_REVIEW_MINUTES),
 });
 export type FileUnit = z.output<typeof FileUnit>;
 
@@ -79,7 +84,8 @@ export const reusableUnit = (
 ): ReusedUnit | undefined => {
   if (previous === undefined) return undefined;
   const { document, units } = previous;
-  if (!units.some((unit) => unit.path === facts.path && unit.key === key)) return undefined;
+  const unit = units.find((candidate) => candidate.path === facts.path && candidate.key === key);
+  if (unit === undefined) return undefined;
   const before = document.provenance.files.find((file) => file.path === facts.path);
   if (before === undefined || !sameFacts(before, facts)) return undefined;
   if (document.provenance.unanalysed.some((file) => file.path === facts.path)) return undefined;
@@ -97,5 +103,5 @@ export const reusableUnit = (
       ...(finding.suggestion === undefined ? {} : { suggestion: finding.suggestion }),
       agentPrompt: finding.agentPrompt,
     }));
-  return { triage, findings };
+  return { triage: { ...triage, reviewMinutes: unit.reviewMinutes }, findings };
 };

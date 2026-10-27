@@ -41,6 +41,7 @@ const DOCUMENT = JSON.parse(
 const UNITS = DOCUMENT.triage.files.map((file, i) => ({
   path: file.path,
   key: i.toString(16).padStart(64, "0"),
+  reviewMinutes: file.reviewMinutes,
 }));
 const UNKNOWN = "5d1e9f00-dddd-4bcd-9e00-000000000010";
 
@@ -131,15 +132,50 @@ describe("analyses store", () => {
     ).rejects.toThrow(AnalysisStoreError);
     await expect(
       db.withOrg(A.orgId, (tx) =>
-        completeAnalysis(tx, id, DOCUMENT, [{ path: "pnpm-lock.yaml", key: "0".repeat(64) }]),
+        completeAnalysis(tx, id, DOCUMENT, [
+          { path: "pnpm-lock.yaml", key: "0".repeat(64), reviewMinutes: 0 },
+        ]),
       ),
     ).rejects.toThrow(/invalid file units/);
     await expect(
       db.withOrg(A.orgId, (tx) =>
-        completeAnalysis(tx, id, DOCUMENT, [{ path: "x.ts", key: "nothex" }]),
+        completeAnalysis(tx, id, DOCUMENT, [{ path: "x.ts", key: "nothex", reviewMinutes: 0 }]),
       ),
     ).rejects.toThrow(/invalid file units/);
     expect(await row(id)).toMatchObject({ status: "running", document: null, file_units: null });
+  });
+
+  it("refuses a document whose verdict sits below an unanalysed auth or migration file (review round 1, Fix A)", async () => {
+    const id = await running(A, "6".repeat(40));
+    const auth = DOCUMENT.triage.files.find((f) => f.path === "src/auth/invitations.ts")!;
+    const lowered = {
+      ...DOCUMENT,
+      provenance: {
+        ...DOCUMENT.provenance,
+        unanalysed: [{ path: auth.path, reason: "analysis-failed" }],
+      },
+      triage: {
+        ...DOCUMENT.triage,
+        files: DOCUMENT.triage.files.filter((f) => f.path !== auth.path),
+      },
+      findings: DOCUMENT.findings.filter((f) => f.path !== auth.path && f.severity !== "high"),
+      briefing: {
+        ...DOCUMENT.briefing,
+        verdict: { level: "low", reason: "Looks fine." },
+        reviewPath: DOCUMENT.briefing.reviewPath.filter((s) => s.path !== auth.path),
+        memoryApplied: [],
+      },
+    };
+    lowered.findings = lowered.findings.map((f) => ({ ...f, memory: [] }));
+    const units = UNITS.filter((u) => u.path !== auth.path);
+    await expect(
+      db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, lowered, units)),
+    ).rejects.toThrow(/invalid document verdict/);
+    const raised = {
+      ...lowered,
+      briefing: { ...lowered.briefing, verdict: { level: "high", reason: "x" } },
+    };
+    expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, raised, units))).toBe(true);
   });
 
   it("a failure stores a fixed code and no document; codes are shape-checked", async () => {

@@ -1,4 +1,5 @@
 import {
+  belowUnanalysedRuleFloor,
   FileUnits,
   type DiffTruncation,
   type FileUnit,
@@ -13,8 +14,9 @@ import type { TenantTx } from "./client.js";
  *
  * A row moves `queued` → `running` → `done` | `failed` (or back to `queued` for a retry). Only two
  * things are ever stored as the outcome:
- * - `done`: a document that passes `parseAnalysisDocumentJson` here, again, at the write, plus the
- *   file units of the files it analysed (every unit names a triaged file of that document);
+ * - `done`: a document that passes `parseAnalysisDocumentJson` here, again, at the write, whose
+ *   verdict is not below an unanalysed migration or auth file, plus the file units of the files
+ *   it analysed (every unit names a triaged file of that document);
  * - `failed`: a fixed error code and no document.
  * A partial or unvalidated document cannot be written through this module.
  */
@@ -183,6 +185,8 @@ export const completeAnalysis = async (
   if (!parsed.ok) invalid("document");
   const checked = FileUnits.safeParse(units);
   if (!parsed.ok || !checked.success) return invalid("file units");
+  // The verdict never sits below an unanalysed migration or auth file (review round 1, Fix A).
+  if (belowUnanalysedRuleFloor(parsed.value)) invalid("document verdict");
   const triaged = new Set(parsed.value.triage.files.map((file) => file.path));
   if (!checked.data.every((unit) => triaged.has(unit.path))) invalid("file units");
   // Store the validated value (defaults filled in), not the caller's object.

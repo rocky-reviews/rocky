@@ -96,6 +96,26 @@ export default tseslint.config(
     },
   },
   {
+    // The scripted LLM fake (P4-3) ships in core's exports for tests and evals; production code
+    // must never answer with it (review round 1, Fix F). Type-only imports load nothing.
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    ignores: ["**/*.test.ts", "**/test-support.ts", "**/testing.ts", "**/testing/**"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@rocky-reviews/core/testing",
+              message: "The scripted LLM fake is for tests only (P4-3).",
+              allowTypeImports: true,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The tag's own definition.
     files: ["packages/core/src/llm.ts"],
     rules: {

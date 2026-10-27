@@ -18,6 +18,7 @@ export {
 export {
   analyzePullRequest,
   DEFAULT_CONCURRENCY,
+  DELETION_ONLY_DETAIL,
   GRAPH_MAX_INPUT_CHARS,
   type AnalysisDeps,
   type AnalysisFailureCode,
@@ -26,3 +27,4 @@ export {
   type AnalysisStage,
   type AnalysisStats,
 } from "./pipeline.js";
+export { belowUnanalysedRuleFloor } from "./verdict.js";

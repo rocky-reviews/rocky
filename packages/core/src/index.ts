@@ -114,7 +114,9 @@ export {
 } from "./llm.js";
 export {
   analyzePullRequest,
+  belowUnanalysedRuleFloor,
   DEFAULT_CONCURRENCY,
+  DELETION_ONLY_DETAIL,
   FileUnit,
   FileUnits,
   GRAPH_MAX_INPUT_CHARS,

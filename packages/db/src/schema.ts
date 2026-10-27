@@ -127,7 +127,7 @@ export const analyses = pgTable("analyses", {
   createdAt: createdAt(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
   /** Unit keys of the files a finished analysis analysed (P4-3, migration 0010). */
-  fileUnits: jsonb("file_units").$type<{ path: string; key: string }[]>(),
+  fileUnits: jsonb("file_units").$type<{ path: string; key: string; reviewMinutes: number }[]>(),
 });
 
 export const findingsState = pgTable("findings_state", {
