@@ -265,6 +265,37 @@ describe("revisions", () => {
     });
   });
 
+  it("review round 1: an `unavailable` reading is not final; a real reading replaces it", async () => {
+    const orgId = await newOrg();
+    const record = (diff: RevisionDiff) =>
+      worker.withOrg(orgId, async (tx) => {
+        const { id } = await upsertPullRequest(tx, await upsertRepository(tx, REPO), pr());
+        return recordRevision(tx, id, pr(), diff);
+      });
+    expect(await record(diffOf("", "unavailable"))).toBe("created");
+    // Not counted as read, so the worker and the rebuild ask GitHub again.
+    expect(
+      await worker.withOrg(orgId, (tx) => mirroredPullRequest(tx, REPO.id, 847)),
+    ).toMatchObject({ headDiffRead: false });
+    // Unavailable again: nothing to change.
+    expect(await record(diffOf("", "unavailable"))).toBe("unchanged");
+    const real = diffOf("+now it exists\n");
+    expect(await record(real)).toBe("completed");
+    expect(
+      await worker.withOrg(orgId, (tx) => mirroredPullRequest(tx, REPO.id, 847)),
+    ).toMatchObject({ headDiffRead: true });
+    const { rows } = await superuser.query(
+      `select diff_bytes, encode(diff_sha256, 'hex') as sha, diff_truncated, diff_truncation
+         from pr_revisions where org_id = $1`,
+      [orgId],
+    );
+    expect(rows).toEqual([
+      { diff_bytes: real.bytes, sha: real.sha256, diff_truncated: false, diff_truncation: null },
+    ]);
+    // A real reading is final: a later unavailable one never replaces it.
+    expect(await record(diffOf("", "unavailable"))).toBe("unchanged");
+  });
+
   it("the database keeps the flag, the reason and the reading consistent (CHECK)", async () => {
     const orgId = await newOrg();
     const prId = await worker.withOrg(

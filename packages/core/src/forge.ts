@@ -237,8 +237,14 @@ export interface RevisionRef {
 export type DiffTruncation = "max_bytes" | "forge_limit" | "unavailable";
 
 export interface ForgeDiff {
-  /** Unified diff text, cut at `maxBytes`. Untrusted content: never logged. */
-  readonly text: string;
+  /**
+   * The unified diff exactly as read, cut at `maxBytes` (review round 1: raw bytes, not decoded
+   * text, so a non-UTF-8 diff keeps its size and digest). Untrusted content: never logged.
+   * Decode only where text is needed.
+   */
+  readonly bytes: Uint8Array;
+  /** sha256 of `bytes`, lower-case hex. */
+  readonly sha256: string;
   /** True when `text` is not the whole diff (`truncation` says why). */
   readonly truncated: boolean;
   readonly truncation: DiffTruncation | null;

@@ -222,7 +222,8 @@ export interface FakeGitHubApi {
   putDiff(
     repositoryId: number,
     revision: { baseSha: string; headSha: string },
-    diff: string | "too_large" | "missing",
+    /** Text is sent as UTF-8; bytes are sent as they are (e.g. a Latin-1 diff). */
+    diff: string | Uint8Array | "too_large" | "missing",
   ): void;
 }
 
@@ -270,7 +271,7 @@ export const fakeGitHubApi = (options: {
   const requests: FakeGitHubApi["requests"] = [];
   const repositories = new Map<number, { installationId: number; repo: FakeRepository }>();
   const pulls = new Map<number, Map<number, FakePullRequest>>();
-  const diffs = new Map<string, string | "too_large" | "missing">();
+  const diffs = new Map<string, string | Uint8Array | "too_large" | "missing">();
   const live = new Map<
     string,
     { installationId: number; repositoryIds: Set<number>; expiresAt: number }
@@ -443,7 +444,7 @@ export const fakeGitHubApi = (options: {
           "index 1111111..2222222",
           `index ${group(m, 3).slice(0, 7)}..${group(m, 4).slice(0, 7)}`,
         );
-      return new Response(text, {
+      return new Response(typeof text === "string" ? text : Buffer.from(text), {
         status: 200,
         headers: { "content-type": "application/vnd.github.diff; charset=utf-8" },
       });

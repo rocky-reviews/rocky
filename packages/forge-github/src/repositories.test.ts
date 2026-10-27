@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ForgeReadError, type RepositorySession } from "@rocky-reviews/core";
 import { describe, expect, it } from "vitest";
 import { parseGitHubAppAuth } from "./app-auth.js";
@@ -383,13 +384,18 @@ describe("pull requests", () => {
 });
 
 describe("diffs: read up to a cap, truncation flagged", () => {
+  const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+  const EMPTY_SHA256 = sha256(new Uint8Array());
+
   it("reads a revision's diff from compare/{base}...{head}", async () => {
     const { github, forge } = setup();
     const text = "diff --git a/x b/x\n+one\n";
     github.putDiff(77, { baseSha: BASE, headSha: HEAD }, text);
     const session = await open(forge);
-    expect(await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 1024 })).toEqual({
-      text,
+    const diff = await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 1024 });
+    expect(diff).toEqual({
+      bytes: new Uint8Array(Buffer.from(text)),
+      sha256: sha256(Buffer.from(text)),
       truncated: false,
       truncation: null,
     });
@@ -405,15 +411,39 @@ describe("diffs: read up to a cap, truncation flagged", () => {
     const diff = await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 100 });
     expect(diff.truncated).toBe(true);
     expect(diff.truncation).toBe("max_bytes");
-    expect(Buffer.byteLength(diff.text)).toBeLessThanOrEqual(100);
-    expect(diff.text.endsWith("\n")).toBe(true);
-    expect(lines.startsWith(diff.text)).toBe(true);
+    expect(diff.bytes.byteLength).toBeLessThanOrEqual(100);
+    const text = Buffer.from(diff.bytes).toString("utf8");
+    expect(text.endsWith("\n")).toBe(true);
+    expect(lines.startsWith(text)).toBe(true);
+    expect(diff.sha256).toBe(sha256(diff.bytes));
     // Exactly at the cap is not truncated.
     const exact = await session.getDiff(
       { baseSha: BASE, headSha: HEAD },
       { maxBytes: Buffer.byteLength(lines) },
     );
     expect(exact).toMatchObject({ truncated: false, truncation: null });
+    await session.close();
+  });
+
+  it("review round 1: size and sha256 describe the raw bytes read, even when they are not UTF-8", async () => {
+    const { github, forge } = setup();
+    // Latin-1: every 0xe9 is invalid UTF-8; decoding and re-encoding would triple it (U+FFFD).
+    const line = Buffer.concat([
+      Buffer.from("+caf"),
+      Buffer.from([0xe9, 0xe9, 0xe9]),
+      Buffer.from("\n"),
+    ]);
+    const raw = Buffer.concat(Array.from({ length: 50 }, () => line));
+    github.putDiff(77, { baseSha: BASE, headSha: HEAD }, raw);
+    const session = await open(forge);
+    const whole = await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 4096 });
+    expect(Buffer.from(whole.bytes).equals(raw)).toBe(true);
+    expect(whole.sha256).toBe(sha256(raw));
+    const cut = await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 100 });
+    expect(cut.bytes.byteLength).toBeLessThanOrEqual(100);
+    expect(Buffer.from(cut.bytes).equals(raw.subarray(0, cut.bytes.byteLength))).toBe(true);
+    expect(cut.bytes.byteLength % line.byteLength).toBe(0);
+    expect(cut.sha256).toBe(sha256(raw.subarray(0, cut.bytes.byteLength)));
     await session.close();
   });
 
@@ -424,12 +454,14 @@ describe("diffs: read up to a cap, truncation flagged", () => {
     github.putDiff(77, { baseSha: BASE, headSha: head2 }, "missing");
     const session = await open(forge);
     expect(await session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 10 })).toEqual({
-      text: "",
+      bytes: new Uint8Array(),
+      sha256: EMPTY_SHA256,
       truncated: true,
       truncation: "forge_limit",
     });
     expect(await session.getDiff({ baseSha: BASE, headSha: head2 }, { maxBytes: 10 })).toEqual({
-      text: "",
+      bytes: new Uint8Array(),
+      sha256: EMPTY_SHA256,
       truncated: true,
       truncation: "unavailable",
     });

@@ -1,6 +1,7 @@
 import {
   ForgeReadError,
   type Clock,
+  type DiffTruncation,
   type Forge,
   type ForgeDiff,
   type ForgePullRequest,
@@ -10,6 +11,7 @@ import {
   type RepositorySession,
   type RevisionRef,
 } from "@rocky-reviews/core";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { githubAppJwt, type GitHubAppAuth } from "./app-auth.js";
 import { isAbort, readCapped, readUpTo } from "./http.js";
@@ -39,8 +41,10 @@ import { createGitHubInstallationReader } from "./installations.js";
  * GitHub shows for a pull request, pinned to the revision's two commits, so a push between the
  * pull request read and the diff read cannot mix revisions). They are read up to `maxBytes`; a
  * longer diff is cut at its last complete line and flagged `max_bytes`. GitHub refusing to render
- * it (406 with `errors[].code == "too_large"`) is `forge_limit`; commits it no longer has (a
- * JSON 404 or 422) is `unavailable`. Diff text is untrusted and never logged.
+ * it (406 with `errors[].code == "too_large"`) is `forge_limit`; commits it does not have (a JSON
+ * 404 or 422, which can be temporary right after a push) is `unavailable`. The reading is the raw
+ * bytes and their sha256, never a decoded copy (a diff need not be UTF-8). Diff content is
+ * untrusted and never logged.
  */
 
 export const MIRROR_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object.freeze({
@@ -139,6 +143,14 @@ const TooLarge = z.object({
 
 const JSON_TYPE = /^application\/(?:vnd\.github\+)?json\b/i;
 const DIFF_TYPE = /^(?:text\/plain|application\/vnd\.github\.diff)\b/i;
+
+/** A diff reading of exactly these bytes. */
+const reading = (bytes: Buffer, truncation: DiffTruncation | null): ForgeDiff => ({
+  bytes: new Uint8Array(bytes),
+  sha256: createHash("sha256").update(bytes).digest("hex"),
+  truncated: truncation !== null,
+  truncation,
+});
 
 const isId = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0;
 
@@ -476,20 +488,10 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
             throw new ForgeReadError("invalid_response");
           }
           const { bytes, overflow } = await readUpTo(response, maxBytes);
-          if (!overflow) {
-            return {
-              text: new TextDecoder("utf-8").decode(bytes),
-              truncated: false,
-              truncation: null,
-            };
-          }
-          // Cut at the last complete line, so no hunk line (or UTF-8 sequence) is split.
-          const end = bytes.lastIndexOf(0x0a);
-          return {
-            text: new TextDecoder("utf-8").decode(bytes.subarray(0, end + 1)),
-            truncated: true,
-            truncation: "max_bytes",
-          };
+          if (!overflow) return reading(bytes, null);
+          // Cut at the last complete line, so no hunk line (or UTF-8 sequence) is split. Size and
+          // digest describe these raw bytes, never a decoded and re-encoded copy.
+          return reading(bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1), "max_bytes");
         }
         const bytes = await readCapped(response, MAX_TOKEN_RESPONSE_BYTES);
         const answer: Exchange = { status: response.status, contentType, bytes };
@@ -497,11 +499,11 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
           if (!TooLarge.safeParse(json(answer)).success) {
             throw new ForgeReadError("http_status", 406);
           }
-          return { text: "", truncated: true, truncation: "forge_limit" };
+          return reading(Buffer.alloc(0), "forge_limit");
         }
         if (isNotFound(answer) || response.status === 422) {
           json(answer);
-          return { text: "", truncated: true, truncation: "unavailable" };
+          return reading(Buffer.alloc(0), "unavailable");
         }
         throw new ForgeReadError("http_status", response.status);
       } catch (error) {

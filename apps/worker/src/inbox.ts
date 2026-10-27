@@ -25,6 +25,8 @@ import {
   type InstallationDeps,
 } from "./installations.js";
 import {
+  DiffNotReadyError,
+  HeadMismatchError,
   OrgNotReadyError,
   PR_ROW_BUDGET_SECONDS,
   reconcilePullRequest,
@@ -112,7 +114,14 @@ const TRANSIENT_SQLSTATE = /^(?:08|40|53|57|58)[0-9A-Z]{3}$/;
 export const failureKindOf = (error: unknown): InboxFailure["kind"] => {
   if (error instanceof ParkDeliveryError) return "permanent";
   if (error instanceof ForgeReadError) return error.transient ? "transient" : "strike";
-  if (error instanceof ContradictionError || error instanceof OrgNotReadyError) return "strike";
+  if (
+    error instanceof ContradictionError ||
+    error instanceof OrgNotReadyError ||
+    error instanceof HeadMismatchError ||
+    error instanceof DiffNotReadyError
+  ) {
+    return "strike";
+  }
   const code = errorCodeOf(error);
   return TRANSIENT_SQLSTATE.test(code) ? "transient" : "strike";
 };

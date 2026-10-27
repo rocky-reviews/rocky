@@ -27,7 +27,7 @@ export interface MirroredPullRequest {
   readonly number: number;
   readonly headSha: string;
   readonly forgeUpdatedAt: Date | null;
-  /** The revision of the current head exists and its diff was read. */
+  /** The revision of the current head exists and its diff was read (`unavailable` is not read). */
   readonly headDiffRead: boolean;
 }
 
@@ -113,9 +113,12 @@ export const upsertRepository = async (tx: TenantTx, repo: ForgeRepository): Pro
     [repo.id, repo.fullName, repo.private, repo.defaultBranch],
   );
   if (rows[0] !== undefined) return rows[0].id;
-  const existing = await tx.query<{ id: string }>("select id from repos where forge_repo_id = $1", [
-    repo.id,
-  ]);
+  // RLS already scopes this to the tenant; the explicit org filter is defence in depth, as in
+  // the other modules that run inside withOrg.
+  const existing = await tx.query<{ id: string }>(
+    "select id from repos where org_id = $1 and forge_repo_id = $2",
+    [tx.orgId, repo.id],
+  );
   const id = existing.rows[0]?.id;
   if (id === undefined) throw new Error("mirror: repository row missing");
   return id;
@@ -154,6 +157,10 @@ export const upsertPullRequest = async (
             head_sha = excluded.head_sha, base_sha = excluded.base_sha,
             opened_at = excluded.opened_at, closed_at = excluded.closed_at,
             forge_updated_at = excluded.forge_updated_at, updated_at = now()
+      -- '<=', not '<': GitHub's updated_at has one-second granularity, so two changes within the
+      -- same second carry the same value, and the snapshot written last wins even if it was read
+      -- first. Accepted: each snapshot is a complete GitHub answer, the next event or rebuild
+      -- writes a later one, and '<' would instead drop a genuine second change of that second.
       where (pull_requests.forge_updated_at is null
              or pull_requests.forge_updated_at <= excluded.forge_updated_at)
         and (pull_requests.title, pull_requests.author_login, pull_requests.state,
@@ -169,8 +176,8 @@ export const upsertPullRequest = async (
   if (row !== undefined) return { id: row.id, write: row.inserted ? "created" : "updated" };
   const existing = await tx.query<{ id: string; newer: boolean }>(
     `select id, coalesce(forge_updated_at > $3, false) as newer
-       from pull_requests where repo_id = $1 and number = $2`,
-    [repoId, pr.ref.number, pr.updatedAt],
+       from pull_requests where org_id = $4 and repo_id = $1 and number = $2`,
+    [repoId, pr.ref.number, pr.updatedAt, tx.orgId],
   );
   const found = existing.rows[0];
   if (found === undefined) throw new Error("mirror: pull request row missing");
@@ -179,8 +186,9 @@ export const upsertPullRequest = async (
 
 /**
  * Records the revision of the pull request's current head with what was read of its diff. A
- * revision that exists without a diff reading gets one (`completed`); one that has a reading is
- * kept as it is (`unchanged`): a revision's commits, and so its diff, do not change.
+ * revision that exists without a diff reading, or whose reading is `unavailable` (GitHub had no
+ * diff then), gets this one (`completed`, unless it is `unavailable` again); one with a real
+ * reading is kept as it is (`unchanged`): a revision's commits, and so its diff, do not change.
  */
 export const recordRevision = async (
   tx: TenantTx,
@@ -202,7 +210,11 @@ export const recordRevision = async (
         set base_sha = excluded.base_sha, stats = excluded.stats,
             diff_truncated = excluded.diff_truncated, diff_bytes = excluded.diff_bytes,
             diff_sha256 = excluded.diff_sha256, diff_truncation = excluded.diff_truncation
+      -- A missing reading is filled; an 'unavailable' one is replaced by a real one (GitHub had
+      -- no diff yet, review round 1); a real reading is final.
       where pr_revisions.diff_bytes is null
+         or (pr_revisions.diff_truncation = 'unavailable'
+             and excluded.diff_truncation is distinct from 'unavailable')
      returning (xmax = 0) as inserted`,
     [
       pullRequestId,
@@ -221,12 +233,14 @@ export const recordRevision = async (
 };
 
 const MIRRORED_SQL = `
-  select p.number, p.head_sha, p.forge_updated_at, (r.diff_bytes is not null) as head_diff_read
+  select p.number, p.head_sha, p.forge_updated_at,
+         (r.diff_bytes is not null and r.diff_truncation is distinct from 'unavailable')
+           as head_diff_read
     from pull_requests p
     join repos rp on rp.org_id = p.org_id and rp.id = p.repo_id
     left join pr_revisions r
       on r.org_id = p.org_id and r.pull_request_id = p.id and r.head_sha = p.head_sha
-   where rp.forge_repo_id = $1`;
+   where p.org_id = $1 and rp.forge_repo_id = $2`;
 
 const mirroredFromRow = (row: {
   number: number;
@@ -248,7 +262,7 @@ export const mirroredPullRequests = async (
   if (!isId(forgeRepositoryId)) invalid("repository id");
   const { rows } = await tx.query<Parameters<typeof mirroredFromRow>[0]>(
     `${MIRRORED_SQL} order by p.number`,
-    [forgeRepositoryId],
+    [tx.orgId, forgeRepositoryId],
   );
   return rows.map(mirroredFromRow);
 };
@@ -262,8 +276,8 @@ export const mirroredPullRequest = async (
   if (!isId(forgeRepositoryId)) invalid("repository id");
   if (!Number.isInteger(number) || number < 1 || number > MAX_INT) invalid("pull request number");
   const { rows } = await tx.query<Parameters<typeof mirroredFromRow>[0]>(
-    `${MIRRORED_SQL} and p.number = $2`,
-    [forgeRepositoryId, number],
+    `${MIRRORED_SQL} and p.number = $3`,
+    [tx.orgId, forgeRepositoryId, number],
   );
   return rows[0] === undefined ? undefined : mirroredFromRow(rows[0]);
 };

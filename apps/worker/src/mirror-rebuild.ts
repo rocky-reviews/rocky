@@ -111,6 +111,8 @@ export const rebuildRepositoryMirror = async (
   }
   if (installation === null) throw new RebuildError("app_not_installed");
   if (installation.suspended) throw new RebuildError("installation_suspended");
+  // Also returns an org in its deletion grace period; GitHub was just asked and says the
+  // installation exists, so rebuilding into it is safe (an erasing org is never returned).
   const [org] = (await deps.db.installationOrgs(deps.forge.kind, ref.installationId, null)).filter(
     (o) => o.installationId === ref.installationId,
   );

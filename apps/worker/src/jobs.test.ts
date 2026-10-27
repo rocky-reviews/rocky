@@ -4,7 +4,12 @@ import { createLogger } from "@rocky-reviews/log";
 import { describe, expect, it } from "vitest";
 import { createAppCheck } from "./app-check.js";
 import { failureKindOf, leaseSecondsFor, retryDelaySeconds, ROW_BUDGET_SECONDS } from "./inbox.js";
-import { OrgNotReadyError, PR_ROW_BUDGET_SECONDS } from "./pull-requests.js";
+import {
+  DiffNotReadyError,
+  HeadMismatchError,
+  OrgNotReadyError,
+  PR_ROW_BUDGET_SECONDS,
+} from "./pull-requests.js";
 import { ContradictionError, ParkDeliveryError, StaleOrgError } from "./installations.js";
 import { startJobs } from "./jobs.js";
 
@@ -250,6 +255,8 @@ describe("failure classification (review round 1, S3)", () => {
       new ContradictionError(),
       new StaleOrgError(),
       new OrgNotReadyError(),
+      new HeadMismatchError(),
+      new DiffNotReadyError(),
       Object.assign(new Error("duplicate key"), { code: "23505" }),
       new Error("no code"),
     ]) {

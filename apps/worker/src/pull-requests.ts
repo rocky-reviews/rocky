@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import {
   ForgeReadError,
   type Forge,
+  type ForgeDiff,
   type ForgePullRequest,
   type OrgId,
   type PullRequestEvent,
@@ -90,14 +90,30 @@ export interface MirrorResult {
   readonly truncation: RevisionDiff["truncation"];
 }
 
-const diffReading = (text: string, truncation: RevisionDiff["truncation"]): RevisionDiff => {
-  const bytes = Buffer.from(text, "utf8");
-  return {
-    bytes: bytes.byteLength,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    truncation,
-  };
-};
+/** GitHub's answer disagrees with the event's head (a lagging replica, or a stale event): retry. */
+export class HeadMismatchError extends Error {
+  override readonly name = "HeadMismatchError";
+  readonly code = "forge_head_mismatch";
+  constructor() {
+    super("pull request mirror: GitHub's head differs from the event's");
+  }
+}
+
+/** GitHub has no diff for the head yet (a commit just pushed, a transient 404): retry. */
+export class DiffNotReadyError extends Error {
+  override readonly name = "DiffNotReadyError";
+  readonly code = "forge_diff_unavailable";
+  constructor() {
+    super("pull request mirror: diff not available yet");
+  }
+}
+
+/** The adapter measured and hashed the raw bytes it read; nothing is decoded here. */
+const diffReading = (diff: ForgeDiff): RevisionDiff => ({
+  bytes: diff.bytes.byteLength,
+  sha256: diff.sha256,
+  truncation: diff.truncation,
+});
 
 /**
  * Writes one pull request snapshot to the org's mirror, reading the head revision's diff first
@@ -109,12 +125,21 @@ export const mirrorPullRequest = async (
   orgId: OrgId,
   session: RepositorySession,
   pr: ForgePullRequest,
-  options: { readonly maxDiffBytes?: number; readonly lease?: InboxLease } = {},
+  options: {
+    readonly maxDiffBytes?: number;
+    readonly lease?: InboxLease;
+    /**
+     * Throw `DiffNotReadyError` instead of recording an `unavailable` diff (the inbox, for its
+     * first attempts). The rebuild records it; a later event or rebuild replaces it.
+     */
+    readonly retryUnavailable?: boolean;
+  } = {},
 ): Promise<MirrorResult> => {
   const known = await db.withOrg(orgId, (tx) =>
     mirroredPullRequest(tx, session.repository.id, pr.ref.number),
   );
-  // A revision's commits fix its diff: read it once per head.
+  // A revision's commits fix its diff: read it once per head (an `unavailable` reading does not
+  // count as read, review round 1).
   const needsDiff = !(known?.headSha === pr.headSha && known.headDiffRead);
   const diff = needsDiff
     ? await session.getDiff(
@@ -122,7 +147,10 @@ export const mirrorPullRequest = async (
         { maxBytes: options.maxDiffBytes ?? MIRROR_DIFF_MAX_BYTES },
       )
     : undefined;
-  const reading = diff === undefined ? undefined : diffReading(diff.text, diff.truncation);
+  if (diff?.truncation === "unavailable" && options.retryUnavailable === true) {
+    throw new DiffNotReadyError();
+  }
+  const reading = diff === undefined ? undefined : diffReading(diff);
   return db.withOrg(orgId, async (tx) => {
     const repoId = await upsertRepository(tx, session.repository);
     const { id, write } = await upsertPullRequest(tx, repoId, pr);
@@ -161,6 +189,8 @@ export const reconcilePullRequest = async (
   if (installation === null) return { outcome: "installation_not_found", completed: false };
   if (installation.suspended) return { outcome: "installation_suspended", completed: false };
 
+  // Also returns an org in its deletion grace period (not one being erased). Harmless: GitHub
+  // just said the installation exists, so mirroring into it is what a reinstall would keep.
   const [org] = (
     await deps.db.installationOrgs(deps.forge.kind, event.installationId, null)
   ).filter((o) => o.installationId === event.installationId);
@@ -177,9 +207,17 @@ export const reconcilePullRequest = async (
   try {
     const pr = await session.getPullRequest(event.number);
     if (pr === null) return { outcome: "pull_request_not_found", completed: false };
+    const retry = lease.strikes < CONTRADICTION_ATTEMPTS - 1;
+    // Review round 1: an opened or pushed head GitHub does not show yet is a lagging read, not
+    // the truth; retried (a strike) before GitHub's answer is believed. For closed and reopened
+    // the head need not have changed, so their answers are taken as they are.
+    const announcesHead =
+      event.type === "pull_request.opened" || event.type === "pull_request.synchronize";
+    if (announcesHead && pr.headSha !== event.headSha && retry) throw new HeadMismatchError();
     const { outcome } = await mirrorPullRequest(deps.db, org.orgId, session, pr, {
       ...(deps.maxDiffBytes === undefined ? {} : { maxDiffBytes: deps.maxDiffBytes }),
       lease,
+      retryUnavailable: retry,
     });
     // Recorded inside the tenant transaction together with the mirror's writes.
     return { outcome, completed: true };

@@ -6,6 +6,9 @@
 - **Amends:** [ADR 0007](0007-webhook-inbox.md) §1 (the outbound `Forge` port takes its P3-4
   shape), [ADR 0009](0009-installation-lifecycle.md) §3 (claims cover whole lanes; the pull
   request lane gets its consumer)
+- **Revised:** review round 1: a lagging pull request read and a compare 404 are retried as
+  strikes before they are believed; an `unavailable` diff reading can be replaced; diff size and
+  digest are those of the raw bytes read; explicit `org_id` filters next to RLS (M11–M13)
 
 ## Context
 
@@ -34,8 +37,16 @@ same app check as the installation lane). A row is a hint (ADR 0007 §4); for ea
 3. A repository session (§2). GitHub refusing a token for the repository (422) means it is not
    this installation's → `repository_inaccessible`.
 4. `GET /repos/{owner}/{repo}/pulls/{number}` with the token: 404 → `pull_request_not_found`.
-   The answer must be about the number and repository asked for (`base.repo.id`).
-5. The head revision's diff is read (§4) only when the mirror has no reading for that head.
+   The answer must be about the number and repository asked for (`base.repo.id`). For `opened`
+   and `synchronize`, a head that differs from the event's is a **lagging read** (review round 1:
+   GitHub's API can lag the webhook, and believing it would complete the row with the old head
+   and lose the push): a strike (`forge_head_mismatch`), retried with backoff; the third time
+   (`CONTRADICTION_ATTEMPTS`) GitHub's answer is believed. For `closed` and `reopened` the head
+   need not change, so the answer is taken as it is.
+5. The head revision's diff is read (§4) only when the mirror has no reading for that head (an
+   `unavailable` reading does not count). GitHub having no diff for it yet (a compare 404 or 422
+   right after a push) is a strike (`forge_diff_unavailable`) for the first attempts; the third
+   time it is recorded as `unavailable`, which a later event or the rebuild replaces.
 6. One `withOrg` transaction upserts the repository, the pull request and the revision, and marks
    the inbox row processed (`pr_mirrored`, `pr_unchanged` or `pr_stale_snapshot`). A lost lease
    rolls all of it back.
@@ -88,10 +99,13 @@ Shapes: one `repos` row per (org, forge repository id), display fields refreshed
 one `pull_requests` row per (repository, number) holding GitHub's current state (`merged` when
 `merged_at` is set); one `pr_revisions` row per head the mirror has seen, with the base it was
 diffed against and the forge's known fields (`files`, `additions`, `deletions`, P1-4) in `stats`.
-A revision's diff reading is written once: its commits fix its diff.
+A revision's diff reading is written once: its commits fix its diff. The one exception is
+`unavailable` (GitHub had no diff then): a real reading replaces it, never the reverse.
 
 **The diff text is not stored.** It is code; the mirror needs to know how big it was, whether it
-was complete and which bytes were read (sha256), and the analysis (P4) reads it from the forge
+was complete and which bytes were read (`diff_bytes` and `diff_sha256` are those of the raw bytes
+the adapter read, before any decoding, so a non-UTF-8 diff keeps its size, which never exceeds the
+cap, and its digest; `ForgeDiff` carries the bytes and their sha256), and the analysis (P4) reads it from the forge
 when it needs it, verifying it against the digest. Storing it (in Postgres or R2) is P4's
 decision. No grant changes: the worker writes these tables through `rocky_app`'s existing
 privileges, inside `withOrg`, under the 0003 tenant policies.
@@ -103,12 +117,12 @@ the merge-base diff GitHub shows for a pull request, pinned to the revision's tw
 push between the pull request read and the diff read cannot mix revisions. The reader stops at
 `maxBytes`:
 
-| `diff_truncation` | When                                                                | Text read                     |
-| ----------------- | ------------------------------------------------------------------- | ----------------------------- |
-| `null`            | the whole diff fit in `MIRROR_DIFF_MAX_BYTES` (1 MiB)               | all of it                     |
-| `max_bytes`       | longer than 1 MiB                                                   | a prefix cut at its last `\n` |
-| `forge_limit`     | GitHub refuses to render it (406 with `errors[].code == too_large`) | none                          |
-| `unavailable`     | GitHub no longer has the commits (its JSON 404, or a 422)           | none                          |
+| `diff_truncation` | When                                                                           | Text read                     |
+| ----------------- | ------------------------------------------------------------------------------ | ----------------------------- |
+| `null`            | the whole diff fit in `MIRROR_DIFF_MAX_BYTES` (1 MiB)                          | all of it                     |
+| `max_bytes`       | longer than 1 MiB                                                              | a prefix cut at its last `\n` |
+| `forge_limit`     | GitHub refuses to render it (406 with `errors[].code == too_large`)            | none                          |
+| `unavailable`     | GitHub has no diff for the commits (its JSON 404, or a 422), after the retries | none                          |
 
 1 MiB is well above what one analysis can take in (P4-6 sets the per-PR budget), so the cap does
 not cut a diff the analysis could have used whole. Any other answer (a 406 without `too_large`, an HTML 404, a
@@ -128,9 +142,11 @@ org bound to it, a scoped token. Semantics:
   entry, deduplicated), up to `--limit` (default 1000, at most 10 000), and writes each through
   the same path as a webhook (§1 steps 4–6, without an inbox row).
 - A pull request whose stored snapshot matches the listing (same head, same `updated_at`, head
-  diff read) is not read again: a second run reads only the listing and changes nothing.
+  diff read; an `unavailable` reading is not read) is not read again: a second run reads only the
+  listing and changes nothing, and a run after GitHub has the diff again repairs `unavailable`.
 - **What "mirror state" means:** the repository row, every pull request row, and the revision of
-  each pull request's current head with its diff reading. That is exactly what a rebuild
+  each pull request's current head with its diff reading (an `unavailable` reading is replaced
+  once GitHub has the diff). That is exactly what a rebuild
   recreates (the e2e test compares the two field by field). **Earlier revisions** (one per push a
   webhook reported) cannot be recreated: GitHub keeps no list of past heads. Existing ones are
   kept.
@@ -166,18 +182,21 @@ the mirror (what reviewers and the analysis will see), log and database hygiene.
 Attackers: PR authors (titles, bodies, diffs, huge diffs); whoever holds the server's database
 credential (planted inbox rows); other tenants; a slow or lying network path; a concurrent worker.
 
-| #   | What can go wrong                                                                     | Prevention                                                                                                                                                                                     | Test                                                                                                                                                                                                                  |
-| --- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M1  | A planted or replayed row writes a pull request GitHub does not have, or an old state | The row is a hint: installation, repository and pull request re-read from GitHub; event fields never written; snapshot guard on `forge_updated_at`                                             | `mirror.e2e.test.ts` "planted rows for things GitHub does not have write nothing", "a stale or replayed event changes nothing"; `mirror.test.ts` "never applies an older snapshot"                                    |
-| M2  | A token broader than needed (write, all repositories) is used or leaks                | Minted per row for one repository id, `contents`/`pull_requests: read`; answer checked (one repository, read-only) or revoked and refused; revoked on close; never logged, stored or in errors | `repositories.test.ts` "mints a token for exactly the repository…", "refuses and revokes a token whose permissions exceed the ask", "…for another repository", "revokes the token on close"; e2e "re-reads … revoked" |
-| M3  | A row names a repository of another installation (cross-tenant read)                  | GitHub scopes the token to the installation's repositories (422 → `repository_inaccessible`); writes only in the installation's own org                                                        | e2e "planted rows…" (`repository_inaccessible`), "keeps tenants apart"; `repositories.test.ts` "a token for one repository cannot read another"                                                                       |
-| M4  | A huge diff exhausts memory or time                                                   | Read stops at 1 MiB (cut at a line), 30 s timeout; GitHub's own refusal is `forge_limit`; other answers are failures, not truncation                                                           | `repositories.test.ts` "cuts a diff longer than maxBytes…", "flags forge_limit…", "does not read other failures as truncation"; e2e acceptance (#4, #5)                                                               |
-| M5  | Diff text, titles or tokens reach logs or the database                                | Diff text never stored (bytes + sha256 only); logs carry ids and codes; tokens in the closure only                                                                                             | e2e "logs and the database never hold an installation token, a diff, a title or a login" (log capture + `pg_dump`)                                                                                                    |
-| M6  | Two writers (worker, rebuild) interleave and leave an older snapshot                  | `forge_updated_at` guard; revision reading written once; one transaction per write                                                                                                             | `mirror.test.ts` "creates, leaves unchanged, updates, and never applies an older snapshot"                                                                                                                            |
-| M7  | A lane stalls behind a type nobody claims                                             | Whole-lane claims only; CHECK pinned to `FORGE_EVENT_TYPES`; unknown types parked                                                                                                              | `inbox.test.ts` "P3-4: claims whole lanes only…"; `mirror-rebuild.test.ts` "parks a decodable row of a type the lane does not handle…"                                                                                |
-| M8  | An outage or a suspended installation parks good rows, or is read as "gone"           | Outages transient (no strike); suspension checked first and finished without effect; only GitHub's JSON 404 is "not found"                                                                     | e2e "a GitHub outage while reading retries…", "a suspended installation is not read on behalf of"; `repositories.test.ts` "treats a suspended installation's 403 as a (transient) read failure"                       |
-| M9  | The pull request lane runs before the org exists and the event is lost                | `org_not_ready` strike and retry; after the window `no_org` (the rebuild recovers it)                                                                                                          | e2e "waits for the org…", "gives up waiting…"                                                                                                                                                                         |
-| M10 | The rebuild deletes reviewers' work or acts for an unverified repository              | Nothing deleted (`notListed` counted); app check, installation, org and token checks first                                                                                                     | e2e "repairs drift … keeps rows GitHub no longer lists", "refuses to rebuild what it cannot verify"                                                                                                                   |
+| #   | What can go wrong                                                                                  | Prevention                                                                                                                                                                                     | Test                                                                                                                                                                                                                  |
+| --- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1  | A planted or replayed row writes a pull request GitHub does not have, or an old state              | The row is a hint: installation, repository and pull request re-read from GitHub; event fields never written; snapshot guard on `forge_updated_at`                                             | `mirror.e2e.test.ts` "planted rows for things GitHub does not have write nothing", "a stale or replayed event changes nothing"; `mirror.test.ts` "never applies an older snapshot"                                    |
+| M2  | A token broader than needed (write, all repositories) is used or leaks                             | Minted per row for one repository id, `contents`/`pull_requests: read`; answer checked (one repository, read-only) or revoked and refused; revoked on close; never logged, stored or in errors | `repositories.test.ts` "mints a token for exactly the repository…", "refuses and revokes a token whose permissions exceed the ask", "…for another repository", "revokes the token on close"; e2e "re-reads … revoked" |
+| M3  | A row names a repository of another installation (cross-tenant read)                               | GitHub scopes the token to the installation's repositories (422 → `repository_inaccessible`); writes only in the installation's own org                                                        | e2e "planted rows…" (`repository_inaccessible`), "keeps tenants apart"; `repositories.test.ts` "a token for one repository cannot read another"                                                                       |
+| M4  | A huge diff exhausts memory or time                                                                | Read stops at 1 MiB (cut at a line), 30 s timeout; GitHub's own refusal is `forge_limit`; other answers are failures, not truncation                                                           | `repositories.test.ts` "cuts a diff longer than maxBytes…", "flags forge_limit…", "does not read other failures as truncation"; e2e acceptance (#4, #5)                                                               |
+| M5  | Diff text, titles or tokens reach logs or the database                                             | Diff text never stored (bytes + sha256 only); logs carry ids and codes; tokens in the closure only                                                                                             | e2e "logs and the database never hold an installation token, a diff, a title or a login" (log capture + `pg_dump`)                                                                                                    |
+| M6  | Two writers (worker, rebuild) interleave and leave an older snapshot                               | `forge_updated_at` guard; revision reading written once; one transaction per write                                                                                                             | `mirror.test.ts` "creates, leaves unchanged, updates, and never applies an older snapshot"                                                                                                                            |
+| M7  | A lane stalls behind a type nobody claims                                                          | Whole-lane claims only; CHECK pinned to `FORGE_EVENT_TYPES`; unknown types parked                                                                                                              | `inbox.test.ts` "P3-4: claims whole lanes only…"; `mirror-rebuild.test.ts` "parks a decodable row of a type the lane does not handle…"                                                                                |
+| M8  | An outage or a suspended installation parks good rows, or is read as "gone"                        | Outages transient (no strike); suspension checked first and finished without effect; only GitHub's JSON 404 is "not found"                                                                     | e2e "a GitHub outage while reading retries…", "a suspended installation is not read on behalf of"; `repositories.test.ts` "treats a suspended installation's 403 as a (transient) read failure"                       |
+| M9  | The pull request lane runs before the org exists and the event is lost                             | `org_not_ready` strike and retry; after the window `no_org` (the rebuild recovers it)                                                                                                          | e2e "waits for the org…", "gives up waiting…"                                                                                                                                                                         |
+| M10 | The rebuild deletes reviewers' work or acts for an unverified repository                           | Nothing deleted (`notListed` counted); app check, installation, org and token checks first                                                                                                     | e2e "repairs drift … keeps rows GitHub no longer lists", "refuses to rebuild what it cannot verify"                                                                                                                   |
+| M11 | A lagging GitHub read completes a push's row with the old head, losing the update (review round 1) | For `opened`/`synchronize`, a head that differs from the event's is a strike, retried before GitHub's answer is believed                                                                       | e2e "a lagging read of a push is retried…", "a stale or replayed event changes nothing" (`forge_head_mismatch`, strikes 2)                                                                                            |
+| M12 | A temporary compare 404 is recorded as `unavailable` for good (review round 1)                     | A strike for the first attempts; `unavailable` is not a read (`headDiffRead`) and a real reading replaces it                                                                                   | e2e "a compare 404 for a just-pushed head is retried…", "an `unavailable` reading is repaired by the next event and by the rebuild"; `mirror.test.ts` "an `unavailable` reading is not final"                         |
+| M13 | The recorded size or digest is not that of the bytes read (non-UTF-8 diff), or exceeds the cap     | The adapter measures and hashes the raw cut bytes; nothing is decoded before that                                                                                                              | `repositories.test.ts` "size and sha256 describe the raw bytes read…"; e2e "diff size and sha256 are those of the raw bytes, never above the cap"                                                                     |
 
 ## Consequences
 
@@ -207,7 +226,12 @@ credential (planted inbox rows); other tenants; a slow or lying network path; a 
   installation's org.
 - **`updated_at` has second granularity**: two changes within one second may both be applied in
   arrival order (`<=`), so the later writer wins even if it read first. Each write is still a
-  complete GitHub snapshot, and the next event or rebuild corrects it.
+  complete GitHub snapshot, and the next event or rebuild corrects it; `<` would instead drop a
+  genuine second change within that second (commented at the upsert).
+- **A lagging read that outlasts the retries** (three strikes, about 1.5 minutes of backoff) is
+  believed, and the mirror keeps the old head until the next event or rebuild.
+- **Truncation GitHub does not report**: a diff that GitHub silently shortens is recorded as
+  complete (follow-up: compare `diff --git` headers with `changed_files`).
 - **Pagination by page number**: a pull request opened during a long listing repeats an entry
   (deduplicated); none is skipped. The listing stops with an error past 100 pages.
 - **Suspended installations** are not mirrored while suspended; there is no unsuspend event

@@ -15,6 +15,14 @@ pnpm mirror:rebuild <owner/name> [--limit N]
 - `--limit` (default 1000, at most 10 000) caps how many pull requests are read, newest first.
 - Safe to run while the worker runs, and safe to run again: it only upserts, and a second run
   reads nothing but GitHub's listing.
+- **GitHub rate limit.** A rebuild spends GitHub's per-installation request budget (5000 an
+  hour on github.com): one listing page per 100 pull requests plus, for every pull request that is
+  not already current, a pull request read and a diff read. A first rebuild of a large repository
+  can use a large share of the hour, competing with the worker. A 403 or 429 aborts the run
+  (`forge_http_403` / `forge_http_429`). It is safe to run again later: pull requests already
+  current are skipped, so the next run continues where this one stopped. Use `--limit` to rebuild
+  only the newest pull requests (for example `--limit 200`) when the budget is tight or only
+  recent work matters, and run without it later.
 - It deletes nothing. Pull requests in the mirror that GitHub no longer lists are counted as
   `notListed` and kept.
 

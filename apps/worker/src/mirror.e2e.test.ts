@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Forge, OrgId } from "@rocky-reviews/core";
 import { createDb, type Db } from "@rocky-reviews/db";
 import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "@rocky-reviews/db/testing";
@@ -478,13 +478,142 @@ describe("pull request events: GitHub's answer, not the event, is what is mirror
       },
     });
     await drainAll();
+    // Its head disagrees with GitHub's: retried as a lagging read (review round 1), then GitHub's
+    // answer is believed and the mirror is unchanged.
     expect(await inboxRow(late.deliveryId)).toMatchObject({
       processed: true,
       outcome: "pr_unchanged",
+      strikes: CONTRADICTION_ATTEMPTS - 1,
+      last_error: "forge_head_mismatch",
     });
     expect(await mirrorState(t.orgId, t.repositoryId)).toEqual(state);
     // The head's diff was read once, not again for the replay.
     expect(compareReads()).toBe(diffs);
+  });
+
+  it("review round 1: a lagging read of a push is retried, and the next read records the new head", async () => {
+    const t = await tenant();
+    await change(t, "opened", { number: 12, headSha: HEAD_1, baseSha: BASE });
+    await drainAll();
+    // GitHub sends the push, but its API still answers with the old head for a moment.
+    const push = await post(
+      "pull_request",
+      pullRequestPayload("synchronize", {
+        installationId: t.installationId,
+        repositoryId: t.repositoryId,
+        number: 12,
+        headSha: HEAD_1B,
+      }),
+    );
+    await drainPullRequests();
+    expect(await inboxRow(push.deliveryId)).toMatchObject({
+      processed: false,
+      strikes: 1,
+      last_error: "forge_head_mismatch",
+    });
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toMatchObject([
+      { number: 12, head_sha: HEAD_1 },
+    ]);
+    // The API catches up; the retry records the push.
+    github.putPullRequest(t.repositoryId, {
+      number: 12,
+      headSha: HEAD_1B,
+      baseSha: BASE,
+      updatedAt: tick(),
+    });
+    await makeRetriesDue();
+    await drainAll();
+    expect(await inboxRow(push.deliveryId)).toMatchObject({ outcome: "pr_mirrored" });
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toMatchObject([
+      { number: 12, head_sha: HEAD_1B, diff_truncation: null },
+    ]);
+  });
+
+  it("review round 1: a compare 404 for a just-pushed head is retried before it is recorded", async () => {
+    const t = await tenant();
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "missing");
+    const { deliveryId } = await change(t, "opened", {
+      number: 13,
+      headSha: HEAD_2,
+      baseSha: BASE,
+    });
+    await drainPullRequests();
+    expect(await inboxRow(deliveryId)).toMatchObject({
+      processed: false,
+      strikes: 1,
+      last_error: "forge_diff_unavailable",
+    });
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toEqual([]);
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_2 }, "+arrived\n");
+    await makeRetriesDue();
+    await drainAll();
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toMatchObject([
+      { number: 13, diff_truncation: null, diff_bytes: Buffer.byteLength("+arrived\n") },
+    ]);
+  });
+
+  it("review round 1: an `unavailable` reading is repaired by the next event and by the rebuild", async () => {
+    const t = await tenant();
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_3 }, "missing");
+    const { deliveryId } = await change(t, "opened", {
+      number: 14,
+      headSha: HEAD_3,
+      baseSha: BASE,
+    });
+    await drainAll();
+    // After the retry window, GitHub's answer is believed and recorded as unavailable.
+    expect(await inboxRow(deliveryId)).toMatchObject({ outcome: "pr_mirrored" });
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toMatchObject([
+      { number: 14, diff_truncated: true, diff_truncation: "unavailable" },
+    ]);
+    // GitHub has the diff again: the rebuild does not count `unavailable` as read.
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_3 }, "+back\n");
+    const report = await rebuildRepositoryMirror({ db: workerDb, forge }, t.fullName);
+    expect(report).toMatchObject({
+      listed: 1,
+      mirrored: 1,
+      unchanged: 0,
+      revisionsRecorded: 1,
+      truncatedDiffs: 0,
+    });
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests).toMatchObject([
+      {
+        number: 14,
+        diff_truncated: false,
+        diff_truncation: null,
+        diff_bytes: Buffer.byteLength("+back\n"),
+      },
+    ]);
+    // A later event for the same head also repairs one (here: nothing left to repair).
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_4 }, "missing");
+    const other = await change(t, "opened", { number: 15, headSha: HEAD_4, baseSha: BASE });
+    await drainAll();
+    expect(await inboxRow(other.deliveryId)).toMatchObject({ outcome: "pr_mirrored" });
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_4 }, "+later\n");
+    await change(t, "reopened", { number: 15, headSha: HEAD_4, baseSha: BASE });
+    await drainAll();
+    expect((await mirrorState(t.orgId, t.repositoryId)).pullRequests[1]).toMatchObject({
+      number: 15,
+      diff_truncation: null,
+    });
+  });
+
+  it("review round 1: diff size and sha256 are those of the raw bytes, never above the cap", async () => {
+    const t = await tenant();
+    // A Latin-1 diff (invalid UTF-8) longer than the cap.
+    const line = Buffer.concat([Buffer.from("+caf"), Buffer.alloc(95, 0xe9), Buffer.from("\n")]);
+    const raw = Buffer.concat(
+      Array.from({ length: Math.ceil(MIRROR_DIFF_MAX_BYTES / line.byteLength) + 5 }, () => line),
+    );
+    github.putDiff(t.repositoryId, { baseSha: BASE, headSha: HEAD_5 }, raw);
+    await change(t, "opened", { number: 16, headSha: HEAD_5, baseSha: BASE });
+    await drainAll();
+    const [mirrored] = (await mirrorState(t.orgId, t.repositoryId)).pullRequests;
+    expect(mirrored).toMatchObject({ diff_truncation: "max_bytes" });
+    expect(mirrored!.diff_bytes).toBeLessThanOrEqual(MIRROR_DIFF_MAX_BYTES);
+    const prefix = raw.subarray(0, mirrored!.diff_bytes as number);
+    expect(prefix.byteLength % line.byteLength).toBe(0);
+    expect(mirrored!.diff_sha256).toBe(createHash("sha256").update(prefix).digest("hex"));
   });
 
   it("a merge records the state without reading the unchanged head's diff again", async () => {
