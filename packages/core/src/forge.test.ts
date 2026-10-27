@@ -5,6 +5,7 @@ import {
   ForgeReadError,
   isForgeEventType,
   isInstallationEvent,
+  isPullRequestEvent,
   type ForgeEvent,
 } from "./forge.js";
 
@@ -47,6 +48,8 @@ describe("forge event types", () => {
     };
     expect(isInstallationEvent(installation)).toBe(true);
     expect(isInstallationEvent(pr)).toBe(false);
+    expect(isPullRequestEvent(pr)).toBe(true);
+    expect(isPullRequestEvent(installation)).toBe(false);
   });
 });
 

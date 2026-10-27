@@ -1,0 +1,6 @@
+{
+  "message": "Sorry, this diff is taking too long to generate.",
+  "errors": [{ "resource": "Comparison", "field": "diff", "code": "too_large" }],
+  "documentation_url": "https://docs.github.com/rest/commits/commits#compare-two-commits",
+  "status": "406"
+}

@@ -96,6 +96,8 @@ export const pullRequests = pgTable("pull_requests", {
   baseSha: text("base_sha").notNull(),
   openedAt: timestamp("opened_at", { withTimezone: true }).notNull(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
+  /** The forge's last-modified time of this snapshot: older snapshots never overwrite it. */
+  forgeUpdatedAt: timestamp("forge_updated_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -108,6 +110,10 @@ export const prRevisions = pgTable("pr_revisions", {
   baseSha: text("base_sha").notNull(),
   diffTruncated: boolean("diff_truncated").notNull().default(false),
   stats: jsonb("stats").$type<Record<string, unknown>>().notNull().default({}),
+  /** What was read of the diff (P3-4): size and sha256; the text is not stored. */
+  diffBytes: integer("diff_bytes"),
+  diffSha256: bytea("diff_sha256"),
+  diffTruncation: text("diff_truncation", { enum: ["max_bytes", "forge_limit", "unavailable"] }),
   createdAt: createdAt(),
 });
 

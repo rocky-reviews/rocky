@@ -1,4 +1,5 @@
 import {
+  FORGE_EVENT_TYPES,
   isForgeEventType,
   type ForgeEvent,
   type ForgeEventType,
@@ -97,9 +98,26 @@ const checkLease = (lease: InboxLease): void => {
   }
 };
 
+/**
+ * The claim's lane of an event type: the part before the dot (`installation`, `pull_request`).
+ * The claim hands out only the oldest pending row of each (installation, lane), and only when its
+ * type is one the caller asked for (migration 0007).
+ */
+export const laneOf = (type: string): string => type.slice(0, Math.max(0, type.indexOf(".")));
+
+/**
+ * Every event type of a lane: what a claim of that lane must ask for. A claim for part of a lane
+ * would skip a head of another type of that lane forever, and so stop the lane behind it (the
+ * P3-3 follow-up): the inbox's `event_type` CHECK accepts exactly `FORGE_EVENT_TYPES`, so a claim
+ * that covers whole lanes is handed every head, and the worker parks a type it cannot handle.
+ */
+export const laneEventTypes = (lane: string): readonly ForgeEventType[] =>
+  FORGE_EVENT_TYPES.filter((t) => laneOf(t) === lane);
+
 export interface ClaimOptions {
   /** Only rows of this forge (the worker's adapter). */
   readonly forge: ForgeKind;
+  /** Whole lanes only: every type of each lane it names (`laneEventTypes`). */
   readonly eventTypes: readonly ForgeEventType[];
   /** Rows per claim (the database clamps to 1..100). */
   readonly limit: number;
@@ -116,6 +134,12 @@ export const claimSql = (
     !options.eventTypes.every(isForgeEventType)
   ) {
     throw new WebhookInboxError("webhook inbox: invalid event types");
+  }
+  const asked = new Set<string>(options.eventTypes);
+  for (const type of asked) {
+    if (!laneEventTypes(laneOf(type)).every((t) => asked.has(t))) {
+      throw new WebhookInboxError("webhook inbox: event types must cover whole lanes");
+    }
   }
   if (!Number.isInteger(options.limit) || !Number.isInteger(options.leaseSeconds)) {
     throw new WebhookInboxError("webhook inbox: invalid claim bounds");

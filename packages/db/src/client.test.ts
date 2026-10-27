@@ -525,3 +525,25 @@ describe("withOrg", () => {
     });
   });
 });
+
+describe("createDb with a connection string", () => {
+  it("survives Postgres ending an idle connection (no uncaught pool error) and reconnects", async () => {
+    const own = createDb({ connectionString: pgs.appUrl, max: 1 });
+    const superuser = new pg.Client({ connectionString: pgs.superUrl });
+    await superuser.connect();
+    try {
+      const pid = await own.withOrg(orgA, async (tx) => {
+        const { rows } = await tx.query<{ pid: number }>("select pg_backend_pid() as pid");
+        return rows[0]!.pid;
+      });
+      // The client is idle in the pool now; ending its backend makes pg-pool emit `error`, which
+      // would be an uncaught exception (and fail this run) without the pool's listener.
+      await superuser.query("select pg_terminate_backend($1)", [pid]);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await own.withOrg(orgA, async () => "reconnected")).toBe("reconnected");
+    } finally {
+      await superuser.end();
+      await own.close();
+    }
+  });
+});

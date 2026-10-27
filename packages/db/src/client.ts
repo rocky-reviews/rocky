@@ -152,6 +152,18 @@ export type DbOptions =
       pool: pg.Pool;
     };
 
+/**
+ * A pool created here, for callers that pass a connection string. pg-pool emits `error` when an
+ * idle client's connection ends (restart, failover, `pg_terminate_backend`); without a listener
+ * that is an uncaught exception. The pool has already discarded the client and the next query
+ * reconnects, so there is nothing to do. Callers that pass their own pool log it themselves.
+ */
+const ownPool = (options: { connectionString: string; max?: number }): pg.Pool => {
+  const pool = new pg.Pool({ connectionString: options.connectionString, max: options.max ?? 10 });
+  pool.on("error", () => undefined);
+  return pool;
+};
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One tenant transaction, shared by the root `withOrg` and every nested call inside it. */
@@ -350,10 +362,7 @@ const makeTx = (scope: Scope): TenantTx => {
 };
 
 export const createDb = (options: DbOptions): Db => {
-  const pool =
-    "pool" in options
-      ? options.pool
-      : new pg.Pool({ connectionString: options.connectionString, max: options.max ?? 10 });
+  const pool = "pool" in options ? options.pool : ownPool(options);
   // One store per Db, so two Db instances in one process never see each other's scope.
   const scopes = new AsyncLocalStorage<Scope>();
 

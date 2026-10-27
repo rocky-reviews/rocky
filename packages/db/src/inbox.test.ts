@@ -1,5 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import type { WebhookDelivery } from "@rocky-reviews/core";
+import {
+  FORGE_EVENT_TYPES,
+  INSTALLATION_EVENT_TYPES,
+  PULL_REQUEST_EVENT_TYPES,
+  type WebhookDelivery,
+} from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
@@ -7,6 +12,8 @@ import {
   completeInTenantTx,
   decodeClaimedDelivery,
   CLAIM_STATEMENT_TIMEOUT_MS,
+  laneEventTypes,
+  laneOf,
   LeaseLostError,
   WEBHOOK_MAX_STRIKES,
   WEBHOOK_TRANSIENT_PARK_HOURS,
@@ -110,7 +117,7 @@ const drain = async (): Promise<void> => {
   for (;;) {
     const rows = await worker.claimWebhookDeliveries({
       forge: "github",
-      eventTypes: [...INSTALLATION_TYPES, "pull_request.opened"],
+      eventTypes: [...INSTALLATION_TYPES, ...PULL_REQUEST_EVENT_TYPES],
       limit: 100,
       leaseSeconds: 60,
     });
@@ -313,6 +320,38 @@ describe("claim, complete, fail", () => {
         leaseSeconds: 60,
       }),
     ).rejects.toThrow(/event types/);
+  });
+
+  it("P3-4: claims whole lanes only, so no lane head is ever skipped for its type", async () => {
+    expect(laneOf("installation.created")).toBe("installation");
+    expect(laneOf("pull_request.synchronize")).toBe("pull_request");
+    expect(laneEventTypes("installation")).toEqual(INSTALLATION_EVENT_TYPES);
+    expect(laneEventTypes("pull_request")).toEqual(PULL_REQUEST_EVENT_TYPES);
+    for (const partial of [
+      ["installation.created"],
+      ["pull_request.opened", "pull_request.closed"],
+      [...INSTALLATION_EVENT_TYPES, "pull_request.opened"],
+    ] as const) {
+      await expect(
+        worker.claimWebhookDeliveries({
+          forge: "github",
+          eventTypes: partial,
+          limit: 1,
+          leaseSeconds: 60,
+        }),
+        partial.join(","),
+      ).rejects.toThrow(/whole lanes/);
+    }
+    // The inbox stores exactly the types the domain knows, so whole lanes of FORGE_EVENT_TYPES
+    // cover every head the claim can meet.
+    const { rows } = await superuser.query<{ def: string }>(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+        where conrelid = 'app.webhook_deliveries'::regclass and contype = 'c'
+          and pg_get_constraintdef(oid) like '%pull_request.opened%'`,
+    );
+    expect(rows).toHaveLength(1);
+    const stored = [...rows[0]!.def.matchAll(/'([a-z_]+\.[a-z_]+)'/g)].map((m) => m[1]).sort();
+    expect(stored).toEqual([...FORGE_EVENT_TYPES].sort());
   });
 
   it("never hands one row to two concurrent workers, and loses none", async () => {
@@ -696,7 +735,7 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
     for (const d of prs) await server.recordWebhookDelivery(d as WebhookDelivery);
     const [pr] = await worker.claimWebhookDeliveries({
       forge: "github",
-      eventTypes: ["pull_request.opened"],
+      eventTypes: PULL_REQUEST_EVENT_TYPES,
       limit: 1,
       leaseSeconds: 60,
     });

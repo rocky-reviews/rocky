@@ -31,6 +31,8 @@ beforeAll(async () => {
   pgs = await startPostgres();
   superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
   appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 });
+  // An idle client whose backend ends must not surface as an uncaught pool error.
+  for (const p of [superuser, appPool]) p.on("error", () => undefined);
   db = createDb({ connectionString: pgs.appUrl, max: 10 });
 }, CONTAINER_TIMEOUT_MS);
 

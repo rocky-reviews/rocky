@@ -1,16 +1,17 @@
-import type { Clock, InstallationReader, OrgErasers, OrgId } from "@rocky-reviews/core";
+import type { Clock, Forge, OrgErasers, OrgId } from "@rocky-reviews/core";
 import { runRetention, type Db } from "@rocky-reviews/db";
 import type { Logger } from "@rocky-reviews/log";
 import { createAppCheck } from "./app-check.js";
 import { sweepOrgDeletions } from "./deletion-sweep.js";
-import { drainInstallationEvents } from "./inbox.js";
+import { drainInstallationEvents, drainPullRequestEvents } from "./inbox.js";
 
 /**
- * The worker's recurring jobs (P3-3). Each runs on its own timer, never overlapping itself; all
- * are idempotent and safe with several workers (the inbox claim skips locked rows, retention
+ * The worker's recurring jobs (P3-3, P3-4). Each runs on its own timer, never overlapping itself;
+ * all are idempotent and safe with several workers (the inbox claim skips locked rows, retention
  * deletes by cutoff, the sweep locks each org). A failing run is logged by code and retried at
- * the next tick. The inbox and the sweep both act on GitHub's answers, so both need the app
- * credentials and wait for the app check (review round 1, M2, S1c); retention does not.
+ * the next tick. The inbox lanes (installations, pull requests) and the sweep act on GitHub's
+ * answers, so they need the app credentials and wait for the app check (review round 1, M2,
+ * S1c); retention does not.
  */
 
 export interface JobIntervals {
@@ -35,10 +36,10 @@ export interface JobDeps {
   readonly erasers: OrgErasers;
   readonly newOrgId: () => OrgId;
   /**
-   * Without it (no app credentials, development only) installation events wait in the inbox and
-   * no org is erased (the sweep re-verifies every uninstall with GitHub first).
+   * Without it (no app credentials, development only) installation and pull request events wait
+   * in the inbox and no org is erased (the sweep re-verifies every uninstall with GitHub first).
    */
-  readonly forge: InstallationReader | undefined;
+  readonly forge: Forge | undefined;
   readonly intervals?: Partial<JobIntervals>;
 }
 
@@ -91,7 +92,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
 
   if (deps.forge === undefined) {
     deps.log.warn(
-      "GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY not set: installation events stay in the inbox and no org is erased (development only)",
+      "GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY not set: installation and pull request events stay in the inbox and no org is erased (development only)",
     );
   } else {
     const forge = deps.forge;
@@ -111,6 +112,21 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
       // Again at once only after a full batch that all went through: a batch with released,
       // retried or lost rows waits for the next tick (no hot loop, review round 2 SF3).
       return report.claimed === batchSize && report.processed + report.parked === batchSize;
+    });
+
+    // Pull requests: their own lane and batch (each row may read a diff, PR_ROW_BUDGET_SECONDS).
+    const prBatchSize = 5;
+    every("pull_requests", intervals.inboxMs, async () => {
+      const report = await drainPullRequestEvents({
+        db: deps.db,
+        forge,
+        appCheck,
+        clock: deps.clock,
+        log: deps.log,
+        batchSize: prBatchSize,
+      });
+      if (report.claimed > 0) deps.log.info({ job: "pull_requests", ...report }, "inbox drained");
+      return report.claimed === prBatchSize && report.processed + report.parked === prBatchSize;
     });
 
     every("org_deletion_sweep", intervals.sweepMs, async () => {
