@@ -696,6 +696,29 @@ export const integrityIssues = (
   });
   const unanalysed = new Set(doc.provenance.unanalysed.map((file) => file.path));
 
+  reportDuplicatePaths(
+    issues,
+    "provenance.readByHand",
+    doc.provenance.readByHand.map((file) => file.path),
+  );
+  const triagedPaths = new Set(doc.triage.files.map((file) => file.path));
+  const withFindings = new Set(doc.findings.map((finding) => finding.path));
+  doc.provenance.readByHand.forEach((file, index) => {
+    const at = `provenance.readByHand[${index}].path`;
+    if (!filesByPath.has(file.path))
+      issues.push({
+        code: "UNKNOWN_FILE",
+        path: at,
+        message: `'${file.path}' is not in the PR's file list`,
+      });
+    else if (!triagedPaths.has(file.path) || withFindings.has(file.path))
+      issues.push({
+        code: "READ_BY_HAND_MISMATCH",
+        path: at,
+        message: `'${file.path}' must be a triaged file with no finding`,
+      });
+  });
+
   if (doc.graph !== undefined) append(issues, graphIssues(doc.graph));
   append(issues, triageIssues(doc.triage, filesByPath, unanalysed));
   append(

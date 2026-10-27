@@ -2609,7 +2609,7 @@
       ]
     }
   },
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "provenance": {
     "repo": {
       "owner": "acme",
@@ -3798,6 +3798,7 @@
         "detail": "Minified bundle over the per-file token budget."
       }
     ],
+    "readByHand": [],
     "generatedAt": "2026-10-25T12:00:00.000Z",
     "generator": {
       "name": "rocky",

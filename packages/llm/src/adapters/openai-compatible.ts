@@ -207,7 +207,7 @@ export const openAiCompatibleAdapter =
       call: ProviderCompletionCall<T>,
     ): Promise<ProviderCompletionResult<T>> => {
       checkOutputCap(call.maxOutputTokens);
-      // Self-hosted servers parse special tokens in the rendered template (ADR 0015 T4).
+      // Self-hosted servers parse special tokens in the rendered template (ADR 0015 I7).
       const prompt = buildPrompt(call, nonce, { neutraliseChatTokens: true });
       const schema = JSON.stringify(call.output.jsonSchema);
       const body = {

@@ -57,7 +57,7 @@ diff ──parseUnifiedDiff──► files (known facts)
 | triage   | triage   | `file_path`, `file_status`, `diff`                             | `TriagedFile` without `path`; levels stop at `low`            | file unanalysed                         |
 | review   | review   | `file_path`, `diff`                                            | `{ findings }`, each `Finding` without `id`, `path`, `memory` | file unanalysed (its triage is dropped) |
 | graph    | graph    | `pr_title`, `file.N.path`, `file.N.diff` (triaged files)       | `Graph`                                                       | `graphUnavailable: analysis-failed`     |
-| briefing | review   | `pr_title`, `triage`, `findings`, `noise`, `unanalysed` (JSON) | `summary`, `verdict`, `reviewPath`, `checkedOk`               | analysis `briefing_failed`              |
+| briefing | review   | `pr_title`, `triage`, `findings`, `noise`, `unanalysed` (JSON) | `summary`, `verdict`, `reviewPath`, `checkedOk`               | Rocky's fallback briefing (ADR 0015 §6) |
 | repair   | the same | the same, plus `validation_issues`                             | the same                                                      | as above                                |
 
 - **Known facts** (paths, statuses, counts, hunks, SHAs, PR number, repository, timestamp,
@@ -93,7 +93,8 @@ diff ──parseUnifiedDiff──► files (known facts)
   new file have no line to review. They stay triaged, are not sent to review, and do not raise
   the verdict.
 - **Stored verdict check:** the not-reviewed floor is also a stored-document rule, as far as the
-  document can express it. `belowUnanalysedFloor` runs in the pipeline's final check (defence in
+  document can express it. `belowVerdictFloor` (named `belowUnanalysedFloor` until P4-4, which
+  added the critical-triage floor, ADR 0015 §8) runs in the pipeline's final check (defence in
   depth: the clamp above makes it unreachable) and in `completeAnalysis`. So no `done` row can
   hold a verdict below medium next to any unanalysed file, or below high next to an unanalysed
   migration or auth file. A non-rule file triaged critical whose review failed is high in the

@@ -29,6 +29,7 @@ import {
   SCHEMA_VERSION,
   type AnalysisDocument,
   type Briefing,
+  type BriefingUnavailable,
   type ChangedFile,
   type Finding,
   type GraphUnavailable,
@@ -67,9 +68,10 @@ import { instructionLeaks } from "./leak.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
-  belowUnanalysedFloor,
+  belowVerdictFloor,
   findingsFloor,
   maxRisk,
+  triageFloor,
   unreviewedFloor,
   type UnreviewedRisk,
 } from "./verdict.js";
@@ -128,7 +130,6 @@ export type AnalysisFailureCode =
   | "diff_truncated"
   | "diff_empty"
   | "invalid_request"
-  | "briefing_failed"
   | "document_invalid"
   | `llm_${LlmFatalErrorKind}`
   | "internal_error";
@@ -185,11 +186,30 @@ export const RAISED_FOR_FINDINGS =
   "Rocky raised this level to match the severity of the draft findings.";
 export const RAISED_FOR_UNREVIEWED =
   "Rocky raised this level: files that carry risk were not reviewed by the AI. See the files it could not analyse.";
+/** A file triaged critical floors the verdict at high (P4-4 review round 1, item 2). */
+export const RAISED_FOR_TRIAGE =
+  "Rocky raised this level: a file triaged critical needs a careful reviewer, whatever the drafts say.";
+
+/**
+ * Rocky's own briefing for when the AI briefing fails after its repair round (P4-4 review round 1,
+ * item 1): the analysis is stored anyway, with `provenance.briefingUnavailable`, so a PR author who
+ * can make the briefing fail cannot make the findings and the verdict disappear with it.
+ */
+export const FALLBACK_SUMMARY =
+  "Rocky could not produce an AI briefing for this pull request. The level below comes from Rocky's rules, the triage and the draft findings. Read the files in the order shown.";
+export const FALLBACK_REASON =
+  "Set by Rocky from its rules, the triage and the draft findings, because the AI briefing was unavailable.";
 
 export const DELETION_ONLY_DETAIL =
   "Only deleted lines: Rocky reviews new-side lines, so this file was not reviewed. Read the deletion by hand.";
 
 const REVIEWED_LEVELS: ReadonlySet<TriagedFile["level"]> = new Set(["critical", "important"]);
+const LEVEL_RANK: Readonly<Record<TriagedFile["level"], number>> = {
+  critical: 3,
+  important: 2,
+  normal: 1,
+  low: 0,
+};
 
 const UNANALYSED_REASON: Readonly<Record<UnitFailure, UnanalysedReason>> = {
   refused: "analysis-failed",
@@ -258,6 +278,8 @@ const mapBounded = async <T, R>(
 
 interface UnitOutcome extends UnreviewedRisk {
   readonly path: string;
+  /** The file went through review and came back valid (fresh or reused). */
+  readonly reviewed?: boolean;
   readonly triage?: TriagedFile;
   readonly findings: readonly ReviewFinding[];
   readonly unanalysed?: UnanalysedReason;
@@ -352,22 +374,27 @@ const run = async (
     const { file, floor } = item;
     const fileFacts = facts(file);
     const key = unitKey(deps.sha256Hex, salt, file);
-    const reused = reusableUnit(previous, fileFacts, key);
-    if (reused !== undefined) {
-      stats.reused++;
-      return {
-        path: file.path,
-        triage: applyFloor(reused.triage, floor),
-        findings: reused.findings,
-        unit: { path: file.path, key, reviewMinutes: reused.triage.reviewMinutes },
-      };
-    }
-    const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
     const fileParts: LlmUntrustedText[] = [
       { label: "file_path", text: file.path },
       { label: "file_status", text: file.status },
       { label: "diff", text: file.patch },
     ];
+    const reused = reusableUnit(previous, fileFacts, key);
+    // A reused unit that carries prompt text is analysed again rather than failing the whole
+    // document at the final check (P4-4 review round 1, N5).
+    if (reused !== undefined && instructionLeaks(reused, fileParts).length === 0) {
+      stats.reused++;
+      const triage = applyFloor(reused.triage, floor);
+      return {
+        path: file.path,
+        triage,
+        findings: reused.findings,
+        reviewed: REVIEWED_LEVELS.has(triage.level) && hasNewSide(file),
+        ruleFloor: floor,
+        unit: { path: file.path, key, reviewMinutes: reused.triage.reviewMinutes },
+      };
+    }
+    const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
     stats.analysed++;
     const triaged = await completeWithRepair(
       llm,
@@ -438,7 +465,14 @@ const run = async (
         level: triage.level,
       };
     }
-    return { path: file.path, triage, findings: reviewed.value.findings, unit };
+    return {
+      path: file.path,
+      triage,
+      findings: reviewed.value.findings,
+      reviewed: true,
+      ruleFloor: floor,
+      unit,
+    };
   };
   const outcomes = await mapBounded(
     work,
@@ -468,6 +502,18 @@ const run = async (
   }
   const byFileOrder = (a: { path: string }, b: { path: string }) =>
     (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0);
+  // Risky files the AI reviewed and drafted nothing for (ADR 0015 R1): a model steered by the
+  // file's own content can say "nothing here", so the reviewer is told to read them by hand.
+  const readByHand = outcomes
+    .filter(
+      (outcome) =>
+        outcome.unanalysed === undefined &&
+        outcome.reviewed === true &&
+        outcome.findings.length === 0 &&
+        (outcome.ruleFloor !== undefined || outcome.triage?.level === "critical"),
+    )
+    .map((outcome) => ({ path: outcome.path }))
+    .sort(byFileOrder);
   unanalysed.sort(byFileOrder);
   stats.unanalysed = unanalysed.length;
 
@@ -497,6 +543,7 @@ const run = async (
     briefing: Briefing,
     graph: GraphAnswer | undefined,
     graphUnavailable: GraphUnavailable | undefined,
+    briefingUnavailable?: BriefingUnavailable,
   ) =>
     parseAnalysisDocumentJson(
       JSON.stringify({
@@ -507,6 +554,8 @@ const run = async (
           files: files.map(facts),
           unanalysed,
           ...(graphUnavailable === undefined ? {} : { graphUnavailable }),
+          ...(briefingUnavailable === undefined ? {} : { briefingUnavailable }),
+          readByHand,
         },
         briefing,
         triage: { files: triageFiles, noise },
@@ -581,7 +630,11 @@ const run = async (
     graph !== undefined ? "drawn" : graphUnavailable !== undefined ? "unavailable" : "none";
 
   // --- Briefing ------------------------------------------------------------------------------
-  const floor = maxRisk(findingsFloor(findings), unreviewedFloor(unreviewed));
+  const floor = maxRisk(
+    findingsFloor(findings),
+    unreviewedFloor(unreviewed),
+    triageFloor(triageFiles),
+  );
   const minutes = Math.max(
     limits.MIN_REVIEW_MINUTES,
     triageFiles.reduce((total, file) => total + file.reviewMinutes, 0),
@@ -599,7 +652,9 @@ const run = async (
             reason:
               RISK_RANK[findingsFloor(findings)] >= RISK_RANK[floor]
                 ? RAISED_FOR_FINDINGS
-                : RAISED_FOR_UNREVIEWED,
+                : RISK_RANK[unreviewedFloor(unreviewed)] >= RISK_RANK[floor]
+                  ? RAISED_FOR_UNREVIEWED
+                  : RAISED_FOR_TRIAGE,
           },
     estimatedReviewMinutes: minutes,
     reviewPath: answer.reviewPath,
@@ -652,21 +707,57 @@ const run = async (
     observe("briefing"),
     signal,
   );
-  if (!briefed.ok) throw new Failed("briefing_failed");
+  // A briefing that fails after its repair round is replaced by Rocky's own (round 1, item 1).
+  const briefingUnavailable: BriefingUnavailable | undefined = briefed.ok
+    ? undefined
+    : {
+        reason:
+          briefed.reason === "too_large"
+            ? "too-large"
+            : briefed.reason === "timeout"
+              ? "timeout"
+              : "analysis-failed",
+      };
+  const briefing: Briefing = briefed.ok
+    ? toBriefing(briefed.value)
+    : {
+        summary: FALLBACK_SUMMARY,
+        verdict: { level: floor, reason: FALLBACK_REASON },
+        estimatedReviewMinutes: minutes,
+        reviewPath: [...triageFiles]
+          .sort(
+            (a, b) =>
+              LEVEL_RANK[b.level] - LEVEL_RANK[a.level] || b.score - a.score || byFileOrder(a, b),
+          )
+          .slice(0, limits.MAX_REVIEW_PATH)
+          .map((file) => ({
+            path: file.path,
+            why: `Triaged ${file.level} (score ${file.score}).`,
+          })),
+        checkedOk: [],
+        memoryApplied: [],
+      };
 
   // --- Final validation: the whole document, as it will be stored ----------------------------
-  const final = assemble(toBriefing(briefed.value), graph, graphUnavailable);
+  const final = assemble(briefing, graph, graphUnavailable, briefingUnavailable);
   // Defence in depth: `toBriefing` already raised the verdict to a floor at least as high as the
   // stored-document rule, so this cannot trip unless that clamp breaks. It is the same check
   // `completeAnalysis` runs at the write (round 2, N3).
-  if (!final.ok || belowUnanalysedFloor(final.value)) throw new Failed("document_invalid");
-  // Defence in depth for the leak guard (P4-4, ADR 0015 §3): every fresh answer was checked in
-  // `completeWithRepair`; reused units were not. Only the PR's own content may be quoted.
+  if (!final.ok || belowVerdictFloor(final.value)) throw new Failed("document_invalid");
+  // Defence in depth for the leak guard (ADR 0015 §3): every fresh answer and every reused unit
+  // was checked on its own; this checks all model-written text together, so a copy spread over
+  // several answers is caught too. Only the PR's own content may be quoted.
   const content: LlmUntrustedText[] = [
     { label: "pr_title", text: request.pullRequest.title },
     ...files.map((file) => ({ label: "diff", text: `${file.path}\n${file.patch}` })),
   ];
-  if (instructionLeaks(final.value, content).length > 0) throw new Failed("document_invalid");
+  const modelText = {
+    briefing: final.value.briefing,
+    triage: final.value.triage,
+    findings: final.value.findings,
+    graph: final.value.graph,
+  };
+  if (instructionLeaks(modelText, content).length > 0) throw new Failed("document_invalid");
   return { status: "done", document: final.value, units, stats };
 };
 

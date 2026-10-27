@@ -22,7 +22,7 @@ export { FINAL_INSTRUCTION, UNTRUSTED_PREAMBLE };
  * Chat-template control tokens of open-weight model families (ChatML, Llama 3, gpt-oss harmony,
  * Phi, DeepSeek's fullwidth bars, Gemma turns, Mistral and Llama 2 markers, `</s>`). An
  * OpenAI-compatible server renders its chat template to text and tokenizes it with special tokens
- * parsed, so one of these in a diff would become a real turn boundary (ADR 0015 T4). The list is
+ * parsed, so one of these in a diff would become a real turn boundary (ADR 0015 I7). The list is
  * best effort; the Claude APIs take structured turns and need none of this.
  */
 const CHAT_TOKEN =

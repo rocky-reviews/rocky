@@ -18,18 +18,20 @@ import {
   INSTRUCTION_LEAK,
   instructionLeaks,
   LEAK_NGRAM_WORDS,
+  PROMPT_SHARE_THRESHOLD,
   PROMPT_TEXTS,
+  promptShare,
 } from "./leak.js";
 import { RAISED_FOR_FINDINGS, RAISED_FOR_UNREVIEWED, DELETION_ONLY_DETAIL } from "./pipeline.js";
 import { NOISE_SUMMARIES } from "./rules.js";
 
 /**
- * P4-4 leak guard (ADR 0015 §3): a model answer that copies Rocky's system prompt (the canary, or
+ * P4-4 leak guard (ADR 0015 \u00a73): a model answer that copies Rocky's system prompt (the canary, or
  * any run of LEAK_NGRAM_WORDS words of instruction text the PR itself does not contain) is
  * refused before anything is stored.
  */
 
-const sentence = REVIEW_INSTRUCTIONS.text.split("\n")[2]!; // "Report real defects only: …"
+const sentence = REVIEW_INSTRUCTIONS.text.split("\n")[2]!; // "Report real defects only: \u2026"
 const leaks = (value: unknown, allowed: string[] = []) =>
   instructionLeaks(
     value,
@@ -157,5 +159,70 @@ describe("createLeakDetector", () => {
     const other = rockyInstructions`Completely different words here for this test only.`;
     const detector = createLeakDetector({ texts: PROMPT_TEXTS, canaries: [], ngramWords: 8 });
     expect(detector.leaks({ x: other.text })).toEqual([]);
+  });
+});
+
+describe("leak guard hardening (P4-4 review round 1, item 4)", () => {
+  const preamble = UNTRUSTED_PREAMBLE;
+  // Words as the guard counts them, so a 7-word piece really holds 7 (no canary here).
+  const promptWords = REVIEW_INSTRUCTIONS.text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const chunks = (list: string[], size: number) =>
+    Array.from({ length: Math.ceil(list.length / size) }, (_, i) =>
+      list.slice(i * size, i * size + size).join(" "),
+    );
+
+  it("finds a canary split across fields, in any order of keys", () => {
+    const [a, b, c, d] = PROMPT_CANARY.match(/.{4}/g)!;
+    expect(leaks({ title: `id ${a}`, body: `${b}`, agentPrompt: `${c}`, why: `${d} end` })).toEqual(
+      [`(root): ${INSTRUCTION_LEAK}`],
+    );
+  });
+
+  it("folds other scripts' digits before looking for the canary", () => {
+    const arabic = PROMPT_CANARY.replace(/[0-9]/g, (d) => String.fromCodePoint(0x660 + Number(d)));
+    const devanagari = PROMPT_CANARY.replace(/[0-9]/g, (d) =>
+      String.fromCodePoint(0x966 + Number(d)),
+    );
+    for (const text of [arabic, devanagari]) expect(leaks({ x: text }), text).toHaveLength(1);
+  });
+
+  it("strips combining marks and folds Cyrillic and Greek look-alikes", () => {
+    const marked = sentence.replace(/([a-z])/g, "$1\u0301");
+    const cyrillic = sentence.replace(
+      /[aeopcx]/g,
+      (c) => ({ a: "\u0430", e: "\u0435", o: "\u043e", p: "\u0440", c: "\u0441", x: "\u0445" })[c]!,
+    );
+    const greek = sentence.replace(
+      /[aoi]/g,
+      (c) => ({ a: "\u03b1", o: "\u03bf", i: "\u03b9" })[c]!,
+    );
+    for (const text of [marked, cyrillic, greek]) expect(leaks({ x: text }), text).toHaveLength(1);
+  });
+
+  it("finds prompt text split into 7-word fields", () => {
+    const parts = chunks(promptWords, 7);
+    expect(leaks({ checkedOk: parts })).toEqual([`(root): ${INSTRUCTION_LEAK}`]);
+    const findings = parts.map((title) => ({ title, body: "ok" }));
+    expect(leaks({ findings })).toEqual([`(root): ${INSTRUCTION_LEAK}`]);
+  });
+
+  it("finds prompt text with a filler word every 7 words, and in shuffled 7-word pieces", () => {
+    const filler = chunks(promptWords, 7).join(" banana ");
+    expect(leaks({ body: filler })).toEqual([`(root): ${INSTRUCTION_LEAK}`]);
+    const shuffled = chunks(promptWords, 7).reverse();
+    expect(leaks({ checkedOk: shuffled })).toEqual([`(root): ${INSTRUCTION_LEAK}`]);
+    const preambleFiller = chunks(preamble.split(/[^\p{L}\p{N}]+/u).filter(Boolean), 6).join(" x ");
+    expect(leaks({ summary: preambleFiller })).toHaveLength(1);
+  });
+
+  it("still allows a PR that quotes the prompt, whatever the field layout", () => {
+    const diff = `+const PROMPT = \`${systemPrompt(REVIEW_INSTRUCTIONS).replaceAll(PROMPT_CANARY_MARKER, "")}\`;`;
+    const parts = chunks(REVIEW_INSTRUCTIONS.text.split(/\s+/), 7);
+    expect(leaks({ checkedOk: parts }, [diff])).toEqual([]);
+  });
+
+  it("stays quiet on the pr-847 fixture and Rocky's fixed texts after the new folds", () => {
+    expect(leaks(fixture)).toEqual([]);
+    expect(promptShare({ fixture })).toBeLessThan(PROMPT_SHARE_THRESHOLD / 2);
   });
 });

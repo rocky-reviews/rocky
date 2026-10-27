@@ -178,13 +178,41 @@ describe("analyses store", () => {
     expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, raised, units))).toBe(true);
   });
 
+  it("refuses a verdict below high next to a file triaged critical (P4-4 review round 1, item 2)", async () => {
+    const id = await running(A, "5".repeat(40));
+    const doc = {
+      ...DOCUMENT,
+      findings: DOCUMENT.findings
+        .filter((f) => f.severity === "medium" || f.severity === "low")
+        .map((f) => ({ ...f, memory: [] })),
+      briefing: {
+        ...DOCUMENT.briefing,
+        verdict: { level: "medium", reason: "x" },
+        memoryApplied: [],
+      },
+    };
+    await expect(db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, doc, UNITS))).rejects.toThrow(
+      /invalid document verdict/,
+    );
+    const high = { ...doc, briefing: { ...doc.briefing, verdict: { level: "high", reason: "x" } } };
+    expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, high, UNITS))).toBe(true);
+  });
+
   it("refuses a verdict below medium next to any unanalysed file (review round 2, SF2)", async () => {
     const id = await running(A, "9".repeat(40));
     const page = "web/src/pages/InvitePage.tsx";
     const doc = {
       ...DOCUMENT,
       provenance: { ...DOCUMENT.provenance, unanalysed: [{ path: page, reason: "too-large" }] },
-      triage: { ...DOCUMENT.triage, files: DOCUMENT.triage.files.filter((f) => f.path !== page) },
+      // No file triaged critical, so only the unanalysed floor applies (the triage floor is P4-4's).
+      triage: {
+        ...DOCUMENT.triage,
+        files: DOCUMENT.triage.files
+          .filter((f) => f.path !== page)
+          .map((f) =>
+            f.level === "critical" ? { ...f, level: "important" as const, score: 70 } : f,
+          ),
+      },
       findings: DOCUMENT.findings
         .filter((f) => f.path !== page && (f.severity === "medium" || f.severity === "low"))
         .map((f) => ({ ...f, memory: [] })),

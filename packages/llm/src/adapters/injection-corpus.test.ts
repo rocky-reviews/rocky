@@ -6,7 +6,7 @@ import { providerAdapters } from "./index.js";
 import { fakeFetch, json, sse, TEST_KEY, verdictSchema, type Verdict } from "./test-support.js";
 
 /**
- * P4-4 (ADR 0015 §1, T1–T4): every payload of the injection corpus, sent through the real
+ * P4-4 (ADR 0015 §1, I7–I9): every payload of the injection corpus, sent through the real
  * Anthropic and OpenAI-compatible request builders. Whatever the payload, the request carries no
  * tool, Rocky's system text is exactly core's, the payload sits only in the user turn, and each
  * part has exactly one closing marker with the call's id, at its end. On the OpenAI-compatible

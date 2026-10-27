@@ -95,7 +95,7 @@ packages/schema (analysis document; shared contract)
     slot is `systemPrompt(instructions)` from core (`prompt.ts`): a fixed preamble carrying a
     canary, then the instructions (ADR 0015).
   - **OpenAI-compatible:** chat-template control tokens (`<|im_start|>`, `[INST]`, …) in PR
-    content are broken before sending, since self-hosted servers parse them (ADR 0015 T4).
+    content are broken before sending, since self-hosted servers parse them (ADR 0015 I7).
 
 ## Analysis pipeline
 

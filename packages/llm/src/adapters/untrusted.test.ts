@@ -111,7 +111,7 @@ describe("P4-4: the prompt text comes from core (ADR 0015 §1)", () => {
   });
 });
 
-describe("P4-4: chat-template control tokens in PR content (ADR 0015 T4)", () => {
+describe("P4-4: chat-template control tokens in PR content (ADR 0015 I7)", () => {
   // Open-weight servers render a chat template to text and tokenize it with special tokens
   // parsed, so these strings in a diff would become real turn boundaries.
   const TOKENS = [
@@ -159,13 +159,19 @@ describe("P4-4: chat-template control tokens in PR content (ADR 0015 T4)", () =>
       "const a = b || c;",
       "if (x <| y) {}",
       "a |> b",
-      "<div><s>old</s></div>".replace("</s>", ""),
+      "<div><s>old",
       "arr[INDEX]",
       "<<EOF",
       "[INSTALL]",
     ]) {
       expect(neutraliseChatTokens(text), text).toBe(text);
     }
+  });
+
+  it("does break HTML's </s>, which shares Mistral's end-of-sequence string (ADR 0015 R5)", () => {
+    const html = "<div><s>old</s></div>";
+    expect(neutraliseChatTokens(html)).not.toBe(html);
+    expect(neutraliseChatTokens(html)).toBe(`<div><s>old<${CHAT_TOKEN_BREAK}/s></div>`);
   });
 
   it("is applied to the parts only when the adapter asks, before the nonce check", () => {

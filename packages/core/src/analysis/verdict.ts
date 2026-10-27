@@ -12,7 +12,7 @@
  * binary file) and talk the briefing into "low", and a stored document would say "low" with the
  * auth file sitting only in `provenance.unanalysed`.
  *
- * `belowUnanalysedFloor` re-checks this on a stored document (the pipeline's final check and
+ * `belowVerdictFloor` re-checks this on a stored document (the pipeline's final check and
  * `completeAnalysis`) with what the document can express: any unanalysed file → at least medium,
  * one on a rules-floored path → at least high. A non-rule file triaged critical whose review then
  * failed can only be checked as medium there: an unanalysed file carries no triage level in the
@@ -50,13 +50,29 @@ export const unreviewedFloor = (files: readonly UnreviewedRisk[]): RiskLevel =>
     ),
   );
 
-/** True when the stored verdict sits below an unanalysed file (rules floor → high, else medium). */
-export const belowUnanalysedFloor = (document: AnalysisDocument): boolean => {
-  const floor = unreviewedFloor(
-    document.provenance.unanalysed.map((file) => {
-      const rule = preTriage(file.path);
-      return { ruleFloor: rule.kind === "analyse" ? rule.floor : undefined };
-    }),
+/**
+ * A file triaged critical floors the verdict at high (P4-4 review round 1, item 2). Triage sees
+ * one file and nothing else (no title, no other file, no model text), so an injection in the
+ * title or in another file's text cannot pull the verdict below what per-file triage said.
+ * Important does not raise the verdict: "low" keeps its meaning for ordinary PRs.
+ */
+export const triageFloor = (files: readonly Pick<TriagedFile, "level">[]): RiskLevel =>
+  files.some((file) => file.level === "critical") ? "high" : "low";
+
+/**
+ * True when the stored verdict sits below a floor the document can express: its findings, its
+ * unanalysed files (rules floor → high, else medium) and its critical triage (→ high).
+ */
+export const belowVerdictFloor = (document: AnalysisDocument): boolean => {
+  const floor = maxRisk(
+    findingsFloor(document.findings),
+    triageFloor(document.triage.files),
+    unreviewedFloor(
+      document.provenance.unanalysed.map((file) => {
+        const rule = preTriage(file.path);
+        return { ruleFloor: rule.kind === "analyse" ? rule.floor : undefined };
+      }),
+    ),
   );
   return RANK[document.briefing.verdict.level] < RANK[floor];
 };
