@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Forge, OrgId } from "@rocky-reviews/core";
 import { createDb, type Db } from "@rocky-reviews/db";
-import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "@rocky-reviews/db/testing";
+import {
+  CONTAINER_TIMEOUT_MS,
+  startPostgres,
+  type TestPostgres,
+  ignoreIdleError,
+} from "@rocky-reviews/db/testing";
 import {
   createGitHubForge,
   createGitHubWebhookIngress,
@@ -210,7 +215,7 @@ const compareReads = () => github.requests.filter((r) => r.path.includes("/compa
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   serverDb = createDb({ connectionString: pgs.appUrl, max: 4 });
   workerDb = createDb({ connectionString: pgs.workerUrl, max: 4 });
   app = buildApp({

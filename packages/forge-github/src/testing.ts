@@ -174,7 +174,19 @@ export interface FakePullRequest {
 }
 
 /** Routes `failRoute` can make fail. */
-export type FakeRoute = "installation" | "token" | "pull" | "list" | "compare";
+export type FakeRoute =
+  | "installation"
+  | "token"
+  | "pull"
+  | "list"
+  | "compare"
+  | "repository"
+  | "user"
+  | "collaborator"
+  | "membership";
+
+/** A user's role on a repository, as GitHub grants it (P3-6). */
+export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
 
 export interface FakeGitHubApi {
   /** Pass as the reader's `fetch`. */
@@ -225,6 +237,25 @@ export interface FakeGitHubApi {
     /** Text is sent as UTF-8; bytes are sent as they are (e.g. a Latin-1 diff). */
     diff: string | Uint8Array | "too_large" | "missing",
   ): void;
+  /**
+   * A GitHub user signed in to the app (P3-6): returns a fresh user access token (a random test
+   * value, also listed in `userTokens`), valid on `GET /user`, `GET /repos/{owner}/{repo}` and
+   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission` until revoked.
+   */
+  addUser(user: { readonly id: number; readonly login: string }): string;
+  /** Every user token issued, so a test can prove none of them leaked. */
+  readonly userTokens: string[];
+  /** The user's role on a repository; `null` removes the user from it (collaborator removed). */
+  setPermission(userId: number, repositoryId: number, permission: FakePermission | null): void;
+  /** The token is revoked or expired: GitHub answers 401 from now on. */
+  revokeUserToken(token: string): void;
+  /**
+   * The repository's visibility. A public repository is readable by every user, an internal one
+   * by every member of the enterprise (modelled as every user); both answer `pull: true` to
+   * non-collaborators, which is why the reader also asks for collaborator status. An internal
+   * repository is reported with `private: true` and `visibility: "internal"`.
+   */
+  setVisibility(repositoryId: number, visibility: "public" | "internal" | "private"): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -241,6 +272,18 @@ const INSTALLATION_ROUTE = /^app\/installations\/(\d+)$/;
 const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
 const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
+const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
+const COLLABORATOR_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/;
+const MEMBERSHIP_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)$/;
+const ROLES: readonly FakePermission[] = ["read", "triage", "write", "maintain", "admin"];
+/** `permission` is the legacy base role: maintain reads as write, triage as read. */
+const LEGACY: Readonly<Record<FakePermission, string>> = {
+  read: "read",
+  triage: "read",
+  write: "write",
+  maintain: "write",
+  admin: "admin",
+};
 const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/;
 
 /**
@@ -252,6 +295,14 @@ const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9
  * (RS256 signature with the app's public key, `iss` = app id, unexpired, at most 10 minutes long)
  * on `/app/...` routes, and on repository routes a live token minted for that repository (a
  * token for another repository gets a 404, as on GitHub). A bad or missing credential gets 401.
+ * P3-6: for user access tokens (`addUser`), `GET /user`; `GET /repos/{owner}/{repo}` (a JSON 404
+ * unless the user has a role on the repository (`setPermission`) or it is public or internal, and
+ * the repository is one an installation of the app can access; otherwise the repository with
+ * that user's `permissions`); and `GET /repos/{owner}/{repo}/collaborators/{username}/permission`
+ * (the effective role: `read` for anyone on a public or internal repository). For installation
+ * tokens, `GET /repos/{owner}/{repo}/collaborators/{username}` answers 204 for a user with a role
+ * on the repository and a JSON 404 otherwise. Fixtures: `get-repository.json`,
+ * `get-authenticated-user.json`, `get-collaborator-permission.json`.
  */
 export const fakeGitHubApi = (options: {
   appId: number;
@@ -277,6 +328,113 @@ export const fakeGitHubApi = (options: {
     { installationId: number; repositoryIds: Set<number>; expiresAt: number }
   >();
   const tokens: FakeGitHubApi["tokens"] = { mints: [], issued: [], revoked: 0 };
+  const userTokens: string[] = [];
+  const users = new Map<string, { id: number; login: string; revoked: boolean }>();
+  const permissions = new Map<string, FakePermission>();
+  const visibilities = new Map<number, "public" | "internal">();
+
+  const flags = (role: FakePermission | undefined, readable: boolean) => {
+    const rank = role === undefined ? -1 : ROLES.indexOf(role);
+    return {
+      admin: rank >= 4,
+      maintain: rank >= 3,
+      push: rank >= 2,
+      triage: rank >= 1,
+      pull: rank >= 0 || readable,
+    };
+  };
+
+  /** The repository as `userId` can see it, or `undefined` (GitHub's 404). */
+  const visibleTo = (owner: string, name: string, userId: number) => {
+    const entry = repositoryByName(owner, name);
+    // A GitHub App user token sees only repositories the app's installation can access.
+    if (entry === undefined || !installed.has(entry.installationId)) return undefined;
+    const role = permissions.get(`${userId}:${entry.repo.id}`);
+    const visibility = visibilities.get(entry.repo.id) ?? "private";
+    if (role === undefined && visibility === "private") return undefined;
+    return { entry, role, visibility };
+  };
+
+  const userOf = (header: string | null) => {
+    const match = /^(?:Bearer|token) (\S+)$/.exec(header ?? "");
+    const user = match?.[1] === undefined ? undefined : users.get(match[1]);
+    return user !== undefined && !user.revoked ? user : undefined;
+  };
+
+  /** `GET /repos/{owner}/{repo}` as a user: 404 unless visible, with that user's permissions. */
+  const repositoryAsUser = (owner: string, name: string, userId: number): Response => {
+    const failure = takeRouteFailure("repository");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const seen = visibleTo(owner, name, userId);
+    if (seen === undefined) return json(404, githubFixture("get-installation.not-found"));
+    return json(200, {
+      ...githubFixture("get-repository"),
+      ...repositoryJson(seen.entry.repo),
+      private: seen.visibility !== "public",
+      visibility: seen.visibility,
+      permissions: flags(seen.role, true),
+    });
+  };
+
+  /** `GET /user`: who the token belongs to. */
+  const authenticatedUser = (user: { id: number; login: string }): Response => {
+    const failure = takeRouteFailure("user");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    return json(200, {
+      ...githubFixture("get-authenticated-user"),
+      id: user.id,
+      login: user.login,
+    });
+  };
+
+  const userByLogin = (username: string) => {
+    let login: string;
+    try {
+      login = decodeURIComponent(username).toLowerCase();
+    } catch {
+      return undefined;
+    }
+    return [...users.values()].find((u) => u.login.toLowerCase() === login);
+  };
+
+  /**
+   * `GET /repos/{owner}/{repo}/collaborators/{username}/permission`, asked by `callerId`. It
+   * reports the **effective** legacy role, as GitHub most likely does (review round 2, B1): a
+   * collaborator gets their role, and anyone else gets `read` on a public repository (and, for
+   * an internal one, every enterprise member, modelled as every user). 404 only when the caller
+   * cannot see the repository or `username` is not a user. Rocky must never read this as
+   * membership.
+   */
+  const collaboratorPermission = (
+    owner: string,
+    name: string,
+    username: string,
+    callerId: number,
+  ): Response => {
+    const failure = takeRouteFailure("collaborator");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const seen = visibleTo(owner, name, callerId);
+    const target = userByLogin(username);
+    if (seen === undefined || target === undefined) {
+      return json(404, githubFixture("get-installation.not-found"));
+    }
+    const role: FakePermission | undefined =
+      permissions.get(`${target.id}:${seen.entry.repo.id}`) ??
+      (seen.visibility === "private" ? undefined : "read");
+    const fixture = githubFixture("get-collaborator-permission");
+    return json(200, {
+      ...fixture,
+      permission: role === undefined ? "none" : LEGACY[role],
+      role_name: role ?? "none",
+      user: {
+        ...(fixture["user"] as Record<string, unknown>),
+        id: target.id,
+        login: target.login,
+        permissions: flags(role, false),
+        role_name: role ?? "none",
+      },
+    });
+  };
 
   const authorized = (header: string | null): boolean => {
     const match = /^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(
@@ -429,6 +587,19 @@ export const fakeGitHubApi = (options: {
       });
       return json(200, slice);
     }
+    m = MEMBERSHIP_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("membership");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      // Membership, not effective access: 204 only for a user with a role on the repository.
+      const target = userByLogin(group(m, 3));
+      const role =
+        target === undefined ? undefined : permissions.get(`${target.id}:${entry.repo.id}`);
+      if (role === undefined) return json(404, githubFixture("get-installation.not-found"));
+      return new Response(null, { status: 204 });
+    }
     m = COMPARE_ROUTE.exec(path);
     if (method === "GET" && m !== null) {
       const failure = takeRouteFailure("compare");
@@ -467,7 +638,10 @@ export const fakeGitHubApi = (options: {
     const appRoute =
       path === "app" || path.startsWith("app/") || REPO_INSTALLATION_ROUTE.test(path);
     const token = appRoute ? undefined : tokenOf(headers.get("authorization"));
-    const ok = appRoute ? authorized(headers.get("authorization")) : token !== undefined;
+    const user = appRoute ? undefined : userOf(headers.get("authorization"));
+    const ok = appRoute
+      ? authorized(headers.get("authorization"))
+      : token !== undefined || user !== undefined;
     requests.push({ method, path: url.pathname, authorized: ok });
     if (init?.redirect !== "error")
       return json(400, { message: "test: redirects must be refused" });
@@ -547,6 +721,20 @@ export const fakeGitHubApi = (options: {
         id: entry.installationId,
       });
     }
+    if (method === "GET" && path === "user" && user !== undefined) return authenticatedUser(user);
+    const repositoryMatch = REPOSITORY_ROUTE.exec(path);
+    if (method === "GET" && repositoryMatch !== null && user !== undefined) {
+      return repositoryAsUser(group(repositoryMatch, 1), group(repositoryMatch, 2), user.id);
+    }
+    const collaboratorMatch = COLLABORATOR_ROUTE.exec(path);
+    if (method === "GET" && collaboratorMatch !== null && user !== undefined) {
+      return collaboratorPermission(
+        group(collaboratorMatch, 1),
+        group(collaboratorMatch, 2),
+        group(collaboratorMatch, 3),
+        user.id,
+      );
+    }
     const routed = repoRoute(method, path, url, token);
     if (routed !== undefined) return routed;
     const match = INSTALLATION_ROUTE.exec(path);
@@ -623,6 +811,25 @@ export const fakeGitHubApi = (options: {
     },
     putDiff: (repositoryId, revision, diff) => {
       diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);
+    },
+    userTokens,
+    addUser: (user) => {
+      const value = `test-user-token-${randomUUID()}`;
+      userTokens.push(value);
+      users.set(value, { id: user.id, login: user.login, revoked: false });
+      return value;
+    },
+    setPermission: (userId, repositoryId, permission) => {
+      if (permission === null) permissions.delete(`${userId}:${repositoryId}`);
+      else permissions.set(`${userId}:${repositoryId}`, permission);
+    },
+    revokeUserToken: (value) => {
+      const user = users.get(value);
+      if (user !== undefined) user.revoked = true;
+    },
+    setVisibility: (repositoryId, visibility) => {
+      if (visibility === "private") visibilities.delete(repositoryId);
+      else visibilities.set(repositoryId, visibility);
     },
   };
 };

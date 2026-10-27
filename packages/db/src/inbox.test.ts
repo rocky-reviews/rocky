@@ -27,6 +27,7 @@ import {
   seedOrg,
   startPostgres,
   type TestPostgres,
+  ignoreIdleError,
 } from "./testing/index.js";
 import { WebhookInboxError } from "./webhooks.js";
 
@@ -156,7 +157,7 @@ const claimOne = async (deliveryId: string): Promise<ClaimedDelivery | undefined
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   server = createDb({ connectionString: pgs.appUrl, max: 4 });
   worker = createDb({ connectionString: pgs.workerUrl, max: 4 });
 }, CONTAINER_TIMEOUT_MS);
@@ -204,7 +205,7 @@ describe("who may touch the inbox", () => {
   });
 
   it("the receiver cannot pre-set a processing state: every row starts pending", async () => {
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     const deliveryId = randomUUID();
     try {
       await app.query(
@@ -486,7 +487,10 @@ describe("claim, complete, fail", () => {
         kind: "maybe" as never,
       }),
     ).rejects.toThrow(/invalid failure/);
-    const raw = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 });
+    const raw = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 }).on(
+      "error",
+      ignoreIdleError,
+    );
     try {
       const { rows } = await raw.query<{ r: string }>(
         "select worker.fail_webhook_delivery('github', $1, $2::uuid, 'x', 0, 'maybe') as r",
@@ -765,7 +769,7 @@ describe("claim ordering (review round 1: M3, S2, L5)", () => {
 
 describe("installation rows must have minimalEvent's shape (review round 2, A)", () => {
   const insertAsApp = async (event: unknown) => {
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     try {
       const type = (event as { type: string }).type;
       await app.query(
@@ -908,7 +912,7 @@ describe("claim cost and timing (review round 3)", () => {
     await drain();
     const flooded = nextInstallation++;
     const genuine = installationDelivery({ type: "installation.deleted" });
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     try {
       // One INSERT … SELECT as the receiver's role, like a compromised server would.
       await app.query(

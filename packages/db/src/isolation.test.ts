@@ -11,6 +11,7 @@ import {
   startPostgres,
   TEST_ROLES,
   type SeededOrg,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /**
@@ -170,8 +171,11 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 });
-  workerPool = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 });
+  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 }).on("error", ignoreIdleError);
+  workerPool = new pg.Pool({ connectionString: pgs.workerUrl, max: 1 }).on(
+    "error",
+    ignoreIdleError,
+  );
   db = createDb({ pool: appPool });
 
   const { rows } = await pgs.migrator.query<{

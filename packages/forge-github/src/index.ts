@@ -44,6 +44,7 @@ export {
   type GitHubInstallationReaderOptions,
 } from "./installations.js";
 export {
+  COLLABORATOR_TOKEN_PERMISSIONS,
   createGitHubForge,
   DIFF_READ_TIMEOUT_MS,
   isRepositoryFullName,
@@ -55,3 +56,9 @@ export {
   TOKEN_REFRESH_MARGIN_MS,
   type GitHubForgeOptions,
 } from "./repositories.js";
+export {
+  createGitHubUserAccessReader,
+  MAX_REPOSITORY_RESPONSE_BYTES,
+  USER_ACCESS_TIMEOUT_MS,
+  type GitHubUserAccessReaderOptions,
+} from "./user-access.js";

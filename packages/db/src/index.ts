@@ -1,3 +1,10 @@
+export {
+  AccessInputError,
+  loadRepositoryAccessContext,
+  resolveRepositoryForAccess,
+  type RepositoryAccessContext,
+  type RepositoryAccessTarget,
+} from "./access.js";
 export { audit, AUDIT_METADATA_MAX_BYTES, type AuditActor, type AuditTarget } from "./audit.js";
 export {
   createDb,

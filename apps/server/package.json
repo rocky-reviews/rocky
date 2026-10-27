@@ -14,6 +14,7 @@
   "dependencies": {
     "@fastify/rate-limit": "11.2.1",
     "@rocky-reviews/core": "workspace:*",
+    "@rocky-reviews/crypto": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/forge-github": "workspace:*",
     "@rocky-reviews/log": "workspace:*",

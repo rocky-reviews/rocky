@@ -18,6 +18,7 @@ import {
   seedOrg,
   startPostgres,
   type TestPostgres,
+  ignoreIdleError,
 } from "@rocky-reviews/db/testing";
 import {
   createGitHubInstallationReader,
@@ -248,7 +249,7 @@ const plant = async (deliveryId: string, event: Record<string, unknown>) => {
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   serverDb = createDb({ connectionString: pgs.appUrl, max: 4 });
   workerDb = createDb({ connectionString: pgs.workerUrl, max: 4 });
   app = buildApp({
@@ -1204,7 +1205,7 @@ describe("review round 2", () => {
       payloadSha256: "ef".repeat(32),
       event: { type: "installation.deleted", installationId: 9122 },
     };
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     try {
       await expect(
         app.query(
@@ -1320,7 +1321,7 @@ describe("review round 3", () => {
     await drain();
     github.uninstall(9160);
     const N = 40;
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     try {
       // Decodable (the shape CHECK holds), older than the genuine uninstall.
       await app.query(

@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createDb, type Db } from "@rocky-reviews/db";
-import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "@rocky-reviews/db/testing";
+import {
+  CONTAINER_TIMEOUT_MS,
+  startPostgres,
+  type TestPostgres,
+  ignoreIdleError,
+} from "@rocky-reviews/db/testing";
 import { createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
 import {
   installationPayload,
@@ -27,7 +32,7 @@ let app: ReturnType<typeof buildApp>;
 beforeAll(async () => {
   pgs = await startPostgres();
   db = createDb({ connectionString: pgs.appUrl, max: 10 });
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 1 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 1 }).on("error", ignoreIdleError);
   app = buildApp({
     checkDatabase: () => Promise.resolve(true),
     webhooks: {

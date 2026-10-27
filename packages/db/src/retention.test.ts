@@ -22,6 +22,7 @@ import {
   seedOrg,
   startPostgres,
   type SeededOrg,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /**
@@ -44,7 +45,7 @@ const NOW = new Date(Date.now() - DAY);
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   [orgA, orgB] = await asWorker(pgs.workerUrl, async (w) => [
     await seedOrg(w, newOrgId(), { installationId: 1, createdAt: NOW }),

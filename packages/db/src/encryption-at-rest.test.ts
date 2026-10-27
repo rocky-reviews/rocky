@@ -42,6 +42,7 @@ import {
   startPostgres,
   type DumpOptions,
   type SeededOrg,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /**
@@ -174,7 +175,7 @@ const fakeWrappedKey = (version = 1, blob: Buffer = Buffer.alloc(60, 9)): string
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   kek = Buffer.from(generateLocalKek(), "base64");
   wrapper = new LocalKeyWrapper([[KEK_VERSION, kek]]);

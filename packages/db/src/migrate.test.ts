@@ -1,7 +1,12 @@
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { appliedMigrations, checksumOf, loadMigrations, migrate, rollback } from "./migrate.js";
-import { CONTAINER_TIMEOUT_MS, startPostgres, type TestPostgres } from "./testing/index.js";
+import {
+  CONTAINER_TIMEOUT_MS,
+  startPostgres,
+  type TestPostgres,
+  ignoreIdleError,
+} from "./testing/index.js";
 
 /** P2-1: migrations go up and down, in both directions, on a real Postgres. */
 
@@ -206,7 +211,10 @@ describe("migrations", () => {
   it("holds an advisory lock so two migrators cannot interleave", async () => {
     const all = loadMigrations();
     await rollback(db.migrator, { steps: all.length });
-    const other = new pg.Pool({ connectionString: db.migratorUrl, max: 2 });
+    const other = new pg.Pool({ connectionString: db.migratorUrl, max: 2 }).on(
+      "error",
+      ignoreIdleError,
+    );
     try {
       const [a, b] = await Promise.all([migrate(db.migrator), migrate(other)]);
       const applied = [...a.applied, ...b.applied].sort();

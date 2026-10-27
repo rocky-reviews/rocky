@@ -68,6 +68,9 @@ importers:
       '@rocky-reviews/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@rocky-reviews/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@rocky-reviews/db':
         specifier: workspace:*
         version: link:../../packages/db
