@@ -1,4 +1,4 @@
-# ADR 0019: Change-map renderer
+# ADR 0021: Change-map renderer
 
 - **Status:** Accepted
 - **Date:** 2026-10-27

@@ -2,7 +2,7 @@
 
 The change map: the analysis document's graph in, one SVG string out. Adapted from the
 [PR Lens](https://github.com/coldteadotai/pr-lens) renderer (MIT, © 2026 Coldtea AI; see
-`NOTICE`) at upstream commit `918ffe82cb1dd71d20ce70b27917aeb80a7a4b49`. Decisions: ADR 0019.
+`NOTICE`) at upstream commit `918ffe82cb1dd71d20ce70b27917aeb80a7a4b49`. Decisions: ADR 0021.
 
 ```ts
 import { renderChangeMap } from "@rocky-reviews/renderer";

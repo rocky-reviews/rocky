@@ -13,7 +13,8 @@ Decisions behind this page:
 [ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md),
 [ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md),
 [ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md),
-[ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md).
+[ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md),
+[ADR 0019 web app stack and PR page shell](adr/0019-web-app-shell.md).
 
 ## Runtime
 
@@ -48,7 +49,7 @@ packages/schema (analysis document; shared contract)
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                                                                   |
 | `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later posting, indexing                     |
-| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                                                                        |
+| `apps/web`                   | React SPA on Vite (ADR 0019): PR review page shell (P6-1), later briefing, diff, inbox, settings, project memory                                                                                                                  |
 | `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)         |
 | `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                                                         |
 | `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                                               |
