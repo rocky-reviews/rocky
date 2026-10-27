@@ -130,6 +130,10 @@ packages/schema (analysis document; shared contract)
   queued row, reads the diff on a read-only session, runs the pipeline and stores `done` (the
   document is re-validated at the write) or `failed` (a code). Retryable LLM and forge errors
   requeue the row with the provider's hint. The queue lane that drives it comes with P4-6.
+- P4-8: `pnpm rocky analyze <owner/repo>#<n>` ([docs/cli.md](cli.md)) runs the same pipeline
+  from a terminal, with no database: a read-only repository session for the diff, the roles
+  behind a per-run token cap, and the validated document printed with untrusted text escaped. It
+  posts and stores nothing.
 
 ## Data layer
 

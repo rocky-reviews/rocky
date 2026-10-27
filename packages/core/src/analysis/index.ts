@@ -32,6 +32,7 @@ export {
   type AnalysisStage,
   type AnalysisStats,
 } from "./pipeline.js";
+export { STAGE_CALLS, type StageTemplate } from "./stages.js";
 export { belowVerdictFloor } from "./verdict.js";
 export {
   createLeakDetector,
