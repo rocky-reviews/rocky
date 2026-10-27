@@ -590,6 +590,102 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
     }
   });
 
+  const START_USAGE =
+    '"usage":{"input_tokens":2048,"output_tokens":1,"cache_creation_input_tokens":1280,"cache_read_input_tokens":1536,"cache_creation":{"ephemeral_5m_input_tokens":1024,"ephemeral_1h_input_tokens":256},"server_tool_use":null,"service_tier":"standard"}';
+  const DELTA_USAGE = '"usage":{"output_tokens":512}';
+  const withUsage = (start: string, delta: string): FakeResponse => {
+    const body = sse("end-turn.sse").body!;
+    expect(body).toContain(START_USAGE);
+    expect(body).toContain(DELTA_USAGE);
+    return {
+      ...sse("end-turn.sse"),
+      body: body.replace(START_USAGE, start).replace(DELTA_USAGE, delta),
+    };
+  };
+
+  it("reports no usage, never a zero, when the usage block is missing or malformed (P4-5 review 1)", async () => {
+    const malformed: [string, string, string][] = [
+      ["empty", '"usage":{}', '"usage":{}'],
+      [
+        "negative input",
+        START_USAGE.replace('"input_tokens":2048', '"input_tokens":-5'),
+        DELTA_USAGE,
+      ],
+      ["negative output", START_USAGE, '"usage":{"output_tokens":-1}'],
+      [
+        "string counts",
+        START_USAGE.replace('"input_tokens":2048', '"input_tokens":"2048"'),
+        '"usage":{"output_tokens":"512"}',
+      ],
+      [
+        "float count",
+        START_USAGE.replace('"cache_read_input_tokens":1536', '"cache_read_input_tokens":15.5'),
+        DELTA_USAGE,
+      ],
+      [
+        "string cache write",
+        START_USAGE.replace('"ephemeral_1h_input_tokens":256', '"ephemeral_1h_input_tokens":"256"'),
+        DELTA_USAGE,
+      ],
+    ];
+    for (const [name, start, delta] of malformed) {
+      const { provider } = providerFor(platform, [withUsage(start, delta)]);
+      const result = await complete(provider);
+      expect(result.status, name).toBe("ok");
+      expect(result.usage, name).toBeUndefined();
+    }
+  });
+
+  it("counts absent or null cache fields as no cache use, and keeps the required counts (P4-5 review 1)", async () => {
+    const { provider } = providerFor(platform, [
+      withUsage(
+        '"usage":{"input_tokens":100,"output_tokens":1,"cache_read_input_tokens":null}',
+        '"usage":{"output_tokens":7}',
+      ),
+    ]);
+    expect((await complete(provider)).usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 7,
+      cacheReadInputTokens: 0,
+      cacheWrite5mInputTokens: 0,
+      cacheWrite1hInputTokens: 0,
+    });
+  });
+
+  it("merges message_delta usage into what a failed stream reports (P4-5 review 1)", async () => {
+    const body = sse("end-turn.sse").body!;
+    const cut = body.slice(0, body.indexOf("event: message_stop"));
+    const failing: FakeResponse = {
+      ...sse("end-turn.sse"),
+      body:
+        cut.replace(DELTA_USAGE, '"usage":{"output_tokens":512,"cache_read_input_tokens":1600}') +
+        'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n',
+    };
+    const { provider } = providerFor(platform, [failing]);
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("overloaded");
+    expect(isLlmCallError(error) && error.partialUsage).toEqual({
+      inputTokens: 2048,
+      outputTokens: 512,
+      cacheReadInputTokens: 1600,
+      cacheWrite5mInputTokens: 1024,
+      cacheWrite1hInputTokens: 256,
+    });
+  });
+
+  it("keeps a finished stream's usage when reading the answer fails afterwards (P4-5 review 1)", async () => {
+    const throwing = {
+      ...verdictSchema,
+      parse: () => {
+        throw new TypeError("validator bug");
+      },
+    };
+    const { provider } = providerFor(platform, [sse("end-turn.sse")]);
+    const error = await rejection(complete(provider, { output: throwing }));
+    expect(isLlmCallError(error) && error.kind).toBe("server_error");
+    expect(isLlmCallError(error) && error.partialUsage).toEqual(usage5m1h);
+  });
+
   it("turns a validator that throws into server_error, dropping its text (S2)", async () => {
     const throwing = {
       ...verdictSchema,

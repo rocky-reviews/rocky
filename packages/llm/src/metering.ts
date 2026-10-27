@@ -24,7 +24,7 @@ import type { LlmConfig } from "./config.js";
 import { costMicroUsd, modelPrice, priceTableAt, PRICE_TABLES, type PriceTable } from "./prices.js";
 
 /**
- * Metering (P4-5, ADR 0015): wraps the `LlmRoles` handed to the pipeline so every call, whatever
+ * Metering (P4-5, ADR 0016): wraps the `LlmRoles` handed to the pipeline so every call, whatever
  * its outcome, writes its usage before its result (or error) is handed on.
  *
  * - One record per attempt the provider reported: a server-side fallback chain is one record per
@@ -178,7 +178,7 @@ export const meterRoles = (roles: LlmRoles, options: MeteringOptions): MeteredRo
     const table = priceTableAt(clock.now(), tables);
     const price = table === undefined ? undefined : modelPrice(table, safeProvider, model);
     // A refusal before any output is billed only in some refusal categories, which Rocky does
-    // not see; a failed call's partial usage has no published billing rule (ADR 0015 §3).
+    // not see; a failed call's partial usage has no published billing rule (ADR 0016 §3).
     const unverified =
       usageStatus === "partial" || (attempt.outcome === "refused" && tokens?.outputTokens === 0);
     let costStatus: LlmCostStatus;
@@ -353,13 +353,16 @@ export const meterRoles = (roles: LlmRoles, options: MeteringOptions): MeteredRo
               recordOf(callId, 0, "embed", result.provider, {
                 model: result.model,
                 outcome: "ok",
-                usage: {
-                  inputTokens: result.usage.inputTokens,
-                  outputTokens: 0,
-                  cacheReadInputTokens: 0,
-                  cacheWrite5mInputTokens: 0,
-                  cacheWrite1hInputTokens: 0,
-                },
+                usage:
+                  result.usage === undefined
+                    ? undefined
+                    : {
+                        inputTokens: result.usage.inputTokens,
+                        outputTokens: 0,
+                        cacheReadInputTokens: 0,
+                        cacheWrite5mInputTokens: 0,
+                        cacheWrite1hInputTokens: 0,
+                      },
                 partial: false,
               }),
             ]);

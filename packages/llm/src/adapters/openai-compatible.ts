@@ -10,7 +10,7 @@ import {
 } from "@rocky-reviews/core";
 import type { ProviderAdapterFactory } from "../registry.js";
 import { callError, cancelledBy, kindForStatus } from "./errors.js";
-import { guarded, tokens, toResult, ZERO_USAGE, type StopKind } from "./output.js";
+import { count, guarded, optionalCount, toResult, ZERO_USAGE, type StopKind } from "./output.js";
 import {
   DEFAULT_TIMEOUT_MS,
   MAX_RESPONSE_BYTES,
@@ -130,16 +130,26 @@ interface ChatCompletion {
   readonly usage?: unknown;
 }
 
-/** OpenAI counts cached tokens inside `prompt_tokens`; the port counts them apart. */
-const chatUsage = (usage: ChatCompletion["usage"]): LlmUsage => {
-  if (!isObject(usage)) return ZERO_USAGE;
-  const prompt = tokens(usage.prompt_tokens);
-  const details = isObject(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};
-  const cached = Math.min(tokens(details["cached_tokens"]), prompt);
+/**
+ * OpenAI counts cached tokens inside `prompt_tokens`; the port counts them apart. Undefined when
+ * the server sent no usage, or a block that cannot be trusted (P4-5 review 1, ADR 0016 §2): both
+ * counts are required non-negative integers; `cached_tokens` is optional (absent or null is 0)
+ * but, when present, must be a count no larger than `prompt_tokens`.
+ */
+const chatUsage = (usage: ChatCompletion["usage"]): LlmUsage | undefined => {
+  if (!isObject(usage)) return undefined;
+  const prompt = count(usage.prompt_tokens);
+  const completion = count(usage.completion_tokens);
+  const details = usage.prompt_tokens_details;
+  if (details !== undefined && details !== null && !isObject(details)) return undefined;
+  const cached = optionalCount(isObject(details) ? details["cached_tokens"] : undefined);
+  if (prompt === undefined || completion === undefined || cached === undefined || cached > prompt) {
+    return undefined;
+  }
   return {
     ...ZERO_USAGE,
     inputTokens: prompt - cached,
-    outputTokens: tokens(usage.completion_tokens),
+    outputTokens: completion,
     cacheReadInputTokens: cached,
   };
 };
@@ -271,11 +281,14 @@ export const openAiCompatibleAdapter =
             vector.every((value) => typeof value === "number" && Number.isFinite(value)),
         );
         if (!valid) throw new LlmCallError("invalid_request");
-        const usage = isObject(answer.usage) ? answer.usage : {};
+        // No usage, or a malformed count: none recorded, never a zero (P4-5 review 1).
+        const inputTokens = isObject(answer.usage)
+          ? count(answer.usage["prompt_tokens"])
+          : undefined;
         return {
           vectors: vectors as number[][],
           model: call.model,
-          usage: { inputTokens: tokens(usage["prompt_tokens"]) },
+          usage: inputTokens === undefined ? undefined : { inputTokens },
         };
       });
     };

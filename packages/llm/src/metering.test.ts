@@ -19,7 +19,7 @@ import { meterRoles, usageTargetsFor, type LlmUsageTargets } from "./metering.js
 import { costMicroUsd, modelPrice, PRICE_TABLES } from "./prices.js";
 
 /**
- * P4-5 (ADR 0015): every call through the metered roles writes one usage record per reported
+ * P4-5 (ADR 0016): every call through the metered roles writes one usage record per reported
  * attempt, and the rows add up to exactly what the provider reported, across a multi-call run
  * with repairs, fallbacks, refusals, truncations, failures and retries. No network, no spending.
  */
@@ -399,6 +399,37 @@ describe("what a usage row says", () => {
     // The role's configured target names the model and provider of a call that never answered.
     for (const row of rows)
       expect([row.provider, row.model]).toEqual(["anthropic", "claude-opus-5-5"]);
+  });
+
+  it("records a result whose provider reported no (valid) usage as unreported, never as a priced zero (review 1)", async () => {
+    const { roles } = scripted({
+      graph: [
+        { result: { status: "ok", value: {}, model: "claude-sonnet-5-5", usage: undefined } },
+        {
+          result: {
+            status: "ok",
+            value: {},
+            model: "claude-opus-4-8",
+            usage: usage(10, 5),
+            attempts: [
+              { model: "claude-opus-5-5", usage: undefined },
+              { model: "claude-opus-4-8", usage: usage(10, 5) },
+            ],
+          },
+        },
+      ],
+    });
+    const { sink, rows } = memorySink();
+    const metered = meter(roles, sink);
+    await call(metered, "graph");
+    await call(metered, "graph");
+    expect(
+      rows.map((r) => [r.attempt, r.usageStatus, r.costStatus, r.costMicroUsd, r.tokens]),
+    ).toEqual([
+      [0, "unreported", "no_usage", null, null],
+      [0, "unreported", "no_usage", null, null],
+      [1, "reported", "priced", priced("claude-opus-4-8", usage(10, 5)), expect.any(Object)],
+    ]);
   });
 
   it("records tokens with no price for an unknown model or an unverified platform; never guesses", async () => {

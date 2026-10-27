@@ -22,7 +22,7 @@ import {
 import type { ProviderKind } from "../providers.js";
 import { assertAmbientAtCall } from "./ambient.js";
 import { callError, cancelledBy, kindForStatus, kindForType } from "./errors.js";
-import { guarded, tokens, toResult, type Answer, type StopKind } from "./output.js";
+import { count, guarded, optionalCount, toResult, type Answer, type StopKind } from "./output.js";
 import {
   cappedFetch,
   DEFAULT_TIMEOUT_MS,
@@ -118,31 +118,54 @@ const requestFor = (
     : {}),
 });
 
+/** A usage block as received: every field is checked before use (`usageOf`). */
 interface UsageLike {
-  readonly input_tokens?: number | null;
-  readonly output_tokens?: number | null;
-  readonly cache_read_input_tokens?: number | null;
-  readonly cache_creation_input_tokens?: number | null;
+  readonly input_tokens?: unknown;
+  readonly output_tokens?: unknown;
+  readonly cache_read_input_tokens?: unknown;
+  readonly cache_creation_input_tokens?: unknown;
   readonly cache_creation?: {
-    readonly ephemeral_5m_input_tokens?: number | null;
-    readonly ephemeral_1h_input_tokens?: number | null;
+    readonly ephemeral_5m_input_tokens?: unknown;
+    readonly ephemeral_1h_input_tokens?: unknown;
   } | null;
 }
 
 /**
- * Anthropic usage → `LlmUsage`. The TTL breakdown is used when it adds up to the write total; a
- * stream can carry a stale breakdown from `message_start`, and a platform may omit it. Otherwise
- * the total counts as 5-minute writes, the only TTL Rocky requests.
+ * Anthropic usage → `LlmUsage`, or undefined when the block cannot be trusted (P4-5 review 1,
+ * ADR 0016 §2). All or nothing:
+ * - `input_tokens` and `output_tokens` are required non-negative integers;
+ * - cache counts a platform leaves out (or sends as null) mean nothing was cached: 0;
+ * - any count that is present but negative, fractional or not a number rejects the whole block,
+ *   so a forged or broken block is recorded as unreported instead of as a priced zero.
+ * The TTL breakdown is used when it adds up to the write total; a stream can carry a stale
+ * breakdown from `message_start`, and a platform may omit it. Otherwise the total counts as
+ * 5-minute writes, the only TTL Rocky requests.
  */
-export const usageOf = (usage: UsageLike): LlmUsage => {
-  const total = tokens(usage.cache_creation_input_tokens);
-  const fiveMinutes = tokens(usage.cache_creation?.ephemeral_5m_input_tokens);
-  const oneHour = tokens(usage.cache_creation?.ephemeral_1h_input_tokens);
-  const split = usage.cache_creation != null && fiveMinutes + oneHour === total;
+export const usageOf = (usage: UsageLike | undefined): LlmUsage | undefined => {
+  if (usage === undefined) return undefined;
+  const input = count(usage.input_tokens);
+  const output = count(usage.output_tokens);
+  const read = optionalCount(usage.cache_read_input_tokens);
+  const total = optionalCount(usage.cache_creation_input_tokens);
+  const breakdown = usage.cache_creation;
+  const fiveMinutes = optionalCount(breakdown?.ephemeral_5m_input_tokens);
+  const oneHour = optionalCount(breakdown?.ephemeral_1h_input_tokens);
+  if (
+    input === undefined ||
+    output === undefined ||
+    read === undefined ||
+    total === undefined ||
+    fiveMinutes === undefined ||
+    oneHour === undefined ||
+    (breakdown !== undefined && breakdown !== null && typeof breakdown !== "object")
+  ) {
+    return undefined;
+  }
+  const split = breakdown != null && fiveMinutes + oneHour === total;
   return {
-    inputTokens: tokens(usage.input_tokens),
-    outputTokens: tokens(usage.output_tokens),
-    cacheReadInputTokens: tokens(usage.cache_read_input_tokens),
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadInputTokens: read,
     cacheWrite5mInputTokens: split ? fiveMinutes : total,
     cacheWrite1hInputTokens: split ? oneHour : 0,
   };
@@ -155,7 +178,7 @@ const usageField = (value: unknown): UsageLike | undefined =>
 
 /**
  * The usage a stream has reported so far (`message_start`, then each `message_delta`), so a call
- * that fails part-way still tells metering what the provider counted (P4-5, ADR 0015). Later
+ * that fails part-way still tells metering what the provider counted (P4-5, ADR 0016). Later
  * fields win; a field a delta leaves out keeps its earlier value.
  */
 export const reportedUsage = (
@@ -177,13 +200,15 @@ export const reportedUsage = (
 };
 
 /** The call's error, carrying what the provider had reported before it failed. */
-const withPartialUsage = (error: LlmCallError, reported: UsageLike | undefined): LlmCallError =>
-  reported === undefined || error.partialUsage !== undefined
+const withPartialUsage = (error: LlmCallError, reported: UsageLike | undefined): LlmCallError => {
+  const partialUsage = usageOf(reported);
+  return partialUsage === undefined || error.partialUsage !== undefined
     ? error
     : new LlmCallError(error.kind, {
         ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
-        partialUsage: usageOf(reported),
+        partialUsage,
       });
+};
 
 const STOPS: Readonly<Record<string, StopKind>> = {
   end_turn: "complete",
@@ -374,7 +399,12 @@ export const claudeProvider = (
         clearTimeout(clock);
         ended.release();
       }
-      return guarded(() => toResult(answerOf(message, call.model), call.output));
+      try {
+        return guarded(() => toResult(answerOf(message, call.model), call.output));
+      } catch (error) {
+        // The stream finished and was billed: reading the answer failing must not lose that.
+        throw withPartialUsage(toCallError(error, state), reported);
+      }
     },
   };
 };

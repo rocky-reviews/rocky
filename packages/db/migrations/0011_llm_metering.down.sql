@@ -1,5 +1,21 @@
--- Reverts 0011. Usage rows the 0002 shape cannot hold (no reported tokens, or no list price) are
--- deleted: the old columns are NOT NULL, and writing a zero there would invent a count or a cost.
+-- Reverts 0011. Usage rows the 0002 shape cannot hold (no reported tokens, or no list price)
+-- stop the revert: the old columns are NOT NULL, writing a zero there would invent a count or a
+-- cost, and deleting them would destroy billing evidence. Nobody gets a path to do that here;
+-- the revert waits until retention has purged them. 1h cache writes fold into the one
+-- cache-write column (5m + 1h), which is what the 0002 shape counted.
+--
+-- FORCE RLS (0003) hides every row from the owner, so the check and the fold below would see
+-- nothing: FORCE is lifted for this transaction only and restored at the end.
+ALTER TABLE llm_usage NO FORCE ROW LEVEL SECURITY;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM llm_usage WHERE input_tokens IS NULL OR cost_micro_usd IS NULL) THEN
+    RAISE EXCEPTION 'llm_usage holds rows the 0010 shape cannot represent (unreported usage or no list price)'
+      USING ERRCODE = 'object_not_in_prerequisite_state',
+            HINT = 'Not reverted: those rows are billing evidence. Revert once retention has purged them.';
+  END IF;
+END
+$$;
 
 -- --- 5. Erasure: back to the 0007 function --------------------------------------------------------
 GRANT USAGE ON SCHEMA retention TO rocky_retention;
@@ -99,6 +115,7 @@ GRANT CREATE ON SCHEMA retention TO rocky_retention;
 ALTER FUNCTION retention.delete_org(uuid) OWNER TO rocky_retention;
 REVOKE CREATE ON SCHEMA retention FROM rocky_retention;
 
+ALTER TABLE app.org_deletions DROP COLUMN IF EXISTS llm_usage_totals;
 ALTER TABLE app.org_deletions DROP COLUMN IF EXISTS llm_usage_deleted;
 
 -- --- 4. Retention ---------------------------------------------------------------------------------
@@ -125,9 +142,12 @@ DROP FUNCTION IF EXISTS app.llm_usage_append_only();
 -- --- 1. Columns -----------------------------------------------------------------------------------
 DROP INDEX IF EXISTS llm_usage_created_idx;
 DROP INDEX IF EXISTS llm_usage_org_analysis_idx;
-DELETE FROM llm_usage WHERE input_tokens IS NULL OR cost_micro_usd IS NULL;
+-- The append-only trigger is gone (section 2 above), so the fold can update.
+UPDATE llm_usage SET cache_write_5m_tokens = cache_write_5m_tokens + cache_write_1h_tokens
+ WHERE cache_write_1h_tokens <> 0;
 ALTER TABLE llm_usage
   DROP CONSTRAINT IF EXISTS llm_usage_call_attempt_unique,
+  DROP CONSTRAINT IF EXISTS llm_usage_priced_has_version,
   DROP CONSTRAINT IF EXISTS llm_usage_cost_when_priced,
   DROP CONSTRAINT IF EXISTS llm_usage_no_usage_when_unreported,
   DROP CONSTRAINT IF EXISTS llm_usage_tokens_when_reported,
@@ -157,3 +177,4 @@ ALTER TABLE llm_usage
   ALTER COLUMN cache_write_5m_tokens SET DEFAULT 0,
   ALTER COLUMN cost_micro_usd SET NOT NULL;
 ALTER TABLE llm_usage RENAME COLUMN cache_write_5m_tokens TO cache_write_tokens;
+ALTER TABLE llm_usage FORCE ROW LEVEL SECURITY;

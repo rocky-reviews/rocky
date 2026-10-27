@@ -10,7 +10,7 @@ import type { TenantTx } from "./client.js";
 import { llmUsage } from "./schema.js";
 
 /**
- * The llm_usage writer (P4-5, migration 0011, ADR 0015). Records are checked against the same
+ * The llm_usage writer (P4-5, migration 0011, ADR 0016). Records are checked against the same
  * rules the table's CHECKs enforce, before any SQL, so a bad record fails with a fixed message
  * instead of a driver error that could echo values. Runs inside `withOrg` (the row's org is the
  * transaction's tenant) as the worker login: the server can read usage but not write it.

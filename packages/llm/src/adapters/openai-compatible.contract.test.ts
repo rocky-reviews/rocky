@@ -12,6 +12,7 @@ import { providerAdapters, type AdapterTransport } from "./index.js";
 import {
   ANSWER,
   fakeFetch,
+  fixture,
   json,
   pendingTimers,
   TEST_KEY,
@@ -166,17 +167,50 @@ describe("OpenAI-compatible contract: chat completions", () => {
     expect(statuses).toEqual(["truncated", "refused", "refused"]);
   });
 
-  it("returns invalid_output for prose, and zero usage when the server reports none", async () => {
+  it("returns invalid_output for prose, and no usage (never a zero) when the server reports none", async () => {
     const prose = providerFor(LOCAL, [json("openai-compatible/chat-invalid-json.json")]);
     expect(await complete(prose.provider)).toMatchObject({
       status: "invalid_output",
       issues: ["(root): invalid_json"],
     });
     const bare = providerFor(LOCAL, [json("openai-compatible/chat-no-usage.json")]);
-    expect((await complete(bare.provider)).usage).toEqual({
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadInputTokens: 0,
+    const answered = await complete(bare.provider);
+    expect(answered.status).toBe("ok");
+    expect(answered.usage).toBeUndefined();
+  });
+
+  it("reports no usage for a malformed usage block (P4-5 review 1)", async () => {
+    const valid = JSON.parse(fixture("openai-compatible/chat-no-usage.json")) as Record<
+      string,
+      unknown
+    >;
+    for (const usage of [
+      {},
+      { prompt_tokens: -1, completion_tokens: 3 },
+      { prompt_tokens: "10", completion_tokens: 3 },
+      { prompt_tokens: 10 },
+      { prompt_tokens: 10, completion_tokens: 3, prompt_tokens_details: { cached_tokens: "4" } },
+      { prompt_tokens: 10, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 11 } },
+    ]) {
+      const { provider } = providerFor(LOCAL, [{ body: JSON.stringify({ ...valid, usage }) }]);
+      expect((await complete(provider)).usage, JSON.stringify(usage)).toBeUndefined();
+    }
+    const { provider } = providerFor(LOCAL, [
+      {
+        body: JSON.stringify({
+          ...valid,
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 3,
+            prompt_tokens_details: { cached_tokens: 4 },
+          },
+        }),
+      },
+    ]);
+    expect((await complete(provider)).usage).toEqual({
+      inputTokens: 6,
+      outputTokens: 3,
+      cacheReadInputTokens: 4,
       cacheWrite5mInputTokens: 0,
       cacheWrite1hInputTokens: 0,
     });
@@ -350,9 +384,20 @@ describe("OpenAI-compatible: malformed answers never escape as raw errors (revie
     const { provider } = providerFor(LOCAL, [
       { body: '{"data":[{"index":0,"embedding":[0.1,0.2]}],"usage":null}' },
     ]);
+    // No usage reported: none recorded, never a zero (P4-5 review 1).
     expect(
       (await provider.embed!({ inputs: ["a"], model: "nomic-embed-text", dimensions: 2 })).usage,
-    ).toEqual({ inputTokens: 0 });
+    ).toBeUndefined();
+    for (const usage of ['{"prompt_tokens":-3}', '{"prompt_tokens":"3"}', "{}"]) {
+      const bad = providerFor(LOCAL, [
+        { body: `{"data":[{"index":0,"embedding":[0.1,0.2]}],"usage":${usage}}` },
+      ]);
+      expect(
+        (await bad.provider.embed!({ inputs: ["a"], model: "nomic-embed-text", dimensions: 2 }))
+          .usage,
+        usage,
+      ).toBeUndefined();
+    }
   });
 
   it("turns a validator that throws into server_error, dropping its text", async () => {

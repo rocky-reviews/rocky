@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import { beginOrgErasure } from "./installations.js";
+import { appliedMigrations, loadMigrations, migrate, rollback } from "./migrate.js";
 import { DEFAULT_RETENTION, LLM_USAGE_MIN_RETENTION_DAYS, runRetention } from "./retention.js";
 import {
   asWorker,
@@ -18,7 +19,7 @@ import {
 import { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 
 /**
- * P4-5 (migration 0011, ADR 0015): the llm_usage ledger. Written by the worker inside withOrg,
+ * P4-5 (migration 0011, ADR 0016): the llm_usage ledger. Written by the worker inside withOrg,
  * append-only for every role (the owner included), readable by the server for its own tenant
  * only, purged by retention after its period and erased with its org.
  */
@@ -266,6 +267,32 @@ describe("the llm_usage table", () => {
     }
   });
 
+  it("refuses the owner's delete as rocky_retention: only the retention functions delete (review 1)", async () => {
+    // The migrator is a member of rocky_retention (it hands functions over to it). SET ROLE gives
+    // it current_user = rocky_retention, but its session is still the owner's: refused.
+    const owner = await pgs.migrator.connect();
+    try {
+      await owner.query("begin");
+      await owner.query("set local role rocky_retention");
+      expect((await owner.query("select 1 from llm_usage")).rowCount).toBeGreaterThan(0);
+      for (const sql of [
+        "delete from llm_usage",
+        `delete from llm_usage where org_id = '${A.orgId}'`,
+      ]) {
+        await owner.query("savepoint s");
+        const error = await pgError(owner.query(sql));
+        expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+        expect(error.message, sql).toMatch(/append-only/);
+        await owner.query("rollback to savepoint s");
+      }
+    } finally {
+      await owner.query("rollback");
+      owner.release();
+    }
+    // The purge (server login) and the erasure (worker login) still delete: see "retention and
+    // erasure" below, which runs both through the same trigger.
+  });
+
   it("stamps created_at with the database clock, whatever the writer sends", async () => {
     const callId = randomUUID();
     await worker.withOrg(A.orgId, (tx) =>
@@ -310,8 +337,13 @@ describe("the llm_usage table", () => {
         ),
       );
     };
-    const violations: Record<string, unknown>[] = [
-      { cost_micro_usd: null },
+    const violations: (Record<string, unknown> | [Record<string, unknown>, string])[] = [
+      // Reported usage, no list price, but marked "no usage": only the unreported/no_usage
+      // pairing is wrong (review 1: this constraint was not reached before).
+      [{ cost_status: "no_usage", cost_micro_usd: null }, "llm_usage_no_usage_when_unreported"],
+      // Priced against no price table (review 1).
+      [{ price_version: "none" }, "llm_usage_priced_has_version"],
+      [{ cost_micro_usd: null }, "llm_usage_cost_when_priced"],
       { cost_status: "no_price" },
       { input_tokens: null },
       { usage_status: "unreported" },
@@ -337,9 +369,12 @@ describe("the llm_usage table", () => {
       { cache_write_1h_tokens: -1 },
       { cost_micro_usd: -1 },
     ];
-    for (const columns of violations) {
+    for (const violation of violations) {
+      const [columns, constraint] = Array.isArray(violation) ? violation : [violation, undefined];
       const error = await pgError(insert(columns));
       expect(error.code, JSON.stringify(columns)).toBe(CHECK_VIOLATION);
+      if (constraint !== undefined)
+        expect(error.constraint, JSON.stringify(columns)).toBe(constraint);
     }
     // A row with no usage and no cost is valid when it says so.
     await insert({
@@ -431,7 +466,40 @@ describe("retention and erasure", () => {
     const org = await asWorker(pgs.workerUrl, (w) =>
       seedOrg(w, newOrgId(), { installationId: 45 }),
     );
-    await worker.withOrg(org.orgId, (tx) => recordLlmUsage(tx, [record(), record()]));
+    await worker.withOrg(org.orgId, (tx) =>
+      recordLlmUsage(tx, [
+        record(),
+        record({ tokens: { ...record().tokens!, cacheWrite1hTokens: 7 }, costMicroUsd: 40_001 }),
+        record({ priceVersion: "2026-01-01", costMicroUsd: 1 }),
+        record({ priceVersion: "2026-01-01", costStatus: "no_price", costMicroUsd: null }),
+        record({
+          outcome: "error",
+          errorKind: "network",
+          usageStatus: "unreported",
+          tokens: null,
+          costMicroUsd: null,
+          costStatus: "no_usage",
+          priceVersion: "none",
+        }),
+      ]),
+    );
+    // What the tombstone must keep: per price version, the sums of the rows about to be erased.
+    const expected = (
+      await superuser.query<Record<string, string>>(
+        `select price_version, count(*)::text as rows,
+                coalesce(sum(input_tokens), 0)::text as input_tokens,
+                coalesce(sum(output_tokens), 0)::text as output_tokens,
+                coalesce(sum(cache_read_tokens), 0)::text as cache_read_tokens,
+                coalesce(sum(cache_write_5m_tokens), 0)::text as cache_write_5m_tokens,
+                coalesce(sum(cache_write_1h_tokens), 0)::text as cache_write_1h_tokens,
+                coalesce(sum(cost_micro_usd), 0)::text as cost_micro_usd,
+                count(*) filter (where cost_status <> 'priced')::text as unpriced_rows,
+                count(*) filter (where usage_status = 'unreported')::text as unreported_rows
+           from llm_usage where org_id = $1 group by price_version order by price_version`,
+        [org.orgId],
+      )
+    ).rows;
+    expect(expected.map((r) => r["price_version"])).toEqual(["2026-01-01", "2026-10-27", "none"]);
     // Time travel past the grace period (as deletion.test.ts does), then the sweep's mark.
     await superuser.query("alter table orgs disable trigger user");
     try {
@@ -444,14 +512,112 @@ describe("retention and erasure", () => {
     }
     expect(await worker.withOrg(org.orgId, (tx) => beginOrgErasure(tx))).not.toBe("not_due");
     const report = await worker.deleteOrg(org.orgId);
-    expect(report).toContainEqual({ table: "llm_usage", deleted: 3 });
+    expect(report).toContainEqual({ table: "llm_usage", deleted: 6 });
     expect(await rowsOf(org.orgId)).toHaveLength(0);
     const tombstone = await superuser.query<{ llm_usage_deleted: string }>(
       "select llm_usage_deleted::text from app.org_deletions where org_id = $1",
       [org.orgId],
     );
-    expect(tombstone.rows[0]?.llm_usage_deleted).toBe("3");
+    expect(tombstone.rows[0]?.llm_usage_deleted).toBe("6");
+    // The ledger's totals survive the erasure: numbers and ids only (review 1).
+    const totals = (
+      await superuser.query<Record<string, string>>(
+        `select t ->> 'price_version' as price_version, t ->> 'rows' as rows,
+                t ->> 'input_tokens' as input_tokens, t ->> 'output_tokens' as output_tokens,
+                t ->> 'cache_read_tokens' as cache_read_tokens,
+                t ->> 'cache_write_5m_tokens' as cache_write_5m_tokens,
+                t ->> 'cache_write_1h_tokens' as cache_write_1h_tokens,
+                t ->> 'cost_micro_usd' as cost_micro_usd, t ->> 'unpriced_rows' as unpriced_rows,
+                t ->> 'unreported_rows' as unreported_rows
+           from app.org_deletions d, jsonb_array_elements(d.llm_usage_totals) t
+          where d.org_id = $1 order by 1`,
+        [org.orgId],
+      )
+    ).rows;
+    expect(totals).toEqual(expected);
+    const keys = await superuser.query<{ keys: string[] }>(
+      `select array_agg(distinct k order by k) as keys
+         from app.org_deletions d, jsonb_array_elements(d.llm_usage_totals) t, jsonb_object_keys(t) k
+        where d.org_id = $1`,
+      [org.orgId],
+    );
+    expect(keys.rows[0]?.keys).toEqual(Object.keys(expected[0]!).sort());
     // Other tenants keep theirs.
     expect((await rowsOf(B.orgId)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("migration 0011 with rows in the ledger (review 1)", () => {
+  const unrepresentable = "input_tokens is null or cost_micro_usd is null";
+
+  it("refuses to go down while rows the 0010 shape cannot hold exist, then folds 1h cache writes", async () => {
+    const all = loadMigrations();
+    const org = await asWorker(pgs.workerUrl, (w) =>
+      seedOrg(w, newOrgId(), { installationId: 47 }),
+    );
+    const stamp = new Date(Date.now() - 60_000);
+    await worker.withOrg(org.orgId, (tx) =>
+      recordLlmUsage(tx, [
+        record(),
+        record({
+          outcome: "error",
+          errorKind: "network",
+          usageStatus: "unreported",
+          tokens: null,
+          costMicroUsd: null,
+          costStatus: "no_usage",
+        }),
+      ]),
+    );
+    const before = await superuser.query<{ n: string; writes: string }>(
+      "select count(*)::text as n, sum(cache_write_5m_tokens + cache_write_1h_tokens)::text as writes from llm_usage where not (" +
+        unrepresentable +
+        ")",
+    );
+
+    // The migrator is not a superuser: FORCE RLS applies to it, so the down must not silently
+    // see (and drop) nothing. It refuses, and leaves everything as it was.
+    await expect(rollback(pgs.migrator, { steps: 1 })).rejects.toThrow(
+      /llm_usage holds rows the 0010 shape cannot represent/,
+    );
+    expect((await appliedMigrations(pgs.migrator)).length).toBe(all.length);
+    expect(
+      Number(
+        (await superuser.query("select count(*) from llm_usage where " + unrepresentable)).rows[0]
+          ?.count,
+      ),
+    ).toBeGreaterThan(0);
+
+    // Test-only: remove what cannot be represented (bypassing the append-only trigger).
+    const client = await superuser.connect();
+    try {
+      await client.query("set session_replication_role = replica");
+      await client.query("delete from llm_usage where " + unrepresentable);
+      await client.query("reset session_replication_role");
+    } finally {
+      client.release();
+    }
+
+    await rollback(pgs.migrator, { steps: 1 });
+    const after = await superuser.query<{ n: string; writes: string }>(
+      "select count(*)::text as n, sum(cache_write_tokens)::text as writes from llm_usage",
+    );
+    expect(after.rows[0]).toEqual(before.rows[0]);
+    const [row] = (
+      await superuser.query<{ cache_write_tokens: number }>(
+        "select cache_write_tokens from llm_usage where org_id = $1 and created_at >= $2 order by id desc limit 1",
+        [org.orgId, stamp],
+      )
+    ).rows;
+    expect(row?.cache_write_tokens).toBe(2048 + 512);
+
+    // Up again with rows present: every old row gets a call id (the backfill sees them).
+    await migrate(pgs.migrator);
+    expect((await appliedMigrations(pgs.migrator)).length).toBe(all.length);
+    const backfilled = await superuser.query<{ n: string; ids: string }>(
+      "select count(*)::text as n, count(distinct call_id)::text as ids from llm_usage",
+    );
+    expect(backfilled.rows[0]?.ids).toBe(backfilled.rows[0]?.n);
+    expect(Number(backfilled.rows[0]?.n)).toBeGreaterThan(0);
   });
 });

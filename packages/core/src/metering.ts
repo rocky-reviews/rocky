@@ -1,5 +1,5 @@
 /**
- * Metering port (P4-5, ADR 0015). Every LLM call becomes one usage record per attempt the
+ * Metering port (P4-5, ADR 0016). Every LLM call becomes one usage record per attempt the
  * provider reported: who (role, provider, model), what came back (outcome), what the provider
  * reported (tokens, or that it reported none) and what it costs at list price (micro-USD, or why
  * it has no price). A record holds ids, enums and numbers only: never a prompt, code, a diff or

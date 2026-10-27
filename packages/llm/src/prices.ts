@@ -2,7 +2,7 @@ import type { LlmUsageTokens } from "@rocky-reviews/core";
 import type { ProviderKind } from "./providers.js";
 
 /**
- * The LLM cost table (P4-5, ADR 0015): providers' public list prices, versioned. Every usage row
+ * The LLM cost table (P4-5, ADR 0016): providers' public list prices, versioned. Every usage row
  * records the version it was priced under, so a price change is a new version, never an edit:
  * a published version is frozen here and pinned by digest in `prices.test.ts`, which fails if
  * anyone changes it. These are list prices (public facts), not what anyone is charged.
@@ -136,7 +136,7 @@ export const PRICE_TABLES: readonly PriceTable[] = deepFreeze([
       },
       // "Token usage rated in USD at standard per-model, per-feature rates (same as Claude API
       // pricing)" (pricing page, "Claude in Microsoft Foundry pricing"). US Data Zone deployments
-      // pay 1.1x; Rocky cannot see the deployment type (ADR 0015, residual risk R3).
+      // pay 1.1x; Rocky cannot see the deployment type (ADR 0016, residual risk R3).
       foundry: {
         status: "verified",
         source:

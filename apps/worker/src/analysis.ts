@@ -38,7 +38,7 @@ import type { Logger } from "@rocky-reviews/log";
  * - Retryable failures (LLM outages, cancellation, forge outages) put the row back in the queue
  *   and return the provider's retry hint; the lane that calls this (with the queue's org
  *   concurrency cap, P4-6) schedules the retry. Everything else stores a failure code.
- * - Metering (P4-5, ADR 0015): the pipeline only ever sees the roles wrapped by `meterRoles`, so
+ * - Metering (P4-5, ADR 0016): the pipeline only ever sees the roles wrapped by `meterRoles`, so
  *   every call writes its `llm_usage` rows (in its own short tenant transaction, before its result
  *   is used) for this org and analysis. A usage write that fails for good stops the run: the
  *   usage is logged as numbers, nothing else is sent to a model, and the row fails as

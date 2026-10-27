@@ -14,7 +14,7 @@ import {
 import { BEDROCK_MODELS, CLAUDE_MODELS } from "./providers.js";
 
 /**
- * P4-5 (ADR 0015): the cost table. Integer micro-USD, versioned, frozen once published, and
+ * P4-5 (ADR 0016): the cost table. Integer micro-USD, versioned, frozen once published, and
  * covering every catalogued Claude model on the platforms whose prices are verified.
  */
 

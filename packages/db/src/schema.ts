@@ -198,7 +198,7 @@ export const auditEvents = pgTable("audit_events", {
 });
 
 /**
- * Append-only metering ledger (migration 0011, ADR 0015): one row per attempt of an LLM call.
+ * Append-only metering ledger (migration 0011, ADR 0016): one row per attempt of an LLM call.
  * Ids, enums and numbers only. Token counts are null only when nothing was reported; the cost is
  * null unless the row is priced at list price.
  */

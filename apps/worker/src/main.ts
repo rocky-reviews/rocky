@@ -32,7 +32,7 @@ try {
 // P4-3: every role resolves to an installed adapter with the capability it needs, or the worker
 // stops here, before it claims work. Keys are read per call through `envSecrets`, never now. The
 // analysis lane that hands these roles to `runAnalysis` (analysis.ts), with
-// `usageTargetsFor(config.llm)` for metering (P4-5, ADR 0015), comes with the queue and its org
+// `usageTargetsFor(config.llm)` for metering (P4-5, ADR 0016), comes with the queue and its org
 // concurrency cap (docs/progress.md, P4-3 follow-ups).
 try {
   createLlmRoles(config.llm, providerAdapters(), envSecrets(process.env));

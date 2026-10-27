@@ -1,4 +1,4 @@
--- 0011 LLM metering (P4-5, ADR 0015).
+-- 0011 LLM metering (P4-5; the decision record is docs/adr/*-llm-metering.md).
 --
 -- Every LLM call writes one llm_usage row per attempt the provider reported (packages/llm
 -- meterRoles). This migration turns the P2-1 placeholder into that ledger:
@@ -19,7 +19,7 @@
 --      like the others. The analyses purge keeps usage (billing reconciles from it).
 --   5. Erasure: retention.delete_org deletes the org's usage rows as rocky_retention before the
 --      org row (a cascade would run as the owner, which the append-only trigger refuses) and
---      counts them in the tombstone.
+--      counts and totals them (per price version) in the tombstone.
 
 -- --- 1. Columns ----------------------------------------------------------------------------------
 
@@ -35,8 +35,13 @@ ALTER TABLE llm_usage
   ADD COLUMN cost_status           text NOT NULL DEFAULT 'priced';
 
 -- Rows written before this migration (none in a deployment: nothing metered before P4-5) get a
--- call id of their own; afterwards the writer must state every field.
+-- call id of their own; afterwards the writer must state every field. FORCE RLS (0003) hides
+-- every row from the owner, which would make this UPDATE a silent no-op and the SET NOT NULL
+-- below fail on the rows it did not see: lift FORCE for the backfill only, inside this
+-- migration's transaction (no other session sees the table without it).
+ALTER TABLE llm_usage NO FORCE ROW LEVEL SECURITY;
 UPDATE llm_usage SET call_id = gen_random_uuid() WHERE call_id IS NULL;
+ALTER TABLE llm_usage FORCE ROW LEVEL SECURITY;
 ALTER TABLE llm_usage
   ALTER COLUMN call_id SET NOT NULL,
   ALTER COLUMN attempt DROP DEFAULT,
@@ -81,9 +86,11 @@ ALTER TABLE llm_usage
     AND (input_tokens IS NULL) = (cache_write_1h_tokens IS NULL)),
   ADD CONSTRAINT llm_usage_no_usage_when_unreported
     CHECK ((usage_status = 'unreported') = (cost_status = 'no_usage')),
-  -- A cost exactly when the row is priced at list price.
+  -- A cost exactly when the row is priced at list price, and only against a price table.
   ADD CONSTRAINT llm_usage_cost_when_priced
     CHECK ((cost_status = 'priced') = (cost_micro_usd IS NOT NULL)),
+  ADD CONSTRAINT llm_usage_priced_has_version
+    CHECK (cost_status <> 'priced' OR price_version <> 'none'),
   ADD CONSTRAINT llm_usage_call_attempt_unique UNIQUE (org_id, call_id, attempt);
 
 CREATE INDEX llm_usage_org_analysis_idx ON llm_usage (org_id, analysis_id)
@@ -99,7 +106,13 @@ AS $$
 DECLARE
   unlinked public.llm_usage;
 BEGIN
-  IF TG_OP = 'DELETE' AND current_user = 'rocky_retention' THEN
+  -- Retention deletes run as rocky_retention inside its SECURITY DEFINER functions, called by
+  -- the server or worker login. The owner can also SET ROLE rocky_retention (it is a member: it
+  -- hands functions over to it), so the session's login must not be the table owner or one of
+  -- its members: that keeps "only the purge and the erasure delete" true for the owner too.
+  IF TG_OP = 'DELETE' AND current_user = 'rocky_retention'
+     AND NOT pg_has_role(session_user,
+                         (SELECT c.relowner FROM pg_class c WHERE c.oid = TG_RELID), 'MEMBER') THEN
     RETURN OLD;
   END IF;
   -- The analyses foreign key is ON DELETE SET NULL (analysis_id): purging an analysis unlinks
@@ -196,6 +209,11 @@ GRANT EXECUTE ON FUNCTION retention.purge_llm_usage(timestamptz) TO rocky_app;
 
 ALTER TABLE app.org_deletions ADD COLUMN llm_usage_deleted bigint NOT NULL DEFAULT 0
   CHECK (llm_usage_deleted >= 0);
+-- Erasure removes the ledger with the org; what billing reconciles against survives as totals
+-- per price version (row count, the five token sums, the priced µUSD, how many rows had no list
+-- price and how many no reported usage). Numbers and price-version ids only.
+ALTER TABLE app.org_deletions ADD COLUMN llm_usage_totals jsonb NOT NULL DEFAULT '[]'
+  CONSTRAINT org_deletions_llm_usage_totals_array CHECK (jsonb_typeof(llm_usage_totals) = 'array');
 
 -- delete_org is owned by rocky_retention, which has no language to recreate it with: the owner
 -- drops it (USAGE on the schema only for that) and the migrator creates the new version and
@@ -207,7 +225,7 @@ RESET ROLE;
 REVOKE USAGE ON SCHEMA retention FROM rocky_retention;
 
 -- 0007's erasure, unchanged except that the org's usage rows are deleted (as rocky_retention)
--- right after its audit events and before the org row, and counted in the tombstone.
+-- right after its audit events and before the org row, counted and totalled in the tombstone.
 CREATE FUNCTION retention.delete_org(org uuid)
   RETURNS TABLE (table_name text, deleted bigint)
   LANGUAGE plpgsql SECURITY DEFINER
@@ -221,6 +239,7 @@ DECLARE
   frg text;
   n_audit bigint;
   n_usage bigint;
+  usage_totals jsonb;
   n_orgs bigint;
   n_inbox bigint;
   n_older bigint;
@@ -246,6 +265,27 @@ BEGIN
   GET DIAGNOSTICS n_audit = ROW_COUNT;
   table_name := 'audit_events'; deleted := n_audit; RETURN NEXT;
 
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'price_version', t.price_version, 'rows', t.n_rows,
+           'input_tokens', t.input_tokens, 'output_tokens', t.output_tokens,
+           'cache_read_tokens', t.cache_read_tokens,
+           'cache_write_5m_tokens', t.cache_write_5m_tokens,
+           'cache_write_1h_tokens', t.cache_write_1h_tokens,
+           'cost_micro_usd', t.cost_micro_usd,
+           'unpriced_rows', t.unpriced_rows, 'unreported_rows', t.unreported_rows)
+           ORDER BY t.price_version), '[]'::jsonb)
+    INTO usage_totals
+    FROM (SELECT u.price_version, count(*) AS n_rows,
+                 coalesce(sum(u.input_tokens), 0) AS input_tokens,
+                 coalesce(sum(u.output_tokens), 0) AS output_tokens,
+                 coalesce(sum(u.cache_read_tokens), 0) AS cache_read_tokens,
+                 coalesce(sum(u.cache_write_5m_tokens), 0) AS cache_write_5m_tokens,
+                 coalesce(sum(u.cache_write_1h_tokens), 0) AS cache_write_1h_tokens,
+                 coalesce(sum(u.cost_micro_usd), 0) AS cost_micro_usd,
+                 count(*) FILTER (WHERE u.cost_status <> 'priced') AS unpriced_rows,
+                 count(*) FILTER (WHERE u.usage_status = 'unreported') AS unreported_rows
+            FROM public.llm_usage u WHERE u.org_id = org
+           GROUP BY u.price_version) t;
   DELETE FROM public.llm_usage u WHERE u.org_id = org;
   GET DIAGNOSTICS n_usage = ROW_COUNT;
   table_name := 'llm_usage'; deleted := n_usage; RETURN NEXT;
@@ -284,8 +324,9 @@ BEGIN
   GET DIAGNOSTICS n_scrubbed = ROW_COUNT;
 
   INSERT INTO app.org_deletions (org_id, forge, installation_id, was_due, audit_events_deleted,
-                                 llm_usage_deleted, inbox_rows_deleted, inbox_rows_scrubbed)
-  VALUES (org, frg, inst, due, n_audit, n_usage, n_inbox, n_scrubbed);
+                                 llm_usage_deleted, llm_usage_totals, inbox_rows_deleted,
+                                 inbox_rows_scrubbed)
+  VALUES (org, frg, inst, due, n_audit, n_usage, usage_totals, n_inbox, n_scrubbed);
   RETURN;
 END
 $$;

@@ -119,14 +119,19 @@ export interface StructuredCompletionRequest<T> {
 /** One attempt the provider reported for a call it ran on more than one model (P4-2, ADR 0013). */
 export interface LlmAttemptUsage {
   readonly model: string;
-  readonly usage: LlmUsage;
+  /** Undefined when the provider reported no usable counts for this attempt (P4-5). */
+  readonly usage: LlmUsage | undefined;
 }
 
 interface ProviderResultBase {
   /** The model that produced the answer (a refusal fallback may have switched it). */
   readonly model: string;
-  /** Usage of the attempt that produced the answer. */
-  readonly usage: LlmUsage;
+  /**
+   * Usage of the attempt that produced the answer. Undefined when the provider reported none, or
+   * a block metering cannot trust (a missing required count, a negative, fractional or non-number
+   * value): metering then records the call as unreported, never as zero (P4-5, ADR 0016 §2).
+   */
+  readonly usage: LlmUsage | undefined;
   /**
    * Every attempt the provider reported, in order, when a server-side refusal fallback re-ran the
    * call on another model; absent otherwise. Reported is not billed at list price: a decline
@@ -163,7 +168,8 @@ export interface EmbeddingRequest {
 export interface ProviderEmbeddingResult {
   readonly vectors: readonly (readonly number[])[];
   readonly model: string;
-  readonly usage: { readonly inputTokens: number };
+  /** Undefined when the provider reported no usable count (P4-5). */
+  readonly usage: { readonly inputTokens: number } | undefined;
 }
 
 export interface EmbeddingResult extends ProviderEmbeddingResult {
@@ -271,7 +277,7 @@ export class LlmCallError extends Error {
   readonly retryAfterMs: number | undefined;
   /**
    * What the provider had reported when the call failed part-way (a stream that broke after it
-   * began), so metering records it (P4-5, ADR 0015). Numbers only; undefined when nothing was
+   * began), so metering records it (P4-5, ADR 0016). Numbers only; undefined when nothing was
    * reported.
    */
   readonly partialUsage: LlmUsage | undefined;
