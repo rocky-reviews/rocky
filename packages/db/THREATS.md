@@ -5,7 +5,9 @@ The webhook inbox (`app.webhook_deliveries`, P3-2) has its own threat table (W1�
 installation lifecycle (P3-3: worker role, org creation, inbox claim path, erasure sweep) has its
 own table (L1–L29) in [ADR 0009](../../docs/adr/0009-installation-lifecycle.md). The pull
 request mirror (P3-4: migration 0008, the mirror's upserts, whole-lane claims) has its own table
-(M1–M10) in [ADR 0010](../../docs/adr/0010-pull-request-mirror.md).
+(M1–M10) in [ADR 0010](../../docs/adr/0010-pull-request-mirror.md). Analysis rows and file units (P4-3:
+migration 0010, `analyses.ts`) are A2, A5, A6 and A12 in
+[ADR 0014](../../docs/adr/0014-analysis-pipeline.md).
 
 Companion to [ADR 0003 tenancy](../../docs/adr/0003-tenancy.md) and
 [ADR 0005 migrations and roles](../../docs/adr/0005-migrations-and-roles.md). Each row names the

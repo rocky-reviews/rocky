@@ -1,3 +1,4 @@
+import { llmConfigFromEnv } from "@rocky-reviews/llm";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { rsaPrivateKeyPem, testAppKeys } from "@rocky-reviews/forge-github/testing";
@@ -80,7 +81,21 @@ describe("workerConfigFromEnv", () => {
     expect(workerConfigFromEnv({ WORKER_DATABASE_URL: DB })).toEqual({
       databaseUrl: DB,
       githubApp: undefined,
+      llm: llmConfigFromEnv({}),
     });
+  });
+
+  it("validates the LLM roles at boot (P4-3): a bad ROCKY_LLM_* stops the worker, naming the variable only", () => {
+    const message = messageOf(() =>
+      workerConfigFromEnv({
+        WORKER_DATABASE_URL: DB,
+        ROCKY_LLM_REVIEW_MODEL: "gpt-oops-secretish",
+      }),
+    );
+    expect(message).toMatch(/ROCKY_LLM_REVIEW_MODEL/);
+    expect(
+      messageOf(() => workerConfigFromEnv({ WORKER_DATABASE_URL: DB, ROCKY_LLM_TYPO: "x" })),
+    ).toMatch(/ROCKY_LLM_TYPO: unknown variable/);
   });
 });
 

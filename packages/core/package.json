@@ -6,6 +6,14 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/analysis/testing.ts"
+  },
+  "dependencies": {
+    "@rocky-reviews/schema": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
   }
 }

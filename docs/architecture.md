@@ -11,7 +11,8 @@ Decisions behind this page:
 [ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md),
 [ADR 0011 repository access check](adr/0011-repository-access-check.md),
 [ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md),
-[ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md).
+[ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md),
+[ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md).
 
 ## Runtime
 
@@ -42,23 +43,23 @@ packages/core  (domain + ports; no I/O — enforced by ESLint)
 packages/schema (analysis document; shared contract)
 ```
 
-| Path                         | Role                                                                                                                                                                                               |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                                    |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing                              |
-| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                                         |
-| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, later `Storage`, `Billing`) |
-| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                          |
-| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                |
-| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                              |
-| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible); later validate-and-repair, metering hooks           |
-| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                           |
-| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                               |
-| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                 |
-| `packages/config`            | Config loading and validation                                                                                                                                                                      |
-| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                                                         |
-| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                                     |
-| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                                |
+| Path                         | Role                                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                                                           |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; `runAnalysis` (P4-3); later the analysis lane, posting, indexing                      |
+| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                                                                |
+| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`) |
+| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                                                 |
+| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                                       |
+| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                                                     |
+| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible); later validate-and-repair, metering hooks                                  |
+| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                                                  |
+| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                                                      |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                                        |
+| `packages/config`            | Config loading and validation                                                                                                                                                                                             |
+| `packages/evals`             | Seeded PRs and scoring for the AI pipeline (pr-847 diff, scripted answers, finding scorer; P4-7 adds the suite)                                                                                                           |
+| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                                                            |
+| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                                                       |
 
 ## LLM roles
 
@@ -90,6 +91,34 @@ packages/schema (analysis document; shared contract)
     becomes a body-free `LlmCallError`.
   - **Instructions** are a `RockyInstructions` value from the `rockyInstructions` template tag
     (literal text only), never a string, so PR content cannot reach the system slot.
+
+## Analysis pipeline
+
+- ADR 0014: `analyzePullRequest` (`packages/core/src/analysis/`) turns one revision's diff into
+  one validated analysis document, or a fixed failure code.
+  - **Stages:** rules pre-triage (lockfiles and generated files are noise; migrations and auth
+    paths are floored to `important`) → per-file triage → review of critical and important
+    files → change map → briefing.
+  - **Validation:** each answer is schema-validated, then integrity-checked in a document (a
+    one-file document for units, the whole document for graph and briefing), with one repair
+    round.
+  - **Failures:** a unit that still fails becomes an unanalysed file or an unavailable change
+    map; a failed briefing fails the analysis. Nothing partial is returned or stored.
+  - **Verdict:** never below the findings, nor below a file that was not reviewed: a migration,
+    auth or critical file → at least high, an important file or one of unknown risk (triage
+    failed, too large, binary) → at least medium. Re-checked at the write as far as the document
+    can express it.
+- PR content and model-derived text travel only as `untrusted` parts under fixed labels;
+  instructions are `rockyInstructions` literals. The pipeline has no forge handle; output is a
+  draft for a human.
+- Incremental: each analysed file has a unit key (sha256 over version, role-config salt, path,
+  status and patch) stored in `analyses.file_units` (migration 0010). On a push only files whose
+  key changed go to a model again; the rest are reused from the pull request's previous analysis
+  and validated with the new document.
+- The worker validates `ROCKY_LLM_*` and builds the roles at boot. `runAnalysis` claims a
+  queued row, reads the diff on a read-only session, runs the pipeline and stores `done` (the
+  document is re-validated at the write) or `failed` (a code). Retryable LLM and forge errors
+  requeue the row with the provider's hint. The queue lane that drives it comes with P4-6.
 
 ## Data layer
 

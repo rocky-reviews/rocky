@@ -13,10 +13,13 @@
     "@rocky-reviews/core": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/forge-github": "workspace:*",
+    "@rocky-reviews/llm": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
     "pg": "8.23.1"
   },
   "devDependencies": {
+    "@rocky-reviews/evals": "workspace:*",
+    "@rocky-reviews/schema": "workspace:*",
     "@rocky-reviews/server": "workspace:*",
     "@types/pg": "8.23.1"
   }

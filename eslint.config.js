@@ -39,6 +39,12 @@ const rockyInstructionsRules = (allowDefinition = false) => [
     message: ROCKY_MESSAGE,
   },
 ];
+const TESTING_MESSAGE = "Test fakes (@rocky-reviews/*/testing) are for tests only (P4-3).";
+/** `import("@rocky-reviews/<pkg>/testing")` outside tests (test files turn the rule off). */
+const TESTING_DYNAMIC = {
+  selector: "ImportExpression[source.value=/^@rocky-reviews\\/[^/]+\\/testing$/]",
+  message: TESTING_MESSAGE,
+};
 const CORE_SYNTAX = [
   { selector: "ImportExpression", message: `No dynamic import in core. ${CORE_MESSAGE}` },
   {
@@ -65,7 +71,7 @@ export default tseslint.config(
     rules: {
       "no-console": "error",
       "@typescript-eslint/consistent-type-imports": "error",
-      "no-restricted-syntax": ["error", ...rockyInstructionsRules()],
+      "no-restricted-syntax": ["error", ...rockyInstructionsRules(), TESTING_DYNAMIC],
     },
   },
   {
@@ -86,7 +92,12 @@ export default tseslint.config(
           ],
         },
       ],
-      "no-restricted-syntax": ["error", ...CORE_SYNTAX, ...rockyInstructionsRules()],
+      "no-restricted-syntax": [
+        "error",
+        ...CORE_SYNTAX,
+        ...rockyInstructionsRules(),
+        TESTING_DYNAMIC,
+      ],
       "no-restricted-globals": [
         "error",
         ...["fetch", "process", "require", "XMLHttpRequest", "WebSocket", "Deno", "Bun"].map(
@@ -96,10 +107,37 @@ export default tseslint.config(
     },
   },
   {
+    // Test fakes (`@rocky-reviews/*/testing`: the scripted LLM, recording adapters, database
+    // fixtures, a fake GitHub) ship in package exports for tests and evals; production code must
+    // never run on them (P4-3 review rounds 1 and 2). Only test files and test-support files may
+    // import their values; type-only imports load nothing. Dynamic imports: TESTING_DYNAMIC.
+    files: ["**/*.{ts,tsx,mts,cts}"],
+    ignores: ["**/*.test.ts", "**/test-support.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@rocky-reviews/*/testing"],
+              message: TESTING_MESSAGE,
+              allowTypeImports: true,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The tag's own definition.
     files: ["packages/core/src/llm.ts"],
     rules: {
-      "no-restricted-syntax": ["error", ...CORE_SYNTAX, ...rockyInstructionsRules(true)],
+      "no-restricted-syntax": [
+        "error",
+        ...CORE_SYNTAX,
+        ...rockyInstructionsRules(true),
+        TESTING_DYNAMIC,
+      ],
     },
   },
   {

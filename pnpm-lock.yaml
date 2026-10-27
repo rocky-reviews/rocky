@@ -111,6 +111,9 @@ importers:
       '@rocky-reviews/forge-github':
         specifier: workspace:*
         version: link:../../packages/forge-github
+      '@rocky-reviews/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../../packages/log
@@ -118,6 +121,12 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
     devDependencies:
+      '@rocky-reviews/evals':
+        specifier: workspace:*
+        version: link:../../packages/evals
+      '@rocky-reviews/schema':
+        specifier: workspace:*
+        version: link:../../packages/schema
       '@rocky-reviews/server':
         specifier: workspace:*
         version: link:../server
@@ -129,7 +138,18 @@ importers:
 
   packages/config: {}
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@rocky-reviews/schema':
+        specifier: workspace:*
+        version: link:../schema
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      fast-check:
+        specifier: 4.10.2
+        version: 4.10.2
 
   packages/crypto:
     devDependencies:
@@ -162,7 +182,14 @@ importers:
         specifier: 8.23.1
         version: 8.23.1
 
-  packages/evals: {}
+  packages/evals:
+    dependencies:
+      '@rocky-reviews/core':
+        specifier: workspace:*
+        version: link:../core
+      '@rocky-reviews/schema':
+        specifier: workspace:*
+        version: link:../schema
 
   packages/forge-github:
     dependencies:

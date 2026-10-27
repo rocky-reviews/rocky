@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { nothingStoredYet, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubForge } from "@rocky-reviews/forge-github";
+import { createLlmRoles, envSecrets, providerAdapters } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
 import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -24,6 +25,20 @@ try {
   log.fatal(
     { err: error instanceof ConfigError ? error.message : "invalid configuration" },
     "invalid configuration",
+  );
+  process.exit(1);
+}
+
+// P4-3: every role resolves to an installed adapter with the capability it needs, or the worker
+// stops here, before it claims work. Keys are read per call through `envSecrets`, never now. The
+// analysis lane that hands these roles to `runAnalysis` (analysis.ts) comes with the queue and its
+// org concurrency cap (docs/progress.md, P4-3 follow-ups).
+try {
+  createLlmRoles(config.llm, providerAdapters(), envSecrets(process.env));
+} catch (error) {
+  log.fatal(
+    { err: error instanceof Error ? error.name : "unknown" },
+    "invalid LLM configuration (ROCKY_LLM_*)",
   );
   process.exit(1);
 }
