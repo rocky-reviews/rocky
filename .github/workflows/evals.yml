@@ -1,0 +1,200 @@
+# Evals (P4-7, packages/evals/README.md): the seeded PRs through the real analysis pipeline,
+# scored for recall, precision and critical false-positive rate, and gated against a baseline
+# (`pnpm evals compare`: fails if total recall drops more than 5 points, precision more than 10,
+# or the critical false-positive rate rises).
+#
+# - harness: the scripted roles (`--fake`), always, for free: tests the eval harness itself.
+# - live: real models, nightly and on same-repo PRs that touch prompts, the pipeline or the LLM
+#   config. Forks never reach it.
+#
+# On a pull request the gate compares against the BASE branch's baseline, and the files that
+# decide a score (baselines, seeded PRs, scoring, runner, gate, this workflow, CODEOWNERS) may
+# change only with the maintainer label `evals-baseline-change`. A PR runs its own copy of this
+# workflow, so these checks catch mistakes and honest drift; the controls a PR cannot edit are
+# the `evals-live` environment's required reviewers (the key) and the provider-side spend limit
+# (the cost). Repository settings for both: packages/evals/README.md, "CI".
+#
+# The key is an environment secret (ROCKY_EVALS_ANTHROPIC_API_KEY) in `evals-live` (PRs, required
+# reviewers) and `evals-nightly` (default branch only); there is no repository-level copy. It
+# reaches only the step that runs the evals, as ANTHROPIC_API_KEY.
+#
+# Every third-party action is pinned to a full commit SHA (tag in the comment).
+name: evals
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # nightly 03:23 UTC
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - "packages/core/src/analysis/**"
+      - "packages/core/src/prompt.ts"
+      - "packages/core/src/llm.ts"
+      - "packages/llm/**"
+      - "packages/schema/src/**"
+      - "packages/evals/**"
+      - "scripts/evals.ts"
+      - ".env.example"
+      - ".github/workflows/evals.yml"
+      - ".github/CODEOWNERS"
+
+permissions:
+  contents: read
+
+# Never run two paid evals for the same ref at once; a newer push waits instead of cancelling a
+# run that has already spent tokens.
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  harness:
+    name: evals harness (--fake)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (the PR merge commit and its base parent)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Protected eval files need the evals-baseline-change label
+        if: github.event_name == 'pull_request'
+        env:
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'evals-baseline-change') }}
+        run: |
+          # On pull_request the checkout is the merge commit: HEAD^1 is the base branch tip.
+          git rev-parse -q --verify 'HEAD^2' > /dev/null || { echo "::error::expected a merge commit"; exit 1; }
+          changed=$(git diff --name-only 'HEAD^1' HEAD | grep -E '^(packages/evals/(baselines/|src/seeded/|src/score\.ts|src/run/)|scripts/evals\.ts|\.github/workflows/evals\.yml|\.github/CODEOWNERS)' || true)
+          if [ -z "$changed" ]; then
+            echo "No protected eval files changed."
+          elif [ "$APPROVED" = "true" ]; then
+            echo "::notice title=Eval baseline change approved::Protected eval files changed under the evals-baseline-change label."
+          else
+            echo "$changed"
+            echo "::error title=Protected eval files changed::Baselines, seeded PRs, scoring, the runner or the gate changed. A maintainer adds the evals-baseline-change label after review."
+            exit 1
+          fi
+
+      - name: Set up pnpm (version from package.json#packageManager)
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc) with pnpm store cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the evals on the scripted roles
+        run: pnpm evals run --fake --injection --out "$RUNNER_TEMP/fake.json"
+
+      - name: Gate against the base branch's fake baseline
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'evals-baseline-change') }}
+        run: |
+          baseline="$RUNNER_TEMP/baseline-fake.json"
+          if [ "$IS_PR" = "true" ] && [ "$APPROVED" != "true" ]; then
+            git show 'HEAD^1:packages/evals/baselines/fake.json' > "$baseline"
+          else
+            cp packages/evals/baselines/fake.json "$baseline"
+          fi
+          pnpm evals compare "$baseline" "$RUNNER_TEMP/fake.json"
+
+  live:
+    name: evals (real models)
+    needs: harness
+    # Same-repo PRs, or the default branch (nightly, manual dispatch). Forks never get here.
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    environment: ${{ github.event_name == 'pull_request' && 'evals-live' || 'evals-nightly' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check for the evals key
+        id: key
+        env:
+          # A boolean, never the value.
+          KEY_PRESENT: ${{ secrets.ROCKY_EVALS_ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$KEY_PRESENT" = "true" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Real-model evals skipped::ROCKY_EVALS_ANTHROPIC_API_KEY is not set in this environment. The scripted harness still ran."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (the PR merge commit and its base parent)
+        if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Set up pnpm (version from package.json#packageManager)
+        if: steps.key.outputs.present == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc) with pnpm store cache
+        if: steps.key.outputs.present == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.key.outputs.present == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the evals against real models
+        if: steps.key.outputs.present == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ROCKY_EVALS_ANTHROPIC_API_KEY }}
+          NIGHTLY: ${{ github.event_name != 'pull_request' }}
+          MAX_TOKENS: ${{ github.event_name == 'pull_request' && (vars.ROCKY_EVALS_MAX_TOKENS || '1000000') || (vars.ROCKY_EVALS_NIGHTLY_MAX_TOKENS || '8000000') }}
+        run: |
+          set -- --max-tokens "$MAX_TOKENS" --out "$RUNNER_TEMP/live.json"
+          if [ "$NIGHTLY" = "true" ]; then set -- "$@" --injection; fi
+          status=0
+          pnpm evals run "$@" > "$RUNNER_TEMP/run.txt" || status=$?
+          cat "$RUNNER_TEMP/run.txt"
+          {
+            echo '### Evals (real models)'
+            echo '```'
+            cat "$RUNNER_TEMP/run.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Gate against the base branch's live baseline
+        if: steps.key.outputs.present == 'true'
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'evals-baseline-change') }}
+        run: |
+          baseline="$RUNNER_TEMP/baseline-live.json"
+          if [ "$IS_PR" = "true" ] && [ "$APPROVED" != "true" ]; then
+            git show 'HEAD^1:packages/evals/baselines/live.json' > "$baseline"
+          else
+            cp packages/evals/baselines/live.json "$baseline"
+          fi
+          status=0
+          pnpm evals compare "$baseline" "$RUNNER_TEMP/live.json" > "$RUNNER_TEMP/compare.txt" || status=$?
+          cat "$RUNNER_TEMP/compare.txt"
+          {
+            echo '### Gate'
+            echo '```'
+            cat "$RUNNER_TEMP/compare.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 3 ]; then
+            echo "::warning title=No real-model baseline::The live baseline is still the placeholder, so the recall gate is not applied. A human commits the first real baseline (packages/evals/README.md, Real-model baseline)."
+            exit 0
+          fi
+          exit "$status"

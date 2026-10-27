@@ -20,6 +20,12 @@ importers:
       '@rocky-reviews/db':
         specifier: workspace:*
         version: link:packages/db
+      '@rocky-reviews/evals':
+        specifier: workspace:*
+        version: link:packages/evals
+      '@rocky-reviews/llm':
+        specifier: workspace:*
+        version: link:packages/llm
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2

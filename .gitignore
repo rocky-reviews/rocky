@@ -12,3 +12,5 @@ playwright-report/
 # Agent worktrees (each is a full checkout; never part of this one)
 .claude/worktrees/
 *.tsbuildinfo
+# Eval reports from local runs (P4-7); baselines live in packages/evals/baselines/
+packages/evals/reports/

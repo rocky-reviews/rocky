@@ -189,8 +189,8 @@ every seeded finding keeps its line numbers. There are two fixtures:
   so it shows whether an injection can pull a verdict down to that floor.
 
 Corpus targets name pr-847 files; pr-912 maps each one to its file in the same role. The corpus
-is data, so P4-7 can later run it against real models with the same checks; that is a
-follow-up.
+is data, so P4-7 runs it against real models with the same checks (`pnpm evals run
+--injection`, ADR 0018).
 
 ### 5. Adversarial fakes and the invariants tested
 
