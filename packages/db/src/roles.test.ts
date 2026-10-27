@@ -7,7 +7,7 @@ import {
   ensureLoginRole,
   scramSha256Verifier,
 } from "./roles.js";
-import { CONTAINER_TIMEOUT_MS, startPostgres } from "./testing/index.js";
+import { CONTAINER_TIMEOUT_MS, startPostgres, ignoreIdleError } from "./testing/index.js";
 
 /** Review #9: check before changing, and never send a plaintext password to the server. */
 
@@ -16,7 +16,7 @@ let superuser: pg.Pool;
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -61,13 +61,13 @@ describe("ensureLoginRole", () => {
     const url = new URL(pgs.appUrl);
     url.username = "scram_login";
     url.password = "scram-login-secret";
-    const ok = new pg.Client({ connectionString: url.toString() });
+    const ok = new pg.Client({ connectionString: url.toString() }).on("error", ignoreIdleError);
     await ok.connect();
     expect((await ok.query("select current_user as u")).rows[0]).toEqual({ u: "scram_login" });
     await ok.end();
 
     url.password = "wrong-password-value";
-    const bad = new pg.Client({ connectionString: url.toString() });
+    const bad = new pg.Client({ connectionString: url.toString() }).on("error", ignoreIdleError);
     await expect(bad.connect()).rejects.toMatchObject({ code: "28P01" });
     await bad.end().catch(() => undefined);
   });
@@ -102,7 +102,7 @@ describe("ensureLoginRole", () => {
     const url = new URL(pgs.appUrl);
     url.username = "again_login";
     url.password = "again-login-rotated";
-    const c = new pg.Client({ connectionString: url.toString() });
+    const c = new pg.Client({ connectionString: url.toString() }).on("error", ignoreIdleError);
     await c.connect();
     await c.end();
   });
@@ -152,7 +152,10 @@ describe("checkServerLogin (review round 6)", () => {
   const checkAs = async (url: string, options?: string) => {
     const target = new URL(url);
     if (options !== undefined) target.searchParams.set("options", options);
-    const client = new pg.Client({ connectionString: target.toString() });
+    const client = new pg.Client({ connectionString: target.toString() }).on(
+      "error",
+      ignoreIdleError,
+    );
     await client.connect();
     try {
       return await checkServerLogin(client);

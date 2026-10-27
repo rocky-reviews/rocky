@@ -48,7 +48,7 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
     if (context.repositoryFullName === null) return none("unknown_repository");
     if (context.token === null) return none("no_token");
     // No installation to ask membership on behalf of: nothing can be verified.
-    if (context.installationId === null) return none("unknown_repository");
+    if (context.installationId === null) return none("no_installation");
     if (context.dataKey === null) return none("token_unreadable");
 
     let token: string;

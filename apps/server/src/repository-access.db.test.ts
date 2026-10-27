@@ -399,6 +399,30 @@ describe("fail closed", () => {
     });
   });
 
+  it("an org without a stored installation is a deny (no_installation), before any decryption", async () => {
+    const before = unwraps;
+    const source = memberAccessSource({
+      db: {
+        ...db,
+        withOrg: async () => ({
+          member: true,
+          forgeUserId: GITHUB_USER,
+          installationId: null,
+          repositoryFullName: A.fullName,
+          token: { ciphertext: ciphertexts[0]!, keyVersion: 1 },
+          dataKey: { ciphertext: "rkw1:unused", keyVersion: 1 },
+        }),
+      } as unknown as Db,
+      keys,
+      reader: readerFor(),
+    });
+    expect(await source.readAccess(asAlice(A))).toEqual({
+      access: "none",
+      reason: "no_installation",
+    });
+    expect(unwraps).toBe(before);
+  });
+
   it("a database failure is a deny, and its text is never logged", async () => {
     const before = lines.length;
     const broken = createRepositoryAccess({
@@ -530,7 +554,7 @@ describe("review round 1, A: public and internal repositories require collaborat
     });
   }
 
-  it("every error of the collaborator call denies", async () => {
+  it("every error of the membership check denies", async () => {
     github.setVisibility(SHARED_REPO, "public");
     try {
       for (const status of [500, 502, 429, 403, 401]) {
@@ -552,13 +576,47 @@ describe("review round 1, A: public and internal repositories require collaborat
 
 describe("hygiene: tokens never in logs, errors or the cache", () => {
   it("logs carry ids and fixed codes only; no token or ciphertext anywhere", async () => {
+    const errors: unknown[] = [];
     await access.check(asAlice(A));
     await access.check(asAlice(A));
     github.failRoute("repository", 500);
     await access.check(asAlice(B, ORG_B_REPO));
+    // Review round 3, S1: public repositories go through the installation-token membership
+    // check, once successfully and once with a forced membership failure.
+    github.setVisibility(SHARED_REPO, "public");
+    try {
+      access.invalidateMember(A.orgId, A.aliceId); // drop the private-repository allow
+      const issuedBefore = github.tokens.issued.length;
+      expect(await access.check(asAlice(A))).toMatchObject({ allowed: true, cached: false });
+      access.invalidateMember(A.orgId, A.aliceId);
+      github.failRoute("membership", 500);
+      expect(await access.check(asAlice(A))).toMatchObject({
+        allowed: false,
+        reason: "forge_unavailable",
+      });
+      expect(github.tokens.issued.length).toBe(issuedBefore + 2);
+      // The errors themselves, as the reader and the forge throw them.
+      const reader = readerFor();
+      for (const route of ["membership", "token", "repository", "user"] as const) {
+        github.failRoute(route, 500);
+        errors.push(
+          await reader
+            .readUserRepositoryAccess(
+              { token: A.aliceToken, userId: GITHUB_USER },
+              { installationId: A.installationId, id: SHARED_REPO, fullName: A.fullName },
+            )
+            .catch((e: unknown) => e),
+        );
+      }
+    } finally {
+      github.setVisibility(SHARED_REPO, "private");
+    }
+    expect(errors.every((e) => e instanceof Error)).toBe(true);
+    expect(github.tokens.issued.length).toBeGreaterThan(0);
 
     const all = lines.join("\n");
-    for (const token of github.userTokens) expect(all).not.toContain(token);
+    const secrets = [...github.userTokens, ...github.tokens.issued];
+    for (const token of secrets) expect(all).not.toContain(token);
     for (const ciphertext of ciphertexts) expect(all).not.toContain(ciphertext.slice(4, 40));
     expect(all).not.toContain("Bearer");
 
@@ -586,6 +644,10 @@ describe("hygiene: tokens never in logs, errors or the cache", () => {
 
     const cache =
       JSON.stringify(access.entries()) + inspect(access, { depth: 10, showHidden: true });
-    for (const token of github.userTokens) expect(cache).not.toContain(token);
+    const thrown = errors.map((e) => inspect(e, { depth: 10, showHidden: true })).join("\n");
+    for (const token of secrets) {
+      expect(cache).not.toContain(token);
+      expect(thrown).not.toContain(token);
+    }
   });
 });

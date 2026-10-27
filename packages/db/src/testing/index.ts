@@ -2,6 +2,7 @@ export {
   CONTAINER_TIMEOUT_MS,
   TEST_ROLES,
   devPostgresImage,
+  ignoreIdleError,
   startPostgres,
   type DumpOptions,
   type TestPostgres,

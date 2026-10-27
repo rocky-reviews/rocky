@@ -20,6 +20,14 @@ export const devPostgresImage = (): string => {
   return match[1];
 };
 
+/**
+ * An `error` listener for raw `pg` pools and clients in tests. node-postgres emits `error` when
+ * an idle pooled client's, or a client's, connection ends (e.g. `57P01` when the container
+ * stops or a test terminates backends); without a listener that is an uncaught exception that
+ * fails the whole run. Query errors still reject their promise, so tests still see them.
+ */
+export const ignoreIdleError = (): void => undefined;
+
 /** Role names used by the harness. The group roles are created by the migrations. */
 export const TEST_ROLES = {
   /** Owns the database and every table; runs migrations. CREATEROLE, not superuser. */
@@ -118,7 +126,7 @@ export const startPostgres = async (options: { migrate?: boolean } = {}): Promis
   const container = await new PostgreSqlContainer(devPostgresImage()).start();
   const superUrl = container.getConnectionUri();
 
-  const superuser = new pg.Client({ connectionString: superUrl });
+  const superuser = new pg.Client({ connectionString: superUrl }).on("error", ignoreIdleError);
   await superuser.connect();
   try {
     await superuser.query("CREATE EXTENSION IF NOT EXISTS vector");
@@ -138,7 +146,10 @@ export const startPostgres = async (options: { migrate?: boolean } = {}): Promis
   }
 
   const migratorUrl = connectionUrl(container, TEST_ROLES.migrator, PASSWORDS.migrator);
-  const migrator = new pg.Pool({ connectionString: migratorUrl, max: 4 });
+  const migrator = new pg.Pool({ connectionString: migratorUrl, max: 4 }).on(
+    "error",
+    ignoreIdleError,
+  );
   if (options.migrate !== false) {
     await migrate(migrator);
     await ensureLoginRole(migrator, { name: TEST_ROLES.app, password: PASSWORDS.app });

@@ -693,7 +693,8 @@ describe("review round 1", () => {
     const orgN = (i: number) => `0b6f1c1e-3333-4a5b-8c9d-${String(i).padStart(12, "0")}`;
 
     it("S1 (ABA): a table reset never lets an in-flight check cache across an invalidation", async () => {
-      for (const reinvalidate of [false, true]) {
+      // Generations are shown as "global:A".
+      for (const variant of ["reset-to-start", "real-aba"] as const) {
         const gh = scripted();
         let release: () => void = () => undefined;
         const gate = new Promise<void>((r) => (release = r));
@@ -707,18 +708,27 @@ describe("review round 1", () => {
           clock: clock(),
           maxEntries,
         });
-        const pending = access.check(req()); // in flight in org A (generation 0)
-        access.invalidateOrg(ORG_A); // A → 1
-        // More than maxEntries other orgs: the table is reset, so A's counter is forgotten and
-        // would read 0 again, its value when the check started.
-        for (let i = 0; i <= maxEntries; i++) {
-          access.invalidateOrg(orgN(i));
-          expect(access.generationTableSize).toBeLessThanOrEqual(maxEntries);
+        const reset = () => {
+          // More than maxEntries other orgs: the table is reset and A's counter is forgotten.
+          for (let i = 0; i <= maxEntries; i++) {
+            access.invalidateOrg(orgN(i));
+            expect(access.generationTableSize).toBeLessThanOrEqual(maxEntries);
+          }
+        };
+        let pending: Promise<unknown>;
+        if (variant === "reset-to-start") {
+          pending = access.check(req()); // starts at "0:0"
+          access.invalidateOrg(ORG_A); // "0:1"
+          reset(); // A forgotten: would read "0:0" again without the global bump
+        } else {
+          access.invalidateOrg(ORG_A); // "0:1"
+          pending = access.check(req()); // starts at "0:1"
+          reset(); // A forgotten
+          access.invalidateOrg(ORG_A); // back to "0:1" without the global bump
         }
-        if (reinvalidate) access.invalidateOrg(ORG_A); // A → 1 again
         release();
-        expect((await pending).allowed).toBe(true);
-        expect(access.size).toBe(0);
+        expect(((await pending) as { allowed: boolean }).allowed).toBe(true);
+        expect(access.size, variant).toBe(0);
         expect(access.generationTableSize).toBeLessThanOrEqual(maxEntries);
       }
     });
@@ -768,7 +778,7 @@ describe("review round 1", () => {
   });
 
   describe("new definitive denials", () => {
-    for (const reason of ["token_user_mismatch", "not_collaborator"] as const) {
+    for (const reason of ["token_user_mismatch", "not_collaborator", "no_installation"] as const) {
       it(`${reason} is a definitive deny (30 s)`, async () => {
         const access = createRepositoryAccessCheck({
           clock: clock(),

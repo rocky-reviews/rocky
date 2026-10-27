@@ -13,6 +13,7 @@ import {
   startPostgres,
   TEST_ROLES,
   type SeededOrg,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /** P2-5: audit_events is append-only; only the retention function may delete, and only old rows. */
@@ -36,7 +37,7 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   org = await asWorker(pgs.workerUrl, (w) => seedOrg(w, newOrgId()));
 }, CONTAINER_TIMEOUT_MS);
@@ -243,7 +244,7 @@ describe("retention purge path", () => {
     expect(left.audit).not.toContain("planted.ancient");
 
     // Direct calls as the app role: an explicit future cutoff and the no-argument form.
-    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const app = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
     try {
       for (const sql of [
         "select * from retention.purge_analyses(now() + interval '1 day')",

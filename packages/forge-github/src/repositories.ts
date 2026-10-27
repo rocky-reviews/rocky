@@ -113,6 +113,11 @@ const TokenJson = z.object({
   permissions: z.record(z.string(), z.string()),
   repositories: z.array(z.record(z.string(), z.unknown())).max(100),
 });
+/**
+ * Printable ASCII without spaces, bounded: safe to put in an `authorization` header for the
+ * revocation of a token that otherwise failed validation (no header injection).
+ */
+const HEADER_SAFE_TOKEN = /^[\x21-\x7e]{1,4096}$/;
 /** Read first, so a token that comes with an unacceptable answer can still be revoked. */
 const TokenOnly = z.object({ token: Token });
 const PullRequestJson = z.object({
@@ -350,9 +355,17 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
       return null;
     }
     if (answer.status !== 201) throw new ForgeReadError("http_status", answer.status);
+    // A 201 whose body is not JSON (or is over the cap) yields nothing that could be revoked:
+    // refused as is; such a token, if one was issued, expires within GitHub's hour (review
+    // round 3, N1).
     const body = json(answer);
     const issued = TokenOnly.safeParse(body);
-    if (!issued.success) throw new ForgeReadError("invalid_response");
+    if (!issued.success) {
+      // A token that fails validation but is header-safe is still revoked before refusing.
+      const loose = (body as { token?: unknown } | null)?.token;
+      if (typeof loose === "string" && HEADER_SAFE_TOKEN.test(loose)) await revoke(loose);
+      throw new ForgeReadError("invalid_response");
+    }
     const token = issued.data.token;
     let repository: ForgeRepository;
     let expiresAt: number;

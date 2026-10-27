@@ -51,6 +51,8 @@ export type AccessDenyReason =
   | "unknown_repository"
   /** The member has no stored forge token (never logged in, or logged out). */
   | "no_token"
+  /** The org has no stored forge installation to check membership on behalf of. */
+  | "no_installation"
   /** The stored token could not be decrypted (wrong key, tampered, no org key). */
   | "token_unreadable"
   /** No usable answer from the forge (timeout, network, 5xx, 429, other status). */
@@ -72,6 +74,7 @@ export const ACCESS_DENY_REASONS: readonly AccessDenyReason[] = [
   "not_member",
   "unknown_repository",
   "no_token",
+  "no_installation",
   "token_unreadable",
   "forge_unavailable",
   "invalid_response",

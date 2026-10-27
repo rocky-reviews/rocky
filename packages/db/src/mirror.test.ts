@@ -17,6 +17,7 @@ import {
   newOrgId,
   startPostgres,
   type TestPostgres,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /**
@@ -84,7 +85,7 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   worker = createDb({ connectionString: pgs.workerUrl, max: 4 });
 }, CONTAINER_TIMEOUT_MS);
 

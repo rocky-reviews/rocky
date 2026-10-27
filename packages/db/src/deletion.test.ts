@@ -17,6 +17,7 @@ import {
   seedOrg,
   startPostgres,
   type SeededOrg,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /**
@@ -107,7 +108,7 @@ const markErasing = async (orgId: OrgId): Promise<void> => {
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
   db = createDb({ connectionString: pgs.appUrl, max: 2 });
   worker = createDb({ connectionString: pgs.workerUrl, max: 2 });
   a = await seedOrg(worker, newOrgId(), { installationId: 1 });
@@ -414,7 +415,10 @@ describe("the deletion sweep's database side (P3-3)", () => {
   it("the server login can neither list due orgs nor erase one", async () => {
     const orgId = await bareOrg(50);
     await makeDue(orgId);
-    const appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on(
+      "error",
+      ignoreIdleError,
+    );
     try {
       for (const [sql, params] of [
         ["select * from retention.orgs_due_for_deletion(10)", []],
@@ -664,7 +668,10 @@ describe("the deletion sweep's database side (P3-3)", () => {
       expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
       expect(error.message, sql).toMatch(/append-only/);
     }
-    const appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+    const appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on(
+      "error",
+      ignoreIdleError,
+    );
     try {
       for (const sql of [
         "select * from app.org_deletions",

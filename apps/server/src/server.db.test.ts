@@ -12,6 +12,7 @@ import {
   startPostgres,
   TEST_ROLES,
   type TestPostgres,
+  ignoreIdleError,
 } from "@rocky-reviews/db/testing";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -39,7 +40,7 @@ const capture = () => {
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 1 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 1 }).on("error", ignoreIdleError);
   const log = createLogger("server-test", {
     destination: {
       write: (c: string) => void lines.push(JSON.parse(c) as Record<string, unknown>),
@@ -94,7 +95,10 @@ describe("the server pool", () => {
       // backend of the app role may be left waiting on it (an orphan per blocked webhook would
       // exhaust max_connections).
       // Its own connection: `locker` holds the superuser pool's only one.
-      const observer = new pg.Client({ connectionString: pgs.superUrl });
+      const observer = new pg.Client({ connectionString: pgs.superUrl }).on(
+        "error",
+        ignoreIdleError,
+      );
       await observer.connect();
       try {
         const waiting = async () =>
@@ -242,7 +246,7 @@ describe("the server's database login (review rounds 4 and 5)", () => {
 
   it("the refused logins really hold what the check is about (the fixtures are not vacuous)", async () => {
     const probe = async (url: string, sql: string) => {
-      const client = new pg.Client({ connectionString: url });
+      const client = new pg.Client({ connectionString: url }).on("error", ignoreIdleError);
       await client.connect();
       try {
         return (await client.query<{ ok: boolean }>(sql)).rows[0]?.ok;

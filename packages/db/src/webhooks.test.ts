@@ -9,6 +9,7 @@ import {
   plantWebhookDelivery,
   startPostgres,
   type TestPostgres,
+  ignoreIdleError,
 } from "./testing/index.js";
 import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS, WebhookInboxError } from "./webhooks.js";
 
@@ -29,8 +30,8 @@ let db: Db;
 
 beforeAll(async () => {
   pgs = await startPostgres();
-  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 });
-  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 });
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
+  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 }).on("error", ignoreIdleError);
   // An idle client whose backend ends must not surface as an uncaught pool error.
   for (const p of [superuser, appPool]) p.on("error", () => undefined);
   db = createDb({ connectionString: pgs.appUrl, max: 10 });

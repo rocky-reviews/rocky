@@ -9,6 +9,7 @@ import {
   newOrgId,
   seedOrg,
   startPostgres,
+  ignoreIdleError,
 } from "./testing/index.js";
 
 /** P2-2: the tenant-scoped client. The isolation suite covers the policies table by table. */
@@ -22,7 +23,7 @@ let orgB: OrgId;
 beforeAll(async () => {
   pgs = await startPostgres();
   // One physical connection, so "stale session state" tests hit the same connection withOrg uses.
-  pool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 });
+  pool = new pg.Pool({ connectionString: pgs.appUrl, max: 1 }).on("error", ignoreIdleError);
   db = createDb({ pool });
   orgA = newOrgId();
   orgB = newOrgId();
@@ -529,7 +530,10 @@ describe("withOrg", () => {
 describe("createDb with a connection string", () => {
   it("survives Postgres ending an idle connection (no uncaught pool error) and reconnects", async () => {
     const own = createDb({ connectionString: pgs.appUrl, max: 1 });
-    const superuser = new pg.Client({ connectionString: pgs.superUrl });
+    const superuser = new pg.Client({ connectionString: pgs.superUrl }).on(
+      "error",
+      ignoreIdleError,
+    );
     await superuser.connect();
     try {
       const pid = await own.withOrg(orgA, async (tx) => {

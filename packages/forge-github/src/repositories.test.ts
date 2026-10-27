@@ -174,6 +174,53 @@ describe("installation tokens: short-lived, scoped to one repository, read-only"
     }
   });
 
+  it("N1: a 201 whose token fails validation is still revoked when a header-safe token can be read", async () => {
+    const fixture = githubFixture("post-installation-access-token");
+    /** A fetch answering the mint with a raw body, recording each request's authorization. */
+    const raw = (body: string, type = "application/json") => {
+      const seen: { method: string; authorization: string | null }[] = [];
+      const f = ((_: string, init?: RequestInit) => {
+        seen.push({
+          method: init?.method ?? "GET",
+          authorization: new Headers(init?.headers).get("authorization"),
+        });
+        return Promise.resolve(
+          init?.method === "DELETE"
+            ? new Response(null, { status: 204 })
+            : new Response(body, { status: 201, headers: { "content-type": type } }),
+        );
+      }) as unknown as typeof fetch;
+      return { f, seen };
+    };
+    // Extractable and header-safe, but not a valid token (too short): revoked, then refused.
+    for (const token of ["short", "x".repeat(600)]) {
+      const { f, seen } = raw(JSON.stringify({ ...fixture, token }));
+      for (const call of [
+        () => forgeWith(f).openRepository(REF),
+        () => forgeWith(f).isCollaborator(REF, "octo-dev"),
+      ]) {
+        seen.length = 0;
+        expect((await failure(call())).code).toBe("forge_invalid_response");
+        expect(seen.map((x) => x.method)).toEqual(["POST", "DELETE"]);
+        expect(seen[1]?.authorization).toBe(`Bearer ${token}`);
+      }
+    }
+    // Nothing usable can be extracted: no revocation request is made (and no header is built
+    // from it). Such a token, if GitHub issued one, expires on its own within the hour.
+    const unusable = [
+      raw(JSON.stringify({ ...fixture, token: "has space in it 0123456789" })),
+      raw(JSON.stringify({ ...fixture, token: "line\r\nx-injected: 1-0123456789" })),
+      raw(JSON.stringify({ ...fixture, token: 12345 })),
+      raw(JSON.stringify({ ...fixture, token: undefined })),
+      raw("{not json"),
+      raw("<html>", "text/html"),
+    ];
+    for (const { f, seen } of unusable) {
+      expect((await failure(forgeWith(f).openRepository(REF))).code).toBe("forge_invalid_response");
+      expect(seen.map((x) => x.method)).toEqual(["POST"]);
+    }
+  });
+
   it("refuses malformed or unexpected mint answers without leaking the token", async () => {
     const fixture = githubFixture("post-installation-access-token");
     const cases: [number, unknown, string][] = [
