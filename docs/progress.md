@@ -48,6 +48,16 @@ Task log for the project plan. Agents append a row when a task is merged.
 - `--ai` cyan text is 3.7:1 on the light panel and the severity colours on their tints are 3.2–4.1:1: P6-2/P6-4 will need AI and severity text often. Decide on darker text tokens (a tokens-test change) or keep using `--text` with coloured marks.
 - Add `eslint-plugin-react-hooks` when the hook count grows (not added in P6-1 to keep the dependency set small).
 - `m` toggles light/dark in the POC: wire it in P6-5 to `useTheme().toggle`.
+- Review round 1 notes (not fixed in P6-1):
+  - The coverage progressbar has `aria-valuemax="0"` when there are no critical or important files, which is invalid; show "nothing high-risk" without a progressbar then.
+  - With storage blocked, the theme choice lasts only until the next system change (the "no saved choice" check reads storage), and there is no cross-tab sync (`storage` event).
+  - The approvals tooltip lives inside its trigger, so screen readers may announce its text twice (content plus `aria-describedby`).
+  - `PullSummary` counts (additions, deletions, files, comments) have no upper bound.
+  - `encodeURIComponent` in `pullRequestUrl` is redundant after the owner/repo patterns; harmless.
+  - Fixture numbers differ from the POC: +215 (POC +214, the fixture's provenance totals) and "7 min" left (POC 6, from `reviewMinutes`). Say so in the PR notes.
+  - Left-truncated paths in the sidebar show the ellipsis at slightly different offsets per row (`direction: rtl` trick).
+  - At 375 px the open approvals tooltip covers the GitHub link until it is dismissed.
+  - The "Briefing & change map" sidebar entry is ticked as part of the P6-1 sidebar but its parity line belongs to P6-2; keep the two ticks consistent when P6-2 lands.
 
 ### P4-8 follow-ups
 

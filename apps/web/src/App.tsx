@@ -1,26 +1,35 @@
 import { useEffect, useState } from "react";
-import type { PullRef, ShellData, ShellDataSource } from "./data/shell-data.js";
+import {
+  parseShellData,
+  type PullRef,
+  type ShellData,
+  type ShellDataSource,
+} from "./data/shell-data.js";
 import { Shell } from "./shell/Shell.js";
 
 type Props = { source: ShellDataSource; pull: PullRef };
 
 type State = { kind: "loading" } | { kind: "ready"; data: ShellData } | { kind: "failed" };
 
-/** Loads the shell's data through the port and keeps "updated N ago" current. */
+/**
+ * Loads the shell's data through the port, validates it here (the one place, so no source can
+ * skip it) and keeps "updated N ago" current.
+ */
 export const App = ({ source, pull }: Props) => {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    let live = true;
-    source.load(pull).then(
-      (data) => live && setState({ kind: "ready", data }),
-      // The error may describe PR content; the page says only that it failed.
-      () => live && setState({ kind: "failed" }),
-    );
-    return () => {
-      live = false;
-    };
+    const abort = new AbortController();
+    source
+      .load(pull, { signal: abort.signal })
+      .then(parseShellData)
+      .then(
+        (data) => !abort.signal.aborted && setState({ kind: "ready", data }),
+        // The error may describe PR content; the page says only that it failed.
+        () => !abort.signal.aborted && setState({ kind: "failed" }),
+      );
+    return () => abort.abort();
   }, [source, pull]);
 
   useEffect(() => {

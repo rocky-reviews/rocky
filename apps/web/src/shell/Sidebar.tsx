@@ -231,7 +231,7 @@ const FileRow = ({ path, level, viewed, selected, onSelect, onToggleViewed, extr
       onClick={onSelect}
     >
       <span className="name">
-        <span>{path}</span>
+        <bdi>{path}</bdi>
       </span>
       {extra}
     </button>

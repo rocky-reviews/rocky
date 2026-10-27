@@ -1,13 +1,12 @@
 /**
  * The shell's data until the server serves it (P7-1, P6-2): the pr-847 analysis fixture from
- * packages/schema plus the GitHub-side facts the POC shows for that PR. It goes through the
- * same `parseShellData` a real source must use.
+ * packages/schema plus the GitHub-side facts the POC shows for that PR. Like any source it
+ * returns unchecked parts; the app runs them through `parseShellData`.
  */
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import {
-  parseShellData,
   type PullRef,
-  type ShellData,
+  type RawShellData,
   ShellDataError,
   type ShellDataSource,
 } from "./shell-data.js";
@@ -30,20 +29,20 @@ export const PR_847_PULL = {
   commentCount: 4,
 } as const;
 
-type Fixture = { pull: unknown; myReview: unknown; analysis: unknown };
+const FIXTURES: readonly RawShellData[] = [{ pull: PR_847_PULL, myReview: null, analysis: pr847 }];
 
-const FIXTURES: readonly Fixture[] = [{ pull: PR_847_PULL, myReview: null, analysis: pr847 }];
-
-const matches = (fixture: Fixture, ref: PullRef): boolean => {
+const matches = (fixture: RawShellData, ref: PullRef): boolean => {
   const pull = fixture.pull as Partial<PullRef>;
   return pull.owner === ref.owner && pull.repo === ref.repo && pull.number === ref.number;
 };
 
-export const createFixtureSource = (fixtures: readonly Fixture[] = FIXTURES): ShellDataSource => ({
-  load: async (ref: PullRef): Promise<ShellData> => {
+export const createFixtureSource = (
+  fixtures: readonly RawShellData[] = FIXTURES,
+): ShellDataSource => ({
+  load: async (ref: PullRef): Promise<RawShellData> => {
     const fixture = fixtures.find((f) => matches(f, ref));
     if (fixture === undefined) throw new ShellDataError("no such pull request");
-    return parseShellData(fixture);
+    return fixture;
   },
 });
 

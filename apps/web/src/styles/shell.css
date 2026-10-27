@@ -115,8 +115,16 @@ code,
   flex: 1;
 }
 .pr-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3em;
+  min-width: 0;
   font-weight: 600;
   font-size: var(--text-lg);
+}
+/* The number stays outside the clipped text, so a long title never hides it. */
+.pr-title-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -125,6 +133,7 @@ code,
 .pr-number {
   color: var(--muted);
   font-weight: 400;
+  flex: none;
 }
 .pr-sub {
   color: var(--muted);
@@ -172,6 +181,12 @@ code,
   background: var(--low-bg);
   color: var(--text);
 }
+/* Approvals and comments wrap together, never one per line. */
+.gh-stats {
+  display: inline-flex;
+  gap: 10px;
+  white-space: nowrap;
+}
 .gh-stat {
   color: var(--text);
   font-weight: 550;
@@ -192,21 +207,32 @@ code,
   position: relative;
   border-radius: var(--radius-xs);
 }
+/*
+ * The tooltip's own box starts at the trigger's bottom edge and pads the gap, so the pointer
+ * can cross onto it without it closing (WCAG 1.4.13). It wraps instead of leaving the viewport.
+ */
 .tip {
   display: none;
   position: absolute;
-  top: calc(100% + 6px);
+  top: 100%;
   left: 0;
   z-index: 40;
+  padding-top: 6px;
+  width: max-content;
+  max-width: min(320px, 100vw - 32px);
+}
+.tip-box {
+  display: block;
   padding: var(--space-1) var(--space-2);
   border-radius: var(--radius-sm);
   background: var(--text);
   color: var(--panel);
   font-weight: 500;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   box-shadow: var(--shadow);
 }
-.has-tip:is(:hover, :focus-visible):not([data-dismissed="true"]) .tip {
+.has-tip[data-open="true"] .tip {
   display: block;
 }
 
@@ -282,7 +308,10 @@ code,
 .main {
   padding: 18px 22px 80px;
 }
-.main:focus {
+/* Focus lands on these regions only programmatically (skip link, a drawer closing on resize). */
+.main:focus,
+.sidebar:focus,
+.panel:focus {
   outline: none;
 }
 .panel {
@@ -387,7 +416,7 @@ code,
   direction: rtl;
   text-align: left;
 }
-.nav-item .name span {
+.nav-item .name bdi {
   direction: ltr;
   unicode-bidi: plaintext;
 }
@@ -621,6 +650,27 @@ code,
     padding: var(--space-2) var(--space-3);
   }
   .topbar .hide-sm {
+    display: none;
+  }
+  .pr-sub {
+    column-gap: var(--space-2);
+    line-height: 1.4;
+  }
+  .gh-stats {
+    gap: var(--space-2);
+  }
+  /* "View on" is read out but not shown, so the link fits beside the counts. */
+  .sr-only-sm {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* The brand mark gives its width to the PR (the name is already hidden here). */
+  .brand {
     display: none;
   }
 }

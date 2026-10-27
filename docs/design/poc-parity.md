@@ -137,6 +137,10 @@ Defect 6 is fixed in the coverage card.
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".
+- **Top bar at ≤ 760 px (P6-1).** The brand mark is hidden (its name already was in the POC), the
+  title stays on one line with `#number` outside the clipped text (full title on hover), and the
+  link reads "GitHub ↗" beside the counts ("View on" is kept for screen readers). The bar is
+  about 96 px tall, close to the POC's 92 px.
 - **Drawer toggles (P6-1).** The top bar gains a Files toggle (≤ 760 px) and a Review panel
   toggle (≤ 1180 px), and a skip link; the POC has neither (defect 5).
 - **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top

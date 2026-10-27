@@ -20,8 +20,8 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   expect: {
-    // Font antialiasing differs a little between runs; layout changes are far larger.
-    toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: "disabled" },
+    // Tight enough that a moved count or pill fails; antialiasing noise stays well below it.
+    toHaveScreenshot: { maxDiffPixelRatio: 0.002, animations: "disabled" },
   },
   projects: [
     { name: "visual", testMatch: /\.visual\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },

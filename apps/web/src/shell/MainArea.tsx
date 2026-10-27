@@ -27,7 +27,9 @@ export const MainContent = ({ selection, analysis }: Props) => (
     ) : (
       <div className="section">
         <div className="h-eyebrow">File</div>
-        <h2 className="main-title file-path">{selection.path}</h2>
+        <h2 className="main-title file-path">
+          <bdi>{selection.path}</bdi>
+        </h2>
         <p className="placeholder">The diff for this file appears here.</p>
       </div>
     )}

@@ -1,8 +1,9 @@
 /**
  * The app shell (P6-1): top bar, sidebar, main column and right panel, laid out like the POC.
  * Below the POC's breakpoints the sidebar and right panel become drawers opened from the top
- * bar (POC defect 5: the POC just hid them). An open drawer makes the rest of the page inert
- * and closes on Escape or a click outside, returning focus to its toggle.
+ * bar (POC defect 5: the POC just hid them). An open drawer is a modal dialog: the rest of the
+ * page is inert, Tab cycles inside it, and Escape or a click outside closes it and returns
+ * focus to its toggle. If the width grows until the panel shows in place, focus moves to it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ShellData } from "../data/shell-data.js";
@@ -36,30 +37,37 @@ export const Shell = ({ data, now }: Props) => {
   );
   const cover = coverage(groups, viewed);
 
-  // Focus moves into an opened drawer and back to its toggle when it closes.
-  const returnFocus = useRef<Drawer | null>(null);
-  const closeDrawer = useCallback(() => {
-    returnFocus.current = drawer;
-    setDrawer(null);
-  }, [drawer]);
+  // Focus moves into an opened drawer, and on close back to its toggle, or to the region
+  // itself when a wider window now shows it in place (the toggle is hidden then).
+  const returnFocus = useRef<string | null>(null);
+  const closeDrawer = useCallback(
+    (focusTarget?: string) => {
+      if (drawer === null) return;
+      returnFocus.current = focusTarget ?? `[data-drawer-toggle="${drawer}"]`;
+      setDrawer(null);
+    },
+    [drawer],
+  );
   useEffect(() => {
     if (drawer !== null) {
       document.querySelector<HTMLElement>(`[data-drawer-close="${drawer}"]`)?.focus();
     } else if (returnFocus.current !== null) {
-      document.querySelector<HTMLElement>(`[data-drawer-toggle="${returnFocus.current}"]`)?.focus();
+      document.querySelector<HTMLElement>(returnFocus.current)?.focus();
       returnFocus.current = null;
     }
   }, [drawer]);
 
   // A drawer whose panel the width now shows in place is no longer a drawer.
   useEffect(() => {
-    if (drawer !== null && overlay === null) setDrawer(null);
-  }, [drawer, overlay]);
+    if (drawer !== null && overlay === null)
+      closeDrawer(drawer === "files" ? "#sidebar" : "#review-panel");
+  }, [drawer, overlay, closeDrawer]);
 
   useEffect(() => {
     if (overlay === null) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeDrawer();
+      if (event.key === "Tab") trapTab(event, overlay === "files" ? "#sidebar" : "#review-panel");
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -82,10 +90,10 @@ export const Shell = ({ data, now }: Props) => {
 
   return (
     <div className="app">
-      <a className="skip-link" href="#main">
-        Skip to main content
-      </a>
       <div className="topbar-wrap" inert={overlay !== null}>
+        <a className="skip-link" href="#main">
+          Skip to main content
+        </a>
         <TopBar
           pull={data.pull}
           myReview={data.myReview}
@@ -100,11 +108,16 @@ export const Shell = ({ data, now }: Props) => {
         <nav
           id="sidebar"
           className="col sidebar"
-          aria-label="Files"
+          tabIndex={-1}
+          {...(overlay === "files"
+            ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
+            : { "aria-label": "Files" })}
           data-open={drawer === "files"}
           inert={overlay !== null && overlay !== "files"}
         >
-          {drawer === "files" && <DrawerHead title="Files" which="files" onClose={closeDrawer} />}
+          {drawer === "files" && (
+            <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
+          )}
           {data.analysis === null ? (
             <p className="placeholder">Files appear here once the analysis is ready.</p>
           ) : (
@@ -126,19 +139,48 @@ export const Shell = ({ data, now }: Props) => {
         <aside
           id="review-panel"
           className="panel"
-          aria-label="Review panel"
+          tabIndex={-1}
+          {...(overlay === "panel"
+            ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
+            : { "aria-label": "Review panel" })}
           data-open={drawer === "panel"}
           inert={overlay !== null && overlay !== "panel"}
         >
           {drawer === "panel" && (
-            <DrawerHead title="Review panel" which="panel" onClose={closeDrawer} />
+            <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
           )}
           <RightPanelContent />
         </aside>
       </div>
-      {overlay !== null && <div className="scrim" aria-hidden="true" onClick={closeDrawer} />}
+      {overlay !== null && (
+        <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
+      )}
     </div>
   );
+};
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Keeps Tab and Shift+Tab inside the open drawer, wrapping at either end. */
+const trapTab = (event: KeyboardEvent, container: string) => {
+  const root = document.querySelector<HTMLElement>(container);
+  if (!root) return;
+  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
+    (el) => el.getClientRects().length > 0,
+  );
+  const first = items[0];
+  const last = items.at(-1);
+  if (!first || !last) return;
+  const active = document.activeElement;
+  const outside = !(active instanceof Node) || !root.contains(active);
+  if (event.shiftKey && (active === first || outside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || outside)) {
+    event.preventDefault();
+    first.focus();
+  }
 };
 
 const DrawerHead = ({
@@ -151,7 +193,7 @@ const DrawerHead = ({
   onClose: () => void;
 }) => (
   <div className="drawer-head">
-    <span>{title}</span>
+    <h2 id={`drawer-title-${which}`}>{title}</h2>
     <button
       type="button"
       className="icon-btn"

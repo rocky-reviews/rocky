@@ -19,6 +19,12 @@ const focused = (page: Page) =>
     return (el.getAttribute("aria-label") ?? el.textContent ?? "").trim().replace(/\s+/g, " ");
   });
 
+const boxOf = async (page: Page, selector: string) => {
+  const box = await page.locator(selector).boundingBox();
+  if (box === null) throw new Error(`${selector} is not visible`);
+  return box;
+};
+
 const hasVisibleFocus = (page: Page) =>
   page.evaluate(() => {
     const el = document.activeElement;
@@ -111,6 +117,41 @@ test.describe("keyboard", () => {
     ]);
   });
 
+  test("Escape closes the tooltip opened by hover, and the pointer can move onto it", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openShell(page);
+    const trigger = page.locator(".has-tip");
+    const tip = page.getByRole("tooltip");
+    await trigger.hover();
+    await expect(tip).toBeVisible();
+    // Move down through the gap onto the tooltip itself: it stays open.
+    const box = await boxOf(page, ".tip-box");
+    await page.mouse.move(box.x + 10, box.y - 3);
+    await page.mouse.move(box.x + 10, box.y + box.height / 2);
+    await expect(tip).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(tip).toBeHidden();
+    // Leaving and hovering again reopens it.
+    await page.mouse.move(5, 500);
+    await trigger.hover();
+    await expect(tip).toBeVisible();
+  });
+
+  test("the tooltip wraps within the viewport with many approvers", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await openShell(page);
+    await page.evaluate(() => {
+      const box = document.querySelector(".tip-box");
+      if (box)
+        box.textContent = `Approved by ${Array.from({ length: 100 }, (_, i) => `@user-${i}`).join(", ")}`;
+    });
+    await page.locator(".has-tip").focus();
+    const box = await boxOf(page, ".tip-box");
+    expect(box.width).toBeLessThanOrEqual(375 - 32);
+  });
+
   test("the approvals tooltip opens on focus and Escape closes it", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openShell(page);
@@ -163,6 +204,67 @@ test.describe("keyboard", () => {
     await expect(sidebar).toBeHidden();
     await expect(page.getByRole("button", { name: "Files", exact: true })).toBeFocused();
   });
+
+  const DRAWERS = [
+    { name: "Files", region: "#sidebar", close: "Close files", width: 375, last: "Show" },
+    {
+      name: "Review panel",
+      region: "#review-panel",
+      close: "Close review panel",
+      width: 1024,
+      last: "Close review panel",
+    },
+  ] as const;
+
+  for (const d of DRAWERS) {
+    test(`the ${d.name} drawer is a modal dialog with a focus trap (${d.width} px)`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: d.width, height: 900 });
+      await openShell(page);
+      await page.getByRole("button", { name: d.name, exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: d.name });
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toHaveAttribute("aria-modal", "true");
+      const close = page.getByRole("button", { name: d.close });
+      await expect(close).toBeFocused();
+      const inside = () => page.evaluate((sel) => !!document.activeElement?.closest(sel), d.region);
+
+      // Shift+Tab from the first control wraps to the last one, still inside.
+      await page.keyboard.press("Shift+Tab");
+      expect(await inside()).toBe(true);
+      expect(await focused(page)).toBe(d.last);
+
+      // Tab past the last control wraps to the first one.
+      await page.keyboard.press("Tab");
+      await expect(close).toBeFocused();
+
+      // A full lap forwards never leaves the drawer.
+      const count = await page
+        .locator(d.region)
+        .locator('a[href], button, input, [tabindex="0"]')
+        .count();
+      for (let i = 0; i < count + 2; i += 1) {
+        await page.keyboard.press("Tab");
+        expect(await inside()).toBe(true);
+      }
+      // The skip link is inert too.
+      await expect(page.locator(".skip-link")).not.toBeFocused();
+    });
+
+    test(`widening the window past the breakpoint moves focus to the ${d.name} in place`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: d.width, height: 900 });
+      await openShell(page);
+      await page.getByRole("button", { name: d.name, exact: true }).click();
+      await expect(page.getByRole("button", { name: d.close })).toBeFocused();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect(page.locator(d.region)).toBeFocused();
+      await expect(page.locator(d.region)).not.toHaveAttribute("role", "dialog");
+      await expect(page.locator("main")).not.toHaveAttribute("inert", "");
+    });
+  }
 
   test("choosing a file closes the Files drawer", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });

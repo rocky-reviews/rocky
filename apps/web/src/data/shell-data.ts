@@ -16,11 +16,12 @@ import {
 } from "@rocky-reviews/schema";
 import { z } from "zod";
 
-/** A GitHub login, including app bots (`dependabot[bot]`). */
-const Login = z
-  .string()
-  .max(limits.MAX_REPO_OWNER_LENGTH + 5)
-  .regex(/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*(?:\[bot\])?$/, "must be a GitHub login");
+/**
+ * A login shown as text (author, approvers), including app bots (`dependabot[bot]`). Looser
+ * than `RepoOwner`: GitHub still has legacy logins such as `john--doe` or `foo-`. Nothing is
+ * built from these, so they only need to be short and plain.
+ */
+const DisplayLogin = z.string().regex(/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/, "must be a GitHub login");
 
 /** GitHub caps titles at 256 characters; a little slack for other forges later. */
 const MAX_TITLE_LENGTH = 1024;
@@ -33,7 +34,7 @@ export const PullSummary = z.strictObject({
   number: z.number().int().min(1).max(limits.MAX_PR_NUMBER),
   title: z.string().min(1).max(MAX_TITLE_LENGTH),
   /** Null when GitHub reports no author (a deleted account shows as "ghost"). */
-  author: Login.nullable(),
+  author: DisplayLogin.nullable(),
   state: z.enum(["open", "closed", "merged"]),
   headRef: GitRef,
   baseRef: GitRef,
@@ -42,7 +43,7 @@ export const PullSummary = z.strictObject({
   changedFiles: z.number().int().min(0),
   updatedAt: z.iso.datetime(),
   /** Logins whose latest review on GitHub is an approval. */
-  approvers: z.array(Login).max(MAX_APPROVERS),
+  approvers: z.array(DisplayLogin).max(MAX_APPROVERS),
   /** Review and issue comments already on the PR. */
   commentCount: z.number().int().min(0),
 });
@@ -51,6 +52,12 @@ export type PullSummary = z.infer<typeof PullSummary>;
 /** The viewer's own submitted review (set by Finish review, P6-6). */
 export const MyReview = z.enum(["approved", "changes_requested", "commented"]);
 export type MyReview = z.infer<typeof MyReview>;
+
+/**
+ * What a source hands over: unchecked parts. Only `parseShellData` turns them into `ShellData`,
+ * and the app calls it on every load, so no source can skip validation.
+ */
+export type RawShellData = { pull: unknown; myReview: unknown; analysis: unknown };
 
 export type ShellData = {
   pull: PullSummary;
@@ -61,9 +68,9 @@ export type ShellData = {
 
 export type PullRef = Pick<PullSummary, "owner" | "repo" | "number">;
 
-/** The port the shell reads through. */
+/** The port the shell reads through. The app validates what it returns (`parseShellData`). */
 export interface ShellDataSource {
-  load(ref: PullRef): Promise<ShellData>;
+  load(ref: PullRef, options?: { signal?: AbortSignal }): Promise<RawShellData>;
 }
 
 export class ShellDataError extends Error {
@@ -74,11 +81,7 @@ export class ShellDataError extends Error {
  * Validates data from any source. Error messages name the field, never its value: the value
  * is PR content.
  */
-export const parseShellData = (input: {
-  pull: unknown;
-  myReview: unknown;
-  analysis: unknown;
-}): ShellData => {
+export const parseShellData = (input: RawShellData): ShellData => {
   const pull = PullSummary.safeParse(input.pull);
   if (!pull.success)
     throw new ShellDataError(
@@ -91,6 +94,15 @@ export const parseShellData = (input: {
     const parsed = parseAnalysisDocument(input.analysis);
     if (!parsed.ok) throw new ShellDataError(`invalid analysis document: ${parsed.error.code}`);
     analysis = parsed.value;
+    // The analysis must describe this PR; GitHub treats owner and repo names case-insensitively.
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const { repo, pullRequest } = analysis.provenance;
+    if (
+      !same(repo.owner, pull.data.owner) ||
+      !same(repo.name, pull.data.repo) ||
+      pullRequest.number !== pull.data.number
+    )
+      throw new ShellDataError("analysis does not match pull request");
   }
   return { pull: pull.data, myReview: myReview.data, analysis };
 };

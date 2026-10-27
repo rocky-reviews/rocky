@@ -1,11 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
-import type { ShellData } from "../data/shell-data.js";
+import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { Shell } from "./Shell.js";
 
 const NOW = Date.parse("2026-10-25T12:12:00.000Z");
-const data = await createFixtureSource().load(DEFAULT_PULL);
+const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
 const render = (d: ShellData = data): string => renderToStaticMarkup(<Shell data={d} now={NOW} />);
 
 /** Text content without tags, whitespace collapsed. */
@@ -41,6 +41,12 @@ describe("app shell layout", () => {
 
 describe("top bar", () => {
   const bar = text(render().split("</header>")[0] ?? "");
+
+  it("keeps the full title in a tooltip and the number outside the clipped text", () => {
+    expect(render()).toContain(
+      '<h1 class="pr-title"><span class="pr-title-text" title="Team invitations with expiring links">',
+    );
+  });
 
   it("shows the PR: title, number, status, repo and branches", () => {
     expect(bar).toContain("Rocky Reviews");
@@ -98,6 +104,27 @@ describe("untrusted PR content", () => {
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<svg onload");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("isolates bidi controls so they cannot reorder the text around them", () => {
+    const rlo = "\u202E";
+    const pull = {
+      ...data.pull,
+      title: `${rlo}evil title`,
+      author: "dana-k",
+      headRef: `${rlo}branch`,
+      approvers: ["sam-r"],
+    };
+    const html = render({ ...data, pull });
+    expect(html).toContain(`<bdi>${rlo}evil title</bdi></span> <span class="pr-number">`);
+    expect(html).toContain(`<bdi class="branch">${rlo}branch</bdi>`);
+    expect(html).toContain("<bdi>@dana-k</bdi>");
+    expect(html).toContain("<bdi>@sam-r</bdi>");
+    expect(html).toContain("<bdi>acme/rocky-app</bdi>");
+    expect(html).toContain("<bdi>src/auth/invitations.ts</bdi>");
+    // In text (attributes aside), every occurrence sits inside its own isolate.
+    const textOnly = html.replace(/="[^"]*"/g, '=""');
+    expect(textOnly).not.toMatch(new RegExp(`${rlo}(?![^<]*</bdi>)`));
   });
 
   it("drops the GitHub link when the owner, repo or number is not valid", () => {

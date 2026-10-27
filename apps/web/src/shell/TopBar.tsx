@@ -4,8 +4,9 @@
  * toggles that open the sidebar and right panel when the width hides them.
  *
  * Every PR string is rendered as a React text child: React escapes it, nothing here builds HTML.
+ * Each one sits in a <bdi>, so bidi controls in it (U+202E) cannot reorder the text around it.
  */
-import { useId, useState } from "react";
+import { Fragment, useEffect, useId, useState } from "react";
 import type { MyReview, PullSummary } from "../data/shell-data.js";
 import { pullRequestUrl } from "../lib/github-url.js";
 import { timeAgo } from "../lib/time.js";
@@ -59,17 +60,22 @@ export const TopBar = ({
       </div>
       <div className="pr-meta">
         <h1 className="pr-title">
-          {pull.title} <span className="pr-number">#{pull.number}</span>
+          <span className="pr-title-text" title={pull.title}>
+            <bdi>{pull.title}</bdi>
+          </span>{" "}
+          <span className="pr-number">#{pull.number}</span>
         </h1>
         <div className="pr-sub">
           <span className={`status-pill tone-${status.tone}`}>{status.label}</span>
           <span>
-            {pull.owner}/{pull.repo}
+            <bdi>
+              {pull.owner}/{pull.repo}
+            </bdi>
           </span>
           <span className="hide-sm">
-            {pull.author === null ? "Someone" : `@${pull.author}`} wants to merge{" "}
-            <span className="branch">{pull.headRef}</span> →{" "}
-            <span className="branch">{pull.baseRef}</span>
+            {pull.author === null ? "Someone" : <bdi>@{pull.author}</bdi>} wants to merge{" "}
+            <bdi className="branch">{pull.headRef}</bdi> →{" "}
+            <bdi className="branch">{pull.baseRef}</bdi>
           </span>
           <span>
             <span className="add">+{pull.additions}</span>{" "}
@@ -77,17 +83,19 @@ export const TopBar = ({
             {plural(pull.changedFiles, "file", "files")}
           </span>
           <span className="hide-sm">updated {timeAgo(pull.updatedAt, now)}</span>
-          <Approvals approvers={pull.approvers} />
-          <span className="gh-stat">
-            <span aria-hidden="true">💬 </span>
-            {plural(pull.commentCount, "comment", "comments")}
+          <span className="gh-stats">
+            <Approvals approvers={pull.approvers} />
+            <span className="gh-stat">
+              <span aria-hidden="true">💬 </span>
+              {plural(pull.commentCount, "comment", "comments")}
+            </span>
+            {url !== undefined && (
+              <a className="gh-link" href={url} target="_blank" rel="noopener noreferrer">
+                <span className="sr-only-sm">View on </span>GitHub <span aria-hidden="true">↗</span>
+                <span className="sr-only"> (opens in a new tab)</span>
+              </a>
+            )}
           </span>
-          {url !== undefined && (
-            <a className="gh-link" href={url} target="_blank" rel="noopener noreferrer">
-              View on GitHub <span aria-hidden="true">↗</span>
-              <span className="sr-only"> (opens in a new tab)</span>
-            </a>
-          )}
         </div>
       </div>
       <button
@@ -114,10 +122,31 @@ export const TopBar = ({
   );
 };
 
-/** "✓ n approvals", with the approvers in a tooltip on hover and keyboard focus. */
+/**
+ * "✓ n approvals", with the approvers in a tooltip on hover and keyboard focus (WCAG 1.4.13:
+ * Escape dismisses it however it opened, and the pointer can move onto it).
+ */
 const Approvals = ({ approvers }: { approvers: readonly string[] }) => {
   const id = useId();
+  const [hover, setHover] = useState(false);
+  const [focus, setFocus] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const open = (hover || focus) && !dismissed;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDismissed(true);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // Once neither hover nor focus holds it, the next hover or focus may open it again.
+  useEffect(() => {
+    if (!hover && !focus) setDismissed(false);
+  }, [hover, focus]);
+
   const label = `✓ ${plural(approvers.length, "approval", "approvals")}`;
   if (approvers.length === 0) return <span className="gh-stat">{label}</span>;
   return (
@@ -125,16 +154,23 @@ const Approvals = ({ approvers }: { approvers: readonly string[] }) => {
       className="gh-stat has-tip"
       tabIndex={0}
       aria-describedby={id}
-      data-dismissed={dismissed}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setDismissed(true);
-      }}
-      onBlur={() => setDismissed(false)}
-      onMouseLeave={() => setDismissed(false)}
+      data-open={open}
+      onFocus={() => setFocus(true)}
+      onBlur={() => setFocus(false)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
     >
       {label}
       <span role="tooltip" id={id} className="tip">
-        Approved by {approvers.map((login) => `@${login}`).join(", ")}
+        <span className="tip-box">
+          Approved by{" "}
+          {approvers.map((login, i) => (
+            <Fragment key={login}>
+              {i > 0 && ", "}
+              <bdi>@{login}</bdi>
+            </Fragment>
+          ))}
+        </span>
       </span>
     </span>
   );

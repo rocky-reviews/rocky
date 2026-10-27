@@ -5,14 +5,14 @@ import { parseShellData, ShellDataError } from "./shell-data.js";
 
 describe("fixture source", () => {
   it("serves pr-847 through the shell data port", async () => {
-    const data = await createFixtureSource().load(DEFAULT_PULL);
+    const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
     expect(data.pull).toMatchObject({ owner: "acme", repo: "rocky-app", number: 847 });
     expect(data.analysis?.provenance.pullRequest.number).toBe(847);
     expect(data.myReview).toBeNull();
   });
 
   it("agrees with the analysis on the PR's size and branches", async () => {
-    const { pull, analysis } = await createFixtureSource().load(DEFAULT_PULL);
+    const { pull, analysis } = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
     const files = analysis?.provenance.files ?? [];
     expect(pull.changedFiles).toBe(files.length);
     expect(pull.additions).toBe(files.reduce((s, f) => s + f.additions, 0));
@@ -33,6 +33,44 @@ describe("parseShellData", () => {
 
   it("accepts a PR without an analysis yet", () => {
     expect(parseShellData({ ...valid, analysis: null }).analysis).toBeNull();
+  });
+
+  it.each(["john--doe", "foo-", "-legacy", "a"])(
+    "accepts the legacy login %s as author and approver",
+    (login) => {
+      const pull = { ...PR_847_PULL, author: login, approvers: [login] };
+      expect(parseShellData({ ...valid, pull }).pull.approvers).toEqual([login]);
+    },
+  );
+
+  it.each(["a".repeat(40), "a b", "a/b", "dependabot[bot][bot]", ""])(
+    "refuses %j as a login",
+    (login) => {
+      expect(() => parseShellData({ ...valid, pull: { ...PR_847_PULL, author: login } })).toThrow(
+        ShellDataError,
+      );
+    },
+  );
+
+  it("keeps owner and repo strict", () => {
+    expect(() => parseShellData({ ...valid, pull: { ...PR_847_PULL, owner: "foo-" } })).toThrow(
+      ShellDataError,
+    );
+  });
+
+  it.each([
+    ["owner", { owner: "other" }],
+    ["repo", { repo: "other-app" }],
+    ["number", { number: 848 }],
+  ])("refuses an analysis of another PR (%s differs)", (_name, patch) => {
+    expect(() => parseShellData({ ...valid, pull: { ...PR_847_PULL, ...patch } })).toThrow(
+      new ShellDataError("analysis does not match pull request"),
+    );
+  });
+
+  it("matches owner and repo case-insensitively, as GitHub does", () => {
+    const pull = { ...PR_847_PULL, owner: "ACME", repo: "Rocky-App" };
+    expect(parseShellData({ ...valid, pull }).analysis).not.toBeNull();
   });
 
   it("accepts bot logins", () => {
