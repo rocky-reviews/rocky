@@ -38,7 +38,7 @@ export const DEFAULT_PROVIDER = "anthropic";
 const PROVIDER_VARS = {
   anthropic: {
     prefix: "ANTHROPIC",
-    fields: { API_KEY_ENV: "apiKeyEnv", BASE_URL: "baseUrl" },
+    fields: { API_KEY_ENV: "apiKeyEnv", BASE_URL: "baseUrl", FALLBACKS: "fallbacks" },
     defaults: { apiKeyEnv: "ANTHROPIC_API_KEY" },
   },
   bedrock: { prefix: "BEDROCK", fields: { REGION: "region" }, defaults: {} },

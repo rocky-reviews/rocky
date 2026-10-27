@@ -28,6 +28,11 @@ export interface AnthropicSettings {
   readonly kind: "anthropic";
   readonly apiKeyEnv: string;
   readonly baseUrl?: string;
+  /**
+   * Server-side refusal fallbacks (ADR 0013 §1). Omitted: on, for the models that take them.
+   * `off` for a gateway at `baseUrl` that rejects the beta.
+   */
+  readonly fallbacks?: "on" | "off";
 }
 export interface BedrockSettings {
   readonly kind: "bedrock";
@@ -174,6 +179,7 @@ const providerSettings = z.discriminatedUnion("kind", [
     baseUrl: baseUrl
       .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
       .optional(),
+    fallbacks: z.enum(["on", "off"], { error: "must be on or off" }).optional(),
   }),
   z.strictObject({ kind: z.literal("bedrock"), region }),
   z.strictObject({ kind: z.literal("vertex"), projectId: resourceName, region }),

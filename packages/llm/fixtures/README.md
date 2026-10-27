@@ -32,6 +32,11 @@ One set serves all four Claude platforms. The Anthropic API, Bedrock Mantle
 | `tool-use.sse`             | `tool_use`                      | An unexpected stop (Rocky sends no tools)                                                                                       |
 | `fallback.sse`             | `end_turn`                      | Server-side fallback mid-stream: partial text, a `fallback` block (Opus 5.5 → Opus 4.8), the answer, and `usage.iterations`     |
 | `overloaded-midstream.sse` | none                            | An `error` event (`overloaded_error`) after output started                                                                      |
+| `fallback-sticky.sse`      | `end_turn`                      | A sticky turn: served by the fallback model with no `fallback` block; a declined `message` iteration with `model: null`         |
+| `fallback-pre-output.sse`  | `end_turn`                      | A `fallback` block before any output, then the answer                                                                           |
+| `fallback-refused.sse`     | `refusal`                       | The whole chain declined: a `fallback` block, then a refusal from the fallback model, both attempts in `usage.iterations`       |
+| `no-message-stop.sse`      | `end_turn`                      | A complete answer whose stream ends before `message_stop` (a dropped link)                                                      |
+| `cut-mid-text.sse`         | none                            | A stream cut in the middle of the answer text                                                                                   |
 
 `claude/errors/*.json` hold the documented error body for each HTTP status the adapters map: 400
 (invalid request, and the prompt-too-long case), 401, 402, 403, 404, 413, 429, 500 and 529. Their
@@ -56,8 +61,10 @@ They follow the OpenAI response shapes that Ollama and vLLM implement.
 
 ## Recording real responses
 
-Recording real responses is a follow-up (`docs/progress.md`, P4-2), and it needs credentials for
-each platform. When recording:
+The P4-2 criterion asks for recorded responses; until these files are replaced it is only partly
+met. Recording is a follow-up (`docs/progress.md`, P4-2) and needs credentials for each platform.
+Record first: Anthropic `end_turn` and `refusal` streams and one prompt-too-long 400. When
+recording:
 
 - keep only the event and field shapes;
 - replace every id, request id, signature, model deployment name and account or project

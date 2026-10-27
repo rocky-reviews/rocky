@@ -1,24 +1,25 @@
-import { AnthropicBedrockMantle } from "@anthropic-ai/bedrock-sdk";
-import { AnthropicFoundry } from "@anthropic-ai/foundry-sdk";
 import Anthropic from "@anthropic-ai/sdk";
-import { AnthropicVertex } from "@anthropic-ai/vertex-sdk";
 import { LlmCallError } from "@rocky-reviews/core";
 import type { ProviderAdapterFactory, SecretSource } from "../registry.js";
-import { claudeProvider, type ClaudeMessagesClient } from "./claude.js";
+import { assertAmbientAtBoot } from "./ambient.js";
+import { claudeProvider, FALLBACK_MODELS, type ClaudeMessagesClient } from "./claude.js";
 import {
   hardenedClientOptions,
   type AdapterTransport,
   type VertexAuthClient,
+  type VertexAuthSource,
 } from "./transport.js";
 
 /**
  * Client factories for the four Claude platforms (P4-2, ADR 0013 §1). Each one pins its host from
  * validated config, so no `ANTHROPIC_*_BASE_URL` variable can redirect a key or PR content (T3).
- * Keyed platforms build a client per call from a key read at that moment (T1), with ambient
- * Anthropic credentials disabled (T2).
+ * Every call builds its own client over that call's capped `fetch` (T9); keyed platforms read the
+ * key at that moment (T1), with ambient Anthropic credentials disabled (T2). The Bedrock, Vertex
+ * and Foundry SDKs are imported on first use, so a worker that never calls them never loads them.
  */
 
 const ANTHROPIC_API = "https://api.anthropic.com";
+const GOOGLE_CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
 /** Reads a configured key at call time; a missing one fails before anything is sent. */
 const keyFrom = (secrets: SecretSource, name: string): string => {
@@ -27,74 +28,85 @@ const keyFrom = (secrets: SecretSource, name: string): string => {
   return key;
 };
 
-/** Built on first use, so a boot without platform credentials does not reach for them. */
-const lazily = <C>(make: () => C): (() => C) => {
-  let client: C | undefined;
-  return () => (client ??= make());
-};
+const never = () => false;
 
 export const anthropicAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"anthropic"> =>
-  (settings, secrets) =>
-    claudeProvider(
+  (settings, secrets) => {
+    assertAmbientAtBoot("anthropic");
+    const fallbacks = settings.fallbacks !== "off";
+    return claudeProvider(
       {
+        kind: "anthropic",
         modelId: (model) => model,
-        client: (): ClaudeMessagesClient =>
-          new Anthropic({
-            ...hardenedClientOptions(transport),
-            apiKey: keyFrom(secrets, settings.apiKeyEnv),
-            authToken: null,
-            baseURL: settings.baseUrl ?? ANTHROPIC_API,
-          }),
-        serverFallbacks: true,
+        client: (fetch) =>
+          Promise.resolve(
+            new Anthropic({
+              ...hardenedClientOptions(transport, fetch),
+              apiKey: keyFrom(secrets, settings.apiKeyEnv),
+              authToken: null,
+              baseURL: settings.baseUrl ?? ANTHROPIC_API,
+            }),
+          ),
+        serverFallbacks: (model) => fallbacks && FALLBACK_MODELS.has(model),
       },
       transport,
     );
+  };
 
 export const foundryAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"foundry"> =>
-  (settings, secrets) =>
-    claudeProvider(
+  (settings, secrets) => {
+    assertAmbientAtBoot("foundry");
+    return claudeProvider(
       {
+        kind: "foundry",
         // Foundry's default deployment name is the canonical id; `platformModel` names others.
         modelId: (model) => model,
-        client: (): ClaudeMessagesClient =>
-          new AnthropicFoundry({
-            ...hardenedClientOptions(transport),
-            apiKey: keyFrom(secrets, settings.apiKeyEnv),
+        client: async (fetch) => {
+          const apiKey = keyFrom(secrets, settings.apiKeyEnv);
+          const { AnthropicFoundry } = await import("@anthropic-ai/foundry-sdk");
+          return new AnthropicFoundry({
+            ...hardenedClientOptions(transport, fetch),
+            apiKey,
             authToken: null,
             resource: settings.resource,
             // `null`, not `undefined`: undefined would read ANTHROPIC_FOUNDRY_BASE_URL.
             baseURL: null,
-          }) as unknown as ClaudeMessagesClient,
-        serverFallbacks: false,
+          }) as unknown as ClaudeMessagesClient;
+        },
+        serverFallbacks: never,
       },
       transport,
     );
+  };
 
 export const bedrockAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"bedrock"> =>
-  (settings) =>
-    claudeProvider(
+  (settings) => {
+    assertAmbientAtBoot("bedrock");
+    return claudeProvider(
       {
+        kind: "bedrock",
         modelId: (model) => `anthropic.${model}`,
         // AWS credentials come from the default chain (or AWS_BEARER_TOKEN_BEDROCK); Rocky holds
-        // none, so one client is reused and its credential cache with it.
-        client: lazily(
-          (): ClaudeMessagesClient =>
-            new AnthropicBedrockMantle({
-              ...hardenedClientOptions(transport),
-              awsRegion: settings.region,
-              baseURL: `https://bedrock-mantle.${settings.region}.api.aws/anthropic`,
-              ...(transport.bedrockCredentials === undefined
-                ? {}
-                : { providerChainResolver: transport.bedrockCredentials }),
-            }),
-        ),
-        serverFallbacks: false,
+        // none. The client resolves them per request, so a failed lookup is not cached.
+        client: async (fetch) => {
+          const { AnthropicBedrockMantle } = await import("@anthropic-ai/bedrock-sdk");
+          return new AnthropicBedrockMantle({
+            ...hardenedClientOptions(transport, fetch),
+            awsRegion: settings.region,
+            baseURL: `https://bedrock-mantle.${settings.region}.api.aws/anthropic`,
+            ...(transport.bedrockCredentials === undefined
+              ? {}
+              : { providerChainResolver: transport.bedrockCredentials }),
+          });
+        },
+        serverFallbacks: never,
       },
       transport,
     );
+  };
 
 /** Vertex serves the pre-4.6 models under dated ids only (Claude on Vertex AI, model table). */
 const VERTEX_DATED_IDS: Readonly<Record<string, string>> = {
@@ -115,25 +127,52 @@ export const vertexBaseUrl = (region: string): string => {
   }
 };
 
+/** Google application default credentials, as the Vertex client would build them. */
+const applicationDefault = async (): Promise<VertexAuthSource> => {
+  const { GoogleAuth } = await import("google-auth-library");
+  return new GoogleAuth({ scopes: GOOGLE_CLOUD_SCOPE }).getClient();
+};
+
+/**
+ * One auth client per adapter, built on first use and reused (it caches its token). A failed
+ * lookup is dropped, not cached: the Vertex client would otherwise keep the rejected promise for
+ * the life of the process (review round 1, S3). Its error text is dropped too.
+ */
+const vertexAuthOnce = (source: () => Promise<VertexAuthSource>) => {
+  let pending: Promise<VertexAuthSource> | undefined;
+  return async (): Promise<VertexAuthSource> => {
+    pending ??= source();
+    try {
+      return await pending;
+    } catch {
+      pending = undefined;
+      throw new LlmCallError("network");
+    }
+  };
+};
+
 export const vertexAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"vertex"> =>
-  (settings) =>
-    claudeProvider(
+  (settings) => {
+    assertAmbientAtBoot("vertex");
+    const auth = vertexAuthOnce(transport.vertexAuth ?? applicationDefault);
+    return claudeProvider(
       {
+        kind: "vertex",
         modelId: (model) => VERTEX_DATED_IDS[model] ?? model,
-        client: lazily(
-          (): ClaudeMessagesClient =>
-            new AnthropicVertex({
-              ...hardenedClientOptions(transport),
-              region: settings.region,
-              projectId: settings.projectId,
-              baseURL: vertexBaseUrl(settings.region),
-              ...(transport.vertexAuthClient === undefined
-                ? {}
-                : { authClient: transport.vertexAuthClient as unknown as VertexAuthClient }),
-            }),
-        ),
-        serverFallbacks: false,
+        client: async (fetch) => {
+          const authClient = (await auth()) as unknown as VertexAuthClient;
+          const { AnthropicVertex } = await import("@anthropic-ai/vertex-sdk");
+          return new AnthropicVertex({
+            ...hardenedClientOptions(transport, fetch),
+            region: settings.region,
+            projectId: settings.projectId,
+            baseURL: vertexBaseUrl(settings.region),
+            authClient,
+          });
+        },
+        serverFallbacks: never,
       },
       transport,
     );
+  };

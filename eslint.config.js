@@ -12,6 +12,12 @@ const CORE_ALLOWED_IMPORTS = ["zod", "@rocky-reviews/schema"];
 const CORE_MESSAGE =
   "packages/core holds domain logic and ports only: import zod, @rocky-reviews/schema or core's own files; inject I/O through a port (ADR-0002).";
 
+/** Instructions come from literal templates only (ADR 0012 §1): a call could pass PR text. */
+const ROCKY_INSTRUCTIONS_LITERAL_ONLY = {
+  selector: "CallExpression[callee.name='rockyInstructions']",
+  message: "Use rockyInstructions only as a tagged template literal (ADR 0012 §1).",
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -30,6 +36,7 @@ export default tseslint.config(
     rules: {
       "no-console": "error",
       "@typescript-eslint/consistent-type-imports": "error",
+      "no-restricted-syntax": ["error", ROCKY_INSTRUCTIONS_LITERAL_ONLY],
     },
   },
   {
@@ -57,6 +64,7 @@ export default tseslint.config(
           selector: "CallExpression[callee.name='require']",
           message: `No require in core. ${CORE_MESSAGE}`,
         },
+        ROCKY_INSTRUCTIONS_LITERAL_ONLY,
       ],
       "no-restricted-globals": [
         "error",
@@ -73,8 +81,9 @@ export default tseslint.config(
   {
     // Tests index into fixtures under noUncheckedIndexedAccess; a `!` there is an assertion
     // about the fixture, and a wrong one fails the test loudly. Production code keeps the rule.
+    // Tests also forge instructions on purpose, to check the runtime refusal.
     files: ["**/*.test.ts"],
-    rules: { "@typescript-eslint/no-non-null-assertion": "off" },
+    rules: { "@typescript-eslint/no-non-null-assertion": "off", "no-restricted-syntax": "off" },
   },
   prettier,
 );

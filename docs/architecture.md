@@ -78,12 +78,18 @@ packages/schema (analysis document; shared contract)
       effort to `output_config.effort` with adaptive thinking.
     - It has one cache breakpoint, on Rocky's instructions. PR content sits in nonce-delimited
       `pr_content` blocks in the user turn. No tools are sent.
-    - On the Anthropic API, server-side refusal fallbacks run (`fallbacks: "default"`).
+    - On the Anthropic API, server-side refusal fallbacks run (`fallbacks: "default"`) on the
+      models that take them; `ROCKY_LLM_ANTHROPIC_FALLBACKS=off` turns them off.
+    - Each call has one deadline covering the whole stream and a 16 MiB cap on response bodies.
+      Platform SDKs are imported on first use.
   - **OpenAI-compatible:** `fetch` to `/chat/completions` (`response_format: json_schema`, with
     the schema in the prompt as the fallback) and `/embeddings`.
   - **Clients:** each one pins its host from config, so no `ANTHROPIC_*_BASE_URL` variable or
-    redirect moves it. Clients have SDK logging and OpenTelemetry off. Every failure becomes a
-    body-free `LlmCallError`.
+    redirect moves it. Clients have SDK logging and OpenTelemetry off. The worker refuses to start
+    with `ANTHROPIC_CUSTOM_HEADERS` (or, for Vertex, `GOOGLE_SDK_NODE_LOGGING`) set. Every failure
+    becomes a body-free `LlmCallError`.
+  - **Instructions** are a `RockyInstructions` value from the `rockyInstructions` template tag
+    (literal text only), never a string, so PR content cannot reach the system slot.
 
 ## Data layer
 

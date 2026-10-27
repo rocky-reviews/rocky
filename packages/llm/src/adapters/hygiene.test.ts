@@ -2,7 +2,11 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
-import type { LlmProvider, ProviderCompletionCall } from "@rocky-reviews/core";
+import {
+  rockyInstructions,
+  type LlmProvider,
+  type ProviderCompletionCall,
+} from "@rocky-reviews/core";
 import { scrubSecrets } from "@rocky-reviews/log";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderSettings } from "../config.js";
@@ -72,11 +76,12 @@ const build = (kind: ProviderKind, responses: FakeResponse[]): LlmProvider => {
       Promise.resolve(() =>
         Promise.resolve({ accessKeyId: "test-access-key-id", secretAccessKey: TEST_KEY }),
       ),
-    vertexAuthClient: {
-      projectId: "acme-ai",
-      getRequestHeaders: () =>
-        Promise.resolve(new Headers({ authorization: `Bearer ${TEST_KEY}` })),
-    },
+    vertexAuth: () =>
+      Promise.resolve({
+        projectId: "acme-ai",
+        getRequestHeaders: () =>
+          Promise.resolve(new Headers({ authorization: `Bearer ${TEST_KEY}` })),
+      }),
   });
   const factory = adapters[kind] as (
     settings: ProviderSettings,
@@ -90,7 +95,7 @@ const call = (kind: ProviderKind): ProviderCompletionCall<Verdict> => ({
   model: MODELS[kind],
   platformModel: undefined,
   effort: "high",
-  instructions: "Review the diff.",
+  instructions: rockyInstructions`Review the diff.`,
   untrusted: [{ label: "diff", text: PR_SECRET_TEXT }],
   output: verdictSchema,
   maxOutputTokens: 4000,

@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { LlmCallError, type StructuredCompletionRequest } from "@rocky-reviews/core";
+import {
+  isRockyInstructions,
+  LlmCallError,
+  type StructuredCompletionRequest,
+} from "@rocky-reviews/core";
 
 /**
  * Prompt layout shared by every adapter (P4-2, ADR 0013 §2; threat T6). Rocky's instructions go
@@ -37,6 +41,8 @@ export const buildPrompt = (
   request: Pick<StructuredCompletionRequest<unknown>, "instructions" | "untrusted">,
   nonce: () => string,
 ): Prompt => {
+  // Only text a Rocky prompt module issued reaches the system slot (ADR 0012 §1, N4).
+  if (!isRockyInstructions(request.instructions)) throw new LlmCallError("invalid_request");
   if (!request.untrusted.every((part) => LABEL.test(part.label))) {
     throw new LlmCallError("invalid_request");
   }
@@ -44,7 +50,7 @@ export const buildPrompt = (
     const id = nonce();
     if (request.untrusted.some((part) => part.text.includes(id))) continue;
     return {
-      system: `${UNTRUSTED_PREAMBLE}\n\n${request.instructions}`,
+      system: `${UNTRUSTED_PREAMBLE}\n\n${request.instructions.text}`,
       parts: request.untrusted.map(
         (part) =>
           `<pr_content id="${id}" label="${part.label}">\n${part.text}\n</pr_content id="${id}">`,

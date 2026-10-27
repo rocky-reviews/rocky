@@ -10,8 +10,13 @@ import {
 } from "@rocky-reviews/core";
 import type { ProviderAdapterFactory } from "../registry.js";
 import { callError, cancelledBy, kindForStatus } from "./errors.js";
-import { tokens, toResult, ZERO_USAGE, type StopKind } from "./output.js";
-import { DEFAULT_TIMEOUT_MS, nonceSource, type AdapterTransport } from "./transport.js";
+import { guarded, tokens, toResult, ZERO_USAGE, type StopKind } from "./output.js";
+import {
+  DEFAULT_TIMEOUT_MS,
+  MAX_RESPONSE_BYTES,
+  nonceSource,
+  type AdapterTransport,
+} from "./transport.js";
 import { buildPrompt, checkOutputCap } from "./untrusted.js";
 
 /**
@@ -21,18 +26,15 @@ import { buildPrompt, checkOutputCap } from "./untrusted.js";
  * fallback); the port's validator decides either way.
  */
 
-/** A hostile or broken server cannot make the worker buffer more than this (T9). */
-export const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
-
 const SCHEMA_NAME = /[^A-Za-z0-9_-]/g;
 
 const endpoint = (baseUrl: string, path: string): string =>
   `${baseUrl.replace(/\/+$/, "")}/${path}`;
 
-/** Reads at most `MAX_RESPONSE_BYTES`; more is a broken server, not an answer. */
-const readCapped = async (response: Response): Promise<string> => {
+/** Reads at most `cap` bytes; more is a broken server, not an answer. */
+const readCapped = async (response: Response, cap: number): Promise<string> => {
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
+  if (Number.isFinite(declared) && declared > cap) {
     await response.body?.cancel();
     throw new LlmCallError("server_error");
   }
@@ -44,7 +46,7 @@ const readCapped = async (response: Response): Promise<string> => {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > MAX_RESPONSE_BYTES) {
+    if (size > cap) {
       await reader.cancel();
       throw new LlmCallError("server_error");
     }
@@ -72,7 +74,11 @@ const errorMessage = (body: unknown): string | undefined => {
 interface Exchange {
   readonly fetch: typeof globalThis.fetch;
   readonly timeoutMs: number;
+  readonly maxResponseBytes: number;
 }
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** One POST; failures become `LlmCallError` with only the status kind and retry hint (T7). */
 const post = async (
@@ -81,7 +87,7 @@ const post = async (
   key: string | undefined,
   body: Record<string, unknown>,
   signal: AbortSignal | undefined,
-): Promise<unknown> => {
+): Promise<Record<string, unknown>> => {
   if (cancelledBy(signal)) throw new LlmCallError("cancelled");
   const timeout = AbortSignal.timeout(exchange.timeoutMs);
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
@@ -98,12 +104,13 @@ const post = async (
       redirect: "error",
       signal: combined,
     });
-    const text = await readCapped(response);
+    const text = await readCapped(response, exchange.maxResponseBytes);
     const parsed = parseJson(text);
     if (!response.ok) {
       throw callError(kindForStatus(response.status, errorMessage(parsed)), response.headers);
     }
-    if (parsed === undefined) throw new LlmCallError("server_error");
+    // An answer is a JSON object; `null`, an array or a scalar is a broken server (S2).
+    if (!isObject(parsed)) throw new LlmCallError("server_error");
     return parsed;
   } catch (error) {
     if (isLlmCallError(error)) throw error;
@@ -113,24 +120,18 @@ const post = async (
   }
 };
 
-interface ChatChoice {
-  readonly finish_reason?: unknown;
-  readonly message?: { readonly content?: unknown; readonly refusal?: unknown };
-}
+/** An answer as received: every field is checked before use. */
 interface ChatCompletion {
-  readonly choices?: readonly ChatChoice[];
-  readonly usage?: {
-    readonly prompt_tokens?: unknown;
-    readonly completion_tokens?: unknown;
-    readonly prompt_tokens_details?: { readonly cached_tokens?: unknown } | null;
-  } | null;
+  readonly choices?: unknown;
+  readonly usage?: unknown;
 }
 
 /** OpenAI counts cached tokens inside `prompt_tokens`; the port counts them apart. */
 const chatUsage = (usage: ChatCompletion["usage"]): LlmUsage => {
-  if (usage === undefined || usage === null) return ZERO_USAGE;
+  if (!isObject(usage)) return ZERO_USAGE;
   const prompt = tokens(usage.prompt_tokens);
-  const cached = Math.min(tokens(usage.prompt_tokens_details?.cached_tokens), prompt);
+  const details = isObject(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};
+  const cached = Math.min(tokens(details["cached_tokens"]), prompt);
   return {
     ...ZERO_USAGE,
     inputTokens: prompt - cached,
@@ -139,11 +140,12 @@ const chatUsage = (usage: ChatCompletion["usage"]): LlmUsage => {
   };
 };
 
-const stopOf = (choice: ChatChoice | undefined): StopKind => {
-  if (choice === undefined) return "unexpected";
-  const refusal = choice.message?.refusal;
+const stopOf = (choice: unknown): StopKind => {
+  if (!isObject(choice)) return "unexpected";
+  const message = isObject(choice["message"]) ? choice["message"] : {};
+  const refusal = message["refusal"];
   if (typeof refusal === "string" && refusal !== "") return "refused";
-  switch (choice.finish_reason) {
+  switch (choice["finish_reason"]) {
     case "stop":
       return "complete";
     case "length":
@@ -155,12 +157,38 @@ const stopOf = (choice: ChatChoice | undefined): StopKind => {
   }
 };
 
+/**
+ * Embeddings by `index`, which must be exactly 0..n-1 (each once, integers only); anything else
+ * could pair a vector with the wrong input (review round 1, item 3).
+ */
+const inInputOrder = (data: unknown, count: number): unknown[] => {
+  if (!Array.isArray(data) || data.length !== count) throw new LlmCallError("invalid_request");
+  const vectors: unknown[] = new Array<unknown>(count);
+  const seen = new Set<number>();
+  for (const entry of data) {
+    const index = isObject(entry) ? entry["index"] : undefined;
+    if (
+      typeof index !== "number" ||
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index >= count ||
+      seen.has(index)
+    ) {
+      throw new LlmCallError("invalid_request");
+    }
+    seen.add(index);
+    vectors[index] = (entry as Record<string, unknown>)["embedding"];
+  }
+  return vectors;
+};
+
 export const openAiCompatibleAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"openai-compatible"> =>
   (settings, secrets) => {
     const exchange: Exchange = {
       fetch: transport.fetch ?? globalThis.fetch,
       timeoutMs: transport.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxResponseBytes: transport.maxResponseBytes ?? MAX_RESPONSE_BYTES,
     };
     const nonce = nonceSource(transport);
     /** Read at call time only (T1); a configured but empty key fails before anything is sent. */
@@ -205,17 +233,20 @@ export const openAiCompatibleAdapter =
         body,
         call.signal,
       )) as ChatCompletion;
-      const choice = Array.isArray(answer.choices) ? answer.choices[0] : undefined;
-      const content = choice?.message?.content;
-      return toResult(
-        {
-          stop: stopOf(choice),
-          text: typeof content === "string" ? content : "",
-          model: call.model,
-          usage: chatUsage(answer.usage),
-        },
-        call.output,
-      );
+      return guarded(() => {
+        const choice: unknown = Array.isArray(answer.choices) ? answer.choices[0] : undefined;
+        const message = isObject(choice) && isObject(choice["message"]) ? choice["message"] : {};
+        const content = message["content"];
+        return toResult(
+          {
+            stop: stopOf(choice),
+            text: typeof content === "string" ? content : "",
+            model: call.model,
+            usage: chatUsage(answer.usage),
+          },
+          call.output,
+        );
+      });
     };
 
     const embed = async (call: ProviderEmbeddingCall): Promise<ProviderEmbeddingResult> => {
@@ -225,29 +256,24 @@ export const openAiCompatibleAdapter =
         key(),
         { model: call.model, input: call.inputs, encoding_format: "float" },
         call.signal,
-      )) as {
-        data?: readonly { index?: unknown; embedding?: unknown }[];
-        usage?: { prompt_tokens?: unknown };
-      };
-      const data = Array.isArray(answer.data) ? answer.data : [];
-      const vectors = [...data]
-        .sort((a, b) => Number(a.index) - Number(b.index))
-        .map((entry) => entry.embedding);
-      // A wrong count or width would corrupt the vector index: refuse it (ADR 0012 §6).
-      const valid =
-        vectors.length === call.inputs.length &&
-        vectors.every(
+      )) as { data?: unknown; usage?: unknown };
+      return guarded(() => {
+        const vectors = inInputOrder(answer.data, call.inputs.length);
+        // A wrong count or width would corrupt the vector index: refuse it (ADR 0012 §6).
+        const valid = vectors.every(
           (vector): vector is number[] =>
             Array.isArray(vector) &&
             vector.length === call.dimensions &&
             vector.every((value) => typeof value === "number" && Number.isFinite(value)),
         );
-      if (!valid) throw new LlmCallError("invalid_request");
-      return {
-        vectors: vectors as number[][],
-        model: call.model,
-        usage: { inputTokens: tokens(answer.usage?.prompt_tokens) },
-      };
+        if (!valid) throw new LlmCallError("invalid_request");
+        const usage = isObject(answer.usage) ? answer.usage : {};
+        return {
+          vectors: vectors as number[][],
+          model: call.model,
+          usage: { inputTokens: tokens(usage["prompt_tokens"]) },
+        };
+      });
     };
 
     return { completeStructured, embed } satisfies LlmProvider;

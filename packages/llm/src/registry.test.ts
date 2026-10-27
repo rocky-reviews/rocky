@@ -1,5 +1,6 @@
 import {
   isLlmCallError,
+  rockyInstructions,
   type LlmOutputSchema,
   type LlmProvider,
   type LlmRoles,
@@ -28,7 +29,7 @@ const verdict: LlmOutputSchema<{ verdict: string }> = {
 
 const reviewOnePr = async (roles: LlmRoles): Promise<StructuredCompletionResult<unknown>[]> => {
   const request = {
-    instructions: "Review the diff.",
+    instructions: rockyInstructions`Review the diff.`,
     untrusted: [{ label: "diff", text: "+ console.log(1)" }],
     output: verdict,
     maxOutputTokens: 1000,
@@ -107,7 +108,7 @@ describe("switching provider requires no code change", () => {
     const roles = createLlmRoles(llmConfigFromEnv({}), adapters.factories, envSecrets({}));
     const signal = new AbortController().signal;
     const request = {
-      instructions: "i",
+      instructions: rockyInstructions`i`,
       untrusted: [{ label: "title", text: "t" }],
       output: verdict,
       maxOutputTokens: 5,

@@ -1,8 +1,10 @@
-import type {
-  LlmAttemptUsage,
-  LlmOutputSchema,
-  LlmUsage,
-  ProviderCompletionResult,
+import {
+  isLlmCallError,
+  LlmCallError,
+  type LlmAttemptUsage,
+  type LlmOutputSchema,
+  type LlmUsage,
+  type ProviderCompletionResult,
 } from "@rocky-reviews/core";
 
 /**
@@ -61,3 +63,17 @@ export const ZERO_USAGE: LlmUsage = {
 /** A non-negative whole token count, or 0 for anything a server got wrong. */
 export const tokens = (value: unknown): number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+
+/**
+ * Runs post-processing of an untrusted answer (review round 1, S2). Anything thrown that is not an
+ * `LlmCallError` (a validator tripping on a hostile shape, a missed guard) becomes `server_error`:
+ * a raw error could carry provider or model text, and the port promises `LlmCallError` only.
+ */
+export const guarded = <R>(read: () => R): R => {
+  try {
+    return read();
+  } catch (error) {
+    if (isLlmCallError(error)) throw error;
+    throw new LlmCallError("server_error");
+  }
+};

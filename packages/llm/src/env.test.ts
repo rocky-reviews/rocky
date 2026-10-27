@@ -497,3 +497,19 @@ describe("platform constraints the adapters rely on (P4-2, ADR 0013)", () => {
     ).toBe(arn);
   });
 });
+
+describe("Anthropic server-side fallbacks switch (P4-2 review round 1, item 11)", () => {
+  it("reads ROCKY_LLM_ANTHROPIC_FALLBACKS as on or off", () => {
+    for (const value of ["on", "off"] as const) {
+      expect(
+        llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_FALLBACKS: value }).providers.anthropic,
+      ).toEqual({ kind: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY", fallbacks: value });
+    }
+  });
+
+  it("rejects any other value, naming the variable", () => {
+    expect(messageOf({ ROCKY_LLM_ANTHROPIC_FALLBACKS: "yes" })).toContain(
+      "ROCKY_LLM_ANTHROPIC_FALLBACKS",
+    );
+  });
+});

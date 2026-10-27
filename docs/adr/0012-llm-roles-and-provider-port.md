@@ -17,6 +17,7 @@
   - notes N4, N5, N7, N9.
 - **Revised:** P4-2 ([ADR 0013](0013-llm-provider-adapters.md)):
   - optional `attempts` on results (refusal fallbacks);
+  - `instructions` typed as `RockyInstructions` (review round 1, N4);
   - Bedrock catalogue limited to the models Mantle serves;
   - per-platform `platformModel` shapes for Vertex and Foundry;
   - the Foundry model form confirmed.
@@ -51,10 +52,20 @@ a role to another provider never needs a code change.
     lifetime: `cacheWrite5mInputTokens` and `cacheWrite1hInputTokens`. They mirror Anthropic's
     `usage.cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, which are
     priced differently. Providers without a cache report zeros.
-  - `attempts` (P4-2, the only port change it needed) lists each billed attempt's model and usage
-    when a server-side refusal fallback re-ran the call on another model. `usage` is then the
-    attempt that produced the answer, and `model` names the model that served it. Without it,
-    metering (P4-5) would miss the declined attempt's tokens.
+  - `attempts` (P4-2) lists the model and usage of every attempt the provider reported when a
+    server-side refusal fallback re-ran the call on another model. `usage` is then the attempt
+    that produced the answer, and `model` names the model that served it. A reported attempt is
+    not necessarily billed at list price (a decline before any output, credit-style cache
+    repricing on the fallback), so metering (P4-5) prices `attempts` by the provider's refusal
+    billing rules instead of summing them. Without it, metering would not see the declined
+    attempt at all.
+  - `instructions` is a `RockyInstructions` value, not a string (P4-2 review round 1, N4). Only
+    the `rockyInstructions` template tag issues one, from literal text with no substitutions (a
+    direct call, a forged template array or an interpolation throws), and `joinInstructions`
+    composes them. Values are frozen and recorded in a module-private `WeakSet`, so an object
+    shaped like one is refused; adapters answer `invalid_request` before building a request. ESLint
+    bans calling the tag as a function outside tests. This keeps PR text out of the system slot by
+    construction; P4-4 adds the injection corpus and verdict invariants on top.
 - `LlmRoles.embedding()`: an embedding client, or `undefined` when embeddings are off.
 - `LlmProvider`: what an adapter implements: `completeStructured` and/or `embed`. It receives the
   request plus the role's target: `role`, `model`, `platformModel`, `effort` (`dimensions` for

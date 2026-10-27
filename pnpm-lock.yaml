@@ -197,6 +197,9 @@ importers:
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../log
+      google-auth-library:
+        specifier: 10.9.1
+        version: 10.9.1
       zod:
         specifier: 4.6.7
         version: 4.6.7

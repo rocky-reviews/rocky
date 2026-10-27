@@ -1,5 +1,6 @@
 import {
   isLlmCallError,
+  rockyInstructions,
   type LlmErrorKind,
   type LlmProvider,
   type ProviderCompletionCall,
@@ -55,7 +56,7 @@ const call = (
   model: "qwen2.5-coder:32b",
   platformModel: undefined,
   effort: "medium",
-  instructions: "You review pull requests. Report the verdict.",
+  instructions: rockyInstructions`You review pull requests. Report the verdict.`,
   untrusted: [{ label: "diff", text: PR_TEXT }],
   output: verdictSchema,
   maxOutputTokens: 8000,
@@ -298,5 +299,101 @@ describe("OpenAI-compatible contract: embeddings", () => {
   it("maps embedding errors like completions", async () => {
     const { provider } = providerFor(KEYED, [json("openai-compatible/error-401.json", 401)]);
     expect(((await rejection(embed(provider))) as { kind: string }).kind).toBe("auth");
+  });
+});
+
+describe("OpenAI-compatible: malformed answers never escape as raw errors (review round 1, S2)", () => {
+  const vector = [0.1, 0.2];
+  const entry = (index: unknown) => ({ index, embedding: vector });
+
+  it("maps a non-object or broken chat answer to server_error or invalid_output", async () => {
+    for (const body of ["null", "42", '"text"', "[]", "true"]) {
+      const { provider } = providerFor(LOCAL, [{ body }]);
+      const error = await rejection(complete(provider));
+      expect(isLlmCallError(error) && error.kind, body).toBe("server_error");
+    }
+    for (const body of [
+      '{"choices":[null]}',
+      '{"choices":[42]}',
+      '{"choices":[{"message":null}]}',
+      '{"choices":"x"}',
+      '{"choices":[{"message":{"content":null}}],"usage":null}',
+    ]) {
+      const { provider } = providerFor(LOCAL, [{ body }]);
+      const result = await complete(provider);
+      expect(result.status, body).toBe("invalid_output");
+    }
+  });
+
+  it("maps a non-object or broken embeddings answer to a call error", async () => {
+    for (const body of [
+      "null",
+      '{"data":[null]}',
+      '{"data":[42]}',
+      '{"data":[{"index":0,"embedding":null}]}',
+      '{"data":null}',
+    ]) {
+      const { provider } = providerFor(LOCAL, [{ body }]);
+      const error = await rejection(
+        provider.embed!({ inputs: ["a"], model: "nomic-embed-text", dimensions: 2 }),
+      );
+      expect(isLlmCallError(error), body).toBe(true);
+    }
+    const { provider } = providerFor(LOCAL, [
+      { body: '{"data":[{"index":0,"embedding":[0.1,0.2]}],"usage":null}' },
+    ]);
+    expect(
+      (await provider.embed!({ inputs: ["a"], model: "nomic-embed-text", dimensions: 2 })).usage,
+    ).toEqual({ inputTokens: 0 });
+  });
+
+  it("turns a validator that throws into server_error, dropping its text", async () => {
+    const throwing = {
+      ...verdictSchema,
+      parse: () => {
+        throw new TypeError("cannot read verdict of: Adds a retry loop");
+      },
+    };
+    const { provider } = providerFor(LOCAL, [json("openai-compatible/chat-stop.json")]);
+    const error = await rejection(complete(provider, { output: throwing }));
+    expect(isLlmCallError(error) && error.kind).toBe("server_error");
+    expect(String(error)).not.toContain("retry loop");
+  });
+
+  it("requires indices that are exactly 0..n-1 (review round 1, item 3)", async () => {
+    for (const indices of [
+      [0, 0],
+      [0, 2],
+      [1, 2],
+      [Number.NaN, 1],
+      ["NaN", 1],
+      ["0", 1],
+      [0, 1.5],
+      [-1, 0],
+      [0, undefined],
+    ]) {
+      const { provider } = providerFor(LOCAL, [
+        // NaN serialises as null, which `Number()` would read as 0.
+        { body: JSON.stringify({ data: indices.map(entry) }) },
+      ]);
+      const error = await rejection(
+        provider.embed!({ inputs: ["a", "b"], model: "nomic-embed-text", dimensions: 2 }),
+      );
+      expect(isLlmCallError(error) && error.kind, JSON.stringify(indices)).toBe("invalid_request");
+    }
+    const { provider } = providerFor(LOCAL, [
+      {
+        body: JSON.stringify({
+          data: [
+            { index: 1, embedding: [0.3, 0.4] },
+            { index: 0, embedding: vector },
+          ],
+        }),
+      },
+    ]);
+    expect(
+      (await provider.embed!({ inputs: ["a", "b"], model: "nomic-embed-text", dimensions: 2 }))
+        .vectors,
+    ).toEqual([vector, [0.3, 0.4]]);
   });
 });

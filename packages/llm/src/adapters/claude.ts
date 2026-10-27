@@ -1,4 +1,5 @@
 import {
+  AnthropicError,
   APIConnectionError,
   APIConnectionTimeoutError,
   APIError,
@@ -18,9 +19,18 @@ import {
   type ProviderCompletionCall,
   type ProviderCompletionResult,
 } from "@rocky-reviews/core";
+import type { ProviderKind } from "../providers.js";
+import { assertAmbientAtCall } from "./ambient.js";
 import { callError, cancelledBy, kindForStatus, kindForType } from "./errors.js";
-import { tokens, toResult, type Answer, type StopKind } from "./output.js";
-import { nonceSource, type AdapterTransport } from "./transport.js";
+import { guarded, tokens, toResult, type Answer, type StopKind } from "./output.js";
+import {
+  cappedFetch,
+  DEFAULT_TIMEOUT_MS,
+  MAX_RESPONSE_BYTES,
+  nonceSource,
+  type AdapterTransport,
+  type ByteBudget,
+} from "./transport.js";
 import { buildPrompt, checkOutputCap, type Prompt } from "./untrusted.js";
 
 /**
@@ -36,23 +46,40 @@ export interface ClaudeMessagesClient {
       stream(
         body: BetaMessageStreamParams,
         options?: { signal?: AbortSignal | undefined },
-      ): { finalMessage(): Promise<BetaMessage> };
+      ): ClaudeMessageStream;
     };
   };
 }
 
+/** The slice of a `BetaMessageStream` this adapter uses. */
+export interface ClaudeMessageStream {
+  on(event: "streamEvent", listener: (event: { readonly type: string }) => void): unknown;
+  finalMessage(): Promise<BetaMessage>;
+}
+
 export interface ClaudePlatform {
+  readonly kind: Extract<ProviderKind, "anthropic" | "bedrock" | "vertex" | "foundry">;
   /** Canonical catalogue id → the platform's form, when the role sets no `platformModel`. */
   readonly modelId: (model: string) => string;
-  /** The SDK client for one call. Keyed platforms read the key here, at call time (T1). */
-  readonly client: () => ClaudeMessagesClient;
-  /** Server-side refusal fallbacks (Anthropic API only; ADR 0013 §1). */
-  readonly serverFallbacks: boolean;
+  /**
+   * The SDK client for one call, over the call's capped `fetch` (T9). Keyed platforms read the key
+   * here, at call time (T1); platform SDKs are imported here, on first use (N6).
+   */
+  readonly client: (fetch: typeof globalThis.fetch) => Promise<ClaudeMessagesClient>;
+  /** Server-side refusal fallbacks for this canonical model (Anthropic API only; ADR 0013 §1). */
+  readonly serverFallbacks: (model: string) => boolean;
 }
 
 /** These take only `budget_tokens` thinking; every other catalogued model takes adaptive. */
 const NO_ADAPTIVE_THINKING: ReadonlySet<string> = new Set(["claude-haiku-4-5", "claude-opus-4-5"]);
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
+/** The models that take `fallbacks: "default"`; Haiku 5.5 and older models reject it. */
+export const FALLBACK_MODELS: ReadonlySet<string> = new Set([
+  "claude-fable-5-1",
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-sonnet-5-5",
+]);
 
 const wireSchemas = new WeakMap<object, Record<string, unknown>>();
 
@@ -86,7 +113,9 @@ const requestFor = (
     ...(call.effort === undefined ? {} : { effort: call.effort }),
   },
   ...(NO_ADAPTIVE_THINKING.has(call.model) ? {} : { thinking: { type: "adaptive" as const } }),
-  ...(platform.serverFallbacks ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
+  ...(platform.serverFallbacks(call.model)
+    ? { betas: [FALLBACK_BETA], fallbacks: "default" as const }
+    : {}),
 });
 
 interface UsageLike {
@@ -159,11 +188,29 @@ const providerMessage = (error: APIError): string | undefined => {
   return typeof message === "string" ? message : undefined;
 };
 
+/** How a call ended, beyond the error itself: whose signal fired, and whether the cap did. */
+export interface CallState {
+  readonly signal: AbortSignal | undefined;
+  readonly deadline?: AbortSignal;
+  readonly budget?: ByteBudget;
+  /** The stream began but never sent `message_stop`. */
+  readonly unfinished?: () => boolean;
+}
+
 /** Any failure → `LlmCallError`, with nothing from the provider but a retry hint (T7). */
-export const toCallError = (error: unknown, signal: AbortSignal | undefined): LlmCallError => {
+export const toCallError = (error: unknown, state: CallState): LlmCallError => {
   if (isLlmCallError(error)) return error;
-  if (error instanceof APIUserAbortError || cancelledBy(signal)) {
-    return new LlmCallError("cancelled");
+  if (cancelledBy(state.signal)) return new LlmCallError("cancelled");
+  if (state.budget?.exceeded === true) return new LlmCallError("server_error");
+  if (state.deadline?.aborted === true) return new LlmCallError("timeout");
+  if (error instanceof APIUserAbortError) return new LlmCallError("cancelled");
+  // The SDK's own "stream ended without producing a Message": the link dropped mid-answer (N3).
+  if (
+    state.unfinished?.() === true &&
+    error instanceof AnthropicError &&
+    !(error instanceof APIError)
+  ) {
+    return new LlmCallError("network");
   }
   if (error instanceof APIConnectionTimeoutError) return new LlmCallError("timeout");
   if (error instanceof APIConnectionError) return new LlmCallError("network");
@@ -176,6 +223,10 @@ export const toCallError = (error: unknown, signal: AbortSignal | undefined): Ll
         : kindForStatus(error.status, providerMessage(error));
     return callError(kind, error.headers);
   }
+  // The SDK wraps a body that failed mid-read (a dropped connection) with the I/O error as cause.
+  if (error instanceof AnthropicError && error.cause !== undefined) {
+    return new LlmCallError("network");
+  }
   // Unexpected (an SDK invariant, a programming error): never rethrown, its text may quote a body.
   return new LlmCallError("server_error");
 };
@@ -185,22 +236,46 @@ export const claudeProvider = (
   transport: AdapterTransport,
 ): LlmProvider => {
   const nonce = nonceSource(transport);
+  const baseFetch = transport.fetch ?? globalThis.fetch;
+  const timeoutMs = transport.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const cap = transport.maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return {
     completeStructured: async <T>(
       call: ProviderCompletionCall<T>,
     ): Promise<ProviderCompletionResult<T>> => {
+      assertAmbientAtCall(platform.kind);
       checkOutputCap(call.maxOutputTokens);
       const prompt = buildPrompt(call, nonce);
       const params = requestFor(call, prompt, platform);
       if (cancelledBy(call.signal)) throw new LlmCallError("cancelled");
+      // The SDK's `timeout` stops once headers arrive; this deadline covers the whole stream (T9).
+      const deadline = AbortSignal.timeout(timeoutMs);
+      const signal =
+        call.signal === undefined ? deadline : AbortSignal.any([call.signal, deadline]);
+      const budget: ByteBudget = { exceeded: false };
+      let started = false;
+      let stopped = false;
+      const state: CallState = {
+        signal: call.signal,
+        deadline,
+        budget,
+        unfinished: () => started && !stopped,
+      };
       let message: BetaMessage;
       try {
-        const options = call.signal === undefined ? {} : { signal: call.signal };
-        message = await platform.client().beta.messages.stream(params, options).finalMessage();
+        const client = await platform.client(cappedFetch(baseFetch, cap, budget));
+        const stream = client.beta.messages.stream(params, { signal });
+        stream.on("streamEvent", (event) => {
+          started = true;
+          if (event.type === "message_stop") stopped = true;
+        });
+        message = await stream.finalMessage();
+        // The SDK returns the partial message when the stream ends early: that is a dropped link.
+        if (!stopped) throw new LlmCallError("network");
       } catch (error) {
-        throw toCallError(error, call.signal);
+        throw toCallError(error, state);
       }
-      return toResult(answerOf(message, call.model), call.output);
+      return guarded(() => toResult(answerOf(message, call.model), call.output));
     },
   };
 };
