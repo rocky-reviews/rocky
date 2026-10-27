@@ -44,3 +44,23 @@ export {
   type AdapterTransport,
   type VertexAuthSource,
 } from "./adapters/index.js";
+export {
+  meterRoles,
+  usageTargetsFor,
+  type LlmUsageTargets,
+  type MeteredRoles,
+  type MeteredTotals,
+  type MeteringOptions,
+  type UsageTarget,
+} from "./metering.js";
+export {
+  costMicroUsd,
+  modelPrice,
+  PRICE_TABLES,
+  priceTableAt,
+  usd,
+  type ModelPrice,
+  type PriceTable,
+  type ProviderPrices,
+  type TokenRates,
+} from "./prices.js";

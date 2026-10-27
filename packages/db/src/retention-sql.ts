@@ -4,7 +4,7 @@
  * app.retention_settings and only accept an `as_of` that moves the cutoff into the past.
  * Kept apart from retention.ts so the client can import it without a cycle.
  */
-export const RETENTION_CATEGORIES = ["analyses", "logs", "audit"] as const;
+export const RETENTION_CATEGORIES = ["analyses", "logs", "audit", "llm_usage"] as const;
 export type RetentionCategory = (typeof RETENTION_CATEGORIES)[number];
 
 /** Retention periods in whole days, as stored in app.retention_settings. */
@@ -19,6 +19,8 @@ export interface RetentionConfig {
   orgDeletionGraceDays: number;
   /** Webhook inbox rows (not tenant data). Also the delivery dedup window; at least 7 days. */
   webhookDeliveriesDays: number;
+  /** LLM usage rows (P4-5), what billing reconciles against. At least 400 days. */
+  llmUsageDays: number;
 }
 
 /** `category` column value for each setting. */
@@ -28,6 +30,7 @@ export const SETTING_CATEGORIES: Readonly<Record<keyof RetentionConfig, string>>
   auditDays: "audit",
   orgDeletionGraceDays: "org_deletion_grace",
   webhookDeliveriesDays: "webhook_deliveries",
+  llmUsageDays: "llm_usage",
 };
 
 /** The webhook inbox purge (migration 0006): not per org, returns a count. `$1` is `as_of`. */
@@ -58,5 +61,10 @@ export const PURGE: Readonly<Record<RetentionCategory, PurgeTarget>> = {
     table: "audit_events",
     setting: "auditDays",
     sql: "select org_id, deleted::text from retention.purge_audit_events($1)",
+  },
+  llm_usage: {
+    table: "llm_usage",
+    setting: "llmUsageDays",
+    sql: "select org_id, deleted::text from retention.purge_llm_usage($1)",
   },
 };

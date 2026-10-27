@@ -50,6 +50,8 @@ export interface RoleUsage {
   /** 5-minute and 1-hour cache writes together. */
   readonly cacheWriteInputTokens: number;
   readonly totalTokens: number;
+  /** Attempts whose provider reported no (valid) usage; the cap charged their reservation. */
+  readonly unreported: number;
   /** The provider that served the role (stamped by the registry). */
   readonly provider: string | undefined;
   /** Every model that answered (a refusal fallback can switch models). */
@@ -105,6 +107,7 @@ const usageTokens = (usage: LlmUsage) => ({
 
 interface Tally {
   calls: number;
+  unreported: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadInputTokens: number;
@@ -113,7 +116,7 @@ interface Tally {
   models: Set<string>;
 }
 
-const totalOf = (tally: Omit<Tally, "calls" | "provider" | "models">): number =>
+const totalOf = (tally: Omit<Tally, "calls" | "unreported" | "provider" | "models">): number =>
   tally.inputTokens + tally.outputTokens + tally.cacheReadInputTokens + tally.cacheWriteInputTokens;
 
 export interface TokenCapOptions {
@@ -145,6 +148,7 @@ export const withTokenCap = (
       role,
       {
         calls: 0,
+        unreported: 0,
         inputTokens: 0,
         outputTokens: 0,
         cacheReadInputTokens: 0,
@@ -190,6 +194,13 @@ export const withTokenCap = (
             tally.models.add(attempt.model);
           }
           for (const usage of attempts) {
+            // A provider that reported no (valid) usage (P4-5): the cap counts the whole
+            // reservation for it, never zero; the per-role tallies show only reported tokens.
+            if (usage === undefined) {
+              tally.unreported++;
+              used += next;
+              continue;
+            }
             const tokens = usageTokens(usage);
             tally.inputTokens += tokens.inputTokens;
             tally.outputTokens += tokens.outputTokens;
@@ -216,6 +227,7 @@ export const withTokenCap = (
           cacheReadInputTokens: tally.cacheReadInputTokens,
           cacheWriteInputTokens: tally.cacheWriteInputTokens,
           totalTokens: totalOf(tally),
+          unreported: tally.unreported,
           provider: tally.provider,
           models: [...tally.models],
         } satisfies RoleUsage,

@@ -1,12 +1,16 @@
-import type { Clock, Forge, OrgErasers, OrgId } from "@rocky-reviews/core";
+import type { Clock, Forge, LlmRoles, OrgErasers, OrgId } from "@rocky-reviews/core";
 import { runRetention, type Db } from "@rocky-reviews/db";
+import type { LlmUsageTargets } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
+import { runAnalysis } from "./analysis.js";
+import { createAnalysisLane, type AnalysisLane } from "./analysis-lane.js";
 import { createAppCheck } from "./app-check.js";
 import { sweepOrgDeletions } from "./deletion-sweep.js";
 import { drainInstallationEvents, drainPullRequestEvents } from "./inbox.js";
 
 /**
- * The worker's recurring jobs (P3-3, P3-4). Each runs on its own timer, never overlapping itself;
+ * The worker's recurring jobs (P3-3, P3-4; the analysis lane P4-6). Each runs on its own timer,
+ * never overlapping itself;
  * all are idempotent and safe with several workers (the inbox claim skips locked rows, retention
  * deletes by cutoff, the sweep locks each org). A failing run is logged by code and retried at
  * the next tick. The inbox lanes (installations, pull requests) and the sweep act on GitHub's
@@ -21,10 +25,13 @@ export interface JobIntervals {
   readonly sweepMs: number;
   /** Retention purge (default 6 h). */
   readonly retentionMs: number;
+  /** Analysis queue claims (default 2 s). */
+  readonly analysisMs: number;
 }
 
 export const DEFAULT_INTERVALS: JobIntervals = {
   inboxMs: 2_000,
+  analysisMs: 2_000,
   sweepMs: 15 * 60_000,
   retentionMs: 6 * 60 * 60_000,
 };
@@ -40,7 +47,27 @@ export interface JobDeps {
    * in the inbox and no org is erased (the sweep re-verifies every uninstall with GitHub first).
    */
   readonly forge: Forge | undefined;
+  /**
+   * The analysis lane (P4-6), only with `ROCKY_ANALYSIS_AUTO=on`. Without it the mirror queues
+   * nothing and nothing is claimed. Needs `forge`.
+   */
+  readonly analysis?: AnalysisJobConfig;
   readonly intervals?: Partial<JobIntervals>;
+}
+
+export interface AnalysisJobConfig {
+  /** Built and validated at boot (P4-3). */
+  readonly llm: LlmRoles;
+  /** `unitKeySaltFor(config.llm)`. */
+  readonly unitKeySalt: string;
+  /** `usageTargetsFor(config.llm)`: every run's roles are metered (P4-5, ADR 0016). */
+  readonly usageTargets: LlmUsageTargets;
+  readonly tokenLimit: number;
+  /** Analyses this worker runs at once. */
+  readonly concurrency: number;
+  /** Analyses one org runs at once, across every worker. */
+  readonly orgConcurrency: number;
+  readonly version?: string;
 }
 
 export interface RunningJobs {
@@ -61,6 +88,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
   let stopped = false;
   const timers = new Set<NodeJS.Timeout>();
   const running = new Set<Promise<void>>();
+  let lane: AnalysisLane | undefined;
 
   /** `task` returns true to run again right away (more work is waiting). */
   const every = (name: string, ms: number, task: () => Promise<boolean>): void => {
@@ -124,10 +152,51 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
         clock: deps.clock,
         log: deps.log,
         batchSize: prBatchSize,
+        // New heads are queued for analysis only with the lane configured (ROCKY_ANALYSIS_AUTO).
+        enqueueAnalyses: deps.analysis !== undefined,
       });
       if (report.claimed > 0) deps.log.info({ job: "pull_requests", ...report }, "inbox drained");
       return report.claimed === prBatchSize && report.processed + report.parked === prBatchSize;
     });
+
+    // Analyses (P4-6, ADR 0017): claimed fairly across orgs, run without blocking this timer.
+    if (deps.analysis !== undefined) {
+      const analysis = deps.analysis;
+      const analysisLane = createAnalysisLane(
+        {
+          db: deps.db,
+          log: deps.log,
+          run: (claim, signal) =>
+            runAnalysis(
+              {
+                db: deps.db,
+                forge,
+                llm: analysis.llm,
+                clock: deps.clock,
+                log: deps.log,
+                unitKeySalt: analysis.unitKeySalt,
+                usageTargets: analysis.usageTargets,
+                tokenLimit: analysis.tokenLimit,
+                ...(analysis.version === undefined ? {} : { version: analysis.version }),
+              },
+              claim,
+              { signal },
+            ),
+        },
+        { slots: analysis.concurrency, orgConcurrency: analysis.orgConcurrency },
+      );
+      lane = analysisLane;
+      every("analyses", intervals.analysisMs, async () => {
+        const started = await analysisLane.tick();
+        if (started > 0) {
+          deps.log.info(
+            { job: "analyses", started, inFlight: analysisLane.inFlight },
+            "analyses started",
+          );
+        }
+        return false;
+      });
+    }
 
     every("org_deletion_sweep", intervals.sweepMs, async () => {
       const report = await sweepOrgDeletions({
@@ -161,7 +230,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
         stopped = true;
         for (const timer of timers) clearTimeout(timer);
         timers.clear();
-        await Promise.allSettled([...running]);
+        await Promise.allSettled([...running, ...(lane === undefined ? [] : [lane.stop()])]);
       })();
       return stopping;
     },

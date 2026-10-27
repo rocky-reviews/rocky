@@ -154,7 +154,7 @@ export const renderUsage = (report: UsageReport, price?: UsagePricer): string =>
     if (usage.calls === 0) continue;
     const who = `${oneLine(usage.provider ?? "?")}/${usage.models.map(oneLine).join("+")}`;
     out.push(
-      `  ${role.padEnd(7)} ${who}  ${usage.calls} ${usage.calls === 1 ? "call" : "calls"}  in ${fmt(usage.inputTokens)}  out ${fmt(usage.outputTokens)}  cache read ${fmt(usage.cacheReadInputTokens)}  cache write ${fmt(usage.cacheWriteInputTokens)}  total ${fmt(usage.totalTokens)}`,
+      `  ${role.padEnd(7)} ${who}  ${usage.calls} ${usage.calls === 1 ? "call" : "calls"}  in ${fmt(usage.inputTokens)}  out ${fmt(usage.outputTokens)}  cache read ${fmt(usage.cacheReadInputTokens)}  cache write ${fmt(usage.cacheWriteInputTokens)}  total ${fmt(usage.totalTokens)}${usage.unreported > 0 ? `  (${usage.unreported} unreported)` : ""}`,
     );
   }
   out.push(`  total   ${fmt(report.totalTokens)} tokens`);

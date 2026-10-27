@@ -10,6 +10,15 @@ import {
   type RetentionConfig,
 } from "./retention-sql.js";
 import {
+  ANALYSIS_CLAIM_STATEMENT_TIMEOUT_MS,
+  AnalysisStoreError,
+  claimAnalysesSql,
+  claimedAnalysisFromRow,
+  type AnalysisClaimOptions,
+  type ClaimedAnalysis,
+  type ClaimedAnalysisRow,
+} from "./analyses.js";
+import {
   claimedFromRow,
   CLAIM_STATEMENT_TIMEOUT_MS,
   claimSql,
@@ -130,6 +139,13 @@ export interface Db {
     lease: InboxLease,
     failure: InboxFailure,
   ): Promise<"retry" | "parked" | "stale">;
+  /**
+   * Claims queued analyses across orgs with a lease, fairly (a per-org cap on running rows,
+   * round-robin across orgs), and reclaims expired leases first (worker.claim_analyses,
+   * migration 0012; worker login only). Each row is then run inside `withOrg(claim.orgId)`.
+   * A database failure throws `AnalysisStoreError` carrying only the SQLSTATE.
+   */
+  claimAnalyses(options: AnalysisClaimOptions): Promise<ClaimedAnalysis[]>;
   /** The configured periods (read-only for the application role). */
   retentionSettings(): Promise<RetentionConfig>;
   /**
@@ -527,6 +543,30 @@ export const createDb = (options: DbOptions): Db => {
     }
   };
 
+  /** Same shape as the inbox claim: its own transaction, bounded by a statement timeout. */
+  const claimAnalyses = async (options: AnalysisClaimOptions): Promise<ClaimedAnalysis[]> => {
+    const statement = claimAnalysesSql(options);
+    let client: pg.PoolClient | undefined;
+    try {
+      client = await pool.connect();
+      await client.query("begin");
+      await client.query(`set local statement_timeout = ${ANALYSIS_CLAIM_STATEMENT_TIMEOUT_MS}`);
+      const { rows } = await client.query<ClaimedAnalysisRow>(statement.text, statement.values);
+      await client.query("commit");
+      return rows.map(claimedAnalysisFromRow);
+    } catch (error) {
+      await client?.query("rollback").catch(() => undefined);
+      const code =
+        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+      throw new AnalysisStoreError(
+        "analyses: claim failed",
+        typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : undefined,
+      );
+    } finally {
+      client?.release();
+    }
+  };
+
   const completeWebhookDelivery = async (lease: InboxLease, outcome: string): Promise<boolean> =>
     (await inboxQuery<{ ok: boolean }>(completeSql(lease, outcome)))[0]?.ok === true;
 
@@ -604,6 +644,7 @@ export const createDb = (options: DbOptions): Db => {
       auditDays: read("auditDays"),
       orgDeletionGraceDays: read("orgDeletionGraceDays"),
       webhookDeliveriesDays: read("webhookDeliveriesDays"),
+      llmUsageDays: read("llmUsageDays"),
     };
   };
 
@@ -614,6 +655,7 @@ export const createDb = (options: DbOptions): Db => {
     orgsDueForDeletion,
     installationOrgs,
     claimWebhookDeliveries,
+    claimAnalyses,
     completeWebhookDelivery,
     failWebhookDelivery,
     retentionSettings,

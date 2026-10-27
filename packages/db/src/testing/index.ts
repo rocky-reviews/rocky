@@ -10,6 +10,7 @@ export {
 export {
   asWorker,
   newOrgId,
+  plantAnalysisLease,
   plantAuditEvent,
   plantWebhookDelivery,
   seedOrg,

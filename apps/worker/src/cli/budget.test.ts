@@ -33,7 +33,7 @@ const usage = (inputTokens: number, outputTokens: number, cache = 0): LlmUsage =
 /** Roles that answer `{ ok: true }` with the given usage, and count calls that reached them. */
 const fakeRoles = (
   answer: (role: LlmCompletionRole) => {
-    usage: LlmUsage;
+    usage: LlmUsage | undefined;
     attempts?: { model: string; usage: LlmUsage }[];
     error?: LlmCallError;
   },
@@ -216,6 +216,16 @@ describe("withTokenCap", () => {
     fail = false;
     await graph.complete(request(1_000));
     expect(budget.report().roles.graph).toMatchObject({ calls: 1, totalTokens: 2 });
+  });
+
+  it("charges the whole reservation for a call whose provider reported no usage (P4-5)", async () => {
+    const { roles } = fakeRoles(() => ({ usage: undefined }));
+    const budget = withTokenCap(roles, 100_000);
+    await budget.roles.completion("review").complete(request(1_000));
+    const report = budget.report();
+    expect(report.roles.review).toMatchObject({ calls: 1, unreported: 1, totalTokens: 0 });
+    // Never counted as free: the cap charged what the call had reserved.
+    expect(report.totalTokens).toBeGreaterThan(1_000);
   });
 
   it("refuses a cap that is not a positive integer", () => {

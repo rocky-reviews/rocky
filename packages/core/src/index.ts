@@ -113,6 +113,19 @@ export {
   type StructuredCompletionResult,
 } from "./llm.js";
 export {
+  isLlmMeteringError,
+  LLM_COST_STATUSES,
+  LLM_USAGE_OUTCOMES,
+  LLM_USAGE_STATUSES,
+  LlmMeteringError,
+  type LlmCostStatus,
+  type LlmUsageOutcome,
+  type LlmUsageRecord,
+  type LlmUsageSink,
+  type LlmUsageStatus,
+  type LlmUsageTokens,
+} from "./metering.js";
+export {
   FINAL_INSTRUCTION,
   PROMPT_CANARY,
   PROMPT_CANARY_MARKER,
@@ -121,7 +134,15 @@ export {
 } from "./prompt.js";
 export {
   analyzePullRequest,
+  ANALYSIS_STAGES,
   belowVerdictFloor,
+  CHARS_PER_TOKEN,
+  DEFAULT_ANALYSIS_TOKEN_LIMIT,
+  estimateAnalysisTokens,
+  FILE_CALL_OVERHEAD_TOKENS,
+  STAGE_OVERHEAD_TOKENS,
+  type EstimateOptions,
+  type TokenEstimate,
   createLeakDetector,
   INSTRUCTION_LEAK,
   instructionLeaks,

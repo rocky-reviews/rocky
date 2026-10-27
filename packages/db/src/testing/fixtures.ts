@@ -182,15 +182,21 @@ export const seedOrg = async (
         .insert(schema.llmUsage)
         .values({
           analysisId: analysis.id,
+          callId: randomUUID(),
+          attempt: 0,
           role: "review",
           provider: "anthropic",
           model: "test-model",
+          outcome: "ok",
+          usageStatus: "reported",
           inputTokens: 10,
           outputTokens: 5,
           cacheReadTokens: 0,
-          cacheWriteTokens: 0,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
           costMicroUsd: 42,
-          priceVersion: "2026-10",
+          costStatus: "priced",
+          priceVersion: "2026-10-27",
         })
         .returning({ id: schema.llmUsage.id }),
     );
@@ -309,4 +315,29 @@ export const plantWebhookDelivery = async (
   } finally {
     client.release();
   }
+};
+
+/**
+ * Marks one queued analysis `running` under a fresh lease, as the claim would, without going
+ * through the cross-org claim (whose fair order would hand out other tests' rows). For tests of
+ * what a lease holder may do; the claim itself is tested in analysis-queue.test.ts. Superuser;
+ * tests only.
+ */
+export const plantAnalysisLease = async (
+  superuser: pg.Pool,
+  analysisId: string,
+  options: { leaseSeconds?: number } = {},
+): Promise<{ analysisId: string; leaseId: string }> => {
+  const { rows } = await superuser.query<{ lease_id: string }>(
+    `update public.analyses
+        set status = 'running', attempts = attempts + 1, claimed_at = now(),
+            lease_id = gen_random_uuid(),
+            lease_until = now() + make_interval(secs => $2)
+      where id = $1 and status = 'queued'
+      returning lease_id::text as lease_id`,
+    [analysisId, options.leaseSeconds ?? 600],
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error("plantAnalysisLease: the row is not queued");
+  return { analysisId, leaseId: row.lease_id };
 };

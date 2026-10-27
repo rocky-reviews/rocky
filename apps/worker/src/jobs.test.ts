@@ -1,3 +1,4 @@
+import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
 import { ForgeReadError, nothingStoredYet, type OrgId } from "@rocky-reviews/core";
 import type { Db } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
@@ -21,6 +22,7 @@ const settings = {
   auditDays: 365,
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
+  llmUsageDays: 730,
 };
 
 const stubDb = (overrides: Partial<Db> = {}) => {
@@ -124,6 +126,40 @@ describe("startJobs", () => {
     const failed = lines.filter((l) => l["msg"] === "job failed");
     expect(failed[0]).toMatchObject({ job: "org_deletion_sweep", errorCode: "internal_error" });
     expect(JSON.stringify(lines)).not.toContain("10.0.0.5");
+  });
+});
+
+describe("the analysis lane (P4-6)", () => {
+  const analysis = {
+    llm: { completion: () => undefined, embedding: () => undefined } as never,
+    unitKeySalt: "salt",
+    usageTargets: usageTargetsFor(llmConfigFromEnv({})),
+    tokenLimit: 150_000,
+    concurrency: 3,
+    orgConcurrency: 2,
+  };
+
+  it("claims analyses only when configured and with app credentials, into its free slots", async () => {
+    const claims: unknown[] = [];
+    const claimAnalyses = (options: unknown) => {
+      claims.push(options);
+      return Promise.resolve([]);
+    };
+    const { log } = capture();
+    const intervals = { ...base.intervals, analysisMs: 5 };
+    for (const deps of [{ forge: undefined, analysis }, { forge }]) {
+      const { db } = stubDb({ claimAnalyses } as Partial<Db>);
+      const jobs = startJobs({ ...base, intervals, db, log, ...deps });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await jobs.stop();
+    }
+    expect(claims).toEqual([]);
+
+    const { db } = stubDb({ claimAnalyses } as Partial<Db>);
+    const jobs = startJobs({ ...base, intervals, db, log, forge, analysis });
+    await expect.poll(() => claims.length).toBeGreaterThan(2);
+    await jobs.stop();
+    expect(claims[0]).toEqual({ limit: 3, leaseSeconds: 600, orgConcurrency: 2 });
   });
 });
 

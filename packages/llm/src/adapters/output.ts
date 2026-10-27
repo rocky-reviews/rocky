@@ -18,7 +18,7 @@ export interface Answer {
   readonly stop: StopKind;
   readonly text: string;
   readonly model: string;
-  readonly usage: LlmUsage;
+  readonly usage: LlmUsage | undefined;
   readonly attempts?: readonly LlmAttemptUsage[] | undefined;
 }
 
@@ -60,9 +60,16 @@ export const ZERO_USAGE: LlmUsage = {
   cacheWrite1hInputTokens: 0,
 };
 
-/** A non-negative whole token count, or 0 for anything a server got wrong. */
-export const tokens = (value: unknown): number =>
-  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : 0;
+/** A non-negative whole token count, or undefined for anything a server got wrong. */
+export const count = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+
+/**
+ * An optional count (cache fields a provider leaves out when nothing was cached): absent or null
+ * is 0, a present malformed value is undefined (the whole usage block is then not trusted).
+ */
+export const optionalCount = (value: unknown): number | undefined =>
+  value === undefined || value === null ? 0 : count(value);
 
 /**
  * Runs post-processing of an untrusted answer (review round 1, S2). Anything thrown that is not an
