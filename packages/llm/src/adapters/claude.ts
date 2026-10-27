@@ -197,21 +197,49 @@ export interface CallState {
   readonly unfinished?: () => boolean;
 }
 
+/** Node and undici codes for a link that failed, as opposed to a body that did not parse. */
+const IO_CODES: ReadonlySet<string> = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CLOSED",
+  "UND_ERR_ABORTED",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+const codeOf = (value: unknown): unknown =>
+  typeof value === "object" && value !== null ? (value as { code?: unknown }).code : undefined;
+
+/**
+ * An I/O failure: fetch's `TypeError` ("fetch failed", undici's "terminated") or a socket error
+ * code, on the error or its cause. A `SyntaxError` from malformed event JSON is not one.
+ */
+export const isIoFailure = (cause: unknown): boolean => {
+  if (cause instanceof TypeError) return true;
+  const inner = typeof cause === "object" && cause !== null ? (cause as Error).cause : undefined;
+  return [codeOf(cause), codeOf(inner)].some(
+    (code) => typeof code === "string" && IO_CODES.has(code),
+  );
+};
+
 /** Any failure → `LlmCallError`, with nothing from the provider but a retry hint (T7). */
 export const toCallError = (error: unknown, state: CallState): LlmCallError => {
   if (isLlmCallError(error)) return error;
   if (cancelledBy(state.signal)) return new LlmCallError("cancelled");
+  // A body past the cap wins over its status: an endpoint that sends that much is broken or
+  // hostile, and a status it sent (401, 400) is not trusted to classify the failure (T9).
   if (state.budget?.exceeded === true) return new LlmCallError("server_error");
   if (state.deadline?.aborted === true) return new LlmCallError("timeout");
   if (error instanceof APIUserAbortError) return new LlmCallError("cancelled");
-  // The SDK's own "stream ended without producing a Message": the link dropped mid-answer (N3).
-  if (
-    state.unfinished?.() === true &&
-    error instanceof AnthropicError &&
-    !(error instanceof APIError)
-  ) {
-    return new LlmCallError("network");
-  }
   if (error instanceof APIConnectionTimeoutError) return new LlmCallError("timeout");
   if (error instanceof APIConnectionError) return new LlmCallError("network");
   if (error instanceof APIError) {
@@ -223,12 +251,32 @@ export const toCallError = (error: unknown, state: CallState): LlmCallError => {
         : kindForStatus(error.status, providerMessage(error));
     return callError(kind, error.headers);
   }
-  // The SDK wraps a body that failed mid-read (a dropped connection) with the I/O error as cause.
-  if (error instanceof AnthropicError && error.cause !== undefined) {
-    return new LlmCallError("network");
+  if (error instanceof AnthropicError) {
+    // The SDK wraps what failed mid-stream as `cause`: a dropped link is `network`; anything
+    // else (malformed event JSON, an SDK invariant) is a broken answer (review round 2, nit 2).
+    if (error.cause !== undefined) {
+      return new LlmCallError(isIoFailure(error.cause) ? "network" : "server_error");
+    }
+    // The SDK's own "stream ended without producing a Message": the link dropped mid-answer (N3).
+    if (state.unfinished?.() === true) return new LlmCallError("network");
   }
   // Unexpected (an SDK invariant, a programming error): never rethrown, its text may quote a body.
   return new LlmCallError("server_error");
+};
+
+/** Rejects with the signal's reason once it aborts; `release` drops the listener. */
+const abortion = (signal: AbortSignal): { promise: Promise<never>; release: () => void } => {
+  let release: () => void = () => undefined;
+  const promise = new Promise<never>((_, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    release = () => signal.removeEventListener("abort", abort);
+  });
+  return { promise, release };
 };
 
 export const claudeProvider = (
@@ -248,10 +296,14 @@ export const claudeProvider = (
       const prompt = buildPrompt(call, nonce);
       const params = requestFor(call, prompt, platform);
       if (cancelledBy(call.signal)) throw new LlmCallError("cancelled");
-      // The SDK's `timeout` stops once headers arrive; this deadline covers the whole stream (T9).
-      const deadline = AbortSignal.timeout(timeoutMs);
+      // The SDK's `timeout` stops once headers arrive, and covers neither credential lookups nor
+      // its own auth middleware; this deadline covers the whole call (T9, review round 2 S1).
+      const timer = new AbortController();
+      const clock = setTimeout(() => timer.abort(), timeoutMs);
+      const deadline = timer.signal;
       const signal =
         call.signal === undefined ? deadline : AbortSignal.any([call.signal, deadline]);
+      const ended = abortion(signal);
       const budget: ByteBudget = { exceeded: false };
       let started = false;
       let stopped = false;
@@ -261,19 +313,27 @@ export const claudeProvider = (
         budget,
         unfinished: () => started && !stopped,
       };
-      let message: BetaMessage;
-      try {
+      const exchange = async (): Promise<BetaMessage> => {
         const client = await platform.client(cappedFetch(baseFetch, cap, budget));
         const stream = client.beta.messages.stream(params, { signal });
         stream.on("streamEvent", (event) => {
           started = true;
           if (event.type === "message_stop") stopped = true;
         });
-        message = await stream.finalMessage();
+        const final = await stream.finalMessage();
         // The SDK returns the partial message when the stream ends early: that is a dropped link.
         if (!stopped) throw new LlmCallError("network");
+        return final;
+      };
+      let message: BetaMessage;
+      try {
+        // Credential lookups take no signal: the race ends the call; the lookup is abandoned.
+        message = await Promise.race([exchange(), ended.promise]);
       } catch (error) {
         throw toCallError(error, state);
+      } finally {
+        clearTimeout(clock);
+        ended.release();
       }
       return guarded(() => toResult(answerOf(message, call.model), call.output));
     },

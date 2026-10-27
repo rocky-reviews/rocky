@@ -186,3 +186,29 @@ export const ANSWER: Verdict = {
 /** Built at runtime so no scanner sees a key-shaped literal in the repo. */
 export const TEST_KEY = ["sk", "ant", "api03", "Pq7w".repeat(10)].join("-");
 export const OTHER_KEY = ["sk", "ant", "api03", "Ambient".repeat(6)].join("-");
+
+/**
+ * Runs `body` and returns how many timers armed with `delayMs` are still pending afterwards:
+ * a call must clear its deadline timer when it ends (review round 2, nit 6).
+ */
+export const pendingTimers = async (delayMs: number, body: () => Promise<unknown>) => {
+  const armed = new Set<unknown>();
+  const realSet = globalThis.setTimeout;
+  const realClear = globalThis.clearTimeout;
+  globalThis.setTimeout = ((handler: () => void, delay?: number) => {
+    const id = realSet(handler, delay);
+    if (delay === delayMs) armed.add(id);
+    return id;
+  }) as typeof globalThis.setTimeout;
+  globalThis.clearTimeout = ((id?: Parameters<typeof clearTimeout>[0]) => {
+    armed.delete(id);
+    realClear(id);
+  }) as typeof globalThis.clearTimeout;
+  try {
+    await body().catch(() => undefined);
+  } finally {
+    globalThis.setTimeout = realSet;
+    globalThis.clearTimeout = realClear;
+  }
+  return armed.size;
+};

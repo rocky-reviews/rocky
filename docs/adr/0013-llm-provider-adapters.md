@@ -53,9 +53,13 @@ Every request has the same shape:
 - **Transport:** always streamed (`client.beta.messages.stream(...).finalMessage()`) and
   accumulated internally. The skill requires streaming for large `max_tokens` (N9: 64K and more at
   `xhigh`/`max`), and one code path is simpler than two. The port's result is unchanged.
-- **Bounds (T9):** every call has one deadline for the whole exchange, streaming included
-  (`AbortSignal.timeout`, default 10 minutes, combined with the caller's signal). The SDK's own
-  `timeout` stops counting once headers arrive, so it cannot end a stream that keeps dripping.
+- **Bounds (T9):** every call has one deadline for the whole call (default 10 minutes, an
+  `AbortController` timer cleared when the call ends, combined with the caller's signal). The
+  call body (client construction, credential lookups, the SDK's auth middleware and the stream)
+  is raced against that signal, so a Google or AWS credential source that never answers ends as
+  `timeout` or `cancelled` too; the abandoned lookup takes no signal and is left to settle. The
+  SDK's own `timeout` covers only the fetch and stops counting once headers arrive, so it cannot
+  end a stream that keeps dripping or a hanging credential lookup.
   Each call's client gets a `fetch` that stops every response body after 16 MiB, error bodies
   included; past the cap the call fails as `server_error`. A stream that ends without
   `message_stop` is a dropped link (`network`), never a short answer.
@@ -99,7 +103,9 @@ messages: [ { role: user, content: [
   `RockyInstructions` value (ADR 0012 §1), which only the `rockyInstructions` template tag (literal
   text, no substitutions) and `joinInstructions` issue. Adapters refuse anything else with
   `invalid_request` before a request is built, so a PR title cannot become a system prompt by
-  accident. P4-4 builds the full defence on this.
+  accident. P4-4 builds the full defence on this. `isRockyInstructions` (like `isLlmCallError`)
+  relies on a single loaded copy of `@rocky-reviews/core`: a second copy would have its own
+  registry and class, and its values would be refused (fail closed).
 - **Delimiters:** each part is wrapped in a `pr_content` marker. The marker carries a per-call
   96-bit random id that PR content cannot predict, so a forged closing marker in a diff cannot end
   the block. Labels are Rocky-authored (N7) and checked against `^[a-z][a-z0-9_.:-]{0,63}$`; a bad
@@ -162,7 +168,12 @@ an HTTP date, capped at 24 h, retryable kinds only).
   `rate_limit_error`, `api_error`, ...).
 - **Without a response:** an abort by the caller's signal → `cancelled`; the call deadline or an
   SDK timeout → `timeout`; a connection failure (including AWS credential-chain and Google
-  credential failures) → `network`; a stream that ends without `message_stop` → `network`.
+  credential failures) → `network`; a stream that ends without `message_stop` → `network`. An
+  error the SDK wraps with a `cause` is `network` only when the cause is an I/O failure (fetch's
+  `TypeError`, undici `terminated`, `ECONNRESET` and other socket codes); a `SyntaxError` from
+  malformed event JSON stays `server_error`.
+- **Broken install:** a platform SDK or `google-auth-library` that fails to import →
+  `invalid_request` (fatal): retrying cannot fix it.
 - **Broken answers:** a body past the byte cap, an OpenAI-compatible answer that is not a JSON
   object, and anything post-processing throws that is not an `LlmCallError` (a validator tripping
   on a hostile shape) → `server_error`.
@@ -226,7 +237,7 @@ is clean for the added tree.
 
 `providerAdapters(transport?)` returns the `ProviderAdapters` map for `createLlmRoles`. The
 optional transport (`fetch`, retries, deadline, byte cap, nonce source, Bedrock credential
-resolver, Vertex auth source) exists for tests.
+resolver, Vertex auth source) exists for tests. P4-3 calls `providerAdapters()` in the worker.
 
 **Platform credentials.** Vertex: Rocky builds the Google auth client itself
 (`GoogleAuth.getClient()`, cloud-platform scope) and hands it to `AnthropicVertex`. The Vertex
@@ -235,7 +246,7 @@ failed metadata-server call would fail every later call. Rocky keeps a successfu
 caches its token) and drops a failed lookup. Bedrock: the Mantle client resolves the AWS
 credential chain on every request, so a failure is not cached. Credentials are not memoised
 either; that costs a chain lookup per call (a local file or the instance metadata service), not
-correctness. P4-3 calls `providerAdapters()` in the worker.
+correctness. A lookup that fails late drops only itself, never a newer lookup that replaced it.
 
 ## Threat model
 
@@ -257,7 +268,7 @@ fixtures.
 | T6  | **Injection via untrusted parts:** PR content posing as instructions, closing its delimiter, or reaching tools.                                                                                                               | Untrusted parts only in the user turn, each in a nonce-delimited marker. Instructions must be `RockyInstructions` (literal templates only; lint bans calling the tag directly). The system preamble marks them as data. No tools and no `tool_choice` are sent. Output is schema-validated data (ADR 0004). Labels are validated. Full defence: P4-4.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `untrusted.test.ts` (forged closing marker, nonce not in content, label rules, unbranded instructions), `core/src/llm.test.ts` (no substitutions, forged template arrays) and the contract tests (no `tools`, instructions not in `messages`, PR text not in `system`).                                                                                                                                                                                                               |
 | T7  | **Error-body leakage:** provider bodies echo prompts, keys or account ids.                                                                                                                                                    | `LlmCallError` takes only a kind and a retry hint; SDK errors are never rethrown.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Error-mapping tables per adapter, with bodies containing the key and PR text, assert clean errors.                                                                                                                                                                                                                                                                                                                                                                                    |
 | T8  | **Provider-side data retention:** PR content is retained by the provider.                                                                                                                                                     | Not preventable in code. It is a deployment choice, documented per platform: Anthropic API (org retention settings; Fable 5.x needs 30-day retention), Bedrock and Vertex (governed by AWS and Google; Bedrock has zero operator access), Foundry (Anthropic acts as processor for Microsoft; Hosted-on-Azure keeps prompts in Azure).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `needs-human`: the DPA and subprocessor list (P10).                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| T9  | **Hostile or broken endpoint:** a huge body, a hang, a stream that never ends, or a malformed answer exhausts the worker or escapes as a raw error.                                                                           | One deadline per call covering the whole stream (10 min; the SDK's own timeout stops at headers), a 16 MiB cap on every response body on both adapters (Claude through a counting `fetch`), `network` for a stream cut before `message_stop`, and type checks on every OpenAI-compatible field with a `server_error` catch-all. `max_tokens` does not bound a hostile server, so it is not relied on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `claude.contract.test.ts` "ends a stream that keeps dripping at the call deadline", "stops reading a response past the byte cap", "treats a stream that ends without message_stop as a network failure"; `openai-compatible.contract.test.ts` "refuses an oversized body" and "malformed answers never escape as raw errors".                                                                                                                                                         |
+| T9  | **Hostile or broken endpoint:** a huge body, a hang, a stream that never ends, or a malformed answer exhausts the worker or escapes as a raw error.                                                                           | One deadline per call covering the whole stream (10 min; the SDK's own timeout stops at headers), a 16 MiB cap on every response body on both adapters (Claude through a counting `fetch`), `network` for a stream cut before `message_stop`, and type checks on every OpenAI-compatible field with a `server_error` catch-all. `max_tokens` does not bound a hostile server, so it is not relied on.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `claude.contract.test.ts` "ends a stream that keeps dripping at the call deadline", "the call deadline covers credential acquisition" (hanging Vertex auth, Vertex headers and Bedrock credentials → `timeout` / `cancelled`), "stops reading a response past the byte cap", "treats a stream that ends without message_stop as a network failure"; `openai-compatible.contract.test.ts` "refuses an oversized body" and "malformed answers never escape as raw errors".              |
 | T10 | **Malformed output treated as truth.**                                                                                                                                                                                        | Every answer goes through the port's validator. Refusals and truncations never parse.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Contract tests per stop reason.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **Residual risks:**
@@ -266,8 +277,13 @@ fixtures.
   At worst a too-long input is reported as `invalid_request` (fatal) instead of
   `context_too_long` (also fatal).
 - `NODE_DEBUG=http,fetch` (Node's own debug output) can print request URLs and paths. It does not
-  print headers or bodies; URLs carry no key. `HTTPS_PROXY` routes the Google token exchange
-  (gaxios) through a proxy; TLS is still verified. Both are operator environment.
+  print headers or bodies; URLs carry no key.
+- **Process-wide switches stay operator responsibility (T1, T3).** Rocky refuses only the two
+  variables that undo its own client options. These change the whole process and are the
+  operator's to keep unset or trusted: `NODE_TLS_REJECT_UNAUTHORIZED=0` (no TLS verification),
+  `NODE_EXTRA_CA_CERTS` (extra trusted CAs), `NODE_USE_ENV_PROXY` and `HTTPS_PROXY` (gaxios
+  honours proxies for the Google token endpoint), and `GCE_METADATA_HOST` / `GCE_METADATA_IP`
+  (they redirect where ADC fetches its token). The self-host docs (P10-3) name them.
 - **The acceptance criterion "recorded responses" is only partly met.** The fixtures are
   documentation-shaped (built from the API reference and SDK types), and the recording gate in
   `packages/llm/fixtures/README.md` says how to replace them. Recording real responses needs

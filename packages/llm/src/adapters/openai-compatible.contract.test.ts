@@ -13,6 +13,7 @@ import {
   ANSWER,
   fakeFetch,
   json,
+  pendingTimers,
   TEST_KEY,
   verdictSchema,
   type FakeResponse,
@@ -243,6 +244,13 @@ describe("OpenAI-compatible contract: chat completions", () => {
     const pending = complete(hanging.provider, { signal: controller.signal });
     setTimeout(() => controller.abort(), 10);
     expect(((await rejection(pending)) as { kind: string }).kind).toBe("cancelled");
+  });
+
+  it("clears its deadline timer when the call ends (review round 2, nit 6)", async () => {
+    for (const response of [json("openai-compatible/chat-stop.json"), { status: 503, body: "" }]) {
+      const { provider } = providerFor(LOCAL, [response], { timeoutMs: 123_456 });
+      expect(await pendingTimers(123_456, () => complete(provider))).toBe(0);
+    }
   });
 
   it("refuses a bad output cap or label before anything is sent", async () => {

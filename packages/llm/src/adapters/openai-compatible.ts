@@ -89,7 +89,9 @@ const post = async (
   signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> => {
   if (cancelledBy(signal)) throw new LlmCallError("cancelled");
-  const timeout = AbortSignal.timeout(exchange.timeoutMs);
+  const timer = new AbortController();
+  const clock = setTimeout(() => timer.abort(), exchange.timeoutMs);
+  const timeout = timer.signal;
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
   try {
     const response = await exchange.fetch(url, {
@@ -117,6 +119,8 @@ const post = async (
     if (cancelledBy(signal)) throw new LlmCallError("cancelled");
     if (timeout.aborted) throw new LlmCallError("timeout");
     throw new LlmCallError("network");
+  } finally {
+    clearTimeout(clock);
   }
 };
 

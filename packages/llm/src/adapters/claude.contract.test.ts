@@ -7,15 +7,18 @@ import {
   type ProviderCompletionCall,
   type ProviderCompletionResult,
 } from "@rocky-reviews/core";
+import { AnthropicError } from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmConfigError, type ProviderSettings } from "../config.js";
 import { envSecrets } from "../registry.js";
+import { toCallError } from "./claude.js";
 import { providerAdapters, type AdapterTransport } from "./index.js";
 import {
   ANSWER,
   drippingStream,
   fakeFetch,
   json,
+  pendingTimers,
   sse,
   TEST_KEY,
   OTHER_KEY,
@@ -510,14 +513,41 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
     const error = await rejection(complete(provider));
     expect(isLlmCallError(error) && error.kind).toBe("server_error");
 
-    const big = providerFor(
-      platform,
-      [{ status: 500, body: "x".repeat(70 * 1024), headers: { "content-type": "text/plain" } }],
-      { maxResponseBytes: 64 * 1024 },
-    );
-    expect(((await rejection(complete(big.provider))) as { kind: string }).kind).toBe(
-      "server_error",
-    );
+    // An error body past the cap wins over its status (review round 2, S3): a 401 or 400 that
+    // big is not the provider's documented error, so its status is not trusted for the kind.
+    for (const status of [400, 401]) {
+      const big = providerFor(
+        platform,
+        [{ status, body: "x".repeat(70 * 1024), headers: { "content-type": "text/plain" } }],
+        { maxResponseBytes: 64 * 1024 },
+      );
+      expect(
+        ((await rejection(complete(big.provider))) as { kind: string }).kind,
+        String(status),
+      ).toBe("server_error");
+    }
+  });
+
+  it("keeps malformed event JSON a server_error, not a dropped link (review round 2, nit 2)", async () => {
+    const head = sse("end-turn.sse").body!.split("event: content_block_delta")[0]!;
+    const { provider } = providerFor(platform, [
+      {
+        body: `${head}event: content_block_delta\ndata: {"type":"content_block_delta",\n\n`,
+        headers: { "content-type": "text/event-stream" },
+      },
+    ]);
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("server_error");
+  });
+
+  it("clears its deadline timer when the call ends (review round 2, nit 6)", async () => {
+    for (const response of [
+      sse("end-turn.sse"),
+      json("claude/errors/401-authentication.json", 401),
+    ]) {
+      const { provider } = providerFor(platform, [response], { timeoutMs: 123_456 });
+      expect(await pendingTimers(123_456, () => complete(provider))).toBe(0);
+    }
   });
 
   it("maps a connection reset while reading the body to network", async () => {
@@ -603,6 +633,16 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
 });
 
 describe("Claude platform details", () => {
+  it("retries a 5xx through the capped fetch and then answers (review round 2, nit 5)", async () => {
+    const { provider, requests } = providerFor(
+      PLATFORMS[0]!,
+      [json("claude/errors/500-api.json", 500, { "retry-after-ms": "0" }), sse("end-turn.sse")],
+      { maxRetries: 1 },
+    );
+    expect((await complete(provider)).status).toBe("ok");
+    expect(requests).toHaveLength(2);
+  });
+
   it("maps Vertex's dated ids and regional hosts", async () => {
     const cases: [string, string, string][] = [
       [
@@ -763,6 +803,43 @@ describe("Anthropic server-side fallbacks (review round 1, items 10 and 11)", ()
 /** Built at runtime so no scanner sees a token-shaped literal. */
 const GOOGLE_TOKEN = ["ya29", "fixture"].join(".");
 
+describe("the call deadline covers credential acquisition (review round 2, S1)", () => {
+  const hang = () => new Promise<never>(() => undefined);
+  const hangingVertex = { vertexAuth: hang };
+  const hangingVertexHeaders = {
+    vertexAuth: () => Promise.resolve({ projectId: "acme-ai", getRequestHeaders: hang }),
+  };
+  const hangingBedrock = { bedrockCredentials: () => Promise.resolve(hang) };
+  const cases: [string, Platform, AdapterTransport][] = [
+    ["vertex auth client", PLATFORMS[2]!, hangingVertex],
+    ["vertex request headers", PLATFORMS[2]!, hangingVertexHeaders],
+    ["bedrock credential provider", PLATFORMS[1]!, hangingBedrock],
+  ];
+
+  it.each(cases)("times out a hanging %s", async (_, platform, transport) => {
+    const { provider, requests } = providerFor(platform, [sse("end-turn.sse")], {
+      ...transport,
+      timeoutMs: 200,
+    });
+    const started = Date.now();
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("timeout");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(requests).toHaveLength(0);
+  });
+
+  it.each(cases)("cancels a hanging %s on the caller's signal", async (_, platform, transport) => {
+    const { provider } = providerFor(platform, [sse("end-turn.sse")], {
+      ...transport,
+      timeoutMs: 60_000,
+    });
+    const controller = new AbortController();
+    const pending = complete(provider, { signal: controller.signal });
+    setTimeout(() => controller.abort(), 50);
+    expect(((await rejection(pending)) as { kind: string }).kind).toBe("cancelled");
+  });
+});
+
 describe("platform credentials are not cached after a failure (review round 1, S3)", () => {
   it("Vertex: a failed auth lookup is retried on the next call, then reused", async () => {
     let lookups = 0;
@@ -804,5 +881,33 @@ describe("platform credentials are not cached after a failure (review round 1, S
     expect(requests).toHaveLength(0);
     expect((await complete(provider)).status).toBe("ok");
     expect(lookups).toBe(2);
+  });
+});
+
+describe("toCallError: I/O causes only (review round 2, nit 2)", () => {
+  const wrapped = (cause: unknown) => new AnthropicError("wrapped", { cause });
+  const state = { signal: undefined };
+
+  it("maps a socket failure to network", () => {
+    const reset = Object.assign(new Error("read"), { code: "ECONNRESET" });
+    for (const cause of [
+      new TypeError("fetch failed"),
+      reset,
+      Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" }),
+      Object.assign(new Error("terminated"), { cause: reset }),
+    ]) {
+      expect(toCallError(wrapped(cause), state).kind).toBe("network");
+    }
+  });
+
+  it("keeps anything else a server_error", () => {
+    for (const cause of [
+      new SyntaxError("Unexpected end of JSON input"),
+      new Error("invariant"),
+      Object.assign(new Error("x"), { code: "ERR_ASSERTION" }),
+      "string cause",
+    ]) {
+      expect(toCallError(wrapped(cause), state).kind).toBe("server_error");
+    }
   });
 });

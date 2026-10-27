@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { LlmCallError } from "@rocky-reviews/core";
+import { isLlmCallError, LlmCallError } from "@rocky-reviews/core";
 import type { ProviderAdapterFactory, SecretSource } from "../registry.js";
 import { assertAmbientAtBoot } from "./ambient.js";
 import { claudeProvider, FALLBACK_MODELS, type ClaudeMessagesClient } from "./claude.js";
@@ -29,6 +29,18 @@ const keyFrom = (secrets: SecretSource, name: string): string => {
 };
 
 const never = () => false;
+
+/**
+ * Loads a platform SDK on first use (N6). A failed import does not heal by retrying (a missing or
+ * broken install), so it is fatal: `invalid_request`, never a retryable kind (review round 2).
+ */
+const load = async <M>(module: () => Promise<M>): Promise<M> => {
+  try {
+    return await module();
+  } catch {
+    throw new LlmCallError("invalid_request");
+  }
+};
 
 export const anthropicAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"anthropic"> =>
@@ -65,7 +77,7 @@ export const foundryAdapter =
         modelId: (model) => model,
         client: async (fetch) => {
           const apiKey = keyFrom(secrets, settings.apiKeyEnv);
-          const { AnthropicFoundry } = await import("@anthropic-ai/foundry-sdk");
+          const { AnthropicFoundry } = await load(() => import("@anthropic-ai/foundry-sdk"));
           return new AnthropicFoundry({
             ...hardenedClientOptions(transport, fetch),
             apiKey,
@@ -92,7 +104,7 @@ export const bedrockAdapter =
         // AWS credentials come from the default chain (or AWS_BEARER_TOKEN_BEDROCK); Rocky holds
         // none. The client resolves them per request, so a failed lookup is not cached.
         client: async (fetch) => {
-          const { AnthropicBedrockMantle } = await import("@anthropic-ai/bedrock-sdk");
+          const { AnthropicBedrockMantle } = await load(() => import("@anthropic-ai/bedrock-sdk"));
           return new AnthropicBedrockMantle({
             ...hardenedClientOptions(transport, fetch),
             awsRegion: settings.region,
@@ -129,7 +141,7 @@ export const vertexBaseUrl = (region: string): string => {
 
 /** Google application default credentials, as the Vertex client would build them. */
 const applicationDefault = async (): Promise<VertexAuthSource> => {
-  const { GoogleAuth } = await import("google-auth-library");
+  const { GoogleAuth } = await load(() => import("google-auth-library"));
   return new GoogleAuth({ scopes: GOOGLE_CLOUD_SCOPE }).getClient();
 };
 
@@ -138,15 +150,16 @@ const applicationDefault = async (): Promise<VertexAuthSource> => {
  * lookup is dropped, not cached: the Vertex client would otherwise keep the rejected promise for
  * the life of the process (review round 1, S3). Its error text is dropped too.
  */
-const vertexAuthOnce = (source: () => Promise<VertexAuthSource>) => {
+export const vertexAuthOnce = (source: () => Promise<VertexAuthSource>) => {
   let pending: Promise<VertexAuthSource> | undefined;
   return async (): Promise<VertexAuthSource> => {
-    pending ??= source();
+    const lookup = (pending ??= source());
     try {
-      return await pending;
-    } catch {
-      pending = undefined;
-      throw new LlmCallError("network");
+      return await lookup;
+    } catch (error) {
+      // Only this lookup is dropped: a late failure must not discard a newer one.
+      if (pending === lookup) pending = undefined;
+      throw isLlmCallError(error) ? error : new LlmCallError("network");
     }
   };
 };
@@ -162,7 +175,7 @@ export const vertexAdapter =
         modelId: (model) => VERTEX_DATED_IDS[model] ?? model,
         client: async (fetch) => {
           const authClient = (await auth()) as unknown as VertexAuthClient;
-          const { AnthropicVertex } = await import("@anthropic-ai/vertex-sdk");
+          const { AnthropicVertex } = await load(() => import("@anthropic-ai/vertex-sdk"));
           return new AnthropicVertex({
             ...hardenedClientOptions(transport, fetch),
             region: settings.region,
