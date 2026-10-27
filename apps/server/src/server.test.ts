@@ -86,6 +86,7 @@ describe("the pool's login check fails closed (review round 5)", () => {
     who,
     privileged: false,
     groups: ["rocky_app"],
+    admin: false,
     owner: false,
     reaches: false,
   });
@@ -99,6 +100,27 @@ describe("the pool's login check fails closed (review round 5)", () => {
       () =>
         Promise.resolve({
           rows: [plain("session_user"), { ...plain("current_user"), owner: null }],
+        }),
+    ],
+    [
+      "a missing admin_option answer (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), admin: undefined }],
+        }),
+    ],
+    [
+      "a grant with ADMIN OPTION (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), admin: true }],
+        }),
+    ],
+    [
+      "no membership at all (review round 6)",
+      () =>
+        Promise.resolve({
+          rows: [plain("session_user"), { ...plain("current_user"), groups: [] }],
         }),
     ],
     [

@@ -227,9 +227,12 @@ describe("the server's database login (review rounds 4 and 5)", () => {
     try {
       const error = await startServer(env(pgs.appUrl), log).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ServerLoginError);
-      // Its own memberships are still exactly rocky_app: only the MEMBER probe sees it.
+      // Its own memberships are still exactly rocky_app; since review round 6 the reached set
+      // (any path) must be exactly rocky_app too, and the MEMBER probe names the role.
       expect((error as ServerLoginError).refusals).toEqual([
+        "session_user:membership",
         "session_user:forbidden_role",
+        "current_user:membership",
         "current_user:forbidden_role",
       ]);
     } finally {

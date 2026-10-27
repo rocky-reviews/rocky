@@ -67,14 +67,15 @@ const acceptable = (state: RoleState, allowed: readonly string[]): boolean =>
 
 /**
  * Roles the server's login must not reach by any grant option: `pg_has_role(..., 'MEMBER')`
- * sees ADMIN-only and SET-only grants, which `USAGE` misses (review round 5). The owner of the
- * database and of `public.orgs` is checked separately, since its name varies by deployment.
+ * sees ADMIN-only and SET-only grants, which `USAGE` misses (review round 5). Since review round
+ * 6 the reached set must be exactly `rocky_app`, which already excludes these; they are still
+ * probed so a refusal names them.
  */
 export const SERVER_FORBIDDEN_ROLES = [WORKER_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE] as const;
 
 /** Which check refused a server login. Names the check, never the login. */
 export type ServerLoginRefusal =
-  | `${"session_user" | "current_user"}:${"privileged" | "membership" | "owner" | "forbidden_role"}`
+  | `${"session_user" | "current_user"}:${"privileged" | "membership" | "admin_option" | "owner" | "forbidden_role"}`
   | "unexpected_answer";
 
 /** One row per identity, as the check query answers it. */
@@ -82,26 +83,48 @@ interface LoginRow {
   who: unknown;
   privileged: unknown;
   groups: unknown;
+  admin: unknown;
   owner: unknown;
   reaches: unknown;
 }
 
+/*
+ * Every catalog object, function and type is qualified with pg_catalog (review round 6, N-1),
+ * so a search_path (a startup option, or `alter role ... set`) cannot shadow what is read.
+ * `reached` is every role other than the login that the login is a member of, by any path and
+ * grant option (`pg_has_role(..., 'MEMBER')`): privileges are ORed across the login and that
+ * whole set, and ownership is looked for across both (S-1, S-2). `public.orgs` stays named so a
+ * database that is not migrated fails the check (42P01) instead of passing it.
+ */
 const SERVER_LOGIN_CHECK = `
   select v.who,
-         (r.rolsuper or r.rolbypassrls or r.rolcreaterole or r.rolcreatedb or r.rolreplication)
-           as privileged,
-         array(select distinct m.roleid::regrole::text from pg_auth_members m
-                where m.member = r.oid order by 1) as groups,
-         (pg_has_role(r.oid, d.datdba, 'MEMBER') or pg_has_role(r.oid, c.relowner, 'MEMBER'))
-           as owner,
-         (select bool_or(pg_has_role(r.oid, g::name, 'MEMBER')) from unnest($1::text[]) g)
-           as reaches
-    from (values ('session_user', session_user::text), ('current_user', current_user::text))
-           v(who, name)
-    left join pg_roles r on r.rolname = v.name
-    cross join pg_database d
-    cross join pg_class c
-   where d.datname = current_database() and c.oid = 'public.orgs'::regclass
+         (select pg_catalog.bool_or(x.rolsuper or x.rolbypassrls or x.rolcreaterole
+                                    or x.rolcreatedb or x.rolreplication)
+            from pg_catalog.pg_roles x
+           where pg_catalog.pg_has_role(r.oid, x.oid, 'MEMBER')) as privileged,
+         array(
+           select x.rolname::pg_catalog.text from pg_catalog.pg_roles x
+            where x.oid operator(pg_catalog.<>) r.oid
+              and pg_catalog.pg_has_role(r.oid, x.oid, 'MEMBER')
+            order by 1) as groups,
+         exists(select from pg_catalog.pg_auth_members m
+                 where m.member operator(pg_catalog.=) r.oid and m.admin_option) as admin,
+         (pg_catalog.pg_has_role(r.oid, d.datdba, 'MEMBER')
+            or pg_catalog.pg_has_role(r.oid, c.relowner, 'MEMBER')
+            or exists(select from pg_catalog.pg_shdepend s
+                       where s.dbid operator(pg_catalog.=) d.oid
+                         and s.deptype operator(pg_catalog.=) 'o'
+                         and s.refclassid operator(pg_catalog.=) 'pg_catalog.pg_authid'::pg_catalog.regclass
+                         and pg_catalog.pg_has_role(r.oid, s.refobjid, 'MEMBER'))) as owner,
+         (select pg_catalog.bool_or(pg_catalog.pg_has_role(r.oid, g::pg_catalog.name, 'MEMBER'))
+            from pg_catalog.unnest($1::pg_catalog.text[]) g) as reaches
+    from (values ('session_user', session_user::pg_catalog.text),
+                 ('current_user', current_user::pg_catalog.text)) v(who, name)
+    left join pg_catalog.pg_roles r on r.rolname operator(pg_catalog.=) v.name
+    cross join pg_catalog.pg_database d
+    cross join pg_catalog.pg_class c
+   where d.datname operator(pg_catalog.=) pg_catalog.current_database()
+     and c.oid operator(pg_catalog.=) 'public.orgs'::pg_catalog.regclass
    order by 1 desc`;
 
 const IDENTITIES = ["session_user", "current_user"] as const;
@@ -109,11 +132,12 @@ const IDENTITIES = ["session_user", "current_user"] as const;
 /**
  * Checks, on an open connection, that the internet-facing server holds `rocky_app`'s privileges
  * and nothing more (ADR 0009, L28). An allow-list, for both `session_user` and `current_user`
- * (a `role=` startup option makes them differ): no privilege attribute; no membership other than
- * `rocky_app` (any grant option counts); not a member of the owner of the database or of
- * `public.orgs`; not a member of any of SERVER_FORBIDDEN_ROLES. Anything but two well-formed
- * rows refuses. Returns the refusals (empty when acceptable); a query error propagates, and
- * callers treat it as a refusal too.
+ * (a `role=` startup option makes them differ): the roles it reaches by any path and grant
+ * option are exactly `rocky_app`; no privilege attribute on it or on any of them; no grant with
+ * ADMIN OPTION; neither it nor any of them owns the database or any object in it; not a member
+ * of any of SERVER_FORBIDDEN_ROLES. Anything but two well-formed rows refuses. Returns the
+ * refusals (empty when acceptable); a query error propagates, and callers treat it as a refusal
+ * too.
  */
 export const checkServerLogin = async (
   client: Pick<pg.ClientBase, "query">,
@@ -126,6 +150,7 @@ export const checkServerLogin = async (
     if (
       row?.who !== who ||
       typeof row.privileged !== "boolean" ||
+      typeof row.admin !== "boolean" ||
       typeof row.owner !== "boolean" ||
       typeof row.reaches !== "boolean" ||
       !Array.isArray(row.groups) ||
@@ -133,10 +158,9 @@ export const checkServerLogin = async (
     ) {
       return ["unexpected_answer"];
     }
-    const state: RoleState = { privileged: row.privileged, groups: row.groups };
-    if (state.privileged) refusals.push(`${who}:privileged`);
-    if (!acceptable({ ...state, privileged: false }, [APP_ROLE]))
-      refusals.push(`${who}:membership`);
+    if (row.privileged) refusals.push(`${who}:privileged`);
+    if (row.groups.length !== 1 || row.groups[0] !== APP_ROLE) refusals.push(`${who}:membership`);
+    if (row.admin) refusals.push(`${who}:admin_option`);
     if (row.owner) refusals.push(`${who}:owner`);
     if (row.reaches) refusals.push(`${who}:forbidden_role`);
   }
