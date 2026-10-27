@@ -1,0 +1,99 @@
+import {
+  LlmCallError,
+  type LlmErrorKind,
+  type LlmProvider,
+  type ProviderCompletionCall,
+  type ProviderCompletionResult,
+  type ProviderEmbeddingCall,
+} from "@rocky-reviews/core";
+import type { ProviderSettings } from "./config.js";
+import { PROVIDER_CAPABILITIES, PROVIDER_KINDS, type ProviderKind } from "./providers.js";
+import type { ProviderAdapters, SecretSource } from "./registry.js";
+
+/**
+ * Test adapters for every provider kind (P4-1). They record what the registry sends them and
+ * answer with a fixed, schema-valid document; no network, no SDK. Real adapters: P4-2.
+ */
+
+export interface RecordedCompletion extends ProviderCompletionCall<unknown> {
+  readonly kind: ProviderKind;
+}
+export interface RecordedEmbedding extends ProviderEmbeddingCall {
+  readonly kind: ProviderKind;
+}
+
+export interface RecordingAdapters {
+  readonly factories: ProviderAdapters;
+  readonly created: { kind: ProviderKind; settings: ProviderSettings }[];
+  readonly calls: RecordedCompletion[];
+  readonly embedCalls: RecordedEmbedding[];
+  /** Names of secrets the adapters looked up (values are never recorded). */
+  readonly secretsRead: string[];
+}
+
+const usage = {
+  inputTokens: 1,
+  outputTokens: 1,
+  cacheReadInputTokens: 0,
+  cacheWrite5mInputTokens: 0,
+  cacheWrite1hInputTokens: 0,
+};
+
+export interface RecordingOptions {
+  /** Every completion rejects with `LlmCallError(fail)`, as a real adapter maps a failure. */
+  readonly fail?: LlmErrorKind;
+}
+
+export const recordingAdapters = (
+  answer: unknown = { verdict: "comment" },
+  options: RecordingOptions = {},
+): RecordingAdapters => {
+  const created: RecordingAdapters["created"] = [];
+  const calls: RecordedCompletion[] = [];
+  const embedCalls: RecordedEmbedding[] = [];
+  const secretsRead: string[] = [];
+
+  const factory =
+    (kind: ProviderKind) =>
+    (settings: ProviderSettings, secrets: SecretSource): LlmProvider => {
+      created.push({ kind, settings });
+      // Like a real adapter, read the key when it is needed, not when the adapter is built.
+      const readKey = () => {
+        if ("apiKeyEnv" in settings && settings.apiKeyEnv !== undefined) {
+          secretsRead.push(settings.apiKeyEnv);
+          secrets.get(settings.apiKeyEnv);
+        }
+      };
+      const provider: LlmProvider = {
+        completeStructured: <T>(
+          call: ProviderCompletionCall<T>,
+        ): Promise<ProviderCompletionResult<T>> => {
+          readKey();
+          calls.push({ ...(call as ProviderCompletionCall<unknown>), kind });
+          if (options.fail !== undefined) return Promise.reject(new LlmCallError(options.fail));
+          const parsed = call.output.parse(answer);
+          return Promise.resolve(
+            parsed.success
+              ? { status: "ok", value: parsed.data, model: call.model, usage }
+              : { status: "invalid_output", model: call.model, usage, issues: parsed.issues },
+          );
+        },
+      };
+      if (PROVIDER_CAPABILITIES[kind].embeddings) {
+        provider.embed = (call) => {
+          embedCalls.push({ ...call, kind });
+          return Promise.resolve({
+            vectors: call.inputs.map(() => Array.from({ length: call.dimensions }, () => 0)),
+            model: call.model,
+            usage: { inputTokens: call.inputs.length },
+          });
+        };
+      }
+      return provider;
+    };
+
+  const factories = Object.fromEntries(
+    PROVIDER_KINDS.map((kind) => [kind, factory(kind)]),
+  ) as ProviderAdapters;
+  return { factories, created, calls, embedCalls, secretsRead };
+};

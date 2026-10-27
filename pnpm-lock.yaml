@@ -177,7 +177,17 @@ importers:
         specifier: 4.10.2
         version: 4.10.2
 
-  packages/llm: {}
+  packages/llm:
+    dependencies:
+      '@rocky-reviews/core':
+        specifier: workspace:*
+        version: link:../core
+      '@rocky-reviews/log':
+        specifier: workspace:*
+        version: link:../log
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
 
   packages/log:
     dependencies:

@@ -9,7 +9,8 @@ Decisions behind this page:
 [ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md),
 [ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md),
 [ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md),
-[ADR 0011 repository access check](adr/0011-repository-access-check.md).
+[ADR 0011 repository access check](adr/0011-repository-access-check.md),
+[ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md).
 
 ## Runtime
 
@@ -40,23 +41,36 @@ packages/core  (domain + ports; no I/O — enforced by ESLint)
 packages/schema (analysis document; shared contract)
 ```
 
-| Path                         | Role                                                                                                                                                                                    |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                         |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing                   |
-| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                              |
-| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, later `LlmProvider`, `Storage`, `Billing`) |
-| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                               |
-| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                     |
-| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                   |
-| `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                                                                                                   |
-| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                |
-| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                    |
-| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                      |
-| `packages/config`            | Config loading and validation                                                                                                                                                           |
-| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                                              |
-| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                          |
-| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                     |
+| Path                         | Role                                                                                                                                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                                    |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing                              |
+| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                                         |
+| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, later `Storage`, `Billing`) |
+| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                          |
+| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                |
+| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                              |
+| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry; later providers, validate-and-repair, metering hooks                                                                            |
+| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                           |
+| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                               |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                 |
+| `packages/config`            | Config loading and validation                                                                                                                                                                      |
+| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                                                         |
+| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                                     |
+| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                                |
+
+## LLM roles
+
+- ADR 0012: the pipeline asks a role (`triage`, `review`, `graph`, `ask`, `embed`) for a
+  structured completion or embeddings through `LlmRoles` (`packages/core/src/llm.ts`). It never
+  sees a provider. `packages/llm` validates the per-role provider + model + effort config
+  (`llmConfigFromEnv`, `ROCKY_LLM_*` in `.env.example`) against each provider's capabilities and
+  fails fast. Defaults: triage Haiku 5.5, review Opus 5.5, graph and ask Sonnet 5.5, all on the
+  Anthropic API. Embeddings stay off until configured. `createLlmRoles` resolves each role to the
+  adapter factory of its provider (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible;
+  adapters in P4-2), so switching provider is a config change.
+- The config names credentials by variable (`apiKeyEnv`) and never holds them. Adapters read
+  keys through a `SecretSource` at call time (env today, per-org BYOK later).
 
 ## Data layer
 
