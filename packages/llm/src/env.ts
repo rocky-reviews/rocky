@@ -71,7 +71,7 @@ const roleVar = (role: string, field: string) => `${PREFIX}${role.toUpperCase()}
 const KNOWN_VARS = new Set<string>([
   `${PREFIX}PROVIDER`,
   ...LLM_COMPLETION_ROLES.flatMap((role) =>
-    ["PROVIDER", "MODEL", "EFFORT"].map((field) => roleVar(role, field)),
+    ["PROVIDER", "MODEL", "EFFORT", "PLATFORM_MODEL"].map((field) => roleVar(role, field)),
   ),
   ...["PROVIDER", "MODEL", "DIMENSIONS"].map((field) => roleVar("embed", field)),
   ...Object.values(PROVIDER_VARS).flatMap(({ prefix, fields }) =>
@@ -90,7 +90,7 @@ const labelFor =
   (path: string): string => {
     const [section, name, field] = path.split(".");
     if (section === "roles" && name !== undefined && field !== undefined) {
-      const own = roleVar(name, field.toUpperCase());
+      const own = roleVar(name, field.replace(/[A-Z]/g, (c) => `_${c}`).toUpperCase());
       if (field === "provider" && valueOf(env, own) === undefined) {
         return valueOf(env, `${PREFIX}PROVIDER`) === undefined ? own : `${PREFIX}PROVIDER`;
       }
@@ -99,14 +99,24 @@ const labelFor =
     if (section === "providers" && isProviderKind(name) && field !== undefined) {
       const vars = PROVIDER_VARS[name];
       const suffix = Object.entries(vars.fields).find(([, key]) => key === field)?.[0];
-      if (suffix !== undefined) return `${PREFIX}${vars.prefix}_${suffix}`;
+      if (suffix !== undefined) {
+        const own = `${PREFIX}${vars.prefix}_${suffix}`;
+        if (name === "bedrock" && valueOf(env, own) === undefined) {
+          return AWS_REGION_VARS.find((aws) => valueOf(env, aws) !== undefined) ?? own;
+        }
+        return own;
+      }
     }
     return path;
   };
 
+/** Bedrock's region falls back to the AWS SDK's own variables (review N8). */
+const AWS_REGION_VARS = ["AWS_REGION", "AWS_DEFAULT_REGION"] as const;
+
 const completionRole = (env: Env, role: LlmCompletionRole, provider: string) => {
   const model = valueOf(env, roleVar(role, "MODEL"));
   const effort = valueOf(env, roleVar(role, "EFFORT"));
+  const platformModel = valueOf(env, roleVar(role, "PLATFORM_MODEL"));
   // Defaults name Claude models, so they apply only where a Claude catalogue does (or where the
   // provider is unknown and already an error, so one mistake is reported once).
   const claude = !isProviderKind(provider) || PROVIDER_CAPABILITIES[provider].models !== undefined;
@@ -123,6 +133,7 @@ const completionRole = (env: Env, role: LlmCompletionRole, provider: string) => 
     provider,
     model: resolvedModel,
     ...(resolvedEffort === undefined ? {} : { effort: resolvedEffort }),
+    ...(platformModel === undefined ? {} : { platformModel }),
   };
 };
 
@@ -149,6 +160,10 @@ const providerBlock = (env: Env, kind: (typeof PROVIDER_KINDS)[number]) => {
   for (const [suffix, field] of Object.entries(vars.fields)) {
     const value = valueOf(env, `${PREFIX}${vars.prefix}_${suffix}`);
     if (value !== undefined) block[field] = value;
+  }
+  if (kind === "bedrock" && block["region"] === undefined) {
+    const fallback = AWS_REGION_VARS.map((name) => valueOf(env, name)).find((v) => v !== undefined);
+    if (fallback !== undefined) block["region"] = fallback;
   }
   return block;
 };

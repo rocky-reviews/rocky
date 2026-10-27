@@ -1,6 +1,19 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isLlmEffort, isLlmRole, LLM_COMPLETION_ROLES, LLM_EFFORTS, LLM_ROLES } from "./llm.js";
+import {
+  isLlmCallError,
+  isLlmEffort,
+  isLlmErrorKind,
+  isLlmRole,
+  isRetryableLlmError,
+  LLM_COMPLETION_ROLES,
+  LLM_EFFORTS,
+  LLM_ERROR_KINDS,
+  LLM_FATAL_ERROR_KINDS,
+  LLM_RETRYABLE_ERROR_KINDS,
+  LLM_ROLES,
+  LlmCallError,
+} from "./llm.js";
 
 describe("LLM port (P4-1)", () => {
   it("names the five roles, four of them completions", () => {
@@ -29,5 +42,58 @@ describe("LLM port (P4-1)", () => {
       const text = readFileSync(new URL(file, src), "utf8");
       expect(text, file).not.toMatch(/@anthropic-ai|openai|@aws-sdk|@google-cloud|@azure/);
     }
+  });
+});
+
+describe("LlmCallError (review round 1, S4)", () => {
+  it("splits kinds into retryable and fatal, with fixed messages", () => {
+    expect([...LLM_RETRYABLE_ERROR_KINDS]).toEqual([
+      "rate_limited",
+      "overloaded",
+      "server_error",
+      "timeout",
+      "network",
+    ]);
+    expect([...LLM_FATAL_ERROR_KINDS]).toEqual([
+      "auth",
+      "permission",
+      "billing",
+      "invalid_request",
+      "model_not_found",
+      "request_too_large",
+      "context_too_long",
+      "cancelled",
+    ]);
+    for (const kind of LLM_ERROR_KINDS) {
+      const error = new LlmCallError(kind);
+      expect(error.retryable).toBe((LLM_RETRYABLE_ERROR_KINDS as readonly string[]).includes(kind));
+      expect(error.message).toBe(new LlmCallError(kind).message);
+      expect(error.message.length).toBeGreaterThan(0);
+      expect(isLlmCallError(error)).toBe(true);
+      expect(isRetryableLlmError(error)).toBe(error.retryable);
+    }
+  });
+
+  it("carries a retry-after hint and nothing from the provider", () => {
+    const error = new LlmCallError("rate_limited", { retryAfterMs: 1500 });
+    expect(error.retryAfterMs).toBe(1500);
+    expect(error.cause).toBeUndefined();
+    expect(Object.keys(error).sort()).toEqual(["kind", "name", "retryAfterMs", "retryable"]);
+    expect(new LlmCallError("auth").retryAfterMs).toBeUndefined();
+    expect(() => new LlmCallError("timeout", { retryAfterMs: -1 })).toThrow(RangeError);
+  });
+
+  it("guards only real LlmCallErrors", () => {
+    for (const value of [
+      new Error("rate_limited"),
+      { name: "LlmCallError", kind: "rate_limited", retryable: true },
+      null,
+      "x",
+    ]) {
+      expect(isLlmCallError(value)).toBe(false);
+      expect(isRetryableLlmError(value)).toBe(false);
+    }
+    expect(isLlmErrorKind("network")).toBe(true);
+    expect(isLlmErrorKind("teapot")).toBe(false);
   });
 });

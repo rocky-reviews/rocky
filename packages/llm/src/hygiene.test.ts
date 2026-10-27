@@ -75,6 +75,12 @@ describe("LLM config secret hygiene", () => {
       { ROCKY_LLM_REVIEW_PROVIDER: KEY },
       { ROCKY_LLM_REVIEW_MODEL: KEY },
       { ROCKY_LLM_REVIEW_EFFORT: KEY },
+      {
+        ROCKY_LLM_REVIEW_PLATFORM_MODEL: KEY,
+        ROCKY_LLM_PROVIDER: "bedrock",
+        AWS_REGION: "us-east-1",
+      },
+      { ROCKY_LLM_PROVIDER: "bedrock", AWS_REGION: KEY },
       { ROCKY_LLM_EMBED_DIMENSIONS: KEY, ROCKY_LLM_EMBED_MODEL: "m" },
       { ROCKY_LLM_BEDROCK_REGION: KEY, ROCKY_LLM_PROVIDER: "bedrock" },
       { ROCKY_LLM_VERTEX_PROJECT_ID: KEY, ROCKY_LLM_PROVIDER: "vertex" },

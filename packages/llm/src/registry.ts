@@ -82,8 +82,17 @@ export const createLlmRoles = (
     }
     completions.set(role, {
       role,
-      complete: (request) =>
-        complete({ ...request, role, model: target.model, effort: target.effort }),
+      complete: async (request) => ({
+        ...(await complete({
+          ...request,
+          role,
+          model: target.model,
+          platformModel: target.platformModel,
+          effort: target.effort,
+        })),
+        // Stamped here, last, so metering always knows who served the call (review S3).
+        provider: target.provider,
+      }),
     });
   }
 
@@ -98,7 +107,10 @@ export const createLlmRoles = (
     }
     if (call !== undefined) {
       embedding = {
-        embed: (request) => call({ ...request, model: embed.model, dimensions: embed.dimensions }),
+        embed: async (request) => ({
+          ...(await call({ ...request, model: embed.model, dimensions: embed.dimensions })),
+          provider: embed.provider,
+        }),
       };
     }
   }

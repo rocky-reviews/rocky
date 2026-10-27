@@ -1,8 +1,10 @@
-import type {
-  LlmProvider,
-  ProviderCompletionCall,
-  ProviderEmbeddingCall,
-  StructuredCompletionResult,
+import {
+  LlmCallError,
+  type LlmErrorKind,
+  type LlmProvider,
+  type ProviderCompletionCall,
+  type ProviderCompletionResult,
+  type ProviderEmbeddingCall,
 } from "@rocky-reviews/core";
 import type { ProviderSettings } from "./config.js";
 import { PROVIDER_CAPABILITIES, PROVIDER_KINDS, type ProviderKind } from "./providers.js";
@@ -33,10 +35,19 @@ const usage = {
   inputTokens: 1,
   outputTokens: 1,
   cacheReadInputTokens: 0,
-  cacheWriteInputTokens: 0,
+  cacheWrite5mInputTokens: 0,
+  cacheWrite1hInputTokens: 0,
 };
 
-export const recordingAdapters = (answer: unknown = { verdict: "comment" }): RecordingAdapters => {
+export interface RecordingOptions {
+  /** Every completion rejects with `LlmCallError(fail)`, as a real adapter maps a failure. */
+  readonly fail?: LlmErrorKind;
+}
+
+export const recordingAdapters = (
+  answer: unknown = { verdict: "comment" },
+  options: RecordingOptions = {},
+): RecordingAdapters => {
   const created: RecordingAdapters["created"] = [];
   const calls: RecordedCompletion[] = [];
   const embedCalls: RecordedEmbedding[] = [];
@@ -56,14 +67,15 @@ export const recordingAdapters = (answer: unknown = { verdict: "comment" }): Rec
       const provider: LlmProvider = {
         completeStructured: <T>(
           call: ProviderCompletionCall<T>,
-        ): Promise<StructuredCompletionResult<T>> => {
+        ): Promise<ProviderCompletionResult<T>> => {
           readKey();
           calls.push({ ...(call as ProviderCompletionCall<unknown>), kind });
+          if (options.fail !== undefined) return Promise.reject(new LlmCallError(options.fail));
           const parsed = call.output.parse(answer);
           return Promise.resolve(
             parsed.success
               ? { status: "ok", value: parsed.data, model: call.model, usage }
-              : { status: "invalid_output", model: call.model, usage },
+              : { status: "invalid_output", model: call.model, usage, issues: parsed.issues },
           );
         },
       };

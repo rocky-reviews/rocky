@@ -24,13 +24,23 @@ export const isLlmRole = (value: unknown): value is LlmRole =>
 export const isLlmEffort = (value: unknown): value is LlmEffort =>
   typeof value === "string" && (LLM_EFFORTS as readonly string[]).includes(value);
 
+/**
+ * Token usage as the provider reports it. Cache writes are split by lifetime because they are
+ * priced differently; Anthropic reports them as `usage.cache_creation.ephemeral_5m_input_tokens`
+ * and `ephemeral_1h_input_tokens`. Providers without a cache report zeros.
+ */
 export interface LlmUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly cacheReadInputTokens: number;
-  readonly cacheWriteInputTokens: number;
+  readonly cacheWrite5mInputTokens: number;
+  readonly cacheWrite1hInputTokens: number;
 }
 
+/**
+ * `issues` are built from schema paths and issue codes only (e.g. `findings.0.line: too_small`),
+ * never from values: they reach logs and the repair round (ADR 0004).
+ */
 export type LlmParseResult<T> =
   | { readonly success: true; readonly data: T }
   | { readonly success: false; readonly issues: readonly string[] };
@@ -57,8 +67,12 @@ export interface StructuredCompletionRequest<T> {
   readonly signal?: AbortSignal;
 }
 
-/** No side effects either way: a result is data for a human to accept or dismiss. */
-export type StructuredCompletionResult<T> =
+/**
+ * What an adapter returns. No side effects either way: a result is data for a human to accept or
+ * dismiss. `truncated`: generation stopped at the output cap or the context window mid-answer.
+ * An input that cannot fit at all is thrown as `LlmCallError("context_too_long")` instead.
+ */
+export type ProviderCompletionResult<T> =
   | {
       readonly status: "ok";
       readonly value: T;
@@ -66,26 +80,48 @@ export type StructuredCompletionResult<T> =
       readonly usage: LlmUsage;
     }
   | {
-      readonly status: "refused" | "truncated" | "invalid_output";
+      readonly status: "refused" | "truncated";
       readonly model: string;
       readonly usage: LlmUsage;
+    }
+  | {
+      readonly status: "invalid_output";
+      readonly model: string;
+      readonly usage: LlmUsage;
+      /** Schema paths and issue codes only (see `LlmParseResult`). */
+      readonly issues?: readonly string[];
     };
+
+/** What a role returns: the adapter's result, stamped by the registry with the provider kind. */
+export type StructuredCompletionResult<T> = ProviderCompletionResult<T> & {
+  readonly provider: string;
+};
 
 export interface EmbeddingRequest {
   readonly inputs: readonly string[];
   readonly signal?: AbortSignal;
 }
 
-export interface EmbeddingResult {
+export interface ProviderEmbeddingResult {
   readonly vectors: readonly (readonly number[])[];
   readonly model: string;
   readonly usage: { readonly inputTokens: number };
 }
 
+export interface EmbeddingResult extends ProviderEmbeddingResult {
+  readonly provider: string;
+}
+
 /** What the registry hands a provider: the request plus the role's configured target. */
 export interface ProviderCompletionCall<T> extends StructuredCompletionRequest<T> {
   readonly role: LlmCompletionRole;
+  /** Canonical model id: the capability key (catalogue, effort). */
   readonly model: string;
+  /**
+   * The literal model string to send, when the operator set one (a Bedrock inference profile or
+   * ARN, a Vertex dated id, a Foundry deployment). Undefined: the adapter derives it from `model`.
+   */
+  readonly platformModel: string | undefined;
   /** Undefined: the provider's own default for the model. */
   readonly effort: LlmEffort | undefined;
 }
@@ -100,8 +136,9 @@ export interface ProviderEmbeddingCall extends EmbeddingRequest {
  * implements what its platform supports; the registry refuses a role whose provider lacks it.
  */
 export interface LlmProvider {
-  completeStructured?<T>(call: ProviderCompletionCall<T>): Promise<StructuredCompletionResult<T>>;
-  embed?(call: ProviderEmbeddingCall): Promise<EmbeddingResult>;
+  // Failures are thrown as `LlmCallError`, never as an SDK error carrying a provider body.
+  completeStructured?<T>(call: ProviderCompletionCall<T>): Promise<ProviderCompletionResult<T>>;
+  embed?(call: ProviderEmbeddingCall): Promise<ProviderEmbeddingResult>;
 }
 
 /** A completion role as the pipeline sees it: no provider, model or effort in sight. */
@@ -119,3 +156,74 @@ export interface LlmRoles {
   /** Undefined when no embedding provider is configured (features that need it stay off). */
   embedding(): EmbeddingRoleClient | undefined;
 }
+
+/**
+ * Call failures (review round 1, S4). Adapters map their platform's errors to one kind (P4-2):
+ * HTTP 429 → rate_limited, 529 → overloaded, 5xx → server_error, 401 → auth, 403 → permission,
+ * 402 → billing, 400 → invalid_request (or context_too_long when the input does not fit),
+ * 404 → model_not_found, 413 → request_too_large; timeouts, connection failures and aborts map to
+ * timeout, network and cancelled. The message is fixed per kind: no provider body, prompt or
+ * output, and no `cause`, ever.
+ */
+export const LLM_RETRYABLE_ERROR_KINDS = [
+  "rate_limited",
+  "overloaded",
+  "server_error",
+  "timeout",
+  "network",
+] as const;
+export const LLM_FATAL_ERROR_KINDS = [
+  "auth",
+  "permission",
+  "billing",
+  "invalid_request",
+  "model_not_found",
+  "request_too_large",
+  "context_too_long",
+  "cancelled",
+] as const;
+export const LLM_ERROR_KINDS = [...LLM_RETRYABLE_ERROR_KINDS, ...LLM_FATAL_ERROR_KINDS] as const;
+export type LlmErrorKind = (typeof LLM_ERROR_KINDS)[number];
+
+const ERROR_MESSAGES: Readonly<Record<LlmErrorKind, string>> = {
+  rate_limited: "the provider rate-limited the request",
+  overloaded: "the provider is overloaded",
+  server_error: "the provider failed to answer",
+  timeout: "the request timed out",
+  network: "the provider could not be reached",
+  auth: "the provider rejected the credentials",
+  permission: "the credentials may not use this model or operation",
+  billing: "the provider account has a billing problem",
+  invalid_request: "the provider rejected the request as invalid",
+  model_not_found: "the model is not available to these credentials",
+  request_too_large: "the request is larger than the provider accepts",
+  context_too_long: "the input does not fit the model's context window",
+  cancelled: "the request was cancelled",
+};
+
+export const isLlmErrorKind = (value: unknown): value is LlmErrorKind =>
+  typeof value === "string" && (LLM_ERROR_KINDS as readonly string[]).includes(value);
+
+export class LlmCallError extends Error {
+  override readonly name = "LlmCallError";
+  readonly kind: LlmErrorKind;
+  readonly retryable: boolean;
+  /** A provider's retry-after hint, when it gave one. */
+  readonly retryAfterMs: number | undefined;
+  constructor(kind: LlmErrorKind, options: { readonly retryAfterMs?: number } = {}) {
+    super(ERROR_MESSAGES[kind]);
+    const { retryAfterMs } = options;
+    if (retryAfterMs !== undefined && !(Number.isFinite(retryAfterMs) && retryAfterMs >= 0)) {
+      throw new RangeError("retryAfterMs must be a finite, non-negative number");
+    }
+    this.kind = kind;
+    this.retryable = (LLM_RETRYABLE_ERROR_KINDS as readonly string[]).includes(kind);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+export const isLlmCallError = (value: unknown): value is LlmCallError =>
+  value instanceof LlmCallError;
+
+export const isRetryableLlmError = (value: unknown): boolean =>
+  isLlmCallError(value) && value.retryable;

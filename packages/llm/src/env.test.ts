@@ -277,3 +277,163 @@ describe("llmConfigFromEnv validation (fails fast, names the variable)", () => {
     ]);
   });
 });
+
+describe("review round 1: catalogue, platform model ids, URLs, regions", () => {
+  it("accepts the skill's active Claude models with their own effort levels (S1a)", () => {
+    for (const model of [
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "claude-sonnet-5",
+    ]) {
+      expect(
+        llmConfigFromEnv({ ROCKY_LLM_REVIEW_MODEL: model, ROCKY_LLM_REVIEW_EFFORT: "xhigh" }).roles
+          .review.model,
+      ).toBe(model);
+    }
+    for (const model of ["claude-opus-4-6", "claude-sonnet-4-6"]) {
+      expect(
+        llmConfigFromEnv({ ROCKY_LLM_REVIEW_MODEL: model, ROCKY_LLM_REVIEW_EFFORT: "max" }).roles
+          .review.effort,
+      ).toBe("max");
+      expect(
+        messageOf({ ROCKY_LLM_REVIEW_MODEL: model, ROCKY_LLM_REVIEW_EFFORT: "xhigh" }),
+      ).toContain(
+        `effort xhigh is not supported by model ${model} (supported: low, medium, high, max)`,
+      );
+    }
+    expect(
+      messageOf({ ROCKY_LLM_REVIEW_MODEL: "claude-opus-4-5", ROCKY_LLM_REVIEW_EFFORT: "max" }),
+    ).toContain("not supported by model claude-opus-4-5 (supported: low, medium, high)");
+  });
+
+  it("configures platform model ids per role without a code change (S1b)", () => {
+    const bedrock = { ROCKY_LLM_PROVIDER: "bedrock", ROCKY_LLM_BEDROCK_REGION: "eu-west-1" };
+    const profile = llmConfigFromEnv({
+      ...bedrock,
+      ROCKY_LLM_REVIEW_PLATFORM_MODEL: "eu.anthropic.claude-opus-5-5",
+    });
+    expect(profile.roles.review).toEqual({
+      provider: "bedrock",
+      model: "claude-opus-5-5",
+      effort: "high",
+      platformModel: "eu.anthropic.claude-opus-5-5",
+    });
+    const arn = "arn:aws:bedrock:eu-west-1:123456789012:application-inference-profile/a1b2c3d4e5f6";
+    expect(
+      llmConfigFromEnv({ ...bedrock, ROCKY_LLM_TRIAGE_PLATFORM_MODEL: arn }).roles.triage
+        .platformModel,
+    ).toBe(arn);
+    expect(
+      llmConfigFromEnv({
+        ROCKY_LLM_PROVIDER: "vertex",
+        ROCKY_LLM_VERTEX_PROJECT_ID: "acme-ai",
+        ROCKY_LLM_VERTEX_REGION: "global",
+        ROCKY_LLM_TRIAGE_MODEL: "claude-haiku-4-5",
+        ROCKY_LLM_TRIAGE_PLATFORM_MODEL: "claude-haiku-4-5@20251001",
+      }).roles.triage,
+    ).toEqual({
+      provider: "vertex",
+      model: "claude-haiku-4-5",
+      platformModel: "claude-haiku-4-5@20251001",
+    });
+    expect(
+      llmConfigFromEnv({
+        ROCKY_LLM_PROVIDER: "foundry",
+        ROCKY_LLM_FOUNDRY_RESOURCE: "acme-foundry",
+        ROCKY_LLM_GRAPH_PLATFORM_MODEL: "sonnet-prod_eu",
+      }).roles.graph.platformModel,
+    ).toBe("sonnet-prod_eu");
+  });
+
+  it("checks a platform model id's shape only, and only where a platform takes one", () => {
+    const bedrock = { ROCKY_LLM_PROVIDER: "bedrock", ROCKY_LLM_BEDROCK_REGION: "eu-west-1" };
+    for (const bad of ["eu anthropic", "a\u0007b", "x".repeat(513), "-leading"]) {
+      expect(messageOf({ ...bedrock, ROCKY_LLM_REVIEW_PLATFORM_MODEL: bad }), bad).toContain(
+        "ROCKY_LLM_REVIEW_PLATFORM_MODEL: must be a platform model id",
+      );
+    }
+    expect(messageOf({ ROCKY_LLM_REVIEW_PLATFORM_MODEL: "anthropic.claude-opus-5-5" })).toContain(
+      "ROCKY_LLM_REVIEW_PLATFORM_MODEL: only bedrock, vertex and foundry take a platform model id",
+    );
+  });
+
+  it("requires https for the Anthropic base URL (S2)", () => {
+    expect(messageOf({ ROCKY_LLM_ANTHROPIC_BASE_URL: "http://127.0.0.1:8080" })).toContain(
+      "ROCKY_LLM_ANTHROPIC_BASE_URL: must be an https URL",
+    );
+  });
+
+  it("allows http to an OpenAI-compatible server only on loopback or without a key (S2)", () => {
+    const roles = {
+      ROCKY_LLM_PROVIDER: "openai-compatible",
+      ROCKY_LLM_TRIAGE_MODEL: "m",
+      ROCKY_LLM_REVIEW_MODEL: "m",
+      ROCKY_LLM_GRAPH_MODEL: "m",
+      ROCKY_LLM_ASK_MODEL: "m",
+    };
+    const keyed = { ...roles, ROCKY_LLM_OPENAI_API_KEY_ENV: "VLLM_API_KEY" };
+    for (const url of [
+      "http://127.0.0.1:8000/v1",
+      "http://localhost:8000/v1",
+      "http://[::1]:8000/v1",
+    ]) {
+      expect(
+        () => llmConfigFromEnv({ ...keyed, ROCKY_LLM_OPENAI_BASE_URL: url }),
+        url,
+      ).not.toThrow();
+    }
+    expect(messageOf({ ...keyed, ROCKY_LLM_OPENAI_BASE_URL: "http://vllm:8000/v1" })).toContain(
+      "ROCKY_LLM_OPENAI_BASE_URL: must be https when a key is sent (http only on 127.0.0.1, localhost or [::1])",
+    );
+    expect(() =>
+      llmConfigFromEnv({ ...keyed, ROCKY_LLM_OPENAI_BASE_URL: "https://vllm.internal/v1" }),
+    ).not.toThrow();
+    expect(() =>
+      llmConfigFromEnv({ ...roles, ROCKY_LLM_OPENAI_BASE_URL: "http://ollama:11434/v1" }),
+    ).not.toThrow();
+  });
+
+  it("accepts @ in a base URL path but not userinfo (N3)", () => {
+    expect(
+      llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_BASE_URL: "https://gw/v1/@team" }).providers.anthropic
+        ?.baseUrl,
+    ).toBe("https://gw/v1/@team");
+    expect(messageOf({ ROCKY_LLM_ANTHROPIC_BASE_URL: "https://user:pw@host" })).toContain(
+      "must not carry credentials, a query or a fragment",
+    );
+  });
+
+  it("falls back to AWS_REGION, then AWS_DEFAULT_REGION, for Bedrock (N8)", () => {
+    const base = { ROCKY_LLM_PROVIDER: "bedrock" };
+    expect(
+      llmConfigFromEnv({ ...base, AWS_DEFAULT_REGION: "us-west-2" }).providers.bedrock,
+    ).toEqual({ kind: "bedrock", region: "us-west-2" });
+    expect(
+      llmConfigFromEnv({ ...base, AWS_REGION: "eu-central-1", AWS_DEFAULT_REGION: "us-west-2" })
+        .providers.bedrock?.region,
+    ).toBe("eu-central-1");
+    expect(
+      llmConfigFromEnv({
+        ...base,
+        ROCKY_LLM_BEDROCK_REGION: "ap-south-1",
+        AWS_REGION: "eu-central-1",
+      }).providers.bedrock?.region,
+    ).toBe("ap-south-1");
+    expect(messageOf({ ...base, AWS_REGION: "not a region" })).toContain(
+      "AWS_REGION: must be a region",
+    );
+    // AWS_REGION alone does not configure Bedrock for an install that does not use it.
+    expect(llmConfigFromEnv({ AWS_REGION: "eu-central-1" }).providers.bedrock).toBeUndefined();
+  });
+
+  it("refuses a key-name variable that looks like a key (N1)", () => {
+    for (const value of ["A".repeat(65), "A1B2C3D4E5F6A7B8C9D0"]) {
+      expect(messageOf({ ROCKY_LLM_ANTHROPIC_API_KEY_ENV: value }), value).toContain(
+        "ROCKY_LLM_ANTHROPIC_API_KEY_ENV: looks like a key, not a variable name",
+      );
+    }
+    expect(() => llmConfigFromEnv({ ROCKY_LLM_ANTHROPIC_API_KEY_ENV: "ACME_KEY_2" })).not.toThrow();
+  });
+});

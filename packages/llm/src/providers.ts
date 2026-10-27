@@ -25,12 +25,24 @@ export interface ModelCapabilities {
  * its platform's form (Bedrock prefixes `anthropic.`; Vertex uses the bare id) in P4-2.
  * Source: Anthropic's model table and effort reference (claude-api skill, cached 2026-10-06).
  */
+const NO_XHIGH: readonly LlmEffort[] = ["low", "medium", "high", "max"];
+const UP_TO_HIGH: readonly LlmEffort[] = ["low", "medium", "high"];
+
 export const CLAUDE_MODELS: ReadonlyMap<string, ModelCapabilities> = new Map([
   ["claude-fable-5-1", { efforts: LLM_EFFORTS }],
+  ["claude-fable-5", { efforts: LLM_EFFORTS }],
   ["claude-opus-5-5", { efforts: LLM_EFFORTS }],
+  ["claude-opus-5", { efforts: LLM_EFFORTS }],
+  ["claude-opus-4-8", { efforts: LLM_EFFORTS }],
+  ["claude-opus-4-7", { efforts: LLM_EFFORTS }],
+  // `xhigh` arrived with Opus 4.7.
+  ["claude-opus-4-6", { efforts: NO_XHIGH }],
+  ["claude-opus-4-5", { efforts: UP_TO_HIGH }],
   ["claude-sonnet-5-5", { efforts: LLM_EFFORTS }],
+  ["claude-sonnet-5", { efforts: LLM_EFFORTS }],
+  ["claude-sonnet-4-6", { efforts: NO_XHIGH }],
   ["claude-haiku-5-5", { efforts: LLM_EFFORTS }],
-  // Older Haiku, kept for self-hosters pinned to it: the API rejects an effort setting.
+  // The API rejects an effort setting on Haiku 4.5.
   ["claude-haiku-4-5", { efforts: [] }],
 ]);
 

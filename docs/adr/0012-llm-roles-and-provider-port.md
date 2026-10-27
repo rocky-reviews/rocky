@@ -4,6 +4,17 @@
 - **Date:** 2026-10-27
 - **Task:** P4-1
 - **Builds on:** [ADR 0004](0004-schema-first-llm.md) (every model call returns schema-valid JSON)
+- **Revised:** review round 1:
+  - the full active Claude catalogue with per-model effort;
+  - per-role platform model ids;
+  - https rules for base URLs;
+  - the provider stamped on results;
+  - cache writes split by lifetime;
+  - `LlmCallError`;
+  - schema issues on `invalid_output`;
+  - the Bedrock region fallback;
+  - key-shaped variable names refused;
+  - notes N4, N5, N7, N9.
 
 ## Context
 
@@ -27,9 +38,44 @@ a role to another provider never needs a code change.
   schema (JSON Schema + validator, ADR 0004) and an output token cap. The result is `ok` with the
   parsed value, or `refused`, `truncated` or `invalid_output`. Either way it is data, never an
   action.
+  - `invalid_output` may carry `issues`, built from schema paths and issue codes only, never
+    values.
+  - Every result carries `provider` (the kind). The registry stamps it last, so adapters don't
+    supply it and can't misstate it. Metering (P4-5) reads it.
+  - `usage` has `inputTokens`, `outputTokens`, `cacheReadInputTokens` and cache writes split by
+    lifetime: `cacheWrite5mInputTokens` and `cacheWrite1hInputTokens`. They mirror Anthropic's
+    `usage.cache_creation.ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens`, which are
+    priced differently. Providers without a cache report zeros.
 - `LlmRoles.embedding()`: an embedding client, or `undefined` when embeddings are off.
 - `LlmProvider`: what an adapter implements: `completeStructured` and/or `embed`. It receives the
-  request plus the role's target (`role`, `model`, `effort`; `dimensions` for embeddings).
+  request plus the role's target: `role`, `model`, `platformModel`, `effort` (`dimensions` for
+  embeddings).
+- `LlmCallError`: how an adapter reports a failed call. Each error has a `kind` and a fixed
+  message per kind. It never carries a provider body, prompt, output or `cause`. It may carry a
+  `retryAfterMs` hint.
+
+  | Kind group | Kinds                | Source (Anthropic HTTP status)   |
+  | ---------- | -------------------- | -------------------------------- |
+  | Retryable  | `rate_limited`       | 429                              |
+  |            | `overloaded`         | 529                              |
+  |            | `server_error`       | 500 and other 5xx                |
+  |            | `timeout`, `network` | timeouts, connection failures    |
+  | Fatal      | `auth`               | 401                              |
+  |            | `permission`         | 403                              |
+  |            | `billing`            | 402                              |
+  |            | `invalid_request`    | 400                              |
+  |            | `model_not_found`    | 404                              |
+  |            | `request_too_large`  | 413                              |
+  |            | `context_too_long`   | 400 for an input that cannot fit |
+  |            | `cancelled`          | the caller's abort signal        |
+
+  The split follows the `claude-api` skill's error-code table. Other providers map onto the same
+  kinds in P4-2.
+
+  **Context window:** an input that cannot fit is `context_too_long`, thrown, because nothing was
+  generated and the caller must shrink the input (P4-6 splits the PR). A generation that stops at
+  the output cap, or at the context window mid-answer, is the result `truncated`, because the
+  call ran and was billed. That split is what lets metering (P4-5) record every billed call.
 
 Core names no vendor SDK (lint allow-list plus `llm.test.ts`).
 
@@ -61,18 +107,63 @@ Validation fails fast and reports every problem at once. It rejects:
 - a missing role;
 - an embed role on a provider without embeddings;
 - a role whose provider has no settings block;
-- malformed regions, names and URLs, and URLs with credentials, a query or a fragment;
+- malformed regions, names and URLs, and URLs with credentials (userinfo), a query or a
+  fragment (`@` elsewhere in a path is fine);
+- plain-http base URLs where a key would travel in clear (below);
+- a `*_API_KEY_ENV` value that looks like a key rather than a variable name: over 64 characters,
+  or no `_` with a high share of digits;
+- a `platformModel` on a provider that takes none, or one with spaces, control characters or
+  over 512 characters;
 - unknown keys;
 - any value shaped like a credential (the `packages/log` scrubber's patterns).
 
 A validated config is frozen and registered. The registry refuses any other object.
 
-**Models.** The Claude platforms share one catalogue of canonical Claude API ids:
-`claude-fable-5-1`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5` and
-`claude-haiku-4-5`. An id outside it is refused. The adapter maps the id to its platform's form
-in P4-2: Bedrock adds the `anthropic.` prefix, and Vertex uses the bare id. Foundry's form is
-confirmed in P4-2. An OpenAI-compatible server serves whatever it has loaded, so any well-formed
-id is accepted there.
+**Base URLs (review S2).** The rule follows the server's rule for `ROCKY_PUBLIC_URL`: https, or
+http only on the loopback hosts `127.0.0.1`, `localhost` and `[::1]`.
+
+- `anthropic.baseUrl` (a gateway) must be https. The key always travels there.
+- `openai-compatible.baseUrl` with `apiKeyEnv` set must be https, or plain http on loopback.
+- Without a key, plain http to any host is allowed.
+
+The keyless case is the usual self-host layout: Ollama as a sibling container
+(`http://ollama:11434`) on a private Docker network, which serves no TLS out of the box. Requiring
+https there would push operators to add a TLS proxy for a hop that never leaves the host network.
+No credential can leak on that hop. PR content does cross it in clear, and the operator who puts
+the model server on another machine owns that network's confidentiality (the self-host docs,
+P10-3, will say so).
+
+**Models.** The Claude platforms share one catalogue of canonical Claude API ids, with each
+model's effort levels:
+
+| Model                                                                    | Effort levels                                                  |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `claude-fable-5-1`, `claude-fable-5`                                     | all five                                                       |
+| `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7` | all five                                                       |
+| `claude-sonnet-5-5`, `claude-sonnet-5`                                   | all five                                                       |
+| `claude-haiku-5-5`                                                       | all five                                                       |
+| `claude-opus-4-6`, `claude-sonnet-4-6`                                   | `low`, `medium`, `high`, `max` (`xhigh` arrived with Opus 4.7) |
+| `claude-opus-4-5`                                                        | `low`, `medium`, `high`                                        |
+| `claude-haiku-4-5`                                                       | none (the API rejects `effort`)                                |
+
+Source: the `claude-api` skill's model table and its thinking and effort table (cached
+2026-10-06). The skill gives an effort set for every catalogued model, so no entry is a guess.
+Claude Mythos (access program only) is left out.
+
+An id outside the catalogue is refused. The catalogue id is the _capability key_: effort
+validation and defaults read it. The literal string sent to a platform is either derived by the
+adapter in P4-2 (Bedrock adds the `anthropic.` prefix; Vertex uses the bare id; Foundry's form is
+confirmed in P4-2), or set per role as `platformModel` (`ROCKY_LLM_<ROLE>_PLATFORM_MODEL`). That
+override covers:
+
+- a Bedrock inference profile (`eu.anthropic.claude-opus-5-5`) or ARN;
+- a Vertex dated id (`claude-haiku-4-5@20251001`);
+- a Foundry deployment name.
+
+`platformModel` is allowed only on bedrock, vertex and foundry. It is shape-checked only, since
+platforms mint these strings, and the credential check applies to it as to every field. An
+OpenAI-compatible server serves whatever it has loaded, so any well-formed id is accepted there,
+and it needs no override.
 
 **Effort** is a provider-neutral scale `low < medium < high < xhigh < max`, validated against
 what the provider and model support. Each adapter maps it to its own parameter (P4-2):
@@ -106,9 +197,12 @@ role must name its model.
 12-factor, like the rest of Rocky's config. `llmConfigFromEnv` reads:
 
 - `ROCKY_LLM_PROVIDER`, which moves every role;
-- `ROCKY_LLM_<ROLE>_{PROVIDER,MODEL,EFFORT}`;
+- `ROCKY_LLM_<ROLE>_{PROVIDER,MODEL,EFFORT,PLATFORM_MODEL}`;
 - `ROCKY_LLM_EMBED_{PROVIDER,MODEL,DIMENSIONS}`;
 - the provider settings `ROCKY_LLM_{ANTHROPIC,BEDROCK,VERTEX,FOUNDRY,OPENAI}_*`.
+
+Bedrock's region falls back to `AWS_REGION`, then `AWS_DEFAULT_REGION`, as the AWS SDK's does.
+Errors then name the variable that was read. Those variables alone never switch Bedrock on.
 
 Every key is documented in `.env.example`. Errors name the variable to fix and never its value.
 An unknown `ROCKY_LLM_*` variable is an error, so a typo cannot silently leave a role on its
@@ -159,15 +253,35 @@ the setup wizard, P10-2) plug in as follows:
 - a per-org `createLlmRoles` (cached per org and config version) hands the pipeline an `LlmRoles`
   for that org. Nothing in the roles or the pipeline changes.
 
+Two limits on overlays (review N4):
+
+- An org overlay may not set `baseUrl` or `apiKeyEnv`. Otherwise an org admin could point the
+  instance's key at their own host, or name an instance variable (another tenant's key, a
+  database URL) as their key.
+- Org keys come only from the org-scoped `SecretSource`, never from the environment. Any
+  org-supplied endpoint, if one is ever allowed, needs an SSRF policy: https only; no private,
+  loopback or link-local addresses after DNS resolution; no redirects.
+
 None of this is built here.
+
+### 8. Notes for later tasks
+
+- **N5:** `ask` will want streaming for an interactive UI (P9). It will be an optional
+  `streamStructured` on `LlmProvider` and `CompletionRoleClient`, beside `complete`. The existing
+  contract stays as it is.
+- **N7:** `LlmUntrustedText.label` is Rocky-authored (`"diff"`, `"title"`, a file index). It is
+  never built from PR content, such as a file path or a branch name, because adapters use it in
+  the delimiters that mark untrusted text (P4-4).
+- **N9:** at `xhigh` and `max` effort, give `maxOutputTokens` at least 64K, and stream. Thinking
+  counts against the cap, so a lower cap risks `truncated` (P4-2, P4-3).
 
 ## Consequences
 
 - Moving a role to another provider is a config change. A new provider is a capability row plus
   an adapter factory.
-- The Claude catalogue is code: a new Claude model id is a one-line change and a release, not a
-  config edit. That is the price of refusing typos and unknown ids at boot.
-- Bedrock inference-profile ids (regional prefixes) and Foundry deployment names are not
-  expressible yet. P4-2 adds them, as a per-provider model mapping, if a platform needs one.
+- The Claude catalogue is code. A brand-new Claude model still needs a catalogue entry (one line
+  and a release), because its capabilities, such as effort levels, are validated from it. That is
+  the price of refusing typos and unknown ids at boot. Regional and platform forms, inference
+  profiles, ARNs, dated ids and deployments need no catalogue entry: they go in `platformModel`.
 - Validation reads the catalogue, not the provider's live Models API, so a model the provider
   withdraws fails at the first call, not at boot. The P10-2 setup wizard's test call covers that.

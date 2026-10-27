@@ -34,11 +34,13 @@ Task log for the project plan. Agents append a row when a task is merged.
 
 ### P4-1 follow-ups
 
-- P4-2: adapters per provider. Map the canonical Claude id to the platform form (Bedrock adds `anthropic.`; confirm Foundry), map effort to `output_config.effort` / `reasoning_effort`, and read keys through `SecretSource` at call time only. Consider Bedrock inference-profile ids and Foundry deployment names as a per-provider model mapping.
+- P4-2: adapters per provider. Map the canonical Claude id to the platform form (Bedrock adds `anthropic.`; confirm Foundry), map effort to `output_config.effort` / `reasoning_effort`, and read keys through `SecretSource` at call time only. Send `platformModel` verbatim when set (inference profiles, ARNs, Vertex dated ids, Foundry deployments).
 - P4-3: wire `llmConfigFromEnv` + `createLlmRoles` into the worker's config at boot, so a bad `ROCKY_LLM_*` stops the worker before it claims work.
 - The plan's YAML config file has no loader yet (`packages/config` is a stub); when it gets one, it feeds `parseLlmConfig` the same object.
 - C-5 / P10-2: per-org overlay merged and re-validated through `parseLlmConfig`, keys through an `LlmKeyProvider`-backed `SecretSource` (ADR 0012 §7).
 - P4-7: tune the default efforts with the evals.
+- Review round 1 notes (ADR 0012 §7–8): per-org overlays (C-5/P10) may not set `baseUrl` or `apiKeyEnv`; org keys come only from an org-scoped `SecretSource`, plus an SSRF policy for any org endpoint (N4). Streaming for `ask` as an optional `streamStructured` (N5, P9). `LlmUntrustedText.label` is Rocky-authored, never PR content (N7, P4-4). `maxOutputTokens` ≥ 64K and streaming at `xhigh`/`max` (N9, P4-2/P4-3).
+- P4-2: map provider errors onto `LlmCallError` kinds (input over the context window → `context_too_long`; a generation cut off at the cap or window → `truncated`), and the cache-write split onto `cacheWrite5mInputTokens`/`cacheWrite1hInputTokens`.
 - Needs human: choose a default embedding provider (if any) before P8 (ADR 0012 §6).
 
 ### P2-3 / P2-4 final-review follow-ups

@@ -58,7 +58,13 @@ export type ProviderSettingsByKind = { readonly [K in ProviderKind]?: ProviderSe
 
 export interface CompletionRoleConfig {
   readonly provider: ProviderKind;
+  /** Canonical model id: the capability key for validation and defaults. */
   readonly model: string;
+  /**
+   * The literal id the platform adapter sends (Bedrock inference profile or ARN, Vertex dated id,
+   * Foundry deployment). Only on bedrock, vertex and foundry; shape-checked only.
+   */
+  readonly platformModel?: string;
   /** Omitted: the provider's own default for the model. */
   readonly effort?: LlmEffort;
 }
@@ -97,6 +103,9 @@ const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const REGION = /^[a-z0-9]{1,30}(?:-[a-z0-9]{1,30}){0,4}$/;
 const RESOURCE_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,62}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
+const PLATFORM_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$/;
+const PLATFORM_MODEL_PROVIDERS: readonly ProviderKind[] = ["bedrock", "vertex", "foundry"];
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const SAFE_KEY = /^[a-z][A-Za-z0-9]{0,23}(?:-[a-z0-9]{1,16})?$/;
 export const MAX_EMBEDDING_DIMENSIONS = 16_000;
 
@@ -109,49 +118,85 @@ const matching = (pattern: RegExp, message: string) =>
   });
 
 const envName = matching(ENV_NAME, "must name an environment variable (A-Z, 0-9, _)");
+
+/** A variable *name* for a key; refuses values that look like the key itself (review N1). */
+const keyEnvName = envName.superRefine((value, ctx) => {
+  const digits = [...value].filter((char) => char >= "0" && char <= "9").length;
+  const keyLike =
+    value.length > 64 ||
+    (!value.includes("_") && value.length >= 12 && digits / value.length >= 0.3);
+  if (keyLike) ctx.addIssue({ code: "custom", message: "looks like a key, not a variable name" });
+});
 const region = matching(REGION, "must be a region name such as us-east-1");
 const resourceName = matching(RESOURCE_NAME, "must be a resource name (letters, digits, -)");
 
-const baseUrl = z.string().superRefine((raw, ctx) => {
-  let url: URL | undefined;
+const parseUrl = (raw: string): URL | undefined => {
   try {
-    url = new URL(raw);
+    return new URL(raw);
   } catch {
-    url = undefined;
+    return undefined;
   }
+};
+
+/** http(s), no userinfo, query or fragment. Whether plain http is allowed is decided per provider. */
+const baseUrl = z.string().superRefine((raw, ctx) => {
+  const url = parseUrl(raw);
   if (url === undefined || (url.protocol !== "https:" && url.protocol !== "http:")) {
     ctx.addIssue({ code: "custom", message: "must be an http(s) URL" });
-  } else if (
-    url.username !== "" ||
-    url.password !== "" ||
-    raw.includes("?") ||
-    raw.includes("#") ||
-    raw.includes("@")
-  ) {
+  } else if (url.username !== "" || url.password !== "" || raw.includes("?") || raw.includes("#")) {
     ctx.addIssue({ code: "custom", message: "must not carry credentials, a query or a fragment" });
   }
 });
 
+const isPlainHttp = (raw: string): boolean => parseUrl(raw)?.protocol === "http:";
+const isLoopback = (raw: string): boolean => LOOPBACK.has(parseUrl(raw)?.hostname ?? "");
+
 const providerSettings = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("anthropic"),
-    apiKeyEnv: envName,
-    baseUrl: baseUrl.optional(),
+    apiKeyEnv: keyEnvName,
+    // The key always travels to this URL, so https only (review S2).
+    baseUrl: baseUrl
+      .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
+      .optional(),
   }),
   z.strictObject({ kind: z.literal("bedrock"), region }),
   z.strictObject({ kind: z.literal("vertex"), projectId: resourceName, region }),
-  z.strictObject({ kind: z.literal("foundry"), resource: resourceName, apiKeyEnv: envName }),
-  z.strictObject({
-    kind: z.literal("openai-compatible"),
-    baseUrl,
-    apiKeyEnv: envName.optional(),
-  }),
+  z.strictObject({ kind: z.literal("foundry"), resource: resourceName, apiKeyEnv: keyEnvName }),
+  z
+    .strictObject({
+      kind: z.literal("openai-compatible"),
+      baseUrl,
+      apiKeyEnv: keyEnvName.optional(),
+    })
+    // A key goes over https, or plain http on loopback only; a keyless local server on a private
+    // network (`http://ollama:11434`) is the operator's call (ADR 0012 §2).
+    .superRefine((settings, ctx) => {
+      if (
+        settings.apiKeyEnv !== undefined &&
+        isPlainHttp(settings.baseUrl) &&
+        !isLoopback(settings.baseUrl)
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["baseUrl"],
+          message: "must be https when a key is sent (http only on 127.0.0.1, localhost or [::1])",
+        });
+      }
+    }),
 ]);
 
 const completionRole = z.strictObject({
   provider: z.enum(PROVIDER_KINDS),
   model: z.string(),
   effort: z.enum(LLM_EFFORTS).optional(),
+  platformModel: z
+    .string()
+    .refine((value) => PLATFORM_MODEL.test(value), {
+      error:
+        "must be a platform model id (letters, digits, . _ : / @ + -; no spaces; at most 512 characters)",
+    })
+    .optional(),
 });
 
 const dimensions = z
@@ -288,6 +333,12 @@ const semanticIssues = (input: unknown): LlmConfigIssue[] => {
     }
     if (providers !== undefined && providers[kind] === undefined) {
       issues.push({ path: `${path}.provider`, message: `provider ${kind} is not configured` });
+    }
+    if (role["platformModel"] !== undefined && !PLATFORM_MODEL_PROVIDERS.includes(kind)) {
+      issues.push({
+        path: `${path}.platformModel`,
+        message: "only bedrock, vertex and foundry take a platform model id",
+      });
     }
     const model = role["model"];
     if (typeof model !== "string" || !checkModel(path, kind, model)) return;

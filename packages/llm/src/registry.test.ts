@@ -1,8 +1,9 @@
-import type {
-  LlmOutputSchema,
-  LlmProvider,
-  LlmRoles,
-  StructuredCompletionResult,
+import {
+  isLlmCallError,
+  type LlmOutputSchema,
+  type LlmProvider,
+  type LlmRoles,
+  type StructuredCompletionResult,
 } from "@rocky-reviews/core";
 import { describe, expect, it } from "vitest";
 import { LlmConfigError, type LlmConfig } from "./config.js";
@@ -229,5 +230,68 @@ describe("createLlmRoles", () => {
     expect(() => createLlmRoles(forged, recordingAdapters().factories, envSecrets({}))).toThrow(
       /parseLlmConfig/,
     );
+  });
+});
+
+describe("review round 1: results carry the provider, errors stay typed", () => {
+  it("stamps the provider kind on every completion and embedding result (S3)", async () => {
+    const env = {
+      ROCKY_LLM_REVIEW_PROVIDER: "bedrock",
+      ROCKY_LLM_BEDROCK_REGION: "us-east-1",
+      ROCKY_LLM_EMBED_PROVIDER: "openai-compatible",
+      ROCKY_LLM_EMBED_MODEL: "nomic-embed-text",
+      ROCKY_LLM_EMBED_DIMENSIONS: "8",
+      ROCKY_LLM_OPENAI_BASE_URL: "http://127.0.0.1:11434/v1",
+    };
+    const roles = createLlmRoles(
+      llmConfigFromEnv(env),
+      recordingAdapters().factories,
+      envSecrets(env),
+    );
+    const [triage, review] = await reviewOnePr(roles);
+    expect(triage?.provider).toBe("anthropic");
+    expect(review?.provider).toBe("bedrock");
+    expect(review?.usage).toEqual({
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadInputTokens: 0,
+      cacheWrite5mInputTokens: 0,
+      cacheWrite1hInputTokens: 0,
+    });
+    const embedded = await roles.embedding()?.embed({ inputs: ["a"] });
+    expect(embedded?.provider).toBe("openai-compatible");
+  });
+
+  it("passes the platform model id to the adapter as given (S1b)", async () => {
+    const env = {
+      ROCKY_LLM_PROVIDER: "bedrock",
+      ROCKY_LLM_BEDROCK_REGION: "eu-west-1",
+      ROCKY_LLM_REVIEW_PLATFORM_MODEL: "eu.anthropic.claude-opus-5-5",
+    };
+    const adapters = recordingAdapters();
+    await reviewOnePr(createLlmRoles(llmConfigFromEnv(env), adapters.factories, envSecrets(env)));
+    expect(adapters.calls.map((call) => [call.role, call.model, call.platformModel])).toEqual([
+      ["triage", "claude-haiku-5-5", undefined],
+      ["review", "claude-opus-5-5", "eu.anthropic.claude-opus-5-5"],
+    ]);
+  });
+
+  it("carries schema issues on invalid output (N6)", async () => {
+    const adapters = recordingAdapters({ nope: true });
+    const roles = createLlmRoles(llmConfigFromEnv({}), adapters.factories, envSecrets({}));
+    const [result] = await reviewOnePr(roles);
+    expect(result).toMatchObject({
+      status: "invalid_output",
+      provider: "anthropic",
+      issues: ["verdict missing"],
+    });
+  });
+
+  it("lets an adapter's LlmCallError through unchanged (S4)", async () => {
+    const adapters = recordingAdapters(undefined, { fail: "rate_limited" });
+    const roles = createLlmRoles(llmConfigFromEnv({}), adapters.factories, envSecrets({}));
+    const error = await reviewOnePr(roles).catch((caught: unknown) => caught);
+    expect(isLlmCallError(error)).toBe(true);
+    expect(error).toMatchObject({ kind: "rate_limited", retryable: true });
   });
 });
