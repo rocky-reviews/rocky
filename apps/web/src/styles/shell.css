@@ -1,0 +1,688 @@
+/*
+ * App shell (P6-1): layout and the top bar, sidebar and panel frames, after design-poc/index.html.
+ * Colours only through tokens.css. Differences from the POC are marked "POC:" with the reason.
+ */
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--text-md) / 1.5 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+h1,
+h2 {
+  margin: 0;
+  font: inherit;
+}
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+}
+
+/* POC: no visible focus. Every control shows one when reached by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--space-2);
+  top: -100px;
+  z-index: 70;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--you);
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+.skip-link:focus {
+  top: var(--space-2);
+}
+
+.placeholder {
+  color: var(--muted);
+  margin: var(--space-2) 0 0;
+}
+
+.status-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  color: var(--muted);
+}
+
+/* ---------- shell ---------- */
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  /* The title never widens the page; it ellipsises instead. */
+  grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+}
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 10px var(--space-4);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--ai), var(--you));
+  flex: none;
+}
+.pr-meta {
+  min-width: 0;
+  flex: 1;
+}
+.pr-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.3em;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--text-lg);
+}
+/* The number stays outside the clipped text, so a long title never hides it. */
+.pr-title-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* POC: --faint, below 4.5:1 contrast on the panel. */
+.pr-number {
+  color: var(--muted);
+  font-weight: 400;
+  flex: none;
+}
+.pr-sub {
+  color: var(--muted);
+  font-size: var(--text-base);
+  display: flex;
+  gap: 2px 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+.pr-sub > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pr-sub .add {
+  color: var(--add-sign);
+}
+.pr-sub .del {
+  color: var(--del-sign);
+}
+.branch {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--panel-2);
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+}
+.status-pill {
+  font-size: var(--text-sm);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.status-pill.tone-ok {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.status-pill.tone-crit {
+  background: var(--crit-bg);
+  color: var(--crit);
+}
+/* POC: --low text on --low-bg, below 4.5:1 contrast. */
+.status-pill.tone-low {
+  background: var(--low-bg);
+  color: var(--text);
+}
+/* Approvals and comments wrap together, never one per line. */
+.gh-stats {
+  display: inline-flex;
+  gap: 10px;
+  white-space: nowrap;
+}
+.gh-stat {
+  color: var(--text);
+  font-weight: 550;
+  white-space: nowrap;
+}
+.gh-link {
+  color: var(--you);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.gh-link:hover {
+  text-decoration: underline;
+}
+
+/* Approvers tooltip: on hover and on keyboard focus; Escape dismisses it. */
+.has-tip {
+  position: relative;
+  border-radius: var(--radius-xs);
+}
+/*
+ * The tooltip's own box starts at the trigger's bottom edge and pads the gap, so the pointer
+ * can cross onto it without it closing (WCAG 1.4.13). It wraps instead of leaving the viewport.
+ */
+.tip {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 40;
+  padding-top: 6px;
+  width: max-content;
+  max-width: min(320px, 100vw - 32px);
+}
+.tip-box {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--panel);
+  font-weight: 500;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow);
+}
+.has-tip[data-open="true"] .tip {
+  display: block;
+}
+
+.mode-btn,
+.icon-btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 7px;
+  padding: var(--space-1) 9px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+  flex: none;
+}
+.mode-btn:hover,
+.icon-btn:hover {
+  color: var(--text);
+}
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  padding: 5px 7px;
+}
+
+/* Drawer toggles exist only where the POC hides the panel they open. */
+.toggle-files,
+.toggle-panel {
+  display: none;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 7px;
+  padding: 6px var(--space-3);
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--panel-2);
+}
+.btn-sm {
+  padding: 3px 9px;
+  font-size: var(--text-base);
+  border-radius: var(--radius-sm);
+}
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.btn-ghost:hover {
+  color: var(--text);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr) 370px;
+  min-height: 0;
+}
+.col {
+  min-height: 0;
+  overflow: auto;
+}
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: var(--space-3) 10px var(--space-5);
+}
+.main {
+  padding: 18px 22px 80px;
+}
+/* Focus lands on these regions only programmatically (skip link, a drawer closing on resize). */
+.main:focus,
+.sidebar:focus,
+.panel:focus {
+  outline: none;
+}
+.panel {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ---------- sidebar ---------- */
+.coverage {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin-bottom: var(--space-3);
+  background: var(--panel-2);
+}
+.coverage-top {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-base);
+  color: var(--muted);
+}
+.coverage-top b {
+  color: var(--text);
+}
+.bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin-top: 7px;
+}
+.bar > div {
+  height: 100%;
+  background: linear-gradient(90deg, var(--ai), var(--you));
+  transition: width 0.3s;
+}
+.coverage-note {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  margin-top: 6px;
+}
+/* POC: --faint, below 4.5:1 contrast. */
+.group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: var(--space-3) var(--space-2) var(--space-1);
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 0 0 0 var(--space-2);
+  border-radius: 7px;
+  min-width: 0;
+}
+.nav-item:hover {
+  background: var(--panel-2);
+}
+.nav-item.sel {
+  background: var(--you-bg);
+}
+.nav-brief {
+  padding: 6px var(--space-2);
+}
+.nav-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 6px var(--space-2) 6px 0;
+  text-align: left;
+  border-radius: 7px;
+}
+.nav-item .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Truncate from the left so the file name stays visible. */
+  direction: rtl;
+  text-align: left;
+}
+.nav-item .name bdi {
+  direction: ltr;
+  unicode-bidi: plaintext;
+}
+.nav-item.viewed .name {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+}
+/*
+ * POC: the level colour as text on its tint, 3.2-4.1:1 in light mode (below WCAG AA). The tint
+ * still carries the level; the number uses the text colour.
+ */
+.score {
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  min-width: 26px;
+  text-align: center;
+  border-radius: 5px;
+  padding: 1px var(--space-1);
+  color: var(--text);
+}
+.r-critical .score {
+  background: var(--crit-bg);
+}
+.r-important .score {
+  background: var(--high-bg);
+}
+.r-normal .score {
+  background: var(--low-bg);
+}
+.r-low .score {
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.dots {
+  display: flex;
+  gap: 2px;
+}
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.dot.critical {
+  background: var(--crit);
+}
+.dot.high {
+  background: var(--high);
+}
+.dot.medium {
+  background: var(--med);
+}
+.dot.low {
+  background: var(--low);
+}
+.dot.done {
+  opacity: 0.25;
+}
+/* The POC's look on a real checkbox. */
+.check {
+  appearance: none;
+  margin: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--radius-xs);
+  border: 1.5px solid var(--faint);
+  background: var(--panel);
+  flex: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.check:checked {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.check:checked::after {
+  content: "✓";
+  font-size: var(--text-2xs);
+  line-height: 1;
+  color: var(--panel);
+}
+.brief-icon {
+  width: 15px;
+  height: 15px;
+  border-radius: var(--radius-xs);
+  flex: none;
+  background: linear-gradient(135deg, var(--ai), var(--you));
+}
+.noise-box {
+  margin: var(--space-1) 6px;
+  padding: var(--space-2) 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.noise-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* ---------- main ---------- */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow);
+}
+.section {
+  padding: var(--space-4) 18px;
+}
+.h-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* POC: the whole label in --ai, 3.7:1 on the panel in light mode; only the mark is cyan here. */
+.ai-tag {
+  color: var(--text);
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.ai-tag::before {
+  content: "✦";
+  color: var(--ai);
+}
+.main-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.file-path {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- right panel ---------- */
+.panel-head {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-2);
+  flex: none;
+}
+.panel-title {
+  padding: 11px var(--space-3);
+  font-weight: 600;
+  border-bottom: 2px solid var(--you);
+  margin-bottom: -1px;
+}
+.panel-body {
+  overflow: auto;
+  padding: var(--space-3);
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---------- drawers (below the POC breakpoints) ---------- */
+.drawer-head {
+  display: none;
+}
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: var(--overlay);
+}
+
+@media (max-width: 1180px) {
+  .body {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+  .panel {
+    display: none;
+  }
+  .toggle-panel {
+    display: inline-grid;
+  }
+  .panel[data-open="true"] {
+    display: flex;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(370px, 100vw - 48px);
+    box-shadow: var(--shadow-modal);
+  }
+  .panel[data-open="true"] .drawer-head {
+    display: flex;
+  }
+}
+@media (max-width: 760px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sidebar {
+    display: none;
+  }
+  .toggle-files {
+    display: inline-grid;
+  }
+  .sidebar[data-open="true"] {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 50;
+    width: min(320px, 100vw - 48px);
+    box-shadow: var(--shadow-modal);
+  }
+  .sidebar[data-open="true"] .drawer-head {
+    display: flex;
+  }
+  .main {
+    padding: var(--space-3) var(--space-4) 60px;
+  }
+  .topbar {
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  .topbar .hide-sm {
+    display: none;
+  }
+  .pr-sub {
+    column-gap: var(--space-2);
+    line-height: 1.4;
+  }
+  .gh-stats {
+    gap: var(--space-2);
+  }
+  /* "View on" is read out but not shown, so the link fits beside the counts. */
+  .sr-only-sm {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* The brand mark gives its width to the PR (the name is already hidden here). */
+  .brand {
+    display: none;
+  }
+}
+.drawer-head {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.sidebar .drawer-head {
+  margin: calc(-1 * var(--space-3)) -10px var(--space-3);
+}
