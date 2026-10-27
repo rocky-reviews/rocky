@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { applyFloor, NOISE_SUMMARIES, preTriage } from "./rules.js";
 
@@ -114,5 +115,34 @@ describe("applyFloor", () => {
 
   it("without a floor, changes nothing", () => {
     expect(applyFloor(triage, undefined)).toBe(triage);
+  });
+});
+
+describe("name rules without backtracking regexes (CodeQL js/polynomial-redos)", () => {
+  // The patterns the scans replaced: kept here as the reference they must agree with.
+  const OLD_TEST = /(?:\.(?:test|spec)\.[^/]+|_test\.[^/]+|_spec\.[^/]+)$/;
+  const OLD_GENERATED =
+    /(?:\.generated\.[^/]+|\.gen\.[^/]+|\.pb\.(?:go|cc|h|swift|dart)|_pb2(?:_grpc)?\.pyi?|\.g\.dart|\.freezed\.dart|\.min\.(?:js|css))$/;
+  const name = fc
+    .array(fc.constantFrom("a", ".", "_", "test", "spec", "gen", "generated", "pb", "min", "js"), {
+      maxLength: 12,
+    })
+    .map((parts) => parts.join(""));
+
+  it("agrees with the old test-name and generated-name patterns", () => {
+    fc.assert(
+      fc.property(name, (file) => {
+        const path = `src/${file}`;
+        const oldTest = OLD_TEST.test(file);
+        const oldGenerated = OLD_GENERATED.test(file);
+        if (oldGenerated) expect(preTriage(path)).toEqual({ kind: "noise", rule: "generated" });
+        else expect(preTriage(path)).not.toEqual({ kind: "noise", rule: "generated" });
+        // A test name drops the auth floor: compare on an auth directory.
+        const auth = preTriage(`src/auth/${file}`);
+        if (oldTest) expect(auth).not.toMatchObject({ rule: "auth" });
+        else if (file.length > 0) expect(auth).toMatchObject({ rule: "auth" });
+      }),
+      { numRuns: 2000 },
+    );
   });
 });

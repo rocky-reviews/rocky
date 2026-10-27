@@ -57,8 +57,21 @@ const LOCKFILES = new Set([
 ]);
 
 const GENERATED_SEGMENTS = new Set(["generated", "__generated__"]);
-const GENERATED_NAMES =
-  /(?:\.generated\.[^/]+|\.gen\.[^/]+|\.pb\.(?:go|cc|h|swift|dart)|_pb2(?:_grpc)?\.pyi?|\.g\.dart|\.freezed\.dart|\.min\.(?:js|css))$/;
+const GENERATED_SUFFIXES =
+  /(?:\.pb\.(?:go|cc|h|swift|dart)|_pb2(?:_grpc)?\.pyi?|\.g\.dart|\.freezed\.dart|\.min\.(?:js|css))$/;
+const GENERATED_INFIXES = [".generated.", ".gen."] as const;
+
+/**
+ * True when `name` (one path component) contains a marker with at least one character after it.
+ * A scan, not a regex: an unanchored `\.gen\.[^/]+$` backtracks polynomially on names that
+ * repeat the marker (CodeQL js/polynomial-redos). The first occurrence decides: if any occurrence
+ * has a character after it, the first one does.
+ */
+const hasInfix = (name: string, markers: readonly string[]): boolean =>
+  markers.some((marker) => {
+    const at = name.indexOf(marker);
+    return at !== -1 && at + marker.length < name.length;
+  });
 
 const MIGRATION_SEGMENTS = new Set(["migrations", "migration", "migrate", "alembic"]);
 
@@ -68,7 +81,7 @@ const AUTH_ANYWHERE =
 const AUTH_WORD = /(?:^|[/._-])(?:sso|saml|oidc|jwt|acls?|rbac|iam|keys?)(?:[/._-]|$)/;
 
 const TEST_SEGMENTS = new Set(["__tests__", "test", "tests", "spec", "specs", "e2e"]);
-const TEST_NAMES = /(?:\.(?:test|spec)\.[^/]+|_test\.[^/]+|_spec\.[^/]+)$/;
+const TEST_INFIXES = [".test.", ".spec.", "_test.", "_spec."] as const;
 
 export const preTriage = (path: string): PreTriage => {
   const lower = path.toLowerCase();
@@ -79,12 +92,16 @@ export const preTriage = (path: string): PreTriage => {
   if (dirs.some((dir) => MIGRATION_SEGMENTS.has(dir)) || name.endsWith(".sql")) {
     return { kind: "analyse", floor: "important", rule: "migration" };
   }
-  const test = dirs.some((dir) => TEST_SEGMENTS.has(dir)) || TEST_NAMES.test(name);
+  const test = dirs.some((dir) => TEST_SEGMENTS.has(dir)) || hasInfix(name, TEST_INFIXES);
   if (!test && (AUTH_ANYWHERE.test(lower) || AUTH_WORD.test(lower))) {
     return { kind: "analyse", floor: "important", rule: "auth" };
   }
   if (LOCKFILES.has(name)) return { kind: "noise", rule: "lockfile" };
-  if (dirs.some((dir) => GENERATED_SEGMENTS.has(dir)) || GENERATED_NAMES.test(name)) {
+  if (
+    dirs.some((dir) => GENERATED_SEGMENTS.has(dir)) ||
+    GENERATED_SUFFIXES.test(name) ||
+    hasInfix(name, GENERATED_INFIXES)
+  ) {
     return { kind: "noise", rule: "generated" };
   }
   return { kind: "analyse" };
