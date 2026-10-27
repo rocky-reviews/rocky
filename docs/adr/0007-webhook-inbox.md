@@ -7,7 +7,9 @@
 - **Amended by:** [ADR 0009](0009-installation-lifecycle.md) (P3-3: the inbox's processing state,
   the worker's claim path, the purge skips unprocessed rows; review round 1: claims per forge, one
   live lease per installation, transient vs. strike failures; review round 2: no superseding, a
-  shape CHECK on installation rows; review round 3: a bounded claim, collapse on completion)
+  shape CHECK on installation rows; review round 3: a bounded claim, collapse on completion);
+  [ADR 0010](0010-pull-request-mirror.md) (P3-4: the outbound `Forge` port's repository sessions,
+  the pull request lane's consumer, claims cover whole lanes)
 
 ## Context
 
@@ -45,8 +47,9 @@ The domain must also stay forge-neutral (GitLab and Gitea later, P3-7).
   pure, no I/O, never throws, authenticates the raw body before parsing it; plus
   `precheck(header)`, the header-shape rules alone (no secret), run before the body is read;
 - `WebhookInbox`: `record(delivery) → "queued" | "duplicate"`;
-- `Forge`: the read side used by P3-3/P3-4 (`getInstallation`, `getPullRequest`,
-  `listOpenPullRequests`, `getPullRequestDiff`); it grows with P3-5/P3-6.
+- `Forge`: the read side used by P3-3/P3-4 (`getInstallation`, `verifyApp`; since P3-4
+  `openRepository`, a session on one repository with a scoped token that reads pull requests,
+  lists them and reads revision diffs, and `locateRepository`, ADR 0010); it grows with P3-5/P3-6.
 
 GitHub specifics (header names, `X-Hub-Signature-256`, payload shapes, Octokit later) live in
 `packages/forge-github`. Core imports nothing forge-specific: the ESLint allowlist (ADR 0002)

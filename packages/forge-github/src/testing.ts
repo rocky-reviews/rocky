@@ -147,11 +147,50 @@ export interface FakeAccount {
   readonly type: "Organization" | "User" | "Enterprise";
 }
 
+/** A repository of an installation, as the fake serves it. */
+export interface FakeRepository {
+  readonly id: number;
+  /** `owner/name`. */
+  readonly fullName: string;
+  readonly private?: boolean;
+  readonly defaultBranch?: string;
+}
+
+/** A pull request as the fake serves it (fields default to `get-pull-request.json`'s). */
+export interface FakePullRequest {
+  readonly number: number;
+  readonly headSha: string;
+  readonly baseSha?: string;
+  readonly title?: string;
+  readonly state?: "open" | "closed";
+  readonly merged?: boolean;
+  readonly authorLogin?: string | null;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly closedAt?: string | null;
+  readonly additions?: number;
+  readonly deletions?: number;
+  readonly changedFiles?: number;
+}
+
+/** Routes `failRoute` can make fail. */
+export type FakeRoute = "installation" | "token" | "pull" | "list" | "compare";
+
 export interface FakeGitHubApi {
   /** Pass as the reader's `fetch`. */
   readonly fetch: typeof fetch;
-  /** Every request seen: method, path, and whether its app JWT verified. Never the token. */
+  /**
+   * Every request seen: method, path, and whether its credential verified (the app JWT, or a
+   * live installation token scoped to the repository). Never the token.
+   */
   readonly requests: { method: string; path: string; authorized: boolean }[];
+  /** Installation tokens: every mint request's body, and how many were issued and revoked. */
+  readonly tokens: {
+    readonly mints: { installationId: number; body: unknown }[];
+    /** Every token value issued, so a test can prove none of them leaked. */
+    readonly issued: string[];
+    revoked: number;
+  };
   /** GitHub reports this installation as existing (optionally suspended). */
   install(installationId: number, account: FakeAccount, options?: { suspended?: boolean }): void;
   /** GitHub answers 404 for it from now on. */
@@ -166,8 +205,25 @@ export interface FakeGitHubApi {
     times?: number,
     response?: { readonly body: string; readonly contentType: string },
   ): void;
+  /** Like `failNext`, for one route (P3-4). */
+  failRoute(route: FakeRoute, status: number, times?: number): void;
   /** `GET /app` reports this app id from now on (default: the configured one). */
   reportAppId(appId: number): void;
+  /** The installation can access this repository (P3-4). */
+  addRepository(installationId: number, repository: FakeRepository): void;
+  /** The repository is no longer accessible to its installation (minting answers 422). */
+  removeRepository(repositoryId: number): void;
+  /** Creates or replaces a pull request of a repository. */
+  putPullRequest(repositoryId: number, pullRequest: FakePullRequest): void;
+  /**
+   * The diff `compare/{base}...{head}` serves: text, GitHub's 406 "too large", or a JSON 404
+   * (commits gone). Without one, a small synthetic diff naming the head is served.
+   */
+  putDiff(
+    repositoryId: number,
+    revision: { baseSha: string; headSha: string },
+    diff: string | "too_large" | "missing",
+  ): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -176,24 +232,50 @@ const json = (status: number, body: unknown): Response =>
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 
+/** A regex capture group (always present for the routes below). */
+const group = (match: RegExpExecArray, index: number): string => match[index] ?? "";
+
+const TOKEN_ROUTE = /^app\/installations\/(\d+)\/access_tokens$/;
+const INSTALLATION_ROUTE = /^app\/installations\/(\d+)$/;
+const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
+const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
+const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
+const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/;
+
 /**
- * An in-memory GitHub serving `GET /app/installations/{id}` and `GET /app` from the fixtures
- * (ids substituted). It checks the app JWT on every request like GitHub does (RS256 signature with
- * the app's public key, `iss` = app id, unexpired, at most 10 minutes long): a bad or missing
- * token gets 401.
+ * An in-memory GitHub serving, from the documentation-shaped fixtures (ids substituted):
+ * `GET /app/installations/{id}` and `GET /app` (P3-3); installation tokens
+ * (`POST /app/installations/{id}/access_tokens`, `DELETE /installation/token`), `GET
+ * /repos/{owner}/{repo}/installation`, pull requests (one, and the paginated list) and
+ * `compare/{base}...{head}` diffs (P3-4). It checks credentials like GitHub does: the app JWT
+ * (RS256 signature with the app's public key, `iss` = app id, unexpired, at most 10 minutes long)
+ * on `/app/...` routes, and on repository routes a live token minted for that repository (a
+ * token for another repository gets a 404, as on GitHub). A bad or missing credential gets 401.
  */
 export const fakeGitHubApi = (options: {
   appId: number;
   publicKey: KeyObject | string;
   api?: string;
+  /** GitHub's clock in ms (JWT checks, token expiry); default `Date.now`. */
+  now?: () => number;
 }): FakeGitHubApi => {
+  const now = options.now ?? Date.now;
   const base = new URL(options.api ?? "https://api.github.com/");
   const publicKey =
     typeof options.publicKey === "string" ? createPublicKey(options.publicKey) : options.publicKey;
   const installed = new Map<number, { account: FakeAccount; suspended: boolean }>();
   const failures: { status: number; body?: string; contentType?: string }[] = [];
+  const routeFailures = new Map<FakeRoute, number[]>();
   let reportedAppId = options.appId;
   const requests: FakeGitHubApi["requests"] = [];
+  const repositories = new Map<number, { installationId: number; repo: FakeRepository }>();
+  const pulls = new Map<number, Map<number, FakePullRequest>>();
+  const diffs = new Map<string, string | "too_large" | "missing">();
+  const live = new Map<
+    string,
+    { installationId: number; repositoryIds: Set<number>; expiresAt: number }
+  >();
+  const tokens: FakeGitHubApi["tokens"] = { mints: [], issued: [], revoked: 0 };
 
   const authorized = (header: string | null): boolean => {
     const match = /^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(
@@ -214,13 +296,159 @@ export const fakeGitHubApi = (options: {
       if (!verify("sha256", Buffer.from(`${h}.${p}`), publicKey, Buffer.from(sig, "base64url"))) {
         return false;
       }
-      const now = Math.floor(Date.now() / 1000);
+      const seconds = Math.floor(now() / 1000);
       const iat = Number(claims["iat"]);
       const exp = Number(claims["exp"]);
-      return claims["iss"] === String(options.appId) && exp > now && iat <= now && exp - iat <= 600;
+      return (
+        claims["iss"] === String(options.appId) &&
+        exp > seconds &&
+        iat <= seconds &&
+        exp - iat <= 600
+      );
     } catch {
       return false;
     }
+  };
+
+  const tokenOf = (header: string | null): string | undefined => {
+    const match = /^(?:Bearer|token) (\S+)$/.exec(header ?? "");
+    const value = match?.[1];
+    const scope = value === undefined ? undefined : live.get(value);
+    return scope !== undefined && now() < scope.expiresAt ? value : undefined;
+  };
+
+  const repositoryByName = (owner: string, name: string) =>
+    [...repositories.values()].find(
+      (r) => r.repo.fullName.toLowerCase() === `${owner}/${name}`.toLowerCase(),
+    );
+
+  const repositoryJson = (repo: FakeRepository): Record<string, unknown> => {
+    const fixture = (
+      githubFixture("post-installation-access-token")["repositories"] as unknown[]
+    )[0] as Record<string, unknown>;
+    const [owner, name] = repo.fullName.split("/") as [string, string];
+    return {
+      ...fixture,
+      id: repo.id,
+      name,
+      full_name: repo.fullName,
+      owner: { ...(fixture["owner"] as Record<string, unknown>), login: owner },
+      private: repo.private ?? true,
+      default_branch: repo.defaultBranch ?? "main",
+    };
+  };
+
+  const pullJson = (repo: FakeRepository, pr: FakePullRequest): Record<string, unknown> => {
+    const fixture = githubFixture("get-pull-request");
+    const head = fixture["head"] as Record<string, unknown>;
+    const baseRef = fixture["base"] as Record<string, unknown>;
+    const merged = pr.merged === true;
+    const state = merged ? "closed" : (pr.state ?? "open");
+    const closedAt =
+      pr.closedAt ?? (state === "closed" ? (pr.updatedAt ?? "2026-10-26T11:00:00Z") : null);
+    return {
+      ...fixture,
+      number: pr.number,
+      state,
+      title: pr.title ?? fixture["title"],
+      user:
+        pr.authorLogin === null
+          ? null
+          : {
+              ...(fixture["user"] as Record<string, unknown>),
+              login: pr.authorLogin ?? "octo-dev",
+            },
+      created_at: pr.createdAt ?? fixture["created_at"],
+      updated_at: pr.updatedAt ?? fixture["updated_at"],
+      closed_at: closedAt,
+      merged_at: merged ? closedAt : null,
+      merged,
+      head: {
+        ...head,
+        sha: pr.headSha,
+        repo: { ...(head["repo"] as object), id: repo.id, full_name: repo.fullName },
+      },
+      base: {
+        ...baseRef,
+        sha: pr.baseSha ?? "b".repeat(40),
+        repo: { ...(baseRef["repo"] as object), id: repo.id, full_name: repo.fullName },
+      },
+      additions: pr.additions ?? fixture["additions"],
+      deletions: pr.deletions ?? fixture["deletions"],
+      changed_files: pr.changedFiles ?? fixture["changed_files"],
+    };
+  };
+
+  const takeRouteFailure = (route: FakeRoute): number | undefined =>
+    routeFailures.get(route)?.shift();
+
+  const repoRoute = (
+    method: string,
+    path: string,
+    url: URL,
+    token: string | undefined,
+  ): Response | undefined => {
+    const scoped = (owner: string, name: string) => {
+      const entry = repositoryByName(owner, name);
+      if (entry === undefined || token === undefined) return undefined;
+      return live.get(token)?.repositoryIds.has(entry.repo.id) === true ? entry : undefined;
+    };
+    let m = PULL_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("pull");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      const pr = entry === undefined ? undefined : pulls.get(entry.repo.id)?.get(Number(m[3]));
+      if (entry === undefined || pr === undefined) {
+        return json(404, githubFixture("get-installation.not-found"));
+      }
+      return json(200, pullJson(entry.repo, pr));
+    }
+    m = LIST_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("list");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const perPage = Number(url.searchParams.get("per_page") ?? "30");
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const item =
+        (githubFixture("list-pull-requests") as unknown as Record<string, unknown>[])[0] ?? {};
+      const all = [...(pulls.get(entry.repo.id)?.values() ?? [])]
+        .map((pr) => pullJson(entry.repo, pr))
+        .sort(
+          (a, b) =>
+            String(b["created_at"]).localeCompare(String(a["created_at"])) ||
+            Number(b["number"]) - Number(a["number"]),
+        );
+      const slice = all.slice((page - 1) * perPage, page * perPage).map((full) => {
+        const out: Record<string, unknown> = {};
+        for (const key of Object.keys(item)) out[key] = full[key];
+        return out;
+      });
+      return json(200, slice);
+    }
+    m = COMPARE_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("compare");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const diff = diffs.get(`${entry.repo.id}:${m[3]}...${m[4]}`);
+      if (diff === "too_large") return json(406, githubFixture("compare-diff.too-large"));
+      if (diff === "missing") return json(404, githubFixture("get-installation.not-found"));
+      const text =
+        diff ??
+        readFileSync(new URL("../fixtures/compare.diff", import.meta.url), "utf8").replace(
+          "index 1111111..2222222",
+          `index ${group(m, 3).slice(0, 7)}..${group(m, 4).slice(0, 7)}`,
+        );
+      return new Response(text, {
+        status: 200,
+        headers: { "content-type": "application/vnd.github.diff; charset=utf-8" },
+      });
+    }
+    return undefined;
   };
 
   const fakeFetch = async (
@@ -230,15 +458,19 @@ export const fakeGitHubApi = (options: {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
     const method = init?.method ?? "GET";
     const headers = new Headers(init?.headers);
-    const ok = authorized(headers.get("authorization"));
-    requests.push({ method, path: url.pathname, authorized: ok });
     if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) {
+      requests.push({ method, path: url.pathname, authorized: false });
       throw new TypeError("fetch failed: unexpected host");
     }
+    const path = url.pathname.slice(base.pathname.length);
+    const appRoute =
+      path === "app" || path.startsWith("app/") || REPO_INSTALLATION_ROUTE.test(path);
+    const token = appRoute ? undefined : tokenOf(headers.get("authorization"));
+    const ok = appRoute ? authorized(headers.get("authorization")) : token !== undefined;
+    requests.push({ method, path: url.pathname, authorized: ok });
     if (init?.redirect !== "error")
       return json(400, { message: "test: redirects must be refused" });
-    const path = url.pathname.slice(base.pathname.length);
-    const failure = path === "app" ? undefined : failures.shift();
+    const failure = INSTALLATION_ROUTE.test(path) ? failures.shift() : undefined;
     if (failure !== undefined) {
       return failure.body === undefined
         ? json(failure.status, { message: "Injected failure" })
@@ -247,11 +479,76 @@ export const fakeGitHubApi = (options: {
             headers: { "content-type": failure.contentType ?? "text/plain" },
           });
     }
-    if (!ok) return json(401, { message: "A JSON web token could not be decoded" });
+    if (INSTALLATION_ROUTE.test(path)) {
+      const injected = takeRouteFailure("installation");
+      if (injected !== undefined) return json(injected, { message: "Injected failure" });
+    }
+    if (!ok) return json(401, { message: "Bad credentials" });
     if (method === "GET" && path === "app") {
       return json(200, { ...githubFixture("get-app"), id: reportedAppId });
     }
-    const match = /^app\/installations\/(\d+)$/.exec(path);
+    if (method === "DELETE" && path === "installation/token") {
+      if (token !== undefined) live.delete(token);
+      tokens.revoked++;
+      return new Response(null, { status: 204 });
+    }
+    const mintMatch = TOKEN_ROUTE.exec(path);
+    if (method === "POST" && mintMatch !== null) {
+      const installationId = Number(mintMatch[1]);
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        repository_ids?: number[];
+        repositories?: string[];
+        permissions?: Record<string, string>;
+      };
+      tokens.mints.push({ installationId, body });
+      const injected = takeRouteFailure("token");
+      if (injected !== undefined) return json(injected, { message: "Injected failure" });
+      const entry = installed.get(installationId);
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      if (entry.suspended) return json(403, { message: "This installation has been suspended" });
+      const owned = [...repositories.values()].filter((r) => r.installationId === installationId);
+      const wanted = [
+        ...(body.repository_ids ?? []).map((id) => owned.find((r) => r.repo.id === id)),
+        ...(body.repositories ?? []).map((name) =>
+          owned.find((r) => r.repo.fullName.split("/")[1]?.toLowerCase() === name.toLowerCase()),
+        ),
+      ];
+      const found = wanted.filter((r): r is NonNullable<typeof r> => r !== undefined);
+      if (found.length === 0 || found.length !== wanted.length) {
+        return json(422, githubFixture("post-installation-access-token.unprocessable"));
+      }
+      const value = `test-token-${randomUUID()}`;
+      tokens.issued.push(value);
+      live.set(value, {
+        installationId,
+        repositoryIds: new Set(found.map((r) => r.repo.id)),
+        expiresAt: now() + 3_600_000,
+      });
+      return json(201, {
+        ...githubFixture("post-installation-access-token"),
+        token: value,
+        expires_at: new Date(now() + 3_600_000).toISOString(),
+        permissions: { ...body.permissions, metadata: "read" },
+        repositories: found.map((r) => repositoryJson(r.repo)),
+      });
+    }
+    const repoInstallation = REPO_INSTALLATION_ROUTE.exec(path);
+    if (method === "GET" && repoInstallation !== null) {
+      const entry = repositoryByName(group(repoInstallation, 1), group(repoInstallation, 2));
+      if (entry === undefined || !installed.has(entry.installationId)) {
+        return json(404, githubFixture("get-installation.not-found"));
+      }
+      const suspended = installed.get(entry.installationId)?.suspended === true;
+      return json(200, {
+        ...githubFixture(
+          suspended ? "get-installation.user-suspended" : "get-installation.organization",
+        ),
+        id: entry.installationId,
+      });
+    }
+    const routed = repoRoute(method, path, url, token);
+    if (routed !== undefined) return routed;
+    const match = INSTALLATION_ROUTE.exec(path);
     if (method !== "GET" || match === null)
       return json(404, githubFixture("get-installation.not-found"));
     const id = Number(match[1]);
@@ -289,19 +586,42 @@ export const fakeGitHubApi = (options: {
   return {
     fetch: fakeFetch as typeof fetch,
     requests,
+    tokens,
     install: (installationId, account, opts = {}) => {
       installed.set(installationId, { account, suspended: opts.suspended === true });
     },
     uninstall: (installationId) => {
       installed.delete(installationId);
+      for (const [value, scope] of live)
+        if (scope.installationId === installationId) live.delete(value);
     },
     failNext: (status, times = 1, response) => {
       for (let i = 0; i < times; i++) {
         failures.push(response === undefined ? { status } : { status, ...response });
       }
     },
+    failRoute: (route, status, times = 1) => {
+      const list = routeFailures.get(route) ?? [];
+      for (let i = 0; i < times; i++) list.push(status);
+      routeFailures.set(route, list);
+    },
     reportAppId: (appId) => {
       reportedAppId = appId;
+    },
+    addRepository: (installationId, repository) => {
+      repositories.set(repository.id, { installationId, repo: repository });
+    },
+    removeRepository: (repositoryId) => {
+      repositories.delete(repositoryId);
+      for (const scope of live.values()) scope.repositoryIds.delete(repositoryId);
+    },
+    putPullRequest: (repositoryId, pullRequest) => {
+      const map = pulls.get(repositoryId) ?? new Map<number, FakePullRequest>();
+      map.set(pullRequest.number, pullRequest);
+      pulls.set(repositoryId, map);
+    },
+    putDiff: (repositoryId, revision, diff) => {
+      diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);
     },
   };
 };

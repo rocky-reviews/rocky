@@ -23,6 +23,8 @@
   every role the login reaches, not only its direct grants (privileges and ownership ORed across
   them, ownership of any object in the database), refuses ADMIN OPTION and reads the catalog
   through `pg_catalog.` only (L28).
+- **Amended by:** [ADR 0010](0010-pull-request-mirror.md) (P3-4: claims must cover whole lanes;
+  the pull request lane is consumed; suspended installations are not read on behalf of)
 
 ## Context
 
@@ -257,7 +259,8 @@ sweep's re-check).
 
 **Suspended is not deleted.** A suspended installation still exists on GitHub; its org and data
 stay and nothing is scheduled. `installation.suspend`/`unsuspend` are not decoded (ADR 0007);
-reads on behalf of a suspended installation fail until it is unsuspended (P3-4 handles that).
+reads on behalf of a suspended installation fail until it is unsuspended (P3-4 finishes such
+pull request events without effect, ADR 0010 §1).
 
 ### 6. Deletion sweep and erasure
 
@@ -413,7 +416,9 @@ a crashed or concurrent worker; a GitHub outage or a misconfigured key.
   failures or raise the cap.
 - **Future `installation.*` types stop a lane.** The claim skips a lane head whose type is not in
   the worker's `p_event_types`, so storing a new installation event type before the worker
-  handles it stops that installation's lane (follow-up for P3-4, which adds types).
+  handles it would stop that installation's lane. Resolved in P3-4 (ADR 0010 §6): claims must
+  cover whole lanes, the inbox CHECK is pinned to `FORGE_EVENT_TYPES`, and a type a drain does not
+  handle is parked (`unhandled_event_type`).
 - **The server's login check runs on new connections only, not per statement.** A role granted
   to the server's login (or a privilege attribute set on it) while connections are open takes
   effect on those connections at once; the check does not see it. New connections are refused at
@@ -476,8 +481,7 @@ a crashed or concurrent worker; a GitHub outage or a misconfigured key.
 - **A collapsed `created` row's sender** is not offered as an installer candidate; the completed
   row's sender (if its account matched GitHub's) is. The installer candidate is a hint that P7-1
   verifies anyway.
-- **Pull request rows** accumulate unprocessed until P3-4 consumes them (the purge skips
-  unprocessed rows). Either P3-4 is scheduled next, or pending `pull_request.*` rows older than
-  the retention period are purged.
+- **Pull request rows** accumulated unprocessed until P3-4 (the purge skips unprocessed rows).
+  Resolved: P3-4 consumes them (ADR 0010 §1); processed rows are purged as usual.
 - **Installer candidate** may be wrong or absent; P7-1 must verify before granting admin.
 - **Tombstones are kept indefinitely**: they hold no personal data (no login or account id).

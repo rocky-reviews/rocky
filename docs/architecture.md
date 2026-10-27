@@ -7,7 +7,8 @@ Decisions behind this page:
 [ADR 0006 envelope encryption](adr/0006-envelope-encryption.md),
 [ADR 0007 forge port and webhook inbox](adr/0007-webhook-inbox.md),
 [ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md),
-[ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md).
+[ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md),
+[ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md).
 
 ## Runtime
 
@@ -38,23 +39,23 @@ packages/core  (domain + ports; no I/O — enforced by ESLint)
 packages/schema (analysis document; shared contract)
 ```
 
-| Path                         | Role                                                                                                                                   |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                        |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations), org deletion sweep, retention; later analysis, posting, indexing              |
-| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                             |
-| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, later `LlmProvider`, `Storage`, `Billing`) |
-| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                              |
-| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                    |
-| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                  |
-| `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                                                  |
-| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                               |
-| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                   |
-| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                     |
-| `packages/config`            | Config loading and validation                                                                                                          |
-| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                             |
-| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                         |
-| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                    |
+| Path                         | Role                                                                                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                       |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing |
+| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                            |
+| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, later `LlmProvider`, `Storage`, `Billing`)                                |
+| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                             |
+| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                   |
+| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                 |
+| `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                                                                                 |
+| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                              |
+| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                  |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                    |
+| `packages/config`            | Config loading and validation                                                                                                                                         |
+| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                            |
+| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                        |
+| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                   |
 
 ## Data layer
 
@@ -90,6 +91,15 @@ packages/schema (analysis document; shared contract)
   gets a fresh org), erases external stores (`OrgErasers`: object storage, embeddings), then
   `retention.delete_org`, which cascades through every tenant table, deletes or scrubs the
   installation's inbox rows and leaves a tombstone in `app.org_deletions`.
+- Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
+  from GitHub (the event is a hint) on an installation token minted per row for that one
+  repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is
+  done; it upserts `repos`, `pull_requests` (never over a newer `forge_updated_at`) and the head
+  revision in `pr_revisions` with its diff reading (bytes, sha256, `diff_truncation`:
+  `max_bytes` past 1 MiB, `forge_limit`, `unavailable`). Diff text is not stored. Claims cover
+  whole lanes, so no lane stops behind a type nobody claims. `pnpm mirror:rebuild <owner/name>`
+  recreates a repository's mirror from GitHub (pull requests and their current head revisions;
+  nothing deleted).
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); four permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event

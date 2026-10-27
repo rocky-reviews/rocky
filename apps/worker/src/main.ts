@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { nothingStoredYet, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
-import { createGitHubInstallationReader } from "@rocky-reviews/forge-github";
+import { createGitHubForge } from "@rocky-reviews/forge-github";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
 import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
@@ -66,13 +66,19 @@ const jobs = startJobs({
   forge:
     config.githubApp === undefined
       ? undefined
-      : createGitHubInstallationReader({
+      : createGitHubForge({
           auth: config.githubApp.auth,
           api: config.githubApp.api,
           clock,
         }),
 });
-log.info({ installationEvents: config.githubApp !== undefined }, "worker ready");
+log.info(
+  {
+    installationEvents: config.githubApp !== undefined,
+    pullRequestEvents: config.githubApp !== undefined,
+  },
+  "worker ready",
+);
 
 let shuttingDown: Promise<void> | undefined;
 const shutdown = (): Promise<void> => {

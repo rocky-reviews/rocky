@@ -1,0 +1,5 @@
+{
+  "message": "There is at least one repository that does not exist or is not accessible to the parent installation.",
+  "documentation_url": "https://docs.github.com/rest/apps/apps#create-an-installation-access-token-for-an-app",
+  "status": "422"
+}

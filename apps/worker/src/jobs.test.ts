@@ -4,6 +4,7 @@ import { createLogger } from "@rocky-reviews/log";
 import { describe, expect, it } from "vitest";
 import { createAppCheck } from "./app-check.js";
 import { failureKindOf, leaseSecondsFor, retryDelaySeconds, ROW_BUDGET_SECONDS } from "./inbox.js";
+import { OrgNotReadyError, PR_ROW_BUDGET_SECONDS } from "./pull-requests.js";
 import { ContradictionError, ParkDeliveryError, StaleOrgError } from "./installations.js";
 import { startJobs } from "./jobs.js";
 
@@ -66,6 +67,8 @@ const forge = {
   kind: "github" as const,
   getInstallation: () => Promise.resolve(null),
   verifyApp: () => Promise.resolve(),
+  openRepository: () => Promise.resolve(null),
+  locateRepository: () => Promise.resolve(null),
 };
 
 describe("startJobs", () => {
@@ -79,7 +82,9 @@ describe("startJobs", () => {
     // The sweep re-verifies every uninstall with GitHub first (review round 1, S1c).
     expect(calls).not.toContain("due");
     expect(
-      lines.some((l) => String(l["msg"]).includes("installation events stay in the inbox")),
+      lines.some((l) =>
+        String(l["msg"]).includes("installation and pull request events stay in the inbox"),
+      ),
     ).toBe(true);
   });
 
@@ -117,11 +122,11 @@ describe("startJobs", () => {
 });
 
 describe("the inbox re-loop rule (review round 3)", () => {
-  const fullBatch = () =>
-    Array.from({ length: 10 }, (_, i) => ({
+  const fullBatch = (size: number, eventType: string) =>
+    Array.from({ length: size }, (_, i) => ({
       forge: "github" as const,
       deliveryId: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
-      eventType: "installation.created" as const,
+      eventType,
       installationId: i + 1,
       event: null,
       attempts: 1,
@@ -130,12 +135,21 @@ describe("the inbox re-loop rule (review round 3)", () => {
       leaseUntil: new Date(Date.now() + 3_600_000),
     }));
 
-  const run = async (failResult: "retry" | "parked") => {
+  /** Claims of one lane (installations: batches of 10; pull requests, P3-4: batches of 5). */
+  const run = async (
+    failResult: "retry" | "parked",
+    lane: "installation" | "pull_request" = "installation",
+  ) => {
     let claims = 0;
     const { db } = stubDb({
-      claimWebhookDeliveries: () => {
+      claimWebhookDeliveries: (options: { eventTypes: readonly string[] }) => {
+        if (!options.eventTypes.every((t) => t.startsWith(`${lane}.`))) return Promise.resolve([]);
         claims++;
-        return Promise.resolve(fullBatch());
+        return Promise.resolve(
+          lane === "installation"
+            ? fullBatch(10, "installation.created")
+            : fullBatch(5, "pull_request.opened"),
+        );
       },
       // Every row is undecodable (event null) and fails; the stub decides what the database said.
       failWebhookDelivery: () => Promise.resolve(failResult),
@@ -160,6 +174,11 @@ describe("the inbox re-loop rule (review round 3)", () => {
 
   it("a full batch with released or retried rows waits for the next tick (no hot loop)", async () => {
     expect(await run("retry")).toBe(1);
+  });
+
+  it("P3-4: the pull request lane follows the same rule with its own batch", async () => {
+    expect(await run("parked", "pull_request")).toBeGreaterThan(3);
+    expect(await run("retry", "pull_request")).toBe(1);
   });
 });
 
@@ -230,6 +249,7 @@ describe("failure classification (review round 1, S3)", () => {
       new ForgeReadError("http_status", 422),
       new ContradictionError(),
       new StaleOrgError(),
+      new OrgNotReadyError(),
       Object.assign(new Error("duplicate key"), { code: "23505" }),
       new Error("no code"),
     ]) {
@@ -254,6 +274,12 @@ describe("lease sizing (review round 1, S4)", () => {
     expect(leaseSecondsFor(1, 900)).toBe(900);
     // Within what the claim accepts (it clamps to 3600 s).
     expect(leaseSecondsFor(100)).toBeLessThanOrEqual(3600);
+  });
+
+  it("P3-4: a pull request row's budget covers its five forge reads, the diff at its own timeout", () => {
+    expect(PR_ROW_BUDGET_SECONDS).toBeGreaterThanOrEqual(4 * 10 + 30);
+    expect(leaseSecondsFor(5, undefined, PR_ROW_BUDGET_SECONDS)).toBe(6 * PR_ROW_BUDGET_SECONDS);
+    expect(leaseSecondsFor(5, undefined, PR_ROW_BUDGET_SECONDS)).toBeLessThanOrEqual(3600);
   });
 });
 

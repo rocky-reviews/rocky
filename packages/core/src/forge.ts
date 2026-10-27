@@ -92,6 +92,11 @@ export const isForgeEventType = (value: unknown): value is ForgeEventType =>
 export const isInstallationEvent = (event: ForgeEvent): event is InstallationEvent =>
   event.type === "installation.created" || event.type === "installation.deleted";
 
+const PULL_REQUEST_TYPES: ReadonlySet<string> = new Set(PULL_REQUEST_EVENT_TYPES);
+
+export const isPullRequestEvent = (event: ForgeEvent): event is PullRequestEvent =>
+  PULL_REQUEST_TYPES.has(event.type);
+
 // --- Inbound: webhook deliveries ---------------------------------------------------------------
 
 /** One authenticated delivery, reduced to what the domain needs. */
@@ -166,7 +171,7 @@ export interface WebhookInbox {
   record(delivery: WebhookDelivery): Promise<"queued" | "duplicate">;
 }
 
-// --- Outbound: reading from the forge (implemented in P3-3 / P3-4) ----------------------------
+// --- Outbound: reading from the forge (P3-3 installations, P3-4 pull requests) -----------------
 
 export interface ForgeInstallation {
   readonly id: ForgeNumericId;
@@ -180,6 +185,19 @@ export interface ForgeInstallation {
 
 export type ForgePullRequestState = "open" | "closed" | "merged";
 
+/** A repository as the forge describes it now. Display fields are untrusted and may change. */
+export interface ForgeRepository {
+  readonly id: ForgeNumericId;
+  /** `owner/name`; display only (repositories are renamed and transferred). */
+  readonly fullName: string;
+  readonly private: boolean;
+  readonly defaultBranch: string;
+}
+
+/**
+ * A pull request as the forge describes it now (P3-4 mirrors it). `title` and `authorLogin` are
+ * untrusted text from the PR's author: stored verbatim, never logged, never trusted in prompts.
+ */
 export interface ForgePullRequest {
   readonly ref: PullRequestRef;
   readonly title: string;
@@ -189,12 +207,41 @@ export interface ForgePullRequest {
   readonly baseSha: string;
   readonly openedAt: Date;
   readonly closedAt: Date | null;
+  /** The forge's last-modified time: a newer snapshot never loses to an older one. */
+  readonly updatedAt: Date;
+  /** Known fields from the forge (P1-4), never from a model. */
+  readonly changedFiles: number;
+  readonly additions: number;
+  readonly deletions: number;
 }
 
+/** What a listing returns per pull request: enough to tell whether the mirror is current. */
+export interface ForgePullRequestSummary {
+  readonly number: number;
+  readonly headSha: string;
+  readonly updatedAt: Date;
+}
+
+/** One revision of a pull request: the diff between these two commits (merge-base semantics). */
+export interface RevisionRef {
+  readonly baseSha: string;
+  readonly headSha: string;
+}
+
+/**
+ * Why a diff is not complete:
+ * - `max_bytes`: longer than the reader's byte cap; `text` holds a prefix, cut at a line end;
+ * - `forge_limit`: the forge refuses to render a diff this large; `text` is empty;
+ * - `unavailable`: the forge has no diff for these commits (gone after a force-push); empty.
+ */
+export type DiffTruncation = "max_bytes" | "forge_limit" | "unavailable";
+
 export interface ForgeDiff {
-  /** Unified diff text, cut at `maxBytes`. Untrusted content. */
+  /** Unified diff text, cut at `maxBytes`. Untrusted content: never logged. */
   readonly text: string;
+  /** True when `text` is not the whole diff (`truncation` says why). */
   readonly truncated: boolean;
+  readonly truncation: DiffTruncation | null;
 }
 
 /** Why a read from the forge failed. Fixed codes: safe to log and to store as an inbox error. */
@@ -209,6 +256,8 @@ export type ForgeReadFailure =
   | "invalid_response"
   /** The installation is on an account kind the domain does not model (e.g. an enterprise). */
   | "unsupported_account_type"
+  /** The installation is suspended: the forge refuses reads on its behalf until unsuspended. */
+  | "installation_suspended"
   /** The configured credentials authenticate a different app than the configured app id. */
   | "app_mismatch";
 
@@ -255,7 +304,13 @@ export class ForgeReadError extends Error {
  * The read the installation lifecycle needs (P3-3): authenticated as the app itself, not as an
  * installation, because it must also work for an installation that no longer exists.
  */
-export type InstallationReader = Pick<Forge, "kind" | "getInstallation"> & {
+export interface InstallationReader {
+  readonly kind: ForgeKind;
+  /**
+   * `null` only when the forge positively says the installation does not exist (uninstalled);
+   * any other failure throws `ForgeReadError`. Consumers verify events here (ADR 0007 §4).
+   */
+  getInstallation(installationId: ForgeNumericId): Promise<ForgeInstallation | null>;
   /**
    * Proves the configured credentials belong to the configured app (review round 1, M2). Throws
    * `ForgeReadError` (`app_mismatch`, or any read failure) otherwise. A worker must not act on
@@ -263,20 +318,41 @@ export type InstallationReader = Pick<Forge, "kind" | "getInstallation"> & {
    * app's installations look uninstalled.
    */
   verifyApp(): Promise<void>;
-};
+}
 
 /**
- * Read access to one forge, authenticated per installation by the adapter (short-lived, scoped
- * tokens). Grows with the tasks that need it (posting reviews P3-5, access checks P3-6).
+ * Read access to one repository on behalf of its installation (P3-4, ADR 0010). The adapter
+ * holds a short-lived credential scoped to this repository and read-only permissions; it never
+ * leaves the session. `close` revokes it; a session must be closed when the work is done.
  */
-export interface Forge {
-  readonly kind: ForgeKind;
+export interface RepositorySession {
+  /** The repository as the forge described it when the session opened. */
+  readonly repository: ForgeRepository;
+  /** `null` only when the forge positively says there is no such pull request. */
+  getPullRequest(number: number): Promise<ForgePullRequest | null>;
+  /** Every pull request of the repository, any state, most recently updated first. */
+  listPullRequests(): AsyncIterable<ForgePullRequestSummary>;
+  /** The diff of one revision, read up to `maxBytes`. */
+  getDiff(revision: RevisionRef, options: { readonly maxBytes: number }): Promise<ForgeDiff>;
+  /** Revokes the credential (best effort) and refuses further reads. Idempotent. */
+  close(): Promise<void>;
+}
+
+/**
+ * Read access to one forge (P3-3, P3-4). Grows with the tasks that need it (posting reviews
+ * P3-5, access checks P3-6).
+ */
+export interface Forge extends InstallationReader {
   /**
-   * `null` only when the forge positively says the installation does not exist (uninstalled);
-   * any other failure throws `ForgeReadError`. Consumers verify events here (ADR 0007 §4).
+   * Opens a session on one repository of an installation. `null` when the forge positively says
+   * the installation is gone or the repository is not one it can access; any other failure
+   * throws `ForgeReadError`.
    */
-  getInstallation(installationId: ForgeNumericId): Promise<ForgeInstallation | null>;
-  getPullRequest(ref: PullRequestRef): Promise<ForgePullRequest | null>;
-  listOpenPullRequests(ref: RepositoryRef): AsyncIterable<ForgePullRequest>;
-  getPullRequestDiff(ref: PullRequestRef, options: { maxBytes: number }): Promise<ForgeDiff>;
+  openRepository(ref: RepositoryRef): Promise<RepositorySession | null>;
+  /**
+   * Finds the installation and repository id of `owner/name` for this app (the rebuild
+   * command's input). `null` when the app is not installed on it; `ForgeReadError`
+   * (`installation_suspended`) when its installation is suspended.
+   */
+  locateRepository(fullName: string): Promise<RepositoryRef | null>;
 }

@@ -1,14 +1,19 @@
 import {
   ForgeReadError,
-  INSTALLATION_EVENT_TYPES,
   isInstallationEvent,
+  isPullRequestEvent,
   type Clock,
+  type ForgeEvent,
+  type InstallationEvent,
+  type PullRequestEvent,
 } from "@rocky-reviews/core";
 import {
   decodeClaimedDelivery,
   isErrorCode,
+  laneEventTypes,
   LeaseLostError,
   type ClaimedDelivery,
+  type Db,
   type InboxFailure,
 } from "@rocky-reviews/db";
 import type { Logger } from "@rocky-reviews/log";
@@ -19,13 +24,21 @@ import {
   reconcileInstallation,
   type InstallationDeps,
 } from "./installations.js";
+import {
+  OrgNotReadyError,
+  PR_ROW_BUDGET_SECONDS,
+  reconcilePullRequest,
+  type PullRequestDeps,
+} from "./pull-requests.js";
 
 /**
  * Drains installation events from the webhook inbox (P3-3, ADR 0009). Claims a batch of this
  * worker's forge with a lease (at most one row per installation at a time, oldest first:
  * migration 0007), re-validates each row, reconciles it with GitHub and records the
- * outcome. Nothing is claimed until the app check passed (review round 1, M2). Pull request
- * events are not claimed here: they wait for their consumer (P3-4).
+ * outcome. Nothing is claimed until the app check passed (review round 1, M2). The same drain
+ * consumes pull request events (P3-4, ADR 0010) in their own lane, with their own row budget.
+ * Each drain claims whole lanes (`laneEventTypes`), so no lane head is ever skipped for its type;
+ * a row of a type the lane's handler does not know is parked (`unhandled_event_type`).
  *
  * Failures never lose a row (review round 1, S3):
  * - transient (GitHub timeout, network, 5xx, 429, 401/403, a database outage): retried with
@@ -46,7 +59,8 @@ import {
  */
 export const ROW_BUDGET_SECONDS = 2 * 10 + 10;
 
-export interface InboxDeps extends InstallationDeps {
+interface DrainDeps {
+  readonly db: Db;
   readonly log: Logger;
   /** Gate: nothing is claimed until the configured app is verified (M2). */
   readonly appCheck: AppCheck;
@@ -77,8 +91,11 @@ export const retryDelaySeconds = (attempts: number): number =>
  * of a full-speed batch (or the only row of a batch of one) starts with a full budget left (S4,
  * SF3). Strictly more than `batchSize × ROW_BUDGET_SECONDS`.
  */
-export const leaseSecondsFor = (batchSize: number, requested?: number): number =>
-  Math.max(requested ?? 0, (batchSize + 1) * ROW_BUDGET_SECONDS);
+export const leaseSecondsFor = (
+  batchSize: number,
+  requested?: number,
+  rowBudgetSeconds: number = ROW_BUDGET_SECONDS,
+): number => Math.max(requested ?? 0, (batchSize + 1) * rowBudgetSeconds);
 
 const errorCodeOf = (error: unknown): string => {
   const code =
@@ -95,7 +112,7 @@ const TRANSIENT_SQLSTATE = /^(?:08|40|53|57|58)[0-9A-Z]{3}$/;
 export const failureKindOf = (error: unknown): InboxFailure["kind"] => {
   if (error instanceof ParkDeliveryError) return "permanent";
   if (error instanceof ForgeReadError) return error.transient ? "transient" : "strike";
-  if (error instanceof ContradictionError) return "strike";
+  if (error instanceof ContradictionError || error instanceof OrgNotReadyError) return "strike";
   const code = errorCodeOf(error);
   return TRANSIENT_SQLSTATE.test(code) ? "transient" : "strike";
 };
@@ -105,7 +122,28 @@ type RowResult = "processed" | "retried" | "parked" | "lost";
 const resultOf = (result: "retry" | "parked" | "stale"): RowResult =>
   result === "stale" ? "lost" : result === "parked" ? "parked" : "retried";
 
-const processRow = async (deps: InboxDeps, row: ClaimedDelivery): Promise<RowResult> => {
+/** One lane of the inbox and what to do with its rows. */
+interface Lane<E extends ForgeEvent> {
+  readonly name: "installation" | "pull_request";
+  /** Worst-case time for one row (the lease budget). */
+  readonly rowBudgetSeconds: number;
+  readonly accepts: (event: ForgeEvent) => event is E;
+  readonly handle: (
+    row: ClaimedDelivery,
+    event: E,
+  ) => Promise<{ readonly outcome: string; readonly completed: boolean }>;
+  /** Ids worth logging for this lane's events (never content). */
+  readonly ids: (event: E) => Record<string, number>;
+  readonly label: string;
+}
+
+type LaneDeps = DrainDeps & { readonly forge: { readonly kind: ClaimedDelivery["forge"] } };
+
+const processRow = async <E extends ForgeEvent>(
+  deps: LaneDeps,
+  lane: Lane<E>,
+  row: ClaimedDelivery,
+): Promise<RowResult> => {
   const base = { deliveryId: row.deliveryId, attempt: row.attempts, strikes: row.strikes };
   // Defence in depth: the claim already filters by forge (M3).
   if (row.forge !== deps.forge.kind) {
@@ -118,25 +156,28 @@ const processRow = async (deps: InboxDeps, row: ClaimedDelivery): Promise<RowRes
     return resultOf(result);
   }
   const decoded = decodeClaimedDelivery(row);
-  if (!decoded.ok || !isInstallationEvent(decoded.event)) {
+  if (!decoded.ok || !lane.accepts(decoded.event)) {
+    // Whole-lane claims hand out every head; one this lane cannot handle is parked, never left
+    // in front of the rows behind it.
+    const error = decoded.ok ? "unhandled_event_type" : "invalid_event";
     const result = await deps.db.failWebhookDelivery(row, {
-      error: "invalid_event",
+      error,
       retryAfterSeconds: 0,
       kind: "permanent",
     });
-    deps.log.warn({ ...base, errorCode: "invalid_event", result }, "inbox row refused");
+    deps.log.warn({ ...base, errorCode: error, result }, "inbox row refused");
     return resultOf(result);
   }
   const event = decoded.event;
   try {
-    const { outcome, completed } = await reconcileInstallation(deps, row, event);
+    const { outcome, completed } = await lane.handle(row, event);
     if (!completed && !(await deps.db.completeWebhookDelivery(row, outcome))) {
       deps.log.warn({ ...base, outcome }, "inbox lease lost before completion");
       return "lost";
     }
     deps.log.info(
-      { ...base, eventType: event.type, installationId: event.installationId, outcome },
-      "installation event processed",
+      { ...base, eventType: event.type, ...lane.ids(event), outcome },
+      `${lane.label} event processed`,
     );
     return "processed";
   } catch (error) {
@@ -152,24 +193,27 @@ const processRow = async (deps: InboxDeps, row: ClaimedDelivery): Promise<RowRes
       retryAfterSeconds: kind === "permanent" ? 0 : retryDelaySeconds(row.attempts),
       kind,
     });
-    const line = { ...base, installationId: event.installationId, errorCode: code, kind, result };
-    if (result === "parked") deps.log.error(line, "installation event parked");
-    else deps.log.warn(line, "installation event failed");
+    const line = { ...base, ...lane.ids(event), errorCode: code, kind, result };
+    if (result === "parked") deps.log.error(line, `${lane.label} event parked`);
+    else deps.log.warn(line, `${lane.label} event failed`);
     return resultOf(result);
   }
 };
 
-/** Claims and processes one batch. Returns what happened; never throws for a single row. */
-export const drainInstallationEvents = async (deps: InboxDeps): Promise<DrainReport> => {
+/** Claims and processes one batch of a lane. Returns what happened; never throws for a row. */
+const drainLane = async <E extends ForgeEvent>(
+  deps: LaneDeps,
+  lane: Lane<E>,
+): Promise<DrainReport> => {
   if (!(await deps.appCheck.ready())) return EMPTY;
   const clock = deps.clock ?? { now: () => new Date() };
   const batchSize = deps.batchSize ?? 10;
-  const leaseSeconds = leaseSecondsFor(batchSize, deps.leaseSeconds);
+  const leaseSeconds = leaseSecondsFor(batchSize, deps.leaseSeconds, lane.rowBudgetSeconds);
   // Read before the claim, so the local deadline is never later than the database's.
   const deadline = clock.now().getTime() + leaseSeconds * 1000;
   const rows = await deps.db.claimWebhookDeliveries({
     forge: deps.forge.kind,
-    eventTypes: INSTALLATION_EVENT_TYPES,
+    eventTypes: laneEventTypes(lane.name),
     limit: batchSize,
     leaseSeconds,
   });
@@ -177,12 +221,12 @@ export const drainInstallationEvents = async (deps: InboxDeps): Promise<DrainRep
   for (const row of rows) {
     let result: RowResult;
     try {
-      if (clock.now().getTime() + ROW_BUDGET_SECONDS * 1000 > deadline) {
+      if (clock.now().getTime() + lane.rowBudgetSeconds * 1000 > deadline) {
         // Not enough lease left to finish this row safely: hand it back untouched (S4), with a
         // delay so a slow worker does not reclaim it at once (SF3).
         const released = await deps.db.failWebhookDelivery(row, {
           error: "lease_budget",
-          retryAfterSeconds: ROW_BUDGET_SECONDS,
+          retryAfterSeconds: lane.rowBudgetSeconds,
           kind: "transient",
         });
         deps.log.warn(
@@ -191,7 +235,7 @@ export const drainInstallationEvents = async (deps: InboxDeps): Promise<DrainRep
         );
         result = resultOf(released);
       } else {
-        result = await processRow(deps, row);
+        result = await processRow(deps, lane, row);
       }
     } catch (error) {
       // Even recording the failure failed (database down): the lease expires and the row is
@@ -206,3 +250,33 @@ export const drainInstallationEvents = async (deps: InboxDeps): Promise<DrainRep
   }
   return { claimed: rows.length, ...counts };
 };
+
+export interface InboxDeps extends DrainDeps, InstallationDeps {}
+
+/** Installation events (P3-3): the installation lifecycle. */
+export const drainInstallationEvents = (deps: InboxDeps): Promise<DrainReport> =>
+  drainLane<InstallationEvent>(deps, {
+    name: "installation",
+    rowBudgetSeconds: ROW_BUDGET_SECONDS,
+    accepts: isInstallationEvent,
+    handle: (row, event) => reconcileInstallation(deps, row, event),
+    ids: (event) => ({ installationId: event.installationId }),
+    label: "installation",
+  });
+
+export interface PullRequestInboxDeps extends DrainDeps, PullRequestDeps {}
+
+/** Pull request events (P3-4): the mirror. */
+export const drainPullRequestEvents = (deps: PullRequestInboxDeps): Promise<DrainReport> =>
+  drainLane<PullRequestEvent>(deps, {
+    name: "pull_request",
+    rowBudgetSeconds: PR_ROW_BUDGET_SECONDS,
+    accepts: isPullRequestEvent,
+    handle: (row, event) => reconcilePullRequest(deps, row, event),
+    ids: (event) => ({
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      number: event.number,
+    }),
+    label: "pull request",
+  });

@@ -14,6 +14,8 @@ export {
   decodeClaimedDelivery,
   isErrorCode,
   isOutcomeCode,
+  laneEventTypes,
+  laneOf,
   LeaseLostError,
   WEBHOOK_MAX_STRIKES,
   WEBHOOK_TRANSIENT_PARK_HOURS,
@@ -34,6 +36,17 @@ export {
   type InstallationOrg,
   type NewInstallationOrg,
 } from "./installations.js";
+export {
+  mirroredPullRequest,
+  mirroredPullRequests,
+  recordRevision,
+  upsertPullRequest,
+  upsertRepository,
+  type MirroredPullRequest,
+  type PullRequestWrite,
+  type RevisionDiff,
+  type RevisionWrite,
+} from "./mirror.js";
 export {
   appliedMigrations,
   checksumOf,
