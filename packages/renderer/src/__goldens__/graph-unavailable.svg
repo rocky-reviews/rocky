@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cm cm-unavailable" viewBox="0 0 400 68" width="400" height="68" role="img" aria-label="Change map unavailable">
+<rect class="cm-unavailable-bg" x="0" y="0" width="400" height="68" rx="10"/>
+<text class="cm-unavailable-title" x="16" y="29">Change map unavailable</text>
+<text class="cm-unavailable-reason" x="16" y="50">The change map took too long to build.</text>
+</svg>

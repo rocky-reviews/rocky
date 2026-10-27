@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
     "design:poc-screenshots": "tsx scripts/screenshot-poc.ts",
+    "design:change-map-screenshots": "tsx scripts/screenshot-change-map.ts",
     "prepare": "simple-git-hooks",
     "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh",
     "schema:emit": "tsx packages/schema/scripts/emit.ts",
