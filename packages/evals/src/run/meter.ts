@@ -5,6 +5,10 @@
  * already in flight (the pipeline's concurrency). A refused call is a `cancelled` LlmCallError,
  * which fails the analysis it belongs to; the runner marks it and everything after it `capped`.
  *
+ * A provider that reports no (valid) usage (P4-5) is never counted as free: the attempt is charged
+ * a ceiling instead (one token per UTF-8 byte of the request plus its output cap), added to the
+ * total the cap reads but not to the per-role token counts, which hold reported tokens only.
+ *
  * Retryable failures (rate limits, overload) are retried twice, waiting the provider's hint or
  * 2 s, then 4 s, as the worker's queue would; anything else is returned as it came.
  */
@@ -15,6 +19,7 @@ import {
   type LlmCompletionRole,
   type LlmRoles,
   type LlmUsage,
+  type StructuredCompletionRequest,
   type StructuredCompletionResult,
 } from "@rocky-reviews/core";
 import type { RoleUsage, UsageReport } from "./report.js";
@@ -39,6 +44,8 @@ const tokensOf = (usage: LlmUsage): number =>
   usage.cacheWrite5mInputTokens +
   usage.cacheWrite1hInputTokens;
 
+const utf8 = new TextEncoder();
+
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export const createMeter = ({ maxTokens, sleep = wait }: MeterOptions): Meter => {
@@ -46,7 +53,16 @@ export const createMeter = ({ maxTokens, sleep = wait }: MeterOptions): Meter =>
   let total = 0;
   let capped = false;
 
-  const record = (role: LlmCompletionRole, result: StructuredCompletionResult<unknown>) => {
+  const ceilingOf = (request: StructuredCompletionRequest<unknown>): number =>
+    utf8.encode(request.instructions.text).length +
+    request.untrusted.reduce((n, part) => n + utf8.encode(part.text).length, 0) +
+    request.maxOutputTokens;
+
+  const record = (
+    role: LlmCompletionRole,
+    request: StructuredCompletionRequest<unknown>,
+    result: StructuredCompletionResult<unknown>,
+  ) => {
     const entry = byRole.get(role) ?? {
       calls: 0,
       inputTokens: 0,
@@ -57,13 +73,17 @@ export const createMeter = ({ maxTokens, sleep = wait }: MeterOptions): Meter =>
     };
     entry.calls++;
     for (const attempt of result.attempts ?? [{ model: result.model, usage: result.usage }]) {
+      if (!entry.models.includes(attempt.model)) entry.models = [...entry.models, attempt.model];
+      if (attempt.usage === undefined) {
+        total += ceilingOf(request);
+        continue;
+      }
       entry.inputTokens += attempt.usage.inputTokens;
       entry.outputTokens += attempt.usage.outputTokens;
       entry.cacheReadInputTokens += attempt.usage.cacheReadInputTokens;
       entry.cacheWriteInputTokens +=
         attempt.usage.cacheWrite5mInputTokens + attempt.usage.cacheWrite1hInputTokens;
       total += tokensOf(attempt.usage);
-      if (!entry.models.includes(attempt.model)) entry.models = [...entry.models, attempt.model];
     }
     byRole.set(role, entry);
   };
@@ -78,7 +98,7 @@ export const createMeter = ({ maxTokens, sleep = wait }: MeterOptions): Meter =>
         }
         try {
           const result = await client.complete(request);
-          record(client.role, result);
+          record(client.role, request, result);
           return result;
         } catch (error) {
           if (!isLlmCallError(error) || !error.retryable || attempt >= RETRIES) throw error;

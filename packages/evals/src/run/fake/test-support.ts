@@ -35,9 +35,11 @@ const withEstimatedUsage = (roles: LlmRoles): LlmRoles => ({
       return {
         ...result,
         usage: {
-          ...result.usage,
           inputTokens: Math.ceil(input / 4),
           outputTokens: estimate(output),
+          cacheReadInputTokens: result.usage?.cacheReadInputTokens ?? 0,
+          cacheWrite5mInputTokens: result.usage?.cacheWrite5mInputTokens ?? 0,
+          cacheWrite1hInputTokens: result.usage?.cacheWrite1hInputTokens ?? 0,
         },
       };
     };

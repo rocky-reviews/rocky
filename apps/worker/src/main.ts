@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { nothingStoredYet, type OrgErasers, type OrgId } from "@rocky-reviews/core";
+import { nothingStoredYet, type LlmRoles, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubForge } from "@rocky-reviews/forge-github";
-import { createLlmRoles, envSecrets, providerAdapters } from "@rocky-reviews/llm";
+import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
+import { unitKeySaltFor } from "./analysis.js";
 import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { startJobs } from "./jobs.js";
 
@@ -31,10 +32,11 @@ try {
 
 // P4-3: every role resolves to an installed adapter with the capability it needs, or the worker
 // stops here, before it claims work. Keys are read per call through `envSecrets`, never now. The
-// analysis lane that hands these roles to `runAnalysis` (analysis.ts) comes with the queue and its
-// org concurrency cap (docs/progress.md, P4-3 follow-ups).
+// analysis lane (P4-6, jobs.ts) hands these roles to `runAnalysis`, with
+// `usageTargetsFor(config.llm)` for metering (P4-5, ADR 0016): every run's roles are metered.
+let llm: LlmRoles;
 try {
-  createLlmRoles(config.llm, providerAdapters(), envSecrets(process.env));
+  llm = createLlmRoles(config.llm, providerAdapters(), envSecrets(process.env));
 } catch (error) {
   log.fatal(
     { err: error instanceof Error ? error.name : "unknown" },
@@ -78,6 +80,19 @@ const jobs = startJobs({
   clock,
   erasers,
   newOrgId: () => randomUUID() as OrgId,
+  // Off by default (ROCKY_ANALYSIS_AUTO): no lane, and the mirror queues nothing.
+  ...(config.analysis.auto
+    ? {
+        analysis: {
+          llm,
+          unitKeySalt: unitKeySaltFor(config.llm),
+          usageTargets: usageTargetsFor(config.llm),
+          tokenLimit: config.analysis.tokenLimit,
+          concurrency: config.analysis.concurrency,
+          orgConcurrency: config.analysis.orgConcurrency,
+        },
+      }
+    : {}),
   forge:
     config.githubApp === undefined
       ? undefined
@@ -91,6 +106,10 @@ log.info(
   {
     installationEvents: config.githubApp !== undefined,
     pullRequestEvents: config.githubApp !== undefined,
+    analyses: config.githubApp !== undefined && config.analysis.auto,
+    analysisConcurrency: config.analysis.concurrency,
+    analysisOrgConcurrency: config.analysis.orgConcurrency,
+    tokenLimit: config.analysis.tokenLimit,
   },
   "worker ready",
 );

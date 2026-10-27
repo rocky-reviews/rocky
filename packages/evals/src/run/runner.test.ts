@@ -197,6 +197,32 @@ describe("createMeter", () => {
     expect(meter.usage().totalTokens).toBe(18);
   });
 
+  it("never counts a call whose provider reported no usage as free (P4-5)", async () => {
+    const meter = createMeter({ maxTokens: 1_000_000 });
+    const roles = meter.wrap(
+      rolesFrom(async () => ({
+        status: "ok",
+        value: {} as never,
+        model: "m",
+        provider: "p",
+        usage: undefined,
+      })),
+    );
+    const sized = {
+      instructions: { text: "abc" },
+      untrusted: [{ text: "日本" }],
+      maxOutputTokens: 100,
+    } as unknown as Parameters<CompletionRoleClient["complete"]>[0];
+    await roles.completion("review").complete(sized);
+    expect(meter.usage().byRole["review"]).toMatchObject({
+      calls: 1,
+      inputTokens: 0,
+      models: ["m"],
+    });
+    // The cap is charged a ceiling: UTF-8 bytes of the request (3 + 6) plus its output cap.
+    expect(meter.usage().totalTokens).toBe(109);
+  });
+
   it("refuses a call once the cap is reached, as a cancelled call", async () => {
     const meter = createMeter({ maxTokens: 10 });
     const roles = meter.wrap(

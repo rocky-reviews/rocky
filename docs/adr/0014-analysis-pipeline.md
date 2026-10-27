@@ -10,6 +10,8 @@
   deletion-only risky files marked unanalysed; quoted rename and copy paths; header consistency
   in the diff reader; raw review minutes in file units; the scripted fake banned from production
   code; the lease as a merge gate for the queue lane.
+- **Revised:** P4-6 ([ADR 0017](0017-analysis-queue-and-token-limit.md)): the queue lane, the
+  lease on `running` rows (R3 closed), the per-PR token limit and `awaiting_approval`.
 - **Builds on:** [ADR 0004](0004-schema-first-llm.md) (schema-first output, one repair round),
   [ADR 0012](0012-llm-roles-and-provider-port.md) (roles and the provider port),
   [ADR 0013](0013-llm-provider-adapters.md) (adapters, prompt layout),
@@ -33,7 +35,7 @@ an action.
   of its own: `LlmRoles` for models, `Clock`, and an injected `sha256Hex`. Core may import zod
   and `@rocky-reviews/schema`, and nothing else (ESLint).
 - `packages/db/src/analyses.ts`: the `analyses` rows, inside `withOrg`.
-- `apps/worker/src/analysis.ts`: `runAnalysis(deps, orgId, analysisId)` claims a queued row,
+- `apps/worker/src/analysis.ts`: `runAnalysis(deps, claim)` (P4-6: a claim from the queue) runs a leased row,
   reads the diff on a read-only repository session, runs the pipeline and stores the outcome.
 - `packages/core/src/analysis/testing.ts` (`@rocky-reviews/core/testing`): a scripted
   `LlmRoles` for tests and evals.
@@ -199,12 +201,12 @@ allowed only on
 erasure.
 
 - **States:** `queued` → `running` (claimed atomically) → `done` | `failed`, or back to `queued`
-  for a retryable failure.
-- **A row can stay `running`:** after a worker crash, or when `failAnalysis` or `requeueAnalysis`
-  itself throws inside `runAnalysis`'s error path (a database outage). Nothing reclaims it today.
-  **A lease that reclaims expired `running` rows is a merge gate for the change that wires
-  `runAnalysis` into a queue lane** (R3). It is not built here because nothing enqueues analyses
-  yet.
+  for a retryable failure. Since P4-6 also `awaiting_approval` (over the per-PR token limit).
+- **A row could stay `running`** after a worker crash, or when `failAnalysis` or
+  `requeueAnalysis` itself throws inside `runAnalysis`'s error path (a database outage). P4-6
+  (migration 0012, [ADR 0017](0017-analysis-queue-and-token-limit.md)) adds the lease that was the
+  merge gate for the queue lane (R3): the claim hands out a lease, every write needs it, and an
+  expired lease is reclaimed by the next claim.
 - **`completeAnalysis`** parses the document again at the write, stores the parsed value, and
   checks that every unit names a triaged file of it. It also refuses a verdict below an
   unanalysed migration or auth file (`belowUnanalysedRuleFloor`, Fix A).
@@ -229,13 +231,14 @@ erasure.
   is banned too (`no-restricted-syntax`). A computed specifier (a variable or template) is not
   caught by lint; that gap is accepted, since production code has no reason to build one. Planted
   cases are in `scripts/lint-rules.test.ts` (review round 1 Fix F, round 2 N2).
-- **Queue:** `runAnalysis` is the unit of work for a queue lane. The lane (enqueue on a new
-  revision, claim with a lease, retry with `retryAfterMs`, org concurrency cap) is a follow-up
-  with P4-6, so nothing enqueues analyses yet.
+- **Queue:** `runAnalysis` is the unit of work for the queue lane. P4-6 built the lane (enqueue on
+  a new head revision, claim with a lease, retry with backoff, org concurrency cap):
+  [ADR 0017](0017-analysis-queue-and-token-limit.md).
 - **Metering (P4-5)** wraps the `LlmRoles` handed to the pipeline. Every call goes through it,
   and results carry `provider`, `model`, `usage` and `attempts`.
-- **Token limits (P4-6)** plug in before `analyzePullRequest`, and at its per-file
-  `too-large` and graph-size checks.
+- **Token limits (P4-6)** plug in before `analyzePullRequest`: `estimateAnalysisTokens` and the
+  `awaiting_approval` hold ([ADR 0017](0017-analysis-queue-and-token-limit.md) §5). The per-file
+  `too-large` and graph-size checks are unchanged.
 
 ## Threat model
 
@@ -289,9 +292,9 @@ erasure.
   triage on a path no rule floors (test files included), a soft verdict reason, a persuasive body.
   That is a draft for a human, never an action. P4-4 adds the injection corpus, the leak guard and
   the verdict invariants ([ADR 0015](0015-prompt-injection-defence.md), R1 and R2).
-- **R3:** a crash between claim and finish, or a database error inside `runAnalysis`'s own
-  failure path, leaves a row `running`. The lease is a **merge gate** for the change that wires
-  `runAnalysis` into a queue lane (§7).
+- **R3 (closed by P4-6):** a crash between claim and finish, or a database error inside
+  `runAnalysis`'s own failure path, left a row `running`. The lease of
+  [ADR 0017](0017-analysis-queue-and-token-limit.md) §3 reclaims it (Q1, Q2 there).
 - **R4:** a retryable failure late in a run (graph, briefing) re-runs the whole revision,
   including units already answered, so the spend repeats. Checkpointing units is a follow-up.
 - **R5:** real model quality (recall, precision, critical false positives) is not measured here:

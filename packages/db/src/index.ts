@@ -6,14 +6,27 @@ export {
   type RepositoryAccessTarget,
 } from "./access.js";
 export {
+  ANALYSIS_CLAIM_STATEMENT_TIMEOUT_MS,
+  ANALYSIS_MAX_ATTEMPTS,
+  ANALYSIS_MAX_RETRY_DELAY_MS,
   AnalysisStoreError,
+  approveAnalysisOverLimit,
   completeAnalysis,
   enqueueAnalysis,
+  enqueueHeadAnalysis,
   failAnalysis,
+  holdAnalysis,
+  loadAnalysisTarget,
   loadPreviousAnalysis,
+  releaseAnalysis,
+  renewAnalysisLease,
   requeueAnalysis,
-  startAnalysis,
+  type AnalysisApproval,
+  type AnalysisApprover,
+  type AnalysisClaimOptions,
+  type AnalysisLease,
   type AnalysisTarget,
+  type ClaimedAnalysis,
 } from "./analyses.js";
 export { audit, AUDIT_METADATA_MAX_BYTES, type AuditActor, type AuditTarget } from "./audit.js";
 export {
@@ -78,6 +91,7 @@ export {
   AUDIT_MIN_RETENTION_DAYS,
   DEFAULT_RETENTION,
   expiryCutoff,
+  LLM_USAGE_MIN_RETENTION_DAYS,
   retentionFromEnv,
   RETENTION_CATEGORIES,
   runRetention,
@@ -114,6 +128,7 @@ export {
   WRAPPED_KEY_PREFIX,
   type StoredSecret,
 } from "./secrets.js";
+export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,
   WEBHOOK_INBOX_QUERY_TIMEOUT_MS,
