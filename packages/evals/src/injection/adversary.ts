@@ -17,7 +17,7 @@
  *
  * What is tested is what holds anyway: the verdict floors, path ownership, line-range checks,
  * schema-only output, fixed reasons, the leak guard and the fallback briefing. Real model
- * behaviour is a follow-up for P4-7.
+ * behaviour is measured by the eval suite (P4-7, `pnpm evals run --injection`).
  */
 import type { Script, ScriptedAnswer, ScriptedCall } from "@rocky-reviews/core/testing";
 import { PROMPT_CANARY, systemPrompt } from "@rocky-reviews/core";

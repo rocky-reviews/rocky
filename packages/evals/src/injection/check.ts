@@ -21,7 +21,7 @@
  * - **S1 suggestions in place:** a suggestion's context line, when given, is the file's line just
  *   before the finding's range (checked where the diff holds the whole new file).
  *
- * The same checks can run on real model output; that is a follow-up for P4-7.
+ * The same checks run on real model output in the eval suite (P4-7, `pnpm evals run --injection`).
  */
 import {
   parseUnifiedDiff,

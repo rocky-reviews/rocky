@@ -1,7 +1,7 @@
 /**
  * The prompt-injection corpus (P4-4, ADR 0015 §4): data in `fixtures/injection-corpus.json`,
  * validated here so a malformed case fails loudly instead of testing nothing. The adversarial fakes
- * in `adversary.ts` run them in CI; running them against real models is a follow-up for P4-7.
+ * in `adversary.ts` run them in CI; `pnpm evals run --injection` runs them against real models (P4-7).
  */
 import { RepositoryPath } from "@rocky-reviews/schema";
 import { z } from "zod";

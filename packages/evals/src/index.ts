@@ -31,3 +31,35 @@ export {
   type Adversary,
   type AdversaryLog,
 } from "./injection/adversary.js";
+export {
+  findingMatches,
+  LINE_SLACK,
+  severityCompatible,
+  type SeededFinding,
+  type Severity,
+} from "./score.js";
+export { SEEDED_PRS, type SeededPr } from "./seeded/index.js";
+export {
+  DEFAULT_MAX_TOKENS,
+  evalsCli,
+  type CliDeps,
+  type CliIo,
+  type LiveTarget,
+} from "./run/cli.js";
+export {
+  compareReports,
+  CRITICAL_RATE_TOLERANCE,
+  PlaceholderBaselineError,
+  RECALL_DROP_POINTS,
+  type Comparison,
+} from "./run/compare.js";
+export {
+  EvalReport,
+  parseReport,
+  PLACEHOLDER_NOTICE,
+  PROMPT_HASH,
+  REPORT_FORMAT,
+  REPORT_VERSION,
+  type ReportModels,
+} from "./run/report.js";
+export { runEvals, type EvalSubject, type RunOptions } from "./run/runner.js";
