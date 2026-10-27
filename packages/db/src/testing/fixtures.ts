@@ -182,15 +182,21 @@ export const seedOrg = async (
         .insert(schema.llmUsage)
         .values({
           analysisId: analysis.id,
+          callId: randomUUID(),
+          attempt: 0,
           role: "review",
           provider: "anthropic",
           model: "test-model",
+          outcome: "ok",
+          usageStatus: "reported",
           inputTokens: 10,
           outputTokens: 5,
           cacheReadTokens: 0,
-          cacheWriteTokens: 0,
+          cacheWrite5mTokens: 0,
+          cacheWrite1hTokens: 0,
           costMicroUsd: 42,
-          priceVersion: "2026-10",
+          costStatus: "priced",
+          priceVersion: "2026-10-27",
         })
         .returning({ id: schema.llmUsage.id }),
     );

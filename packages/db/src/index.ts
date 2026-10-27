@@ -78,6 +78,7 @@ export {
   AUDIT_MIN_RETENTION_DAYS,
   DEFAULT_RETENTION,
   expiryCutoff,
+  LLM_USAGE_MIN_RETENTION_DAYS,
   retentionFromEnv,
   RETENTION_CATEGORIES,
   runRetention,
@@ -114,6 +115,7 @@ export {
   WRAPPED_KEY_PREFIX,
   type StoredSecret,
 } from "./secrets.js";
+export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,
   WEBHOOK_INBOX_QUERY_TIMEOUT_MS,

@@ -13,11 +13,17 @@ import {
   completeAnalysis,
   failAnalysis,
   loadPreviousAnalysis,
+  recordLlmUsage,
   requeueAnalysis,
   startAnalysis,
   type Db,
 } from "@rocky-reviews/db";
-import type { LlmConfig } from "@rocky-reviews/llm";
+import {
+  meterRoles,
+  type LlmConfig,
+  type LlmUsageTargets,
+  type MeteredRoles,
+} from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 
 /**
@@ -32,6 +38,11 @@ import type { Logger } from "@rocky-reviews/log";
  * - Retryable failures (LLM outages, cancellation, forge outages) put the row back in the queue
  *   and return the provider's retry hint; the lane that calls this (with the queue's org
  *   concurrency cap, P4-6) schedules the retry. Everything else stores a failure code.
+ * - Metering (P4-5, ADR 0015): the pipeline only ever sees the roles wrapped by `meterRoles`, so
+ *   every call writes its `llm_usage` rows (in its own short tenant transaction, before its result
+ *   is used) for this org and analysis. A usage write that fails for good stops the run: the
+ *   usage is logged as numbers, nothing else is sent to a model, and the row fails as
+ *   `metering_failed` (not retried automatically, so a broken ledger cannot loop spend).
  */
 
 /** The longest diff read for an analysis; a longer one fails as `diff_truncated` (P4-6). */
@@ -41,7 +52,10 @@ export interface AnalysisRunnerDeps {
   /** A login under which `withOrg` applies RLS (the worker's or the server's). */
   readonly db: Db;
   readonly forge: Forge;
+  /** The configured roles, unmetered: `runAnalysis` wraps them for each run. */
   readonly llm: LlmRoles;
+  /** From `usageTargetsFor(config)`: names provider and model for calls that never answered. */
+  readonly usageTargets: LlmUsageTargets;
   readonly clock: Clock;
   readonly log: Logger;
   /** From `unitKeySaltFor(config)`: a role-config change re-analyses every file. */
@@ -94,8 +108,21 @@ export const runAnalysis = async (
   analysisId: string,
 ): Promise<AnalysisRun> => {
   const { db, log } = deps;
+  // Fail closed: no run without metering.
+  if (typeof deps.usageTargets !== "object" || deps.usageTargets === null) {
+    throw new TypeError("runAnalysis needs usageTargets (metering, P4-5)");
+  }
   const target = await db.withOrg(orgId, (tx) => startAnalysis(tx, analysisId));
   if (target === undefined) return { outcome: "not_queued" };
+
+  const llm: MeteredRoles = meterRoles(deps.llm, {
+    // Its own transaction per call: usage survives whatever happens to the analysis row.
+    sink: { record: (records) => db.withOrg(orgId, (tx) => recordLlmUsage(tx, records)) },
+    targets: deps.usageTargets,
+    log,
+    analysisId,
+    clock: deps.clock,
+  });
 
   const fail = async (code: string): Promise<AnalysisRun> => {
     await db.withOrg(orgId, (tx) => failAnalysis(tx, analysisId, code));
@@ -153,7 +180,7 @@ export const runAnalysis = async (
         previous,
       },
       {
-        llm: deps.llm,
+        llm,
         clock: deps.clock,
         sha256Hex,
         generator: {
@@ -163,10 +190,21 @@ export const runAnalysis = async (
         unitKeySalt: deps.unitKeySalt,
       },
     );
+    const metered = llm.totals();
     log.info(
-      { analysisId, outcome: outcome.status, diffBytes: diff.bytes.byteLength, ...outcome.stats },
+      {
+        analysisId,
+        outcome: outcome.status,
+        diffBytes: diff.bytes.byteLength,
+        ...outcome.stats,
+        llmCalls: metered.calls,
+        llmUsageRecords: metered.records,
+        costMicroUsd: metered.costMicroUsd,
+        unpricedRecords: metered.unpriced,
+      },
       "analysis ran",
     );
+    if (llm.failed) return await fail("metering_failed");
     if (outcome.status === "failed") return await fail(outcome.code);
     const stored = await db.withOrg(orgId, (tx) =>
       completeAnalysis(tx, analysisId, outcome.document, outcome.units),
@@ -174,6 +212,7 @@ export const runAnalysis = async (
     // Lost the row (another worker requeued and finished it): nothing of ours was written.
     return stored ? { outcome: "done" } : { outcome: "not_queued" };
   } catch (error) {
+    if (llm.failed) return fail("metering_failed");
     if (error instanceof RunFailed) return fail(error.code);
     if (isLlmCallError(error)) {
       // Fatal kinds came back as failure codes from the pipeline; only these reach here.

@@ -269,15 +269,34 @@ export class LlmCallError extends Error {
   readonly retryable: boolean;
   /** A provider's retry-after hint, when it gave one. */
   readonly retryAfterMs: number | undefined;
-  constructor(kind: LlmErrorKind, options: { readonly retryAfterMs?: number } = {}) {
+  /**
+   * What the provider had reported when the call failed part-way (a stream that broke after it
+   * began), so metering records it (P4-5, ADR 0015). Numbers only; undefined when nothing was
+   * reported.
+   */
+  readonly partialUsage: LlmUsage | undefined;
+  constructor(
+    kind: LlmErrorKind,
+    options: { readonly retryAfterMs?: number; readonly partialUsage?: LlmUsage } = {},
+  ) {
     super(ERROR_MESSAGES[kind]);
-    const { retryAfterMs } = options;
+    const { retryAfterMs, partialUsage } = options;
     if (retryAfterMs !== undefined && !(Number.isFinite(retryAfterMs) && retryAfterMs >= 0)) {
       throw new RangeError("retryAfterMs must be a finite, non-negative number");
     }
     this.kind = kind;
     this.retryable = (LLM_RETRYABLE_ERROR_KINDS as readonly string[]).includes(kind);
     this.retryAfterMs = retryAfterMs;
+    this.partialUsage =
+      partialUsage === undefined
+        ? undefined
+        : Object.freeze({
+            inputTokens: partialUsage.inputTokens,
+            outputTokens: partialUsage.outputTokens,
+            cacheReadInputTokens: partialUsage.cacheReadInputTokens,
+            cacheWrite5mInputTokens: partialUsage.cacheWrite5mInputTokens,
+            cacheWrite1hInputTokens: partialUsage.cacheWrite1hInputTokens,
+          });
   }
 }
 

@@ -148,6 +148,43 @@ export const usageOf = (usage: UsageLike): LlmUsage => {
   };
 };
 
+const usageField = (value: unknown): UsageLike | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as UsageLike)
+    : undefined;
+
+/**
+ * The usage a stream has reported so far (`message_start`, then each `message_delta`), so a call
+ * that fails part-way still tells metering what the provider counted (P4-5, ADR 0015). Later
+ * fields win; a field a delta leaves out keeps its earlier value.
+ */
+export const reportedUsage = (
+  previous: UsageLike | undefined,
+  event: { readonly type: string },
+): UsageLike | undefined => {
+  const raw =
+    event.type === "message_start"
+      ? usageField((event as { message?: { usage?: unknown } }).message?.usage)
+      : event.type === "message_delta"
+        ? usageField((event as { usage?: unknown }).usage)
+        : undefined;
+  if (raw === undefined) return previous;
+  const merged: Record<string, unknown> = { ...previous };
+  for (const [key, value] of Object.entries(raw)) {
+    if (value !== null && value !== undefined) merged[key] = value;
+  }
+  return merged as UsageLike;
+};
+
+/** The call's error, carrying what the provider had reported before it failed. */
+const withPartialUsage = (error: LlmCallError, reported: UsageLike | undefined): LlmCallError =>
+  reported === undefined || error.partialUsage !== undefined
+    ? error
+    : new LlmCallError(error.kind, {
+        ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+        partialUsage: usageOf(reported),
+      });
+
 const STOPS: Readonly<Record<string, StopKind>> = {
   end_turn: "complete",
   refusal: "refused",
@@ -307,6 +344,7 @@ export const claudeProvider = (
       const budget: ByteBudget = { exceeded: false };
       let started = false;
       let stopped = false;
+      let reported: UsageLike | undefined;
       const state: CallState = {
         signal: call.signal,
         deadline,
@@ -318,6 +356,7 @@ export const claudeProvider = (
         const stream = client.beta.messages.stream(params, { signal });
         stream.on("streamEvent", (event) => {
           started = true;
+          reported = reportedUsage(reported, event);
           if (event.type === "message_stop") stopped = true;
         });
         const final = await stream.finalMessage();
@@ -330,7 +369,7 @@ export const claudeProvider = (
         // Credential lookups take no signal: the race ends the call; the lookup is abandoned.
         message = await Promise.race([exchange(), ended.promise]);
       } catch (error) {
-        throw toCallError(error, state);
+        throw withPartialUsage(toCallError(error, state), reported);
       } finally {
         clearTimeout(clock);
         ended.release();

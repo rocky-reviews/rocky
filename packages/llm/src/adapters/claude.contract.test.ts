@@ -455,6 +455,28 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
     expect(isLlmCallError(error) && error.kind).toBe("overloaded");
   });
 
+  it("keeps the usage a stream reported before it failed, for metering (P4-5)", async () => {
+    const midstream = providerFor(platform, [sse("overloaded-midstream.sse")]);
+    const overloaded = await rejection(complete(midstream.provider));
+    expect(isLlmCallError(overloaded) && overloaded.partialUsage).toEqual({
+      inputTokens: 2048,
+      outputTokens: 1,
+      cacheReadInputTokens: 1536,
+      cacheWrite5mInputTokens: 1024,
+      cacheWrite1hInputTokens: 256,
+    });
+
+    const cut = providerFor(platform, [sse("no-message-stop.sse")]);
+    const dropped = await rejection(complete(cut.provider));
+    expect(isLlmCallError(dropped) && dropped.kind).toBe("network");
+    expect(isLlmCallError(dropped) && dropped.partialUsage?.inputTokens).toBeGreaterThan(0);
+
+    // Nothing was reported before an HTTP error: no usage, never an invented one.
+    const limited = providerFor(platform, [json("claude/errors/429-rate-limit.json", 429)]);
+    const rejected = await rejection(complete(limited.provider));
+    expect(isLlmCallError(rejected) && rejected.partialUsage).toBeUndefined();
+  });
+
   it("maps connection failures, timeouts and the caller's abort", async () => {
     const network = providerFor(platform, [{ fail: new TypeError("fetch failed: ECONNREFUSED") }]);
     expect(((await rejection(complete(network.provider))) as { kind: string }).kind).toBe(

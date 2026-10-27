@@ -21,6 +21,7 @@ const settings = {
   auditDays: 365,
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
+  llmUsageDays: 730,
 };
 
 const stubDb = (overrides: Partial<Db> = {}) => {
