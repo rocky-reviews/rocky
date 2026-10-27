@@ -81,9 +81,37 @@ describe("LlmCallError (review round 1, S4)", () => {
     const error = new LlmCallError("rate_limited", { retryAfterMs: 1500 });
     expect(error.retryAfterMs).toBe(1500);
     expect(error.cause).toBeUndefined();
-    expect(Object.keys(error).sort()).toEqual(["kind", "name", "retryAfterMs", "retryable"]);
+    expect(Object.keys(error).sort()).toEqual([
+      "kind",
+      "name",
+      "partialUsage",
+      "retryAfterMs",
+      "retryable",
+    ]);
     expect(new LlmCallError("auth").retryAfterMs).toBeUndefined();
+    expect(new LlmCallError("auth").partialUsage).toBeUndefined();
     expect(() => new LlmCallError("timeout", { retryAfterMs: -1 })).toThrow(RangeError);
+  });
+
+  it("carries partial usage as a frozen copy of the five counts only (P4-5)", () => {
+    const reported = {
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadInputTokens: 3,
+      cacheWrite5mInputTokens: 4,
+      cacheWrite1hInputTokens: 5,
+      body: "provider text that must not travel",
+    };
+    const error = new LlmCallError("overloaded", { partialUsage: reported });
+    expect(error.partialUsage).toEqual({
+      inputTokens: 10,
+      outputTokens: 2,
+      cacheReadInputTokens: 3,
+      cacheWrite5mInputTokens: 4,
+      cacheWrite1hInputTokens: 5,
+    });
+    expect(Object.isFrozen(error.partialUsage)).toBe(true);
+    expect(JSON.stringify(error)).not.toContain("provider text");
   });
 
   it("guards only real LlmCallErrors", () => {

@@ -204,7 +204,7 @@ and before any model call. It counts:
 - a fixed overhead of 4 000 tokens for each of the 4 stages.
 
 It is a size, not a bill: review and the change map read parts of the diff again. P4-5's usage
-totals can be logged next to it through the `meter` seam (§8) to calibrate it.
+totals are logged next to it (§8) to calibrate it.
 
 When the estimate is above `max(limit, approved_tokens)`:
 
@@ -253,11 +253,13 @@ redacts unknown `*tokens` keys. Never titles, paths, diffs or model text.
 are validated at boot. A bad value stops the worker,
 and the message names the variable, never the value. Per-org limits are a follow-up (C-5/P10).
 
-### 8. Metering seam (P4-5)
+### 8. Metering (P4-5, ADR 0016)
 
-`AnalysisRunnerDeps.meter?` wraps a run's roles and reports `{ inputTokens, outputTokens }`, which
-`runAnalysis` logs next to the estimate. P4-5's metered roles and totals plug in here. This task
-does not depend on P4-5's code.
+Every lane run goes through P4-5's `meterRoles` with the worker's `usageTargets`, so each call is
+recorded in `llm_usage` against the analysis. `runAnalysis` logs `MeteredRoles.totals()` (calls,
+records, cost, unpriced records) next to the estimate. A metering write failure fails the run as
+`metering_failed` before any other outcome, including a shutdown release, so an unrecorded run
+never completes or goes back to the queue silently.
 
 ## Threat model
 
@@ -283,7 +285,7 @@ does not depend on P4-5's code.
   file is capped at `MAX_FILE_PATCH_CHARS`. The limit bounds size, not spend exactly. Text cannot
   shrink the estimate: non-ASCII counts one token per UTF-8 byte (SF2), an upper bound for
   tokenizers with byte fallback, and ASCII at 3 characters per token is conservative for code.
-  P4-5's totals through the `meter` seam make the gap visible. A hard spend guard on actual usage
+  P4-5's totals logged next to the estimate make the gap visible. A hard spend guard on actual usage
   is a follow-up.
 - **R2:** reused units lower the estimate. A file whose unit is reused is not counted, but the
   pipeline may still re-analyse it, for example when reuse fails a check (a leak, changed facts).

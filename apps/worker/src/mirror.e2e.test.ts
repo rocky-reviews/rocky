@@ -27,6 +27,7 @@ import {
   type FakeGitHubApi,
   type FakePullRequest,
 } from "@rocky-reviews/forge-github/testing";
+import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import { buildApp } from "@rocky-reviews/server/app";
 import pg from "pg";
@@ -680,6 +681,7 @@ describe("pull request events: GitHub's answer, not the event, is what is mirror
           clock: { now: () => new Date() },
           log,
           unitKeySalt: "",
+          usageTargets: usageTargetsFor(llmConfigFromEnv({})),
         },
         { ...lease, orgId: t.orgId, attempts: 1, leaseUntil: new Date(Date.now() + 600_000) },
       );

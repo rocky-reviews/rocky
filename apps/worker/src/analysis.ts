@@ -18,12 +18,18 @@ import {
   holdAnalysis,
   loadAnalysisTarget,
   loadPreviousAnalysis,
+  recordLlmUsage,
   releaseAnalysis,
   requeueAnalysis,
   type ClaimedAnalysis,
   type Db,
 } from "@rocky-reviews/db";
-import type { LlmConfig } from "@rocky-reviews/llm";
+import {
+  meterRoles,
+  type LlmConfig,
+  type LlmUsageTargets,
+  type MeteredRoles,
+} from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 
 /**
@@ -44,6 +50,13 @@ import type { Logger } from "@rocky-reviews/log";
  *   then the failure code is stored. Everything else stores a failure code at once.
  * - Every write needs the claim's lease: a run whose lease expired (and was reclaimed by another
  *   worker) writes nothing (`lease_lost`).
+ * - Metering (P4-5, ADR 0016): the pipeline only ever sees the roles wrapped by `meterRoles`, so
+ *   every call writes its `llm_usage` rows (in its own short tenant transaction, before its result
+ *   is used) for this org and analysis. A usage write that fails for good stops the run: the
+ *   usage is logged as numbers, nothing else is sent to a model, and the row fails as
+ *   `metering_failed` (not retried automatically, so a broken ledger cannot loop spend). The
+ *   totals are logged next to the token estimate, which is how the estimate is checked against
+ *   real usage (ADR 0017 §8).
  */
 
 /** The longest diff read for an analysis; a longer one fails as `diff_truncated` (P4-6). */
@@ -53,7 +66,10 @@ export interface AnalysisRunnerDeps {
   /** A login under which `withOrg` applies RLS (the worker's or the server's). */
   readonly db: Db;
   readonly forge: Forge;
+  /** The configured roles, unmetered: `runAnalysis` wraps them for each run. */
   readonly llm: LlmRoles;
+  /** From `usageTargetsFor(config)`: names provider and model for calls that never answered. */
+  readonly usageTargets: LlmUsageTargets;
   readonly clock: Clock;
   readonly log: Logger;
   /** From `unitKeySaltFor(config)`: a role-config change re-analyses every file. */
@@ -62,22 +78,6 @@ export interface AnalysisRunnerDeps {
   readonly maxDiffBytes?: number;
   /** The per-PR token limit (`ROCKY_ANALYSIS_TOKEN_LIMIT`, default 150 000). */
   readonly tokenLimit?: number;
-  /**
-   * Seam for metering (P4-5): wraps the roles of one run and reports what it used, logged next
-   * to the estimate so the estimate can be checked against real usage. Optional.
-   */
-  readonly meter?: (llm: LlmRoles, claim: ClaimedAnalysis) => MeteredRun;
-}
-
-/** What one run used, as the meter counted it. Counts only. */
-export interface RunUsage {
-  readonly inputTokens: number;
-  readonly outputTokens: number;
-}
-
-export interface MeteredRun {
-  readonly llm: LlmRoles;
-  totals(): RunUsage;
 }
 
 export type AnalysisRun =
@@ -158,8 +158,21 @@ export const runAnalysis = async (
 ): Promise<AnalysisRun> => {
   const { db, log } = deps;
   const { orgId, analysisId } = claim;
+  // Fail closed: no run without metering.
+  if (typeof deps.usageTargets !== "object" || deps.usageTargets === null) {
+    throw new TypeError("runAnalysis needs usageTargets (metering, P4-5)");
+  }
   const target = await db.withOrg(orgId, (tx) => loadAnalysisTarget(tx, claim));
   if (target === undefined) return { outcome: "lease_lost" };
+
+  const llm: MeteredRoles = meterRoles(deps.llm, {
+    // Its own transaction per call: usage survives whatever happens to the analysis row.
+    sink: { record: (records) => db.withOrg(orgId, (tx) => recordLlmUsage(tx, records)) },
+    targets: deps.usageTargets,
+    log,
+    analysisId,
+    clock: deps.clock,
+  });
 
   const lost = (): AnalysisRun => {
     log.warn({ analysisId, attempt: claim.attempts }, "analysis lease lost");
@@ -256,7 +269,6 @@ export const runAnalysis = async (
     }
 
     if (stopping()) return await release();
-    const metered = deps.meter?.(deps.llm, claim);
     const outcome = await analyzePullRequest(
       {
         repo: { owner, name },
@@ -269,7 +281,7 @@ export const runAnalysis = async (
         signal: options.signal,
       },
       {
-        llm: metered?.llm ?? deps.llm,
+        llm,
         clock: deps.clock,
         sha256Hex,
         generator: {
@@ -279,17 +291,22 @@ export const runAnalysis = async (
         unitKeySalt: deps.unitKeySalt,
       },
     );
+    const metered = llm.totals();
     log.info(
       {
         analysisId,
         outcome: outcome.status,
         diffBytes: diff.bytes.byteLength,
         estimate: estimate?.tokens,
-        ...(metered === undefined ? {} : metered.totals()),
         ...outcome.stats,
+        llmCalls: metered.calls,
+        llmUsageRecords: metered.records,
+        costMicroUsd: metered.costMicroUsd,
+        unpricedRecords: metered.unpriced,
       },
       "analysis ran",
     );
+    if (llm.failed) return await fail("metering_failed");
     if (outcome.status === "failed") return await fail(outcome.code);
     const stored = await db.withOrg(orgId, (tx) =>
       completeAnalysis(tx, claim, outcome.document, outcome.units),
@@ -297,6 +314,8 @@ export const runAnalysis = async (
     // The lease expired and another worker holds the row now: nothing of ours was written.
     return stored ? { outcome: "done" } : lost();
   } catch (error) {
+    // A broken ledger fails closed first, even during a stop (never retried or released).
+    if (llm.failed) return fail("metering_failed");
     // Whatever the stop interrupted (a cancelled call, a forge read), the row goes back as it was.
     if (stopping()) return release();
     if (error instanceof RunFailed) return fail(error.code);

@@ -1,3 +1,4 @@
+import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
 import { ForgeReadError, nothingStoredYet, type OrgId } from "@rocky-reviews/core";
 import type { Db } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
@@ -21,6 +22,7 @@ const settings = {
   auditDays: 365,
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
+  llmUsageDays: 730,
 };
 
 const stubDb = (overrides: Partial<Db> = {}) => {
@@ -131,6 +133,7 @@ describe("the analysis lane (P4-6)", () => {
   const analysis = {
     llm: { completion: () => undefined, embedding: () => undefined } as never,
     unitKeySalt: "salt",
+    usageTargets: usageTargetsFor(llmConfigFromEnv({})),
     tokenLimit: 150_000,
     concurrency: 3,
     orgConcurrency: 2,

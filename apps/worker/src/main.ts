@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { nothingStoredYet, type LlmRoles, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubForge } from "@rocky-reviews/forge-github";
-import { createLlmRoles, envSecrets, providerAdapters } from "@rocky-reviews/llm";
+import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
 import { unitKeySaltFor } from "./analysis.js";
@@ -32,7 +32,8 @@ try {
 
 // P4-3: every role resolves to an installed adapter with the capability it needs, or the worker
 // stops here, before it claims work. Keys are read per call through `envSecrets`, never now. The
-// analysis lane (P4-6, jobs.ts) hands these roles to `runAnalysis`.
+// analysis lane (P4-6, jobs.ts) hands these roles to `runAnalysis`, with
+// `usageTargetsFor(config.llm)` for metering (P4-5, ADR 0016): every run's roles are metered.
 let llm: LlmRoles;
 try {
   llm = createLlmRoles(config.llm, providerAdapters(), envSecrets(process.env));
@@ -85,6 +86,7 @@ const jobs = startJobs({
         analysis: {
           llm,
           unitKeySalt: unitKeySaltFor(config.llm),
+          usageTargets: usageTargetsFor(config.llm),
           tokenLimit: config.analysis.tokenLimit,
           concurrency: config.analysis.concurrency,
           orgConcurrency: config.analysis.orgConcurrency,

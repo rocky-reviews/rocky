@@ -18,6 +18,7 @@ import {
   type SeededOrg,
   type TestPostgres,
 } from "@rocky-reviews/db/testing";
+import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -268,13 +269,18 @@ const setup = (options: {
     log,
     unitKeySalt: "lane-e2e",
     version: "0.0.0",
+    usageTargets: usageTargetsFor(llmConfigFromEnv({})),
   };
   const outcomes: AnalysisRun[] = [];
+  // Claim order: the lane starts runs in the order the claim handed them out. Forge reads come
+  // later and race each other within a step, so they do not show the scheduler's order.
+  const handed: Started[] = [];
   const lane = createAnalysisLane(
     {
       db: worker,
       log,
       run: async (claim, signal) => {
+        handed.push({ org: claim.orgId === A.orgId ? "A" : "B", step });
         const outcome = await runAnalysis(runner, claim, { signal });
         outcomes.push(outcome);
         return outcome;
@@ -288,6 +294,7 @@ const setup = (options: {
     llm,
     lines,
     outcomes,
+    handed,
     get step() {
       return step;
     },
@@ -356,7 +363,7 @@ describe("load test: one org with 50 pull requests cannot starve another (P4-6)"
         steps++;
         if (started === 0 && world.lane.inFlight === 0) break;
       }
-      const startedOf = (org: "A" | "B") => world.forge.started.filter((s) => s.org === org);
+      const startedOf = (org: "A" | "B") => world.handed.filter((s) => s.org === org);
       expect(startedOf("A")).toHaveLength(50);
       expect(startedOf("B")).toHaveLength(3);
       expect(world.outcomes.every((o) => o.outcome === "done")).toBe(true);
@@ -364,7 +371,7 @@ describe("load test: one org with 50 pull requests cannot starve another (P4-6)"
       // The bound, in the order analyses were handed out: with two orgs waiting they take turns,
       // so B's i-th analysis (0-based) is among the first 2(i + 1) started, whatever A's backlog
       // and however the slots free up. A first-come queue would start B's first as the 51st.
-      const order = world.forge.started.map((s) => s.org);
+      const order = world.handed.map((s) => s.org);
       order
         .map((org, at) => ({ org, at }))
         .filter((x) => x.org === "B")
@@ -458,6 +465,12 @@ describe("a 200k-token pull request waits for user action (P4-6)", () => {
     expect(world.outcomes.at(-1)).toEqual({ outcome: "done" });
     expect(world.llm.calls.filter((c) => c.role === "triage")).toHaveLength(4);
     expect((await row()).status).toBe("done");
+    // Metered (P4-5): every call of the lane's run wrote its usage row; the hold wrote none.
+    const usage = await superuser.query<{ n: number }>(
+      "select count(distinct call_id)::int as n from llm_usage where analysis_id = $1",
+      [id],
+    );
+    expect(usage.rows[0]!.n).toBe(world.llm.calls.length);
 
     // The approval was for that revision only: a push is a new row, estimated again, and held
     // again when it is still over the limit (here every file changed, so none is reused).

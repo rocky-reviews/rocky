@@ -2,10 +2,16 @@ import { createHash } from "node:crypto";
 import {
   ForgeReadError,
   LlmCallError,
+  type CompletionRoleClient,
   PROMPT_CANARY,
   type Forge,
   type ForgeDiff,
+  type LlmCompletionRole,
+  type LlmRoles,
+  type LlmUsage,
   type RepositorySession,
+  type StructuredCompletionRequest,
+  type StructuredCompletionResult,
 } from "@rocky-reviews/core";
 import { scriptedRoles, type Script } from "@rocky-reviews/core/testing";
 import {
@@ -39,7 +45,7 @@ import {
   storedViolations,
   type AdversaryLog,
 } from "@rocky-reviews/evals";
-import { llmConfigFromEnv } from "@rocky-reviews/llm";
+import { llmConfigFromEnv, usageTargetsFor, type LlmUsageTargets } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import { parseAnalysisDocument } from "@rocky-reviews/schema";
 import pg from "pg";
@@ -127,13 +133,20 @@ const capture = () => {
   };
 };
 
-const deps = (forge: Forge, script: Script = pr847Script) => {
-  const llm = scriptedRoles(script);
+/** The default role targets (Claude API): what metering names for a call that never answered. */
+const TARGETS: LlmUsageTargets = usageTargetsFor(llmConfigFromEnv({}));
+
+const deps = (forge: Forge, script: Script = pr847Script, wrap?: (roles: LlmRoles) => LlmRoles) => {
+  const llm = scriptedRoles(script, {
+    provider: "anthropic",
+    model: (role) => TARGETS[role].model,
+  });
   const { log, lines } = capture();
   const runner: AnalysisRunnerDeps = {
     db: worker,
     forge,
-    llm: llm.roles,
+    llm: wrap === undefined ? llm.roles : wrap(llm.roles),
+    usageTargets: TARGETS,
     clock: { now: () => new Date("2026-10-27T12:00:00Z") },
     log,
     unitKeySalt: "e2e",
@@ -141,6 +154,96 @@ const deps = (forge: Forge, script: Script = pr847Script) => {
   };
   return { runner, calls: llm.calls, lines };
 };
+
+/**
+ * Gives every call a distinct, deterministic provider-reported usage (the scripted model reports
+ * zeros) and tallies it the way a provider bills it: one entry per reported attempt, plus the
+ * partial usage of a call that failed part-way. Every `fallbackEvery`-th call is a server-side
+ * fallback chain (two attempts); `failAt` makes that call (1-based) fail part-way.
+ */
+const stampUsage = (options: { fallbackEvery?: number; failAt?: number } = {}) => {
+  const reported: LlmUsage[] = [];
+  let n = 0;
+  const usageFor = (i: number): LlmUsage => ({
+    inputTokens: 1000 + i,
+    outputTokens: 100 + i,
+    cacheReadInputTokens: 10 * i,
+    cacheWrite5mInputTokens: i % 2 === 0 ? 2048 : 0,
+    cacheWrite1hInputTokens: i % 3 === 0 ? 512 : 0,
+  });
+  const wrap = (roles: LlmRoles): LlmRoles => ({
+    completion: (role: LlmCompletionRole): CompletionRoleClient => ({
+      role,
+      complete: async <T>(request: StructuredCompletionRequest<T>) => {
+        const i = ++n;
+        if (i === options.failAt) {
+          const partial = usageFor(i);
+          reported.push(partial);
+          throw new LlmCallError("overloaded", { partialUsage: partial, retryAfterMs: 5 });
+        }
+        const result: StructuredCompletionResult<T> = await roles
+          .completion(role)
+          .complete(request);
+        const used = usageFor(i);
+        if (options.fallbackEvery !== undefined && i % options.fallbackEvery === 0) {
+          const declined = { ...usageFor(i + 1000), outputTokens: 0 };
+          reported.push(declined, used);
+          return {
+            ...result,
+            model: "claude-opus-4-8",
+            usage: used,
+            attempts: [
+              { model: result.model, usage: declined },
+              { model: "claude-opus-4-8", usage: used },
+            ],
+          };
+        }
+        reported.push(used);
+        return { ...result, usage: used };
+      },
+    }),
+    embedding: () => roles.embedding(),
+  });
+  const total = () =>
+    reported.reduce(
+      (t, u) => ({
+        input: t.input + u.inputTokens,
+        output: t.output + u.outputTokens,
+        cacheRead: t.cacheRead + u.cacheReadInputTokens,
+        write5m: t.write5m + u.cacheWrite5mInputTokens,
+        write1h: t.write1h + u.cacheWrite1hInputTokens,
+        rows: t.rows + 1,
+      }),
+      { input: 0, output: 0, cacheRead: 0, write5m: 0, write1h: 0, rows: 0 },
+    );
+  return { wrap, total, calls: () => n };
+};
+
+const usageOf = async (analysisId: string) =>
+  (
+    await superuser.query<{
+      input: string;
+      output: string;
+      cache_read: string;
+      write_5m: string;
+      write_1h: string;
+      rows: string;
+      orgs: string;
+      calls: string;
+    }>(
+      `select coalesce(sum(input_tokens), 0)::text as input,
+              coalesce(sum(output_tokens), 0)::text as output,
+              coalesce(sum(cache_read_tokens), 0)::text as cache_read,
+              coalesce(sum(cache_write_5m_tokens), 0)::text as write_5m,
+              coalesce(sum(cache_write_1h_tokens), 0)::text as write_1h,
+              -- Rows that carry reported usage (a sibling cancelled mid-run reports none).
+              (count(*) filter (where usage_status <> 'unreported'))::text as rows,
+              count(distinct org_id)::text as orgs,
+              count(distinct call_id)::text as calls
+         from llm_usage where analysis_id = $1`,
+      [analysisId],
+    )
+  ).rows[0]!;
 
 /** A push: a new head revision of the org's pull request, with a queued analysis. */
 const newRevision = (org: SeededOrg, head: string): Promise<string> =>
@@ -370,6 +473,145 @@ describe("runAnalysis (P4-3)", () => {
       code: "forge_http_503",
       retryAfterMs: 30_000,
     });
+  });
+});
+
+describe("metering (P4-5)", () => {
+  it("every call writes llm_usage rows whose sum equals the provider-reported usage (repairs, fallbacks, a failed run and its retry)", async () => {
+    // Org B has no finished analysis of this pull request, so nothing is reused: a full run.
+    const head = "b5".repeat(20);
+    const id = await newRevision(B, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    // First run: the 5th call fails part-way (retryable), so the row is requeued.
+    const stamp = stampUsage({ fallbackEvery: 4, failAt: 5 });
+    const first = deps(forge.forge, pr847Script, stamp.wrap);
+    expect(await runAnalysis(first.runner, await claimed(B, id))).toMatchObject({
+      outcome: "retry",
+      code: "llm_overloaded",
+    });
+    // The retry runs the whole revision again; its usage is recorded too.
+    const retried = deps(forge.forge, pr847Script, stamp.wrap);
+    expect(await runAnalysis(retried.runner, await claimed(B, id, 2))).toEqual({
+      outcome: "done",
+    });
+    expect(retried.calls.some((c) => c.repair)).toBe(true);
+    expect(retried.calls.map((c) => c.role)).toEqual(
+      expect.arrayContaining(["triage", "review", "graph"]),
+    );
+
+    const expected = stamp.total();
+    const got = await usageOf(id);
+    expect({
+      input: Number(got.input),
+      output: Number(got.output),
+      cacheRead: Number(got.cache_read),
+      write5m: Number(got.write_5m),
+      write1h: Number(got.write_1h),
+      rows: Number(got.rows),
+    }).toEqual(expected);
+    expect(Number(got.calls)).toBe(stamp.calls());
+    expect(got.orgs).toBe("1");
+
+    const rows = (
+      await superuser.query<{
+        org_id: string;
+        role: string;
+        model: string;
+        outcome: string;
+        attempt: number;
+        usage_status: string;
+        cost_status: string;
+        cost_micro_usd: string | null;
+        price_version: string;
+        error_kind: string | null;
+      }>("select * from llm_usage where analysis_id = $1 order by id", [id])
+    ).rows;
+    for (const row of rows) {
+      expect(row.org_id).toBe(B.orgId);
+      expect(row.price_version).toBe("2026-10-27");
+    }
+    // The failed call: partial usage, no list price claimed. Siblings cancelled by its failure
+    // are recorded too, with no usage (they reported none).
+    const errors = rows.filter((r) => r.outcome === "error");
+    expect(errors.filter((r) => r.usage_status === "partial")).toEqual([
+      expect.objectContaining({
+        error_kind: "overloaded",
+        cost_status: "billing_unverified",
+        cost_micro_usd: null,
+      }),
+    ]);
+    for (const r of errors.filter((r) => r.usage_status !== "partial")) {
+      expect(r).toMatchObject({
+        error_kind: "cancelled",
+        usage_status: "unreported",
+        cost_status: "no_usage",
+      });
+    }
+    // Fallback chains: the declined attempt (no output) is recorded with its tokens, unpriced;
+    // the serving attempt is priced at its own model.
+    const declined = rows.filter((r) => r.attempt === 0 && r.outcome === "refused");
+    expect(declined.length).toBeGreaterThan(0);
+    for (const r of declined) expect(r.cost_status).toBe("billing_unverified");
+    const served = rows.filter((r) => r.attempt === 1);
+    expect(served.length).toBe(declined.length);
+    for (const r of served) expect([r.model, r.cost_status]).toEqual(["claude-opus-4-8", "priced"]);
+    // Everything else is priced at list price.
+    for (const r of rows.filter(
+      (r) => r.outcome !== "error" && r.attempt === 0 && r.outcome !== "refused",
+    )) {
+      expect(r.cost_status).toBe("priced");
+      expect(Number(r.cost_micro_usd)).toBeGreaterThan(0);
+    }
+  });
+
+  it("a usage write that fails stops the run, logs the usage as numbers and stores metering_failed", async () => {
+    const head = "b6".repeat(20);
+    const id = await newRevision(A, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const stamp = stampUsage();
+    const { runner, lines } = deps(forge.forge, pr847Script, stamp.wrap);
+    await superuser.query("revoke insert on llm_usage from rocky_worker");
+    try {
+      expect(await runAnalysis(runner, await claimed(A, id))).toEqual({
+        outcome: "failed",
+        code: "metering_failed",
+      });
+    } finally {
+      await superuser.query("grant insert on llm_usage to rocky_worker");
+    }
+    expect(await stored(id)).toMatchObject({
+      status: "failed",
+      error_code: "metering_failed",
+      document: null,
+    });
+    expect((await usageOf(id)).rows).toBe("0");
+    // No unmetered spend: once a write failed, no further call reached the model.
+    const unrecorded = lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((l) => l["errorCode"] === "llm_usage_unrecorded");
+    expect(unrecorded.length).toBeGreaterThan(0);
+    expect(stamp.calls()).toBe(unrecorded.length);
+    expect(unrecorded[0]).toMatchObject({ sqlstate: "42501", analysisId: id });
+    expect(typeof unrecorded[0]!["inputTokens"]).toBe("number");
+    const logs = lines.join("\n");
+    for (const secret of ["title-marker-7731", "src/auth/invitations.ts", "randomBytes"]) {
+      expect(logs).not.toContain(secret);
+    }
+  });
+
+  it("refuses to run without usage targets (no unmetered path)", async () => {
+    const id = await newRevision(B, "b7".repeat(20));
+    const { runner } = deps(recordingForge({}).forge);
+    const unmetered = { ...runner, usageTargets: undefined } as unknown as AnalysisRunnerDeps;
+    const claim = {
+      analysisId: id,
+      leaseId: "00000000-0000-4000-8000-000000000000",
+      orgId: B.orgId,
+      attempts: 1,
+      leaseUntil: new Date(Date.now() + 600_000),
+    };
+    await expect(runAnalysis(unmetered, claim)).rejects.toThrow(TypeError);
+    expect((await stored(id)).status).toBe("queued");
   });
 });
 

@@ -41,6 +41,7 @@ const ALLOWED_SECURITY_DEFINER = [
   "retention.purge_analyses",
   "retention.purge_audit_events",
   "retention.purge_jobs",
+  "retention.purge_llm_usage",
   "retention.purge_webhook_deliveries",
 ];
 
@@ -78,7 +79,8 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.embeddings": DML,
   "public.findings_state": DML,
   "public.jobs": DML,
-  "public.llm_usage": DML,
+  // Append-only and written by the worker (P4-5, migration 0011): the server only reads it.
+  "public.llm_usage": ["SELECT"],
   "public.llm_usage_id_seq": [],
   "public.members": DML,
   "public.memory_entries": DML,
@@ -144,7 +146,7 @@ const ANALYSES_COLUMN_PRIVILEGES = [
  * rocky_app; rocky_lifecycle owns the worker functions and reads/updates exactly what they need.
  */
 const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
-  [WORKER_ROLE]: { "public.orgs": ["INSERT"] },
+  [WORKER_ROLE]: { "public.llm_usage": ["INSERT"], "public.orgs": ["INSERT"] },
   [LIFECYCLE_ROLE]: {
     "app.webhook_deliveries": ["SELECT", "UPDATE"],
     "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
@@ -402,7 +404,8 @@ describe("org A against org B's rows, per table", () => {
 
   it("update of foreign rows affects nothing and leaves them unchanged", async () => {
     for (const t of tables) {
-      if (t.name === "audit_events") continue; // append-only: covered in audit.test.ts
+      // Append-only: covered in audit.test.ts and usage.test.ts.
+      if (t.name === "audit_events" || t.name === "llm_usage") continue;
       // The app may not update orgs.id at all (column grants, review round 1 H1): touch a column
       // it may write instead, so this still proves RLS hides the foreign row.
       const set = t.name === "orgs" ? "settings" : t.tenantColumn;
@@ -459,7 +462,7 @@ describe("org A against org B's rows, per table", () => {
 
   it("delete of foreign rows affects nothing", async () => {
     for (const t of tables) {
-      if (t.name === "audit_events") continue;
+      if (t.name === "audit_events" || t.name === "llm_usage") continue;
       if (t.name === "orgs") {
         // No DELETE privilege at all on the tenant root (final review #2; deletion.test.ts).
         const error = await pgError(
@@ -798,6 +801,7 @@ describe("other catalog objects (review #8)", () => {
     expect(settings.rows.map((r) => r.category)).toEqual([
       "analyses",
       "audit",
+      "llm_usage",
       "logs",
       "org_deletion_grace",
       "webhook_deliveries",

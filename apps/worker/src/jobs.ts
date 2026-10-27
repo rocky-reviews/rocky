@@ -1,5 +1,6 @@
 import type { Clock, Forge, LlmRoles, OrgErasers, OrgId } from "@rocky-reviews/core";
 import { runRetention, type Db } from "@rocky-reviews/db";
+import type { LlmUsageTargets } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 import { runAnalysis } from "./analysis.js";
 import { createAnalysisLane, type AnalysisLane } from "./analysis-lane.js";
@@ -59,6 +60,8 @@ export interface AnalysisJobConfig {
   readonly llm: LlmRoles;
   /** `unitKeySaltFor(config.llm)`. */
   readonly unitKeySalt: string;
+  /** `usageTargetsFor(config.llm)`: every run's roles are metered (P4-5, ADR 0016). */
+  readonly usageTargets: LlmUsageTargets;
   readonly tokenLimit: number;
   /** Analyses this worker runs at once. */
   readonly concurrency: number;
@@ -172,6 +175,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
                 clock: deps.clock,
                 log: deps.log,
                 unitKeySalt: analysis.unitKeySalt,
+                usageTargets: analysis.usageTargets,
                 tokenLimit: analysis.tokenLimit,
                 ...(analysis.version === undefined ? {} : { version: analysis.version }),
               },
