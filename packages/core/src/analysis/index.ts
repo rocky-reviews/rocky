@@ -20,6 +20,8 @@ export {
   DEFAULT_CONCURRENCY,
   DELETION_ONLY_DETAIL,
   GRAPH_MAX_INPUT_CHARS,
+  RAISED_FOR_FINDINGS,
+  RAISED_FOR_UNREVIEWED,
   type AnalysisDeps,
   type AnalysisFailureCode,
   type AnalysisOutcome,
@@ -28,3 +30,12 @@ export {
   type AnalysisStats,
 } from "./pipeline.js";
 export { belowUnanalysedFloor } from "./verdict.js";
+export {
+  createLeakDetector,
+  INSTRUCTION_LEAK,
+  instructionLeaks,
+  LEAK_NGRAM_WORDS,
+  PROMPT_TEXTS,
+  type LeakDetector,
+  type LeakDetectorOptions,
+} from "./leak.js";

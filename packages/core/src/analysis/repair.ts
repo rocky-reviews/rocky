@@ -7,6 +7,10 @@
  *
  * The issue list is built by Rocky but describes model output (paths can carry model-chosen keys),
  * so it goes in an `untrusted` part like PR content; the repair instruction is a literal.
+ *
+ * Every schema-valid answer also passes the leak guard (P4-4, ADR 0015 §3) before its integrity
+ * check: an answer that copies Rocky's system prompt is repaired or fails like any invalid one.
+ * The guard allows only text found in the call's own content, never in the issue list.
  */
 import {
   isLlmCallError,
@@ -19,6 +23,8 @@ import {
   type StructuredCompletionResult,
 } from "../llm.js";
 import { REPAIR_INSTRUCTIONS } from "./instructions.js";
+import { instructionLeaks } from "./leak.js";
+import { MAX_REPAIR_ISSUES } from "./outputs.js";
 import type { UnitCheck } from "./validate.js";
 
 /** ADR 0004: one repair round. Each unit costs at most 1 + this many calls. */
@@ -98,8 +104,10 @@ export const completeWithRepair = async <T>(
     }
     const checked = call.check(result.value);
     if (checked === "unrepairable") return { ok: false, reason: "invalid" };
-    if (checked.length === 0) return { ok: true, value: result.value };
-    issues = checked;
+    // `call.untrusted`, not this round's parts: the issue list must not allow a copy (A24).
+    const found = [...instructionLeaks(result.value, call.untrusted), ...checked];
+    if (found.length === 0) return { ok: true, value: result.value };
+    issues = found.slice(0, MAX_REPAIR_ISSUES);
   }
   return { ok: false, reason: "invalid" };
 };

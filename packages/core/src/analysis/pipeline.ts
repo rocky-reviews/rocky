@@ -63,6 +63,7 @@ import {
   type GraphAnswer,
   type ReviewFinding,
 } from "./outputs.js";
+import { instructionLeaks } from "./leak.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
@@ -659,6 +660,13 @@ const run = async (
   // stored-document rule, so this cannot trip unless that clamp breaks. It is the same check
   // `completeAnalysis` runs at the write (round 2, N3).
   if (!final.ok || belowUnanalysedFloor(final.value)) throw new Failed("document_invalid");
+  // Defence in depth for the leak guard (P4-4, ADR 0015 §3): every fresh answer was checked in
+  // `completeWithRepair`; reused units were not. Only the PR's own content may be quoted.
+  const content: LlmUntrustedText[] = [
+    { label: "pr_title", text: request.pullRequest.title },
+    ...files.map((file) => ({ label: "diff", text: `${file.path}\n${file.patch}` })),
+  ];
+  if (instructionLeaks(final.value, content).length > 0) throw new Failed("document_invalid");
   return { status: "done", document: final.value, units, stats };
 };
 

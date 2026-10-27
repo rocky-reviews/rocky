@@ -26,7 +26,7 @@ import type { ReviewFinding } from "./outputs.js";
  * Bump when instructions, output contracts, rules or anything else that shapes a unit's answer
  * changes: no stored unit is reused across versions.
  */
-export const PIPELINE_VERSION = "p4-3.1";
+export const PIPELINE_VERSION = "p4-4.1";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 

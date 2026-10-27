@@ -286,8 +286,8 @@ erasure.
   follow-up.
 - **R2:** a model steered by PR content can still write a wrong or misleading draft: a lower
   triage on a path no rule floors (test files included), a soft verdict reason, a persuasive body.
-  That is a draft for a human, never an action. P4-4 adds the injection corpus and the verdict
-  invariants.
+  That is a draft for a human, never an action. P4-4 adds the injection corpus, the leak guard and
+  the verdict invariants ([ADR 0015](0015-prompt-injection-defence.md), R1 and R2).
 - **R3:** a crash between claim and finish, or a database error inside `runAnalysis`'s own
   failure path, leaves a row `running`. The lease is a **merge gate** for the change that wires
   `runAnalysis` into a queue lane (§7).

@@ -10,11 +10,13 @@ import {
 import {
   analyzePullRequest,
   GRAPH_MAX_INPUT_CHARS,
+  RAISED_FOR_UNREVIEWED,
   type AnalysisDeps,
   type AnalysisOutcome,
   type AnalysisRequest,
 } from "./pipeline.js";
-import { MAX_REPAIR_ROUNDS } from "./repair.js";
+import { PROMPT_CANARY, PROMPT_CANARY_MARKER, systemPrompt } from "../prompt.js";
+import { completeWithRepair, MAX_REPAIR_ROUNDS } from "./repair.js";
 import { scriptedRoles, type Script, type ScriptedAnswer, type ScriptedCall } from "./testing.js";
 import { PIPELINE_VERSION } from "./units.js";
 
@@ -426,7 +428,7 @@ describe("A5 incremental reuse is keyed and conservative", () => {
   });
 
   it("keys bind the pipeline version", () => {
-    expect(PIPELINE_VERSION).toMatch(/^p4-3\.\d+$/);
+    expect(PIPELINE_VERSION).toMatch(/^p4-4\.\d+$/);
   });
 
   it("a file that could not be analysed is tried again", async () => {
@@ -855,5 +857,132 @@ describe("A5c old-shape units are not reused (review round 2)", () => {
       previous: { document: previous.document, units: old },
     });
     expect(done(outcome).stats).toMatchObject({ analysed: 2, reused: 0 });
+  });
+});
+
+describe("A23 the leak guard keeps instruction text out of the document (P4-4, ADR 0015 §3)", () => {
+  const prompt = (call: ScriptedCall) => systemPrompt(call.instructions);
+
+  it("a finding that copies the system prompt goes back for repair, and a fixed answer is stored", async () => {
+    const leaky = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? {
+            value: {
+              findings: [
+                call.repair ? finding("high", 2) : { ...finding("high", 2), body: prompt(call) },
+              ],
+            },
+          }
+        : undefined,
+    );
+    const { outcome, calls } = await analyze(leaky);
+    const repair = calls.find((c) => c.repair)!;
+    expect(repair.part("validation_issues")).toBe("findings[0].body: instruction_leak");
+    const { document } = done(outcome);
+    expect(document.findings).toHaveLength(1);
+    expect(JSON.stringify(document)).not.toContain(PROMPT_CANARY);
+  });
+
+  it("a review that keeps leaking leaves the file unanalysed and floors the verdict", async () => {
+    const leaky = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? { value: { findings: [{ ...finding("low", 2), agentPrompt: prompt(call) }] } }
+        : undefined,
+    );
+    const { document } = done((await analyze(leaky)).outcome);
+    expect(document.findings).toEqual([]);
+    expect(document.provenance.unanalysed).toEqual([
+      { path: "src/auth/session.ts", reason: "analysis-failed" },
+    ]);
+    expect(document.briefing.verdict).toEqual({ level: "high", reason: RAISED_FOR_UNREVIEWED });
+  });
+
+  it("a triage reason that leaks the canary is refused", async () => {
+    const leaky = script((call) =>
+      is("triage", "src/util/format.ts")(call)
+        ? { value: { ...triage("normal", 30), reason: `Marker ${PROMPT_CANARY_MARKER}.` } }
+        : undefined,
+    );
+    const { document } = done((await analyze(leaky)).outcome);
+    expect(document.provenance.unanalysed.map((f) => f.path)).toEqual(["src/util/format.ts"]);
+  });
+
+  it("a change map that leaks is unavailable; a briefing that leaks fails the analysis", async () => {
+    const graph = script((call) =>
+      call.role === "graph"
+        ? { value: { ...GRAPH, nodes: [{ ...GRAPH.nodes[0], label: prompt(call).slice(0, 80) }] } }
+        : undefined,
+    );
+    const mapped = done((await analyze(graph)).outcome).document;
+    expect(mapped.graph).toBeUndefined();
+    expect(mapped.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+
+    const briefing = script((call) =>
+      is("review")(call) && call.part("file_path") === undefined
+        ? { value: { ...briefingFor(call), summary: prompt(call).slice(0, 1000) } }
+        : undefined,
+    );
+    const { outcome } = await analyze(briefing);
+    expect(outcome).toMatchObject({ status: "failed", code: "briefing_failed" });
+  });
+
+  it("a PR that quotes Rocky's instructions can be reviewed quoting them back", async () => {
+    const quoted = REVIEW_INSTRUCTIONS.text.split("\n")[2]!;
+    const diff = addedFile("src/prompts/review.ts", [`export const TEXT = "${quoted}";`]);
+    const quoting = script((call) =>
+      call.role === "triage"
+        ? { value: triage("important", 60) }
+        : is("review", "src/prompts/review.ts")(call)
+          ? { value: { findings: [{ ...finding("medium", 1), body: `Changes: ${quoted}` }] } }
+          : undefined,
+    );
+    const { document } = done((await analyze(quoting, { diff })).outcome);
+    expect(document.findings).toHaveLength(1);
+    expect(document.provenance.unanalysed).toEqual([]);
+  });
+});
+
+describe("A24 a repair round's issue list cannot allow what the answer copied (P4-4)", () => {
+  it("instruction text echoed into the issues still leaks in the second answer", async () => {
+    const sentence = TRIAGE_INSTRUCTIONS.text.split("\n")[2]!;
+    let checks = 0;
+    const llm = scriptedRoles((call) => ({ value: { text: sentence, repair: call.repair } }));
+    const result = await completeWithRepair(
+      llm.roles,
+      {
+        role: "triage",
+        instructions: TRIAGE_INSTRUCTIONS,
+        untrusted: [{ label: "diff", text: "+const a = 1;" }],
+        output: {
+          name: "t",
+          jsonSchema: { type: "object" },
+          parse: (value) => ({ success: true, data: value }),
+        },
+        maxOutputTokens: 100,
+        // A check whose first issue line carries the copied text (as a model-chosen key would);
+        // it passes the second answer, so only the leak guard can refuse it.
+        check: () => (checks++ === 0 ? [`${sentence}: custom`] : []),
+      },
+      { onResult: () => undefined },
+      undefined,
+    );
+    expect(result).toEqual({ ok: false, reason: "invalid" });
+    expect(llm.calls).toHaveLength(1 + MAX_REPAIR_ROUNDS);
+    expect(llm.calls[1]!.part("validation_issues")).toContain(sentence);
+    expect(checks).toBe(2);
+  });
+});
+
+describe("A25 the stored document is checked whole for instruction text (P4-4)", () => {
+  it("the final check refuses a document that leaks even if a unit check missed it", async () => {
+    // A previous analysis tampered to carry the system prompt: reuse skips the unit's leak check,
+    // so only the final whole-document check stands between it and storage.
+    const previous = done((await analyze()).outcome);
+    const tampered = structuredClone(previous.document);
+    tampered.triage.files[0]!.reason = `${PROMPT_CANARY_MARKER} leaked`;
+    const { outcome } = await analyze(script(), {
+      previous: { document: tampered, units: previous.units },
+    });
+    expect(outcome).toMatchObject({ status: "failed", code: "document_invalid" });
   });
 });

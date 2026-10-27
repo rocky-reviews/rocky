@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   ForgeReadError,
   LlmCallError,
+  PROMPT_CANARY,
   type Forge,
   type ForgeDiff,
   type RepositorySession,
@@ -18,7 +19,19 @@ import {
   type SeededOrg,
   type TestPostgres,
 } from "@rocky-reviews/db/testing";
-import { PR847, pr847Diff, pr847Script, ROUTES_PUSH_2, scoreFindings } from "@rocky-reviews/evals";
+import {
+  adversaryScript,
+  findLeaks,
+  INJECTION_CORPUS,
+  injectCase,
+  PR847,
+  pr847Diff,
+  pr847Script,
+  ROUTES_PUSH_2,
+  scoreFindings,
+  storedViolations,
+  type AdversaryLog,
+} from "@rocky-reviews/evals";
 import { llmConfigFromEnv } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import { parseAnalysisDocument } from "@rocky-reviews/schema";
@@ -266,6 +279,50 @@ describe("runAnalysis (P4-3)", () => {
       outcome: "retry",
       code: "forge_http_503",
     });
+  });
+});
+
+describe("runAnalysis under prompt injection (P4-4, ADR 0015)", () => {
+  // A model that copies its system prompt into every answer that saw the payload (a comment in a
+  // reviewed file), and keeps copying it in the repair round.
+  const leakCase = INJECTION_CORPUS.find((c) => c.id === "comment-leak-prompt")!;
+
+  it("instruction text never reaches the database row or the logs", async () => {
+    const { diff } = injectCase(leakCase);
+    const head = "3".repeat(40);
+    const id = await newRevision(A, head);
+    const forge = recordingForge({ [head]: diffOf(diff) });
+    const log: AdversaryLog = { compromised: [] };
+    const { runner, lines } = deps(forge.forge, adversaryScript("leak", leakCase.trigger, log));
+    expect(await runAnalysis(runner, A.orgId, id)).toEqual({ outcome: "done" });
+    // The adversary did try: its file's review answered with the system prompt.
+    expect(log.compromised.some((call) => call.role === "review")).toBe(true);
+
+    // The whole row as Postgres stores it, every column.
+    const { rows } = await superuser.query<{ row: string }>(
+      "select row_to_json(a)::text as row from analyses a where id = $1",
+      [id],
+    );
+    const row = rows[0]!.row;
+    expect(row).not.toContain(PROMPT_CANARY);
+    expect(findLeaks(JSON.parse(row), [TITLE, diff])).toEqual([]);
+    const stored = await superuser.query<{ document: unknown }>(
+      "select document from analyses where id = $1",
+      [id],
+    );
+    const parsed = parseAnalysisDocument(stored.rows[0]!.document);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    // The leaking file is not shown as reviewed; the verdict keeps its floor.
+    expect(parsed.value.provenance.unanalysed.map((f) => f.path)).toEqual([leakCase.target]);
+    expect(
+      storedViolations(
+        { status: "done", document: parsed.value, units: [], stats: {} as never },
+        { title: TITLE, diff },
+      ),
+    ).toEqual([]);
+    expect(findLeaks(lines, [])).toEqual([]);
+    expect(lines.join("\n")).not.toContain(leakCase.trigger);
   });
 });
 

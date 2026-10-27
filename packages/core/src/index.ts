@@ -113,8 +113,24 @@ export {
   type StructuredCompletionResult,
 } from "./llm.js";
 export {
+  FINAL_INSTRUCTION,
+  PROMPT_CANARY,
+  PROMPT_CANARY_MARKER,
+  systemPrompt,
+  UNTRUSTED_PREAMBLE,
+} from "./prompt.js";
+export {
   analyzePullRequest,
   belowUnanalysedFloor,
+  createLeakDetector,
+  INSTRUCTION_LEAK,
+  instructionLeaks,
+  LEAK_NGRAM_WORDS,
+  PROMPT_TEXTS,
+  RAISED_FOR_FINDINGS,
+  RAISED_FOR_UNREVIEWED,
+  type LeakDetector,
+  type LeakDetectorOptions,
   DEFAULT_CONCURRENCY,
   DELETION_ONLY_DETAIL,
   FileUnit,
