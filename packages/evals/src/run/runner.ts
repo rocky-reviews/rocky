@@ -117,7 +117,8 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
         generator: { name: "rocky-evals", version: PIPELINE_VERSION },
         unitKeySalt: `evals:${options.kind}`,
       });
-      return meter.capped() && outcome.status === "failed" ? ("capped" as const) : outcome;
+      // A call refused by the cap leaves the analysis incomplete even if the pipeline recovered.
+      return meter.capped() ? ("capped" as const) : outcome;
     } catch (error) {
       // The pipeline rethrows a cancelled call (as it does an abort): here, the cap's refusal.
       if (meter.capped() && isLlmCallError(error) && error.kind === "cancelled") return "capped";

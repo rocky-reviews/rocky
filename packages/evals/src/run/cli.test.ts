@@ -3,7 +3,7 @@ import { LlmCallError, type LlmRoles } from "@rocky-reviews/core";
 import { describe, expect, it } from "vitest";
 import { evalsCli, type CliDeps, type CliIo } from "./cli.js";
 import { fakeTarget } from "./fake/test-support.js";
-import { parseReport, type EvalReport } from "./report.js";
+import { parseReport, totalsOf, type EvalReport } from "./report.js";
 
 const KEY = "sk-ant-test-DO-NOT-PRINT-0123456789";
 
@@ -141,7 +141,13 @@ describe("pnpm evals compare", () => {
   it("exits 1 when recall dropped more than 5 points", async () => {
     const a = JSON.parse(await fake()) as EvalReport;
     const worse = structuredClone(a);
-    for (const pr of worse.prs) pr.matched = Math.max(0, pr.matched - 2);
+    // Two fewer matches per PR, as a consistent report: each lost match is a false positive.
+    for (const pr of worse.prs) {
+      pr.matched -= 2;
+      pr.recall = pr.matched / pr.expected;
+      pr.precision = pr.matched / pr.produced;
+    }
+    worse.total = totalsOf(worse.prs);
     const t = io({ "base.json": JSON.stringify(a), "new.json": JSON.stringify(worse) });
     expect(await evalsCli(["compare", "base.json", "new.json"], t.io, deps())).toBe(1);
     expect(t.text()).toContain("recall dropped");
@@ -162,5 +168,17 @@ describe("pnpm evals compare", () => {
     expect(await evalsCli(["compare", "missing.json", "bad.json"], t.io, deps())).toBe(2);
     expect(await evalsCli(["compare", "bad.json", "bad.json"], t.io, deps())).toBe(2);
     expect(await evalsCli(["compare", "bad.json"], t.io, deps())).toBe(2);
+  });
+
+  it("exits 2 on a baseline or report that ran only some PRs (review round 1)", async () => {
+    const full = await fake();
+    const t = io();
+    await evalsCli(["run", "--fake", "--only", "pr-912", "--out", "only.json"], t.io, deps());
+    const only = t.written["only.json"]!;
+    const c = io({ "full.json": full, "only.json": only });
+    expect(await evalsCli(["compare", "only.json", "full.json"], c.io, deps())).toBe(2);
+    expect(c.text()).toContain("a baseline must run every seeded PR");
+    expect(await evalsCli(["compare", "full.json", "only.json"], c.io, deps())).toBe(2);
+    expect(c.text()).toContain("a gated report must run every seeded PR");
   });
 });

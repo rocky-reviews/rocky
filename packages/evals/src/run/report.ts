@@ -144,23 +144,91 @@ export const EvalReport = z
   .refine((report) => (report.kind === "placeholder") === (report.notice === PLACEHOLDER_NOTICE), {
     message: "a placeholder carries PLACEHOLDER_NOTICE, and only a placeholder does",
     path: ["notice"],
+  })
+  .superRefine((report, context) => {
+    const issue = (path: (string | number)[], message: string) =>
+      context.addIssue({ code: "custom", path, message });
+    if (report.kind === "placeholder") {
+      if (report.prs.length > 0) issue(["prs"], "a placeholder holds no results");
+      return;
+    }
+    report.prs.forEach((pr, index) => {
+      for (const message of countIssues(pr)) issue(["prs", index], message);
+    });
+    const total = totalsOf(report.prs);
+    for (const key of Object.keys(total) as (keyof Totals)[])
+      if (!same(total[key], report.total[key]))
+        issue(["total", key], "totals must be the sums of the PRs");
+    const anyCapped =
+      report.prs.some((pr) => pr.status === "capped") ||
+      (report.injection?.cases ?? []).some((c) => c.status === "capped");
+    if (anyCapped !== report.usage.capped)
+      issue(["usage", "capped"], "capped must be set exactly when a PR or case was capped");
   });
 export type EvalReport = z.infer<typeof EvalReport>;
+
+/** Rates are ratios of the counts beside them; float noise only. */
+const same = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+const ratio = (part: number, whole: number, empty: number) => (whole === 0 ? empty : part / whole);
+
+const countIssues = (counts: z.infer<typeof PrResult>): string[] => [
+  ...(counts.matched > counts.expected ? ["matched exceeds expected"] : []),
+  ...(counts.matched > counts.produced ? ["matched exceeds produced"] : []),
+  ...(counts.criticalFalsePositives > counts.criticalProduced
+    ? ["critical false positives exceed criticals produced"]
+    : []),
+  ...(same(counts.recall, ratio(counts.matched, counts.expected, 1))
+    ? []
+    : ["recall is not matched / expected"]),
+  ...(same(counts.precision, ratio(counts.matched, counts.produced, 1))
+    ? []
+    : ["precision is not matched / produced"]),
+  ...(same(
+    counts.criticalFalsePositiveRate,
+    ratio(counts.criticalFalsePositives, counts.criticalProduced, 0),
+  )
+    ? []
+    : ["critical false-positive rate is not the ratio of its counts"]),
+];
 
 export type ReportParse =
   | { readonly ok: true; readonly report: EvalReport }
   | { readonly ok: false; readonly issues: readonly string[] };
 
-export const parseReport = (value: unknown): ReportParse => {
+/**
+ * `baseline`: what a gate compares against must be a complete run (not capped, no `--only`,
+ * every PR done). `report`: what is gated must not be capped or partial; a failed PR is a result
+ * (it found nothing). Placeholders parse in any purpose so `compare` can refuse them by name.
+ */
+export interface ParseOptions {
+  readonly purpose?: "any" | "baseline" | "report";
+}
+
+const purposeIssues = (report: EvalReport, purpose: ParseOptions["purpose"]): string[] => {
+  if (purpose === undefined || purpose === "any" || report.kind === "placeholder") return [];
+  const who = purpose === "baseline" ? "a baseline" : "a gated report";
+  return [
+    ...(report.usage.capped ? [`usage.capped: ${who} cannot be capped`] : []),
+    ...(report.options.only === null ? [] : [`options.only: ${who} must run every seeded PR`]),
+    ...(purpose === "baseline"
+      ? report.prs.flatMap((pr, index) =>
+          pr.status === "done" ? [] : [`prs.${index}.status: every baseline PR must be done`],
+        )
+      : []),
+  ];
+};
+
+export const parseReport = (value: unknown, options: ParseOptions = {}): ReportParse => {
   const parsed = EvalReport.safeParse(value);
-  return parsed.success
-    ? { ok: true, report: parsed.data }
-    : {
-        ok: false,
-        issues: parsed.error.issues.map(
-          (issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`,
-        ),
-      };
+  if (!parsed.success)
+    return {
+      ok: false,
+      issues: parsed.error.issues.map(
+        (issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`,
+      ),
+    };
+  const issues = purposeIssues(parsed.data, options.purpose);
+  return issues.length === 0 ? { ok: true, report: parsed.data } : { ok: false, issues };
 };
 
 /** Micro-averaged totals: sums of counts, rates from the sums. */

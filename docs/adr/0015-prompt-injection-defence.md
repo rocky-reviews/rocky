@@ -190,7 +190,7 @@ every seeded finding keeps its line numbers. There are two fixtures:
 
 Corpus targets name pr-847 files; pr-912 maps each one to its file in the same role. The corpus
 is data, so P4-7 runs it against real models with the same checks (`pnpm evals run
---injection`, ADR 0016).
+--injection`, ADR 0018).
 
 ### 5. Adversarial fakes and the invariants tested
 

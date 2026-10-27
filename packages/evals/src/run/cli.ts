@@ -190,7 +190,11 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
   return 0;
 };
 
-const readReport = async (io: CliIo, path: string): Promise<EvalReport> => {
+const readReport = async (
+  io: CliIo,
+  path: string,
+  purpose: "baseline" | "report",
+): Promise<EvalReport> => {
   let text: string;
   try {
     text = await io.readFile(path);
@@ -203,7 +207,7 @@ const readReport = async (io: CliIo, path: string): Promise<EvalReport> => {
   } catch {
     throw new UsageError(`${path} is not JSON`);
   }
-  const parsed = parseReport(json);
+  const parsed = parseReport(json, { purpose });
   if (!parsed.ok)
     throw new UsageError(`${path} is not an eval report: ${parsed.issues.join("; ")}`);
   return parsed.report;
@@ -213,8 +217,8 @@ const compare = async (args: string[], io: CliIo): Promise<number> => {
   const { positionals } = parseArgs({ args, strict: true, allowPositionals: true, options: {} });
   if (positionals.length !== 2) throw new UsageError("compare takes a baseline and a report");
   const [baselinePath, reportPath] = positionals as [string, string];
-  const baseline = await readReport(io, baselinePath);
-  const report = await readReport(io, reportPath);
+  const baseline = await readReport(io, baselinePath, "baseline");
+  const report = await readReport(io, reportPath, "report");
   let result;
   try {
     result = compareReports(baseline, report);

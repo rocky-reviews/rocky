@@ -4,10 +4,13 @@
  *
  * 1. **Same file:** the paths are equal.
  * 2. **Overlapping lines:** the produced range overlaps the seeded range widened by `LINE_SLACK`
- *    lines on each side (a model often points one line above or below the bug).
+ *    lines on each side (a model often points one line above or below the bug), and spans at
+ *    most `MAX_EXTRA_SPAN` lines more than the seeded range (a whole-file range names nothing).
  * 3. **Compatible severity:** at most one step apart on critical > high > medium > low.
- * 4. **Same issue:** when the seeded finding lists `keywords`, the produced title or body
- *    contains at least one of them (case-insensitive substring). Without keywords, rule 4 holds.
+ * 4. **Same issue:** when the seeded finding lists `keywords`, the produced title or the first
+ *    `KEYWORD_BODY_CHARS` characters of its body contain at least one of them (case-insensitive
+ *    substring), so a body stuffed with every keyword does not match. Without keywords, rule 4
+ *    holds.
  *
  * Each seeded finding matches at most one produced finding and the reverse; the matched count
  * is the size of a maximum matching, so the order findings come in cannot lower it. Produced
@@ -56,6 +59,12 @@ export interface FindingScore {
 }
 
 export const LINE_SLACK = 2;
+/** Lines a produced range may span beyond the seeded range's own span. */
+export const MAX_EXTRA_SPAN = 2 * LINE_SLACK;
+/** How much of a produced body the keyword rule reads. */
+export const KEYWORD_BODY_CHARS = 200;
+
+const span = (range: ScoredFinding["range"]): number => range.end - range.start;
 
 const RANK: Readonly<Record<Severity, number>> = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -67,7 +76,8 @@ const lineDistance = (seeded: ScoredFinding["range"], produced: ScoredFinding["r
 
 const keywordHits = (seeded: SeededFinding | ScoredFinding, produced: ScoredFinding): number => {
   const keywords = "keywords" in seeded ? (seeded.keywords ?? []) : [];
-  const text = `${produced.title ?? ""}\n${produced.body ?? ""}`.toLowerCase();
+  const body = (produced.body ?? "").slice(0, KEYWORD_BODY_CHARS);
+  const text = `${produced.title ?? ""}\n${body}`.toLowerCase();
   return keywords.filter((keyword) => text.includes(keyword.toLowerCase())).length;
 };
 
@@ -80,6 +90,7 @@ export const findingMatches = (
   return (
     produced.path === seeded.path &&
     lineDistance(seeded.range, produced.range) <= LINE_SLACK &&
+    span(produced.range) <= span(seeded.range) + MAX_EXTRA_SPAN &&
     severityCompatible(seeded.severity, produced.severity) &&
     (keywords.length === 0 || keywordHits(seeded, produced) > 0)
   );

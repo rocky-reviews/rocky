@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   findingMatches,
+  KEYWORD_BODY_CHARS,
   LINE_SLACK,
+  MAX_EXTRA_SPAN,
   scoreFindings,
   severityCompatible,
   type ScoredFinding,
@@ -37,10 +39,17 @@ describe("matching rules (README: Matching rules)", () => {
   it(`rule 2: lines overlap the seeded range widened by ${LINE_SLACK} lines`, () => {
     expect(LINE_SLACK).toBe(2);
     expect(findingMatches(seeded(), produced({ range: { start: 8, end: 8 } }))).toBe(true);
-    expect(findingMatches(seeded(), produced({ range: { start: 14, end: 20 } }))).toBe(true);
+    expect(findingMatches(seeded(), produced({ range: { start: 14, end: 16 } }))).toBe(true);
     expect(findingMatches(seeded(), produced({ range: { start: 7, end: 7 } }))).toBe(false);
     expect(findingMatches(seeded(), produced({ range: { start: 15, end: 15 } }))).toBe(false);
-    expect(findingMatches(seeded(), produced({ range: { start: 1, end: 40 } }))).toBe(true);
+  });
+
+  it(`rule 2: a produced span wider than the seeded span plus ${2 * LINE_SLACK} lines never matches`, () => {
+    // The seeded range 10–12 spans 3 lines; at most 3 + 4 = 7 lines may match.
+    expect(MAX_EXTRA_SPAN).toBe(2 * LINE_SLACK);
+    expect(findingMatches(seeded(), produced({ range: { start: 8, end: 14 } }))).toBe(true);
+    expect(findingMatches(seeded(), produced({ range: { start: 8, end: 15 } }))).toBe(false);
+    expect(findingMatches(seeded(), produced({ range: { start: 1, end: 40 } }))).toBe(false);
   });
 
   it("rule 3: severities at most one step apart are compatible", () => {
@@ -51,6 +60,14 @@ describe("matching rules (README: Matching rules)", () => {
     expect(severityCompatible("high", "low")).toBe(false);
     expect(findingMatches(seeded(), produced({ severity: "critical" }))).toBe(true);
     expect(findingMatches(seeded(), produced({ severity: "low" }))).toBe(false);
+  });
+
+  it(`rule 4: keywords count in the title and the first ${KEYWORD_BODY_CHARS} characters of the body only`, () => {
+    expect(KEYWORD_BODY_CHARS).toBe(200);
+    const late = `${"x".repeat(KEYWORD_BODY_CHARS)} sql injection`;
+    expect(findingMatches(seeded(), produced({ title: "Unclear code", body: late }))).toBe(false);
+    const early = `${"x".repeat(KEYWORD_BODY_CHARS - 4)} sql`;
+    expect(findingMatches(seeded(), produced({ title: "Unclear code", body: early }))).toBe(true);
   });
 
   it("rule 4: with keywords, the title or body must name the issue (case-insensitive)", () => {
@@ -116,8 +133,8 @@ describe("scoreFindings", () => {
   it("finds the maximum matching whatever the order (no greedy loss)", () => {
     // S1 accepts p0 and p1; S2 accepts only p0. Greedy S1→p0 would leave S2 unmatched.
     const s1 = seeded({ keywords: [] });
-    const s2 = seeded({ id: "S2", range: { start: 30, end: 30 }, keywords: [] });
-    const p0 = produced({ id: "p0", range: { start: 12, end: 30 } });
+    const s2 = seeded({ id: "S2", range: { start: 16, end: 16 }, keywords: [] });
+    const p0 = produced({ id: "p0", range: { start: 14, end: 14 } });
     const p1 = produced({ id: "p1", range: { start: 10, end: 10 } });
     const score = scoreFindings([s1, s2], [p0, p1]);
     expect(score.matched).toBe(2);
@@ -147,6 +164,32 @@ describe("scoreFindings", () => {
     );
     expect(score).toMatchObject({ produced: 1, matched: 1, tolerated: 1, precision: 1 });
     expect(score.falsePositives).toEqual([]);
+  });
+
+  it("gaming: many wide, keyword-stuffed findings do not raise recall (review round 1)", () => {
+    const expected = Array.from({ length: 12 }, (_, i) =>
+      seeded({
+        id: `S${i}`,
+        path: `src/f${i % 3}.ts`,
+        range: { start: 10 + 20 * i, end: 10 + 20 * i },
+      }),
+    );
+    const stuffing = expected.flatMap((s) => s.keywords ?? []).join(" ");
+    const gamed = ["src/f0.ts", "src/f1.ts", "src/f2.ts"].flatMap((path) =>
+      (["critical", "high", "medium", "low"] as const).map((severity, k) => ({
+        id: `${path}-${k}`,
+        path,
+        severity,
+        range: { start: 1, end: 400 },
+        title: "Several issues in this file",
+        body: `${"Please review this file carefully. ".repeat(8)}${stuffing}`,
+      })),
+    );
+    const honest = scoreFindings(expected, []);
+    const score = scoreFindings(expected, gamed);
+    expect(score.matched).toBe(honest.matched);
+    expect(score.recall).toBe(0);
+    expect(score.precision).toBe(0);
   });
 
   it("nothing seeded and nothing produced scores 1 recall, 1 precision and 0 critical rate", () => {

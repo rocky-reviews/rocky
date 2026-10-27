@@ -3,9 +3,10 @@ import {
   compareReports,
   CRITICAL_RATE_TOLERANCE,
   PlaceholderBaselineError,
+  PRECISION_DROP_POINTS,
   RECALL_DROP_POINTS,
 } from "./compare.js";
-import type { EvalReport, PrResult } from "./report.js";
+import { parseReport, totalsOf, type EvalReport, type PrResult } from "./report.js";
 
 const pr = (
   id: string,
@@ -42,21 +43,14 @@ const report = (prs: PrResult[], over: Partial<EvalReport> = {}): EvalReport => 
   options: { maxTokens: 1, injection: false, only: null },
   usage: { byRole: {}, totalTokens: 0, capped: false },
   prs,
-  total: {
-    prs: 0,
-    expected: 0,
-    produced: 0,
-    matched: 0,
-    tolerated: 0,
-    recall: 0,
-    precision: 0,
-    criticalProduced: 0,
-    criticalFalsePositives: 0,
-    criticalFalsePositiveRate: 0,
-  },
+  total: totalsOf(prs),
   injection: null,
   ...over,
 });
+
+/** A PR with `produced` findings, `matched` of them right. */
+const scored = (id: string, matched: number, expected: number, produced: number): PrResult =>
+  pr(id, matched, expected, { produced, precision: produced === 0 ? 1 : matched / produced });
 
 describe("compareReports: the gate (README: Gate)", () => {
   it(`passes a recall drop of exactly ${RECALL_DROP_POINTS} points and fails anything more`, () => {
@@ -87,13 +81,66 @@ describe("compareReports: the gate (README: Gate)", () => {
     expect(worse.reasons).toEqual(["critical false-positive rate rose (25.0% → 50.0%)"]);
   });
 
-  it("compares totals over the PRs both reports ran, and says which it left out", () => {
-    const baseline = report([pr("a", 8), pr("old", 0)]);
+  it("a PR new in the report is noted; totals cover the baseline's PRs", () => {
+    const baseline = report([pr("a", 8)]);
     const result = compareReports(baseline, report([pr("a", 8), pr("new", 0)]));
     expect(result.ok).toBe(true);
     expect(result.common).toEqual(["a"]);
-    expect(result.notes).toContain("only in the baseline: old");
     expect(result.notes).toContain("only in the report: new");
+  });
+
+  it("fails when a baseline PR is missing from the report (review round 1)", () => {
+    const baseline = report([pr("a", 8), pr("hard", 0)]);
+    const result = compareReports(baseline, report([pr("a", 8)]));
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("missing from the report: hard");
+  });
+
+  it("fails a report that ran only some seeded PRs (--only)", () => {
+    const baseline = report([pr("a", 8)]);
+    const partial = report([pr("a", 8)], {
+      options: { maxTokens: 1, injection: false, only: ["a"] },
+    });
+    expect(compareReports(baseline, partial).reasons).toContain(
+      "the report ran only some seeded PRs (--only)",
+    );
+  });
+
+  it.each([
+    [
+      "capped",
+      report([pr("a", 8, 10, { status: "capped" })], {
+        usage: { byRole: {}, totalTokens: 9, capped: true },
+      }),
+    ],
+    ["--only", report([pr("a", 8)], { options: { maxTokens: 1, injection: false, only: ["a"] } })],
+    ["a failed PR", report([pr("a", 0, 10, { status: "failed", failure: "llm_auth" })])],
+  ])("refuses a baseline that is not a complete run: %s", (_, baseline) => {
+    const result = compareReports(baseline, report([pr("a", 8)]));
+    expect(result.ok).toBe(false);
+    expect(result.reasons.join(" ")).toMatch(/^the baseline is not a complete run/);
+  });
+
+  it(`fails a precision drop of more than ${PRECISION_DROP_POINTS} points; exactly ${PRECISION_DROP_POINTS} passes`, () => {
+    expect(PRECISION_DROP_POINTS).toBe(10);
+    const baseline = report([scored("a", 10, 10, 20)]); // 50%
+    expect(compareReports(baseline, report([scored("a", 10, 10, 25)])).ok).toBe(true); // 40%
+    const worse = compareReports(baseline, report([scored("a", 10, 10, 26)])); // 38.5%
+    expect(worse.ok).toBe(false);
+    expect(worse.reasons).toEqual([
+      "total precision dropped 11.5 points (50.0% → 38.5%; limit 10)",
+    ]);
+  });
+
+  it("a drop of exactly 5 points passes despite float error (16/20 → 15/20)", () => {
+    expect((16 / 20 - 15 / 20) * 100).toBeGreaterThan(5);
+    expect(compareReports(report([pr("a", 16, 20)]), report([pr("a", 15, 20)])).ok).toBe(true);
+  });
+
+  it("a drop of 5.5 points fails (100/200 → 89/200)", () => {
+    const result = compareReports(report([pr("a", 100, 200)]), report([pr("a", 89, 200)]));
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toEqual(["total recall dropped 5.5 points (50.0% → 44.5%; limit 5)"]);
   });
 
   it("a failed PR counts as finding nothing", () => {
@@ -117,6 +164,10 @@ describe("compareReports: the gate (README: Gate)", () => {
     expect(
       compareReports(report([pr("a", 1)], { kind: "fake" }), report([pr("a", 1)])).reasons,
     ).toContain("a live report cannot be compared with a fake baseline");
+  });
+
+  it("the helpers build reports that parse (so the cases above are realistic)", () => {
+    expect(parseReport(report([pr("a", 8), scored("b", 3, 4, 6)])).ok).toBe(true);
   });
 
   it("refuses a placeholder baseline", () => {

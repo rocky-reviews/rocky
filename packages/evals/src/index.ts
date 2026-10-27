@@ -33,7 +33,9 @@ export {
 } from "./injection/adversary.js";
 export {
   findingMatches,
+  KEYWORD_BODY_CHARS,
   LINE_SLACK,
+  MAX_EXTRA_SPAN,
   severityCompatible,
   type SeededFinding,
   type Severity,
@@ -50,6 +52,7 @@ export {
   compareReports,
   CRITICAL_RATE_TOLERANCE,
   PlaceholderBaselineError,
+  PRECISION_DROP_POINTS,
   RECALL_DROP_POINTS,
   type Comparison,
 } from "./run/compare.js";
@@ -60,6 +63,7 @@ export {
   PROMPT_HASH,
   REPORT_FORMAT,
   REPORT_VERSION,
+  type ParseOptions,
   type ReportModels,
 } from "./run/report.js";
 export { runEvals, type EvalSubject, type RunOptions } from "./run/runner.js";

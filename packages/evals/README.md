@@ -53,11 +53,15 @@ A produced finding matches a seeded one when all four hold (`findingMatches`):
 
 1. **Same file:** the paths are equal.
 2. **Overlapping lines:** the produced range overlaps the seeded range widened by
-   `LINE_SLACK` = 2 lines on each side.
+   `LINE_SLACK` = 2 lines on each side, and spans at most `MAX_EXTRA_SPAN` = 4 lines more than
+   the seeded range (a seeded one-liner matches a range of up to 5 lines). A wide range names no
+   line in particular, so it matches nothing.
 3. **Compatible severity:** at most one step apart on critical > high > medium > low
    (a seeded high matches critical, high or medium).
-4. **Same issue:** the produced title or body contains at least one of the seeded finding's
-   `keywords` (case-insensitive substring). A seeded finding without keywords skips this rule.
+4. **Same issue:** the produced title, or the first `KEYWORD_BODY_CHARS` = 200 characters of
+   its body, contains at least one of the seeded finding's `keywords` (case-insensitive
+   substring), so a body stuffed with every keyword buys nothing. A seeded finding without
+   keywords skips this rule.
    Keywords are what tells apart two seeded bugs on the same line (pr-1104 has two such pairs).
 
 Each seeded finding matches at most one produced finding and the reverse. The matched count is
@@ -130,42 +134,69 @@ provider's hint or 2 s then 4 s. A live run never starts without its key: when t
 a key variable that is unset, `run` exits 2 naming the variable. The key is read from the
 environment by the adapters at call time, never printed and never written to the report.
 
-| Exit | `run`                                | `compare`                            |
-| ---: | ------------------------------------ | ------------------------------------ |
-|    0 | done                                 | gate passed                          |
-|    1 | the token cap stopped the run        | gate failed                          |
-|    2 | bad usage, LLM config or missing key | bad usage, missing or malformed file |
-|    3 |                                      | the baseline is a placeholder        |
+| Exit | `run`                                | `compare`                                             |
+| ---: | ------------------------------------ | ----------------------------------------------------- |
+|    0 | done                                 | gate passed                                           |
+|    1 | the token cap stopped the run        | gate failed                                           |
+|    2 | bad usage, LLM config or missing key | bad usage, missing, malformed, capped or partial file |
+|    3 |                                      | the baseline is a placeholder                         |
 
 ## Gate
 
 `pnpm evals compare <baseline> <report>` fails (exit 1) when:
 
-- **total recall dropped more than 5 percentage points** (`RECALL_DROP_POINTS`); a drop of
-  exactly 5 passes;
-- **the total critical false-positive rate rose at all** (beyond float noise, 1e-9);
-- the report is incomplete (the token cap stopped it), shares no seeded PR with the baseline, or
-  is of another kind (`fake` is compared only with `fake`, `live` only with `live`).
+- **total recall dropped more than 5 percentage points** (`RECALL_DROP_POINTS`);
+- **total precision dropped more than 10 percentage points** (`PRECISION_DROP_POINTS`), so many
+  wide or verbose findings cannot trade precision for recall;
+- **the total critical false-positive rate rose at all**;
+- the report misses a seeded PR the baseline ran, ran with `--only`, was stopped by the token
+  cap, or is of another kind (`fake` is compared only with `fake`, `live` only with `live`);
+- the baseline is not a complete run (capped, `--only`, or a PR that did not finish `done`).
 
-Totals are recomputed over the PRs both reports ran, so adding a seeded PR does not move the
-gate by itself; the PRs left out are listed. Precision, the injection counts, the prompt hash,
-the pipeline version and model changes are printed as notes and not gated. A placeholder
-baseline cannot gate anything: `compare` exits 3.
+Drops are compared with a 1e-9 tolerance, so a drop of exactly 5 (or 10) points passes even
+when float error makes it 5.000000000000004. `compare` reads the baseline and the report with
+`parseReport`, which also checks that each report is consistent (matched at most expected and
+produced, rates equal to the ratios of their counts, totals equal to the sums, the capped flag
+matching the statuses) and refuses a capped or partial file for gating (exit 2).
+
+Totals are recomputed over the baseline's PRs; a PR new in the report is noted and left out, so
+adding a seeded PR does not move the gate by itself. A failed PR counts as finding nothing. The
+injection counts, the prompt hash, the pipeline version and model changes are printed as notes
+and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 
 ## CI
 
 `.github/workflows/evals.yml`:
 
-- **harness** (always): `pnpm evals run --fake --injection`, then `compare` against
-  `baselines/fake.json`. The same comparison runs in `pnpm verify` (`run/baseline.test.ts`).
-- **live**: nightly, on manual dispatch, and on PRs touching `packages/core/src/analysis/**`,
-  `packages/core/src/prompt.ts`, `packages/core/src/llm.ts`, `packages/llm/**`,
-  `packages/schema/src/**`, `packages/evals/**`, `scripts/evals.ts` or `.env.example`. It needs
-  the repository secret `ROCKY_EVALS_ANTHROPIC_API_KEY` and skips with a notice when it is absent
-  (forks, Dependabot). Nightly adds `--injection`. Caps come from the repository variables
-  `ROCKY_EVALS_MAX_TOKENS` (PRs, default 1,000,000) and `ROCKY_EVALS_NIGHTLY_MAX_TOKENS`
-  (nightly, default 8,000,000). The gate is applied once `baselines/live.json` is a real
-  baseline; until then the job warns that the gate is not applied.
+- **harness** (always, free): `pnpm evals run --fake --injection`, then `compare` against the
+  fake baseline. The same comparison runs in `pnpm verify` (`run/baseline.test.ts`).
+- **live**: nightly and on manual dispatch from the default branch, and on same-repo PRs touching
+  `packages/core/src/analysis/**`, `packages/core/src/prompt.ts`, `packages/core/src/llm.ts`,
+  `packages/llm/**`, `packages/schema/src/**`, `packages/evals/**`, `scripts/evals.ts`,
+  `.env.example`, the workflow or `CODEOWNERS`. Fork PRs never reach it. Nightly adds
+  `--injection`. Caps come from the repository variables `ROCKY_EVALS_MAX_TOKENS` (PRs, default
+  1,000,000) and `ROCKY_EVALS_NIGHTLY_MAX_TOKENS` (nightly, default 8,000,000). The gate applies
+  once the live baseline is a real one; until then the job warns that it is not applied.
+
+**What a PR cannot change on its own.** On a pull request both gates compare against the
+**base branch's** baseline (`git show HEAD^1:…`, the merge commit's base parent), and the job
+fails if the PR changes the files that decide a score without the maintainer label
+`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/score.ts`,
+`src/run/**`, `scripts/evals.ts`, `.github/workflows/evals.yml` and `.github/CODEOWNERS`. With the
+label (a maintainer reviewed the change, for example a regenerated baseline), the PR's own
+baseline is used. `CODEOWNERS` names the owner of those files.
+
+A pull request runs its own copy of the workflow, so these checks stop mistakes and silent
+drift, not a determined author with write access. The controls a PR cannot edit are repository
+settings:
+
+- **The key lives only in GitHub Environments**, never as a repository secret:
+  `ROCKY_EVALS_ANTHROPIC_API_KEY` in `evals-live` (used by PRs; **required reviewers** approve
+  each run, so no PR code sees the key unreviewed) and in `evals-nightly` (deployment branches:
+  the default branch only, so a PR cannot borrow it).
+- **The key is a dedicated Anthropic workspace key with a monthly spend limit set at the
+  provider.** That limit is the real cap: `--max-tokens` and the variables above are set by code
+  and configuration a PR can change.
 
 ## Baselines
 
@@ -191,6 +222,6 @@ ANTHROPIC_API_KEY=<key> pnpm evals run --injection --max-tokens 8000000 --out pa
 ```
 
 Check the printed summary, then commit `packages/evals/baselines/live.json` (it holds no key and
-no model text). To baseline another provider or model, set the same `ROCKY_LLM_*` variables the
+no model text) in a PR that a maintainer labels `evals-baseline-change`. To baseline another provider or model, set the same `ROCKY_LLM_*` variables the
 worker reads (`.env.example`); the workflow runs the default config, so a model change for CI
 also goes into the run step's `env` in `evals.yml`.
