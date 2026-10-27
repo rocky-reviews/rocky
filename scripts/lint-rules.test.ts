@@ -197,3 +197,21 @@ describe("the scripted LLM fake stays out of production code (P4-3 review round 
     ).not.toContain(rule);
   });
 });
+
+describe("the web app renders PR content as text, never as HTML (P6-1)", () => {
+  it.each([
+    "export const A = (p: { t: string }) => <p dangerouslySetInnerHTML={{ __html: p.t }} />;\n",
+    'document.body.innerHTML = "x";\n',
+    'document.body.outerHTML = "x";\n',
+    'document.body.insertAdjacentHTML("beforeend", "x");\n',
+    'new Range().createContextualFragment("x");\n',
+    'document.write("x");\n',
+  ])("fails on %s", async (code) => {
+    expect(await ruleIds("apps/web/src/planted.tsx", code)).toContain("no-restricted-syntax");
+  });
+
+  it("allows text rendering", async () => {
+    const code = "export const A = (p: { t: string }) => <p>{p.t}</p>;\n";
+    expect(await ruleIds("apps/web/src/planted.tsx", code)).toEqual([]);
+  });
+});

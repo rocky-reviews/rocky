@@ -129,6 +129,34 @@ export default tseslint.config(
     },
   },
   {
+    // The web app runs in the browser. PR content (titles, paths, branch names) is untrusted
+    // and is rendered only as React text: no HTML sinks, so markup in PR content stays text
+    // (P6-1). A test that needs one says why with an eslint-disable comment.
+    files: ["apps/web/src/**/*.{ts,tsx}", "apps/web/public/**/*.js"],
+    languageOptions: { globals: { ...globals.browser } },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...rockyInstructionsRules(),
+        TESTING_DYNAMIC,
+        {
+          selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+          message: "Render PR content as text, never as HTML (P6-1).",
+        },
+        {
+          selector:
+            "MemberExpression[property.name=/^(innerHTML|outerHTML|insertAdjacentHTML|createContextualFragment)$/]",
+          message: "Render PR content as text, never as HTML (P6-1).",
+        },
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(write|writeln)$/][callee.object.name='document']",
+          message: "Render PR content as text, never as HTML (P6-1).",
+        },
+      ],
+    },
+  },
+  {
     // The tag's own definition.
     files: ["packages/core/src/llm.ts"],
     rules: {
