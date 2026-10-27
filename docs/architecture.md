@@ -8,7 +8,8 @@ Decisions behind this page:
 [ADR 0007 forge port and webhook inbox](adr/0007-webhook-inbox.md),
 [ADR 0008 GitHub App manifest](adr/0008-github-app-manifest.md),
 [ADR 0009 installation lifecycle](adr/0009-installation-lifecycle.md),
-[ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md).
+[ADR 0010 pull request mirror](adr/0010-pull-request-mirror.md),
+[ADR 0011 repository access check](adr/0011-repository-access-check.md).
 
 ## Runtime
 
@@ -39,23 +40,23 @@ packages/core  (domain + ports; no I/O — enforced by ESLint)
 packages/schema (analysis document; shared contract)
 ```
 
-| Path                         | Role                                                                                                                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                       |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing |
-| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                            |
-| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, later `LlmProvider`, `Storage`, `Billing`)                                |
-| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                             |
-| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                   |
-| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                 |
-| `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                                                                                 |
-| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                              |
-| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                  |
-| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                    |
-| `packages/config`            | Config loading and validation                                                                                                                                         |
-| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                            |
-| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                        |
-| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                   |
+| Path                         | Role                                                                                                                                                                                    |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                         |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; later analysis, posting, indexing                   |
+| `apps/web`                   | React SPA: PR review page, inbox, settings, project memory                                                                                                                              |
+| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, later `LlmProvider`, `Storage`, `Billing`) |
+| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                               |
+| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                     |
+| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                   |
+| `packages/llm`               | Roles, providers, validate-and-repair, metering hooks                                                                                                                                   |
+| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                |
+| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                    |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                      |
+| `packages/config`            | Config loading and validation                                                                                                                                                           |
+| `packages/evals`             | Seeded PRs and scoring for the AI pipeline                                                                                                                                              |
+| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                          |
+| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                     |
 
 ## Data layer
 
@@ -100,6 +101,15 @@ packages/schema (analysis document; shared contract)
   whole lanes, so no lane stops behind a type nobody claims. `pnpm mirror:rebuild <owner/name>`
   recreates a repository's mirror from GitHub (pull requests and their current head revisions;
   nothing deleted).
+- Repository access (ADR 0011): Rocky membership is not enough to see a repository's data; the
+  member must be able to read the repository on GitHub. `createRepositoryAccess`
+  (`apps/server/src/repository-access.ts`, over `createRepositoryAccessCheck` in `packages/core`)
+  reads the member, the repository's name and the encrypted token inside `withOrg`, decrypts the
+  token for one call and asks `GET /repos/{owner}/{repo}` as the user (`permissions.pull`, same
+  repository id). An allow is cached per org + member + repository for at most 5 minutes from the
+  question and never extended (an outage after that is a deny); denies for 30 s (5 s when
+  transient); bounded LRU; invalidation hooks. Every failure denies. P7-2 must call it on every
+  route that touches a repository's data (ADR 0011 §6).
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); four permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event

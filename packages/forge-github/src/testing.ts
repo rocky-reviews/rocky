@@ -174,7 +174,10 @@ export interface FakePullRequest {
 }
 
 /** Routes `failRoute` can make fail. */
-export type FakeRoute = "installation" | "token" | "pull" | "list" | "compare";
+export type FakeRoute = "installation" | "token" | "pull" | "list" | "compare" | "repository";
+
+/** A user's role on a repository, as GitHub grants it (P3-6). */
+export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
 
 export interface FakeGitHubApi {
   /** Pass as the reader's `fetch`. */
@@ -225,6 +228,19 @@ export interface FakeGitHubApi {
     /** Text is sent as UTF-8; bytes are sent as they are (e.g. a Latin-1 diff). */
     diff: string | Uint8Array | "too_large" | "missing",
   ): void;
+  /**
+   * A GitHub user signed in to the app (P3-6): returns a fresh user access token (a random test
+   * value, also listed in `userTokens`), valid on `GET /repos/{owner}/{repo}` until revoked.
+   */
+  addUser(user: { readonly id: number; readonly login: string }): string;
+  /** Every user token issued, so a test can prove none of them leaked. */
+  readonly userTokens: string[];
+  /** The user's role on a repository; `null` removes the user from it (collaborator removed). */
+  setPermission(userId: number, repositoryId: number, permission: FakePermission | null): void;
+  /** The token is revoked or expired: GitHub answers 401 from now on. */
+  revokeUserToken(token: string): void;
+  /** Make the repository public or private (a public one is readable by every user). */
+  setVisibility(repositoryId: number, visibility: "public" | "private"): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -241,6 +257,7 @@ const INSTALLATION_ROUTE = /^app\/installations\/(\d+)$/;
 const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
 const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
+const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
 const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/;
 
 /**
@@ -252,6 +269,9 @@ const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9
  * (RS256 signature with the app's public key, `iss` = app id, unexpired, at most 10 minutes long)
  * on `/app/...` routes, and on repository routes a live token minted for that repository (a
  * token for another repository gets a 404, as on GitHub). A bad or missing credential gets 401.
+ * P3-6: `GET /repos/{owner}/{repo}` for user access tokens (`addUser`): a JSON 404 unless the user
+ * has a role on the repository (`setPermission`) or it is public, and the repository is one an
+ * installation of the app can access; otherwise the repository with that user's `permissions`.
  */
 export const fakeGitHubApi = (options: {
   appId: number;
@@ -277,6 +297,46 @@ export const fakeGitHubApi = (options: {
     { installationId: number; repositoryIds: Set<number>; expiresAt: number }
   >();
   const tokens: FakeGitHubApi["tokens"] = { mints: [], issued: [], revoked: 0 };
+  const userTokens: string[] = [];
+  const users = new Map<string, { id: number; login: string; revoked: boolean }>();
+  const permissions = new Map<string, FakePermission>();
+  const publicRepositories = new Set<number>();
+
+  const userOf = (header: string | null) => {
+    const match = /^(?:Bearer|token) (\S+)$/.exec(header ?? "");
+    const user = match?.[1] === undefined ? undefined : users.get(match[1]);
+    return user !== undefined && !user.revoked ? user : undefined;
+  };
+
+  /** `GET /repos/{owner}/{repo}` as a user: 404 unless visible, with that user's permissions. */
+  const repositoryAsUser = (owner: string, name: string, userId: number): Response => {
+    const failure = takeRouteFailure("repository");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const entry = repositoryByName(owner, name);
+    // A GitHub App user token sees only repositories the app's installation can access.
+    if (entry === undefined || !installed.has(entry.installationId)) {
+      return json(404, githubFixture("get-installation.not-found"));
+    }
+    const role = permissions.get(`${userId}:${entry.repo.id}`);
+    const isPublic = publicRepositories.has(entry.repo.id);
+    if (role === undefined && !isPublic) {
+      return json(404, githubFixture("get-installation.not-found"));
+    }
+    const rank = ["read", "triage", "write", "maintain", "admin"].indexOf(role ?? "");
+    return json(200, {
+      ...githubFixture("get-repository"),
+      ...repositoryJson(entry.repo),
+      private: !isPublic,
+      visibility: isPublic ? "public" : "private",
+      permissions: {
+        admin: rank >= 4,
+        maintain: rank >= 3,
+        push: rank >= 2,
+        triage: rank >= 1,
+        pull: rank >= 0 || isPublic,
+      },
+    });
+  };
 
   const authorized = (header: string | null): boolean => {
     const match = /^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(
@@ -467,7 +527,10 @@ export const fakeGitHubApi = (options: {
     const appRoute =
       path === "app" || path.startsWith("app/") || REPO_INSTALLATION_ROUTE.test(path);
     const token = appRoute ? undefined : tokenOf(headers.get("authorization"));
-    const ok = appRoute ? authorized(headers.get("authorization")) : token !== undefined;
+    const user = appRoute ? undefined : userOf(headers.get("authorization"));
+    const ok = appRoute
+      ? authorized(headers.get("authorization"))
+      : token !== undefined || user !== undefined;
     requests.push({ method, path: url.pathname, authorized: ok });
     if (init?.redirect !== "error")
       return json(400, { message: "test: redirects must be refused" });
@@ -547,6 +610,10 @@ export const fakeGitHubApi = (options: {
         id: entry.installationId,
       });
     }
+    const repositoryMatch = REPOSITORY_ROUTE.exec(path);
+    if (method === "GET" && repositoryMatch !== null && user !== undefined) {
+      return repositoryAsUser(group(repositoryMatch, 1), group(repositoryMatch, 2), user.id);
+    }
     const routed = repoRoute(method, path, url, token);
     if (routed !== undefined) return routed;
     const match = INSTALLATION_ROUTE.exec(path);
@@ -623,6 +690,25 @@ export const fakeGitHubApi = (options: {
     },
     putDiff: (repositoryId, revision, diff) => {
       diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);
+    },
+    userTokens,
+    addUser: (user) => {
+      const value = `test-user-token-${randomUUID()}`;
+      userTokens.push(value);
+      users.set(value, { id: user.id, login: user.login, revoked: false });
+      return value;
+    },
+    setPermission: (userId, repositoryId, permission) => {
+      if (permission === null) permissions.delete(`${userId}:${repositoryId}`);
+      else permissions.set(`${userId}:${repositoryId}`, permission);
+    },
+    revokeUserToken: (value) => {
+      const user = users.get(value);
+      if (user !== undefined) user.revoked = true;
+    },
+    setVisibility: (repositoryId, visibility) => {
+      if (visibility === "public") publicRepositories.add(repositoryId);
+      else publicRepositories.delete(repositoryId);
     },
   };
 };

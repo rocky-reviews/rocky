@@ -55,3 +55,9 @@ export {
   TOKEN_REFRESH_MARGIN_MS,
   type GitHubForgeOptions,
 } from "./repositories.js";
+export {
+  createGitHubUserAccessReader,
+  MAX_REPOSITORY_RESPONSE_BYTES,
+  USER_ACCESS_TIMEOUT_MS,
+  type GitHubUserAccessReaderOptions,
+} from "./user-access.js";

@@ -362,3 +362,48 @@ export interface Forge extends InstallationReader {
    */
   locateRepository(fullName: string): Promise<RepositoryRef | null>;
 }
+
+// --- Outbound: a user's own access to a repository (P3-6, ADR 0011) ----------------------------
+
+/**
+ * A forge user's own credential (an OAuth / user-to-server token). Secret: it is never logged,
+ * stored in plaintext, cached or put in an error. Callers decrypt it for one call and drop it.
+ */
+export interface ForgeUserCredential {
+  readonly token: string;
+}
+
+/** The repository to ask about: the id is the identity, the name only addresses the request. */
+export interface RepositoryLocator {
+  readonly id: ForgeNumericId;
+  /** `owner/name` as last mirrored (display data; the answer's id must match `id`). */
+  readonly fullName: string;
+}
+
+/** Why the forge says this user cannot read the repository. Fixed codes: safe to log. */
+export type UserRepositoryDenial =
+  /** The forge says there is no such repository for this user (no access, or gone). */
+  | "not_found"
+  /** The forge shows the repository but without read permission for this user. */
+  | "no_read_permission"
+  /** The credential is not accepted (expired, revoked, malformed). */
+  | "token_rejected"
+  /** The forge refuses the request (SSO enforcement, IP allow list, rate limit). */
+  | "forbidden"
+  /** The answer is about another repository (deleted and recreated, renamed onto). */
+  | "repository_mismatch";
+
+export type UserRepositoryAccess =
+  { readonly access: "read" } | { readonly access: "none"; readonly reason: UserRepositoryDenial };
+
+/**
+ * Asks the forge, as the user, whether the user can read one repository (P3-6). Any failure other
+ * than the documented denials throws `ForgeReadError`; a caller must treat that as "deny".
+ */
+export interface UserAccessReader {
+  readonly kind: ForgeKind;
+  readUserRepositoryAccess(
+    credential: ForgeUserCredential,
+    repository: RepositoryLocator,
+  ): Promise<UserRepositoryAccess>;
+}
