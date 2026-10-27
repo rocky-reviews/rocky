@@ -3,6 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P4-3
+- **Revised:** review round 2: files with no hunks stay triaged (SF1); unanalysed files of unknown
+  risk floor the verdict at medium, also at the write (SF2); fixed reasons for a raised verdict;
+  every `@rocky-reviews/*/testing` subpath banned from production code, dynamic imports included.
 - **Revised:** review round 1 (Fixes A to G): verdict floor for files that were not reviewed;
   deletion-only risky files marked unanalysed; quoted rename and copy paths; header consistency
   in the diff reader; raw review minutes in file units; the scripted fake banned from production
@@ -66,20 +69,36 @@ diff ──parseUnifiedDiff──► files (known facts)
   cap); `memoryApplied: []` (project memory is P8); the verdict, raised to the higher of two
   floors whatever the model said (`verdict.ts`):
   - the findings' floor: a critical finding means critical, a high one at least medium;
-  - the floor of files that were **not reviewed** (review round 1, Fix A). A file the rules floor
-    (migration, auth path) or that triage called critical means at least high; one triage called
-    important means at least medium. This covers every way a file can miss its review: triage or
-    review failed (refused, invalid, timeout), too large, binary, or deletion-only. Otherwise a PR
-    author could make a risky file fail on purpose and talk the briefing into "low".
-- **Deletion-only files (Fix B):** a critical or important file with no new-side lines cannot
-  carry a finding, so it is not shown as reviewed and clean. It goes to `provenance.unanalysed`
-  (`analysis-failed`) with the fixed `detail` `DELETION_ONLY_DETAIL`. A deletion-only file triaged
-  normal or low stays triaged; those levels are not reviewed anyway.
-- **Stored verdict check:** the rules half of the not-reviewed floor is also a stored-document
-  rule. `belowUnanalysedRuleFloor` runs in the pipeline's final check and in `completeAnalysis`,
-  so no `done` row can hold a verdict below an unanalysed migration or auth file. The triage half
-  is enforced by the pipeline only: an unanalysed file carries no triage level in the document,
-  and carrying one is a schema change (a new optional field, a minor version, which the reading
+  - the floor of files that were **not reviewed**, that is, the files in `provenance.unanalysed`
+    (review round 1 Fix A, round 2 SF2):
+    - a file the rules floor (migration, auth path) or that triage called critical: at least high;
+    - one triage called important: at least medium;
+    - one whose risk is unknown (its triage failed or was refused, or it was too large or binary
+      with no rules floor): at least medium. This fails closed.
+
+    This covers every way a file can miss its review: triage or review failed (refused, invalid,
+    timeout), too large, binary, or deletion-only. Otherwise a PR author could make a risky file
+    fail on purpose (pad `src/payments/charge.ts` past the cap, get its triage refused) and talk
+    the briefing into "low". Noise files and files triaged normal or low are not unanalysed: they
+    are not reviewed by design and do not raise the verdict.
+
+  - **Reason:** when a floor raises the level, the model's reason ("Looks fine.") is replaced by
+    fixed Rocky text: `RAISED_FOR_FINDINGS` when the findings set the level, else
+    `RAISED_FOR_UNREVIEWED` (round 2, N4). An unraised verdict keeps the model's reason.
+- **Deletion-only files (Fix B):** a critical or important file with deleted lines and no
+  new-side lines cannot carry a finding, so it is not shown as reviewed and clean. It goes to
+  `provenance.unanalysed` (`analysis-failed`) with the fixed `detail` `DELETION_ONLY_DETAIL`. A
+  deletion-only file triaged normal or low stays triaged; those levels are not reviewed anyway.
+- **Files with no hunks (round 2, SF1):** a pure rename or copy, a mode-only change and an empty
+  new file have no line to review. They stay triaged, are not sent to review, and do not raise
+  the verdict.
+- **Stored verdict check:** the not-reviewed floor is also a stored-document rule, as far as the
+  document can express it. `belowUnanalysedFloor` runs in the pipeline's final check (defence in
+  depth: the clamp above makes it unreachable) and in `completeAnalysis`. So no `done` row can
+  hold a verdict below medium next to any unanalysed file, or below high next to an unanalysed
+  migration or auth file. A non-rule file triaged critical whose review failed is high in the
+  pipeline but only checked as medium at the write: an unanalysed file carries no triage level in
+  the document, and carrying one is a schema change (a new optional field, a minor version, which the reading
   policy `SUPPORTED_VERSION_PATTERN` would make a cross-version migration). That is left to a
   schema task. The same reasoning keeps the deletion-only case on the existing
   `analysis-failed` reason with a fixed detail, rather than a new enum value.
@@ -201,9 +220,14 @@ erasure.
 - **At boot:** the worker validates `ROCKY_LLM_*` (`loadWorkerConfig`) and builds the roles
   (`createLlmRoles(config.llm, providerAdapters(), envSecrets(env))`). A bad config stops it
   before it claims work.
-- **Test fake:** `@rocky-reviews/core/testing` (the scripted `LlmRoles`) is banned outside test
-  and test-support files by ESLint (`@typescript-eslint/no-restricted-imports`; type-only
-  imports allowed), with planted cases in `scripts/lint-rules.test.ts` (review round 1, Fix F).
+- **Test fakes:** ESLint bans value imports of every `@rocky-reviews/*/testing` subpath outside
+  `*.test.ts` and `test-support.ts` files. This covers the scripted `LlmRoles`, recording
+  adapters, database fixtures and the fake GitHub. It uses
+  `@typescript-eslint/no-restricted-imports`, and type-only imports are allowed. Testing modules
+  themselves get no exemption. `import("@rocky-reviews/<pkg>/testing")` with a literal specifier
+  is banned too (`no-restricted-syntax`). A computed specifier (a variable or template) is not
+  caught by lint; that gap is accepted, since production code has no reason to build one. Planted
+  cases are in `scripts/lint-rules.test.ts` (review round 1 Fix F, round 2 N2).
 - **Queue:** `runAnalysis` is the unit of work for a queue lane. The lane (enqueue on a new
   revision, claim with a lease, retry with `retryAfterMs`, org concurrency cap) is a follow-up
   with P4-6, so nothing enqueues analyses yet.
@@ -250,7 +274,9 @@ erasure.
 | A16 | A deleted critical file looks reviewed and clean                                                                        | Deletion-only critical/important files go to `unanalysed` with fixed detail and count toward A15                                                                                      | `pipeline.test.ts` "A16 …" (deleted `src/auth/guard.ts` and `src/core/engine.ts` triaged critical)                                                                                                                              |
 | A17 | Header confusion in the diff: a file reviewed under one path and stored under another; a quoted rename failing the PR   | Header, `---`/`+++`, rename and copy paths must agree; `---`/`+++` paired; `/dev/null` sides checked; quoted move paths unquoted                                                      | `diff.test.ts` "unquotes git's C-quoted rename and copy paths…", "a +++ path that disagrees with the header" and the other Fix D cases                                                                                          |
 | A18 | Reuse skews review minutes (scaled twice)                                                                               | Units hold the raw `reviewMinutes`; scaling happens only when composing the document                                                                                                  | `pipeline.test.ts` "A17 reused units keep raw review minutes…"                                                                                                                                                                  |
-| A19 | The scripted fake answers in production                                                                                 | ESLint bans value imports of `@rocky-reviews/core/testing` outside tests and test-support files                                                                                       | `scripts/lint-rules.test.ts` "the scripted LLM fake stays out of production code…"                                                                                                                                              |
+| A19 | Test fakes answer in production                                                                                         | ESLint bans value imports (static and literal dynamic) of every `@rocky-reviews/*/testing` subpath outside test and test-support files                                                | `scripts/lint-rules.test.ts` "the scripted LLM fake stays out of production code…" (incl. round 2: other subpaths, testing modules, dynamic import)                                                                             |
+| A20 | A file with no hunks (rename, mode change, empty file) is marked unanalysed and forces the verdict up                   | The deletion-only branch requires deleted lines; files with no hunks stay triaged and are not reviewed                                                                                | `pipeline.test.ts` "A20 files with no hunks are not deletion-only…"                                                                                                                                                             |
+| A21 | A non-rule risky file is padded, made binary or has its triage refused, and the briefing says "low"                     | Unanalysed files of unknown risk floor the verdict at medium; at the write, any unanalysed file needs ≥ medium; a raised verdict gets a fixed reason                                  | `pipeline.test.ts` "A21 …", "A22 …"; `analyses.test.ts` "refuses a verdict below medium next to any unanalysed file"                                                                                                            |
 
 ### Residual risks
 
@@ -258,9 +284,10 @@ erasure.
   from the AI (not from humans). It stays in the noise list with a summary saying the AI did not
   read it. Security paths are never noise. Content-based checks for generated files are a
   follow-up.
-- **R2:** a model steered by PR content can still write a wrong or misleading draft (lower
-  triage on a path no rule floors, including test files, a soft verdict reason, a persuasive body). That is a draft for
-  a human, never an action. P4-4 adds the injection corpus and the verdict invariants.
+- **R2:** a model steered by PR content can still write a wrong or misleading draft: a lower
+  triage on a path no rule floors (test files included), a soft verdict reason, a persuasive body.
+  That is a draft for a human, never an action. P4-4 adds the injection corpus and the verdict
+  invariants.
 - **R3:** a crash between claim and finish, or a database error inside `runAnalysis`'s own
   failure path, leaves a row `running`. The lease is a **merge gate** for the change that wires
   `runAnalysis` into a queue lane (§7).
@@ -276,7 +303,8 @@ erasure.
 
 - Moving a stage to another model is config. A changed prompt is a `PIPELINE_VERSION` bump,
   which re-analyses every file once.
-- The analysis document stays the only AI output anything reads. Units are keys, not a second
-  copy of model output.
+- The analysis document stays the only AI output anything reads. A unit holds a path, a key and
+  `reviewMinutes`, a bounded integer from the triage model (0 to 480, schema-checked). It is not
+  a second copy of model output.
 - Per-file triage is cheap to cache, but it cannot rank files against each other: scores are
   per file. The briefing orders the review path.

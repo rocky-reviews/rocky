@@ -66,13 +66,14 @@ import {
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
-  belowUnanalysedRuleFloor,
+  belowUnanalysedFloor,
   findingsFloor,
   maxRisk,
   unreviewedFloor,
   type UnreviewedRisk,
 } from "./verdict.js";
 import {
+  FileUnits,
   reusableUnit,
   unitKey,
   type FileUnit,
@@ -178,6 +179,12 @@ const RISK_RANK: Readonly<Record<RiskLevel, number>> = { low: 0, medium: 1, high
  * Fixed text for a critical or important file with only deleted lines (review round 1, Fix B):
  * findings sit on new-side lines, so there is nothing the review can point at.
  */
+/** Fixed verdict reasons for a level the pipeline raised (round 2, N4). */
+export const RAISED_FOR_FINDINGS =
+  "Rocky raised this level to match the severity of the draft findings.";
+export const RAISED_FOR_UNREVIEWED =
+  "Rocky raised this level: files that carry risk were not reviewed by the AI. See the files it could not analyse.";
+
 export const DELETION_ONLY_DETAIL =
   "Only deleted lines: Rocky reviews new-side lines, so this file was not reviewed. Read the deletion by hand.";
 
@@ -332,6 +339,11 @@ const run = async (
 
   // --- Triage and review, per file ---------------------------------------------------------
   const salt = deps.unitKeySalt ?? "";
+  // Units of another shape (an older `file_units`, a caller's mistake) are not reused.
+  const previous =
+    request.previous !== undefined && FileUnits.safeParse(request.previous.units).success
+      ? request.previous
+      : undefined;
   const analyseFile = async (
     item: (typeof work)[number],
     unitSignal: AbortSignal,
@@ -339,7 +351,7 @@ const run = async (
     const { file, floor } = item;
     const fileFacts = facts(file);
     const key = unitKey(deps.sha256Hex, salt, file);
-    const reused = reusableUnit(request.previous, fileFacts, key);
+    const reused = reusableUnit(previous, fileFacts, key);
     if (reused !== undefined) {
       stats.reused++;
       return {
@@ -383,8 +395,9 @@ const run = async (
     if (!REVIEWED_LEVELS.has(triage.level)) {
       return { path: file.path, triage, findings: [], unit };
     }
-    if (!hasNewSide(file)) {
-      // Nothing to review on the new side: it must not look reviewed and clean (Fix B).
+    if (!hasNewSide(file) && file.deletions > 0) {
+      // Only deleted lines: nothing to review on the new side, and it must not look reviewed and
+      // clean (Fix B).
       return {
         path: file.path,
         findings: [],
@@ -393,6 +406,11 @@ const run = async (
         ruleFloor: floor,
         level: triage.level,
       };
+    }
+    if (!hasNewSide(file)) {
+      // No hunks at all (a pure rename or copy, a mode change, an empty file): there is no line
+      // to review, so it stays triaged (review round 2, SF1).
+      return { path: file.path, triage, findings: [], unit };
     }
     stats.reviewed++;
     const reviewed = await completeWithRepair(
@@ -569,12 +587,19 @@ const run = async (
   );
   const toBriefing = (answer: BriefingAnswer): Briefing => ({
     summary: answer.summary,
-    verdict: {
-      // The verdict never sits below what the findings say, nor below the risk of a file that
-      // was not reviewed, whatever the model answered (Fix A).
-      level: RISK_RANK[answer.verdict.level] >= RISK_RANK[floor] ? answer.verdict.level : floor,
-      reason: answer.verdict.reason,
-    },
+    // The verdict never sits below what the findings say, nor below the risk of a file that was
+    // not reviewed, whatever the model answered (Fix A). When it is raised, the model's reason
+    // ("Looks fine.") no longer describes it, so a fixed Rocky reason replaces it (round 2, N4).
+    verdict:
+      RISK_RANK[answer.verdict.level] >= RISK_RANK[floor]
+        ? answer.verdict
+        : {
+            level: floor,
+            reason:
+              RISK_RANK[findingsFloor(findings)] >= RISK_RANK[floor]
+                ? RAISED_FOR_FINDINGS
+                : RAISED_FOR_UNREVIEWED,
+          },
     estimatedReviewMinutes: minutes,
     reviewPath: answer.reviewPath,
     checkedOk: answer.checkedOk,
@@ -630,7 +655,10 @@ const run = async (
 
   // --- Final validation: the whole document, as it will be stored ----------------------------
   const final = assemble(toBriefing(briefed.value), graph, graphUnavailable);
-  if (!final.ok || belowUnanalysedRuleFloor(final.value)) throw new Failed("document_invalid");
+  // Defence in depth: `toBriefing` already raised the verdict to a floor at least as high as the
+  // stored-document rule, so this cannot trip unless that clamp breaks. It is the same check
+  // `completeAnalysis` runs at the write (round 2, N3).
+  if (!final.ok || belowUnanalysedFloor(final.value)) throw new Failed("document_invalid");
   return { status: "done", document: final.value, units, stats };
 };
 

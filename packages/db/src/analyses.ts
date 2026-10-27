@@ -1,5 +1,5 @@
 import {
-  belowUnanalysedRuleFloor,
+  belowUnanalysedFloor,
   FileUnits,
   type DiffTruncation,
   type FileUnit,
@@ -185,8 +185,9 @@ export const completeAnalysis = async (
   if (!parsed.ok) invalid("document");
   const checked = FileUnits.safeParse(units);
   if (!parsed.ok || !checked.success) return invalid("file units");
-  // The verdict never sits below an unanalysed migration or auth file (review round 1, Fix A).
-  if (belowUnanalysedRuleFloor(parsed.value)) invalid("document verdict");
+  // The verdict never sits below an unanalysed file: high for a migration or auth path, medium
+  // otherwise (review round 1 Fix A, round 2 SF2).
+  if (belowUnanalysedFloor(parsed.value)) invalid("document verdict");
   const triaged = new Set(parsed.value.triage.files.map((file) => file.path));
   if (!checked.data.every((unit) => triaged.has(unit.path))) invalid("file units");
   // Store the validated value (defaults filled in), not the caller's object.

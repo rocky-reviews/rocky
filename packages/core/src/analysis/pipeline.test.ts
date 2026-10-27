@@ -728,3 +728,132 @@ describe("A5b reuse refuses a file the previous analysis listed as unanalysed (r
     ]);
   });
 });
+
+describe("A20 files with no hunks are not deletion-only (review round 2, SF1)", () => {
+  const crit = script((call) =>
+    call.role === "triage" ? { value: triage("critical", 95) } : undefined,
+  );
+  it.each([
+    [
+      "a pure rename",
+      [
+        "diff --git a/src/auth/a.ts b/src/auth/b.ts",
+        "similarity index 100%",
+        "rename from src/auth/a.ts",
+        "rename to src/auth/b.ts",
+      ],
+      "src/auth/b.ts",
+    ],
+    [
+      "a mode-only change",
+      ["diff --git a/src/auth/run.sh b/src/auth/run.sh", "old mode 100644", "new mode 100755"],
+      "src/auth/run.sh",
+    ],
+    [
+      "an empty new file",
+      [
+        "diff --git a/src/auth/e.ts b/src/auth/e.ts",
+        "new file mode 100644",
+        "index 0000000..e69de29",
+      ],
+      "src/auth/e.ts",
+    ],
+  ])(
+    "%s stays triaged, is not reviewed, and does not raise the verdict",
+    async (_name, lines, path) => {
+      const { outcome, calls } = await analyze(crit, { diff: lines.join("\n") });
+      const { document } = done(outcome);
+      expect(document.provenance.unanalysed).toEqual([]);
+      expect(document.triage.files.map((f) => f.path)).toEqual([path]);
+      expect(calls.filter(is("review", path))).toHaveLength(0);
+      expect(document.briefing.verdict.level).toBe("low");
+    },
+  );
+});
+
+describe("A21 an unanalysed file of unknown risk floors the verdict at medium (review round 2, SF2)", () => {
+  const verdictOf = (outcome: AnalysisOutcome) => done(outcome).document.briefing.verdict.level;
+
+  it("a too-large non-auth file", async () => {
+    const diff = [
+      addedFile(
+        "src/payments/charge.ts",
+        Array.from({ length: 5_001 }, () => "x"),
+      ),
+      addedFile("src/util/format.ts", LINES),
+    ].join("\n");
+    expect(verdictOf((await analyze(script(), { diff })).outcome)).toBe("medium");
+  });
+
+  it("a refused triage on a non-auth file", async () => {
+    const { outcome } = await analyze(
+      script((call) =>
+        is("triage", "src/util/format.ts")(call) ? { status: "refused" } : undefined,
+      ),
+      {
+        diff: [addedFile("src/util/format.ts", LINES), addedFile("src/util/b.ts", LINES)].join(
+          "\n",
+        ),
+      },
+    );
+    expect(verdictOf(outcome)).toBe("medium");
+  });
+
+  it("a binary non-auth file", async () => {
+    const diff = [
+      "diff --git a/assets/logo.png b/assets/logo.png",
+      "new file mode 100644",
+      "Binary files /dev/null and b/assets/logo.png differ",
+      addedFile("src/util/format.ts", LINES),
+    ].join("\n");
+    expect(verdictOf((await analyze(script(), { diff })).outcome)).toBe("medium");
+  });
+
+  it("noise and normal files triaged but not reviewed by design leave the verdict alone", async () => {
+    const diff = [addedFile("yarn.lock", ["x"]), addedFile("src/util/format.ts", LINES)].join("\n");
+    expect(verdictOf((await analyze(script(), { diff })).outcome)).toBe("low");
+  });
+});
+
+describe("A22 a raised verdict carries Rocky's reason, not the model's (review round 2, N4)", () => {
+  it("the floor replaces the reason when it raises the level", async () => {
+    const { outcome } = await analyze(
+      script((call) =>
+        is("review", "src/auth/session.ts")(call) ? { status: "refused" } : undefined,
+      ),
+    );
+    const { verdict } = done(outcome).document.briefing;
+    expect(verdict.level).toBe("high");
+    expect(verdict.reason).not.toContain("Small change.");
+    expect(verdict.reason).toMatch(/^Rocky raised this level/);
+  });
+
+  it("a finding floor gets its own fixed reason", async () => {
+    const critical = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? { value: { findings: [finding("critical", 1)] } }
+        : undefined,
+    );
+    const { verdict } = done((await analyze(critical)).outcome).document.briefing;
+    expect(verdict).toMatchObject({ level: "critical", reason: expect.stringMatching(/findings/) });
+  });
+
+  it("an unraised verdict keeps the model's reason", async () => {
+    const { outcome } = await analyze(script(), { diff: addedFile("src/util/format.ts", LINES) });
+    expect(done(outcome).document.briefing.verdict.reason).toBe("Small change.");
+  });
+});
+
+describe("A5c old-shape units are not reused (review round 2)", () => {
+  it("units without reviewMinutes are ignored and the analysis proceeds afresh", async () => {
+    const previous = done((await analyze()).outcome);
+    const old = previous.units.map(({ path, key }) => ({
+      path,
+      key,
+    })) as unknown as typeof previous.units;
+    const { outcome } = await analyze(script(), {
+      previous: { document: previous.document, units: old },
+    });
+    expect(done(outcome).stats).toMatchObject({ analysed: 2, reused: 0 });
+  });
+});

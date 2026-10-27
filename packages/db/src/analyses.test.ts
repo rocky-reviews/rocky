@@ -178,6 +178,29 @@ describe("analyses store", () => {
     expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, raised, units))).toBe(true);
   });
 
+  it("refuses a verdict below medium next to any unanalysed file (review round 2, SF2)", async () => {
+    const id = await running(A, "9".repeat(40));
+    const page = "web/src/pages/InvitePage.tsx";
+    const doc = {
+      ...DOCUMENT,
+      provenance: { ...DOCUMENT.provenance, unanalysed: [{ path: page, reason: "too-large" }] },
+      triage: { ...DOCUMENT.triage, files: DOCUMENT.triage.files.filter((f) => f.path !== page) },
+      findings: DOCUMENT.findings
+        .filter((f) => f.path !== page && (f.severity === "medium" || f.severity === "low"))
+        .map((f) => ({ ...f, memory: [] })),
+      briefing: { ...DOCUMENT.briefing, verdict: { level: "low", reason: "x" }, memoryApplied: [] },
+    };
+    const units = UNITS.filter((u) => u.path !== page);
+    await expect(db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, doc, units))).rejects.toThrow(
+      /invalid document verdict/,
+    );
+    const medium = {
+      ...doc,
+      briefing: { ...doc.briefing, verdict: { level: "medium", reason: "x" } },
+    };
+    expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, medium, units))).toBe(true);
+  });
+
   it("a failure stores a fixed code and no document; codes are shape-checked", async () => {
     const id = await running(A, "f".repeat(40));
     await expect(
@@ -219,6 +242,20 @@ describe("analyses store", () => {
       [first],
     );
     const second = await running(B, "4".repeat(40));
+    expect(
+      await db.withOrg(B.orgId, (tx) => loadPreviousAnalysis(tx, B.pullRequestId, second)),
+    ).toBeUndefined();
+  });
+
+  it("old-shape units (no reviewMinutes) are not offered for reuse (review round 2)", async () => {
+    const first = await running(B, "7".repeat(40));
+    await db.withOrg(B.orgId, (tx) => completeAnalysis(tx, first, DOCUMENT, UNITS));
+    await superuser.query(
+      `update analyses set file_units = (select jsonb_agg(u - 'reviewMinutes') from jsonb_array_elements(file_units) u)
+        where id = $1`,
+      [first],
+    );
+    const second = await running(B, "8".repeat(40));
     expect(
       await db.withOrg(B.orgId, (tx) => loadPreviousAnalysis(tx, B.pullRequestId, second)),
     ).toBeUndefined();

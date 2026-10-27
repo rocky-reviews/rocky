@@ -27,4 +27,4 @@ export {
   type AnalysisStage,
   type AnalysisStats,
 } from "./pipeline.js";
-export { belowUnanalysedRuleFloor } from "./verdict.js";
+export { belowUnanalysedFloor } from "./verdict.js";

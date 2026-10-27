@@ -146,6 +146,46 @@ describe("the scripted LLM fake stays out of production code (P4-3 review round 
     ).toContain(rule);
   });
 
+  it.each([
+    [
+      'import { seedOrg } from "@rocky-reviews/db/testing";\nexport const s = seedOrg;\n',
+      "apps/server/src/planted.ts",
+    ],
+    [
+      'import { recordingAdapters } from "@rocky-reviews/llm/testing";\nexport const r = recordingAdapters;\n',
+      "apps/worker/src/planted.ts",
+    ],
+    [
+      'import { fakeGitHubApi } from "@rocky-reviews/forge-github/testing";\nexport const f = fakeGitHubApi;\n',
+      "packages/db/src/planted.ts",
+    ],
+  ])(
+    "fails on any @rocky-reviews/*/testing value import (round 2, N2): %s",
+    async (snippet, file) => {
+      expect(await ruleIds(file, snippet)).toContain(rule);
+    },
+  );
+
+  it("testing modules themselves get no exemption (round 2, N2)", async () => {
+    expect(await ruleIds("packages/llm/src/testing.ts", code)).toContain(rule);
+    expect(await ruleIds("packages/db/src/testing/planted.ts", code)).toContain(rule);
+  });
+
+  it("fails on a dynamic import of a testing subpath (round 2, N2)", async () => {
+    expect(
+      await ruleIds(
+        "apps/worker/src/planted.ts",
+        'export const m = () => import("@rocky-reviews/core/testing");\n',
+      ),
+    ).toContain("no-restricted-syntax");
+    expect(
+      await ruleIds(
+        "packages/core/src/planted.ts",
+        'export const m = () => import("@rocky-reviews/core/testing");\n',
+      ),
+    ).toContain("no-restricted-syntax");
+  });
+
   it("allows it in tests, test-support files and type-only imports", async () => {
     expect(await ruleIds("apps/worker/src/planted.test.ts", code)).not.toContain(rule);
     expect(await ruleIds("packages/llm/src/adapters/test-support.ts", code)).not.toContain(rule);

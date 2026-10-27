@@ -4,7 +4,8 @@
 -- analysed: a sha256 over what was sent to the model for that file (path, status, patch) under
 -- the pipeline version and the role configuration. The next push of the same pull request reuses
 -- a file's triage and findings when its key is unchanged, so only changed files are sent to a
--- model again. Keys and paths only: no code, no diff. The document itself stays the one
+-- model again. Each unit is a path, a key and `reviewMinutes` (a bounded integer from the triage
+-- model, 0 to 480, schema-checked at the write): no code, no diff. The document itself stays the one
 -- validated analysis document (packages/schema); the row keeps its tenant policy (0003),
 -- retention (0005, category `analyses`) and cascades. No grants change.
 

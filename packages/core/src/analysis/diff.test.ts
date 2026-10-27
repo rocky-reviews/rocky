@@ -277,6 +277,43 @@ describe("parseUnifiedDiff", () => {
         ].join("\n"),
         "diff_unparseable",
       ],
+      // Review round 2, N1: the remaining guards.
+      [
+        "a new file that is also renamed",
+        [
+          "diff --git a/a.ts b/b.ts",
+          "new file mode 100644",
+          "rename from a.ts",
+          "rename to b.ts",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a second --- line",
+        [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
+      [
+        "a second +++ line",
+        [
+          "diff --git a/a.ts b/a.ts",
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+        ].join("\n"),
+        "diff_unparseable",
+      ],
       [
         "a deleted file whose +++ side is not /dev/null",
         [

@@ -105,8 +105,9 @@ packages/schema (analysis document; shared contract)
   - **Failures:** a unit that still fails becomes an unanalysed file or an unavailable change
     map; a failed briefing fails the analysis. Nothing partial is returned or stored.
   - **Verdict:** never below the findings, nor below a file that was not reviewed: a migration,
-    auth or critical file → at least high, an important one → at least medium. The rules half is
-    re-checked at the write.
+    auth or critical file → at least high, an important file or one of unknown risk (triage
+    failed, too large, binary) → at least medium. Re-checked at the write as far as the document
+    can express it.
 - PR content and model-derived text travel only as `untrusted` parts under fixed labels;
   instructions are `rockyInstructions` literals. The pipeline has no forge handle; output is a
   draft for a human.
