@@ -575,12 +575,17 @@ describe("migration 0011 with rows in the ledger (review 1)", () => {
         ")",
     );
 
+    // Later migrations (0012+) go down first, so the next step down is 0011's.
+    const later = all.filter((m) => m.version > 11).length;
+    if (later > 0) await rollback(pgs.migrator, { steps: later });
+    expect((await appliedMigrations(pgs.migrator)).length).toBe(all.length - later);
+
     // The migrator is not a superuser: FORCE RLS applies to it, so the down must not silently
     // see (and drop) nothing. It refuses, and leaves everything as it was.
     await expect(rollback(pgs.migrator, { steps: 1 })).rejects.toThrow(
       /llm_usage holds rows the 0010 shape cannot represent/,
     );
-    expect((await appliedMigrations(pgs.migrator)).length).toBe(all.length);
+    expect((await appliedMigrations(pgs.migrator)).length).toBe(all.length - later);
     expect(
       Number(
         (await superuser.query("select count(*) from llm_usage where " + unrepresentable)).rows[0]

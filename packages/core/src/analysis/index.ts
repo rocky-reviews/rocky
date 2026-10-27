@@ -6,6 +6,16 @@ export {
   type DiffFile,
   type DiffParse,
 } from "./diff.js";
+export {
+  ANALYSIS_STAGES,
+  CHARS_PER_TOKEN,
+  DEFAULT_ANALYSIS_TOKEN_LIMIT,
+  estimateAnalysisTokens,
+  FILE_CALL_OVERHEAD_TOKENS,
+  STAGE_OVERHEAD_TOKENS,
+  type EstimateOptions,
+  type TokenEstimate,
+} from "./estimate.js";
 export { MAX_REPAIR_ROUNDS } from "./repair.js";
 export { preTriage, type PreTriage } from "./rules.js";
 export {

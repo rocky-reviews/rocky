@@ -7,9 +7,10 @@ import {
   completeAnalysis,
   enqueueAnalysis,
   failAnalysis,
+  loadAnalysisTarget,
   loadPreviousAnalysis,
   requeueAnalysis,
-  startAnalysis,
+  type AnalysisLease,
 } from "./analyses.js";
 import { createDb, type Db } from "./client.js";
 import {
@@ -17,6 +18,7 @@ import {
   CONTAINER_TIMEOUT_MS,
   ignoreIdleError,
   newOrgId,
+  plantAnalysisLease,
   seedOrg,
   startPostgres,
   type SeededOrg,
@@ -26,7 +28,9 @@ import {
 /**
  * P4-3 (migration 0010, ADR 0014 §7): analysis rows as the application role, under RLS. Only a
  * document that validates is stored as `done`; a failure stores a code and nothing else; another
- * org's rows can be neither claimed, finished nor reused.
+ * org's rows can be neither claimed, finished nor reused. Since P4-6 (migration 0012) every
+ * finishing write needs the row's lease; leases here are planted as the claim would hand them
+ * out, and the claim itself is tested in analysis-queue.test.ts.
  */
 
 let pgs: TestPostgres;
@@ -59,47 +63,63 @@ afterAll(async () => {
   await pgs?.stop();
 });
 
-/** A new revision of the org's seeded pull request, and a running analysis of it. */
-const running = async (org: SeededOrg, head: string): Promise<string> =>
-  db.withOrg(org.orgId, async (tx) => {
+/** A new revision of the org's seeded pull request, and a running analysis of it (its lease). */
+const running = async (org: SeededOrg, head: string): Promise<AnalysisLease> => {
+  const id = await db.withOrg(org.orgId, async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
       `insert into pr_revisions (pull_request_id, head_sha, base_sha) values ($1, $2, $3)
        on conflict (org_id, pull_request_id, head_sha) do update set base_sha = excluded.base_sha
        returning id`,
       [org.pullRequestId, head, "b".repeat(40)],
     );
-    const id = await enqueueAnalysis(tx, rows[0]!.id);
-    expect(await startAnalysis(tx, id)).toBeDefined();
-    return id;
+    return enqueueAnalysis(tx, rows[0]!.id);
   });
+  const lease = await plantAnalysisLease(superuser, id);
+  expect(await db.withOrg(org.orgId, (tx) => loadAnalysisTarget(tx, lease))).toBeDefined();
+  return lease;
+};
 
-const row = async (id: string) =>
+const row = async (lease: AnalysisLease | string) =>
   (
     await superuser.query<{
       status: string;
       document: unknown;
       file_units: unknown;
       error_code: string | null;
-    }>("select status, document, file_units, error_code from analyses where id = $1", [id])
+    }>("select status, document, file_units, error_code from analyses where id = $1", [
+      typeof lease === "string" ? lease : lease.analysisId,
+    ])
   ).rows[0];
 
 describe("analyses store", () => {
-  it("queued → running returns the target; a second claim gets nothing", async () => {
+  it("the lease holder loads the target; another token, or none, gets nothing", async () => {
+    const id = await db.withOrg(A.orgId, (tx) => enqueueAnalysis(tx, A.revisionId));
+    // Queued, not leased yet: nothing to load.
     await db.withOrg(A.orgId, async (tx) => {
-      const id = await enqueueAnalysis(tx, A.revisionId);
-      const target = await startAnalysis(tx, id);
-      expect(target).toMatchObject({
+      expect(await loadAnalysisTarget(tx, { analysisId: id, leaseId: UNKNOWN })).toBeUndefined();
+    });
+    const lease = await plantAnalysisLease(superuser, id);
+    await db.withOrg(A.orgId, async (tx) => {
+      expect(await loadAnalysisTarget(tx, lease)).toEqual({
         analysisId: id,
         revisionId: A.revisionId,
         pullRequestId: A.pullRequestId,
         number: 847,
         title: "Invite flow",
         headSha: "a".repeat(40),
+        baseSha: "b".repeat(40),
         forgeRepoId: 2001,
+        fullName: expect.stringMatching(/\/api$/) as unknown as string,
         diffTruncation: null,
+        approvedTokens: null,
+        // The seeded pull request's head is this revision, and it is open.
+        superseded: false,
       });
-      expect(await startAnalysis(tx, id)).toBeUndefined();
+      expect(await loadAnalysisTarget(tx, { ...lease, leaseId: UNKNOWN })).toBeUndefined();
     });
+    // Enqueueing the same revision again returns the live row instead of a second one.
+    expect(await db.withOrg(A.orgId, (tx) => enqueueAnalysis(tx, A.revisionId))).toBe(id);
+    expect(await db.withOrg(A.orgId, (tx) => failAnalysis(tx, lease, "internal_error"))).toBe(true);
   });
 
   it("stores a valid document with its units, and offers it to the next revision", async () => {
@@ -111,13 +131,15 @@ describe("analyses store", () => {
 
     const second = await running(A, "d".repeat(40));
     const previous = await db.withOrg(A.orgId, (tx) =>
-      loadPreviousAnalysis(tx, A.pullRequestId, second),
+      loadPreviousAnalysis(tx, A.pullRequestId, second.analysisId),
     );
     expect(previous?.units).toEqual(UNITS);
     expect(previous?.document.provenance.pullRequest.number).toBe(847);
     // Not offered to itself.
     expect(
-      await db.withOrg(A.orgId, (tx) => loadPreviousAnalysis(tx, A.pullRequestId, first)),
+      await db.withOrg(A.orgId, (tx) =>
+        loadPreviousAnalysis(tx, A.pullRequestId, first.analysisId),
+      ),
     ).toBeUndefined();
   });
 
@@ -244,20 +266,51 @@ describe("analyses store", () => {
     expect(await db.withOrg(A.orgId, (tx) => completeAnalysis(tx, id, DOCUMENT, UNITS))).toBe(
       false,
     );
-    expect(await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id))).toBe(false);
+    expect(await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id, "llm_rate_limited", 0))).toBe(
+      false,
+    );
   });
 
-  it("a retryable failure puts the row back in the queue", async () => {
+  it("a retryable failure puts the row back in the queue, after its delay, without the lease", async () => {
     const id = await running(A, "1".repeat(40));
-    expect(await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id))).toBe(true);
-    expect((await row(id))?.status).toBe("queued");
+    await expect(
+      db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id, "llm_rate_limited", -1)),
+    ).rejects.toThrow(/invalid retry delay/);
+    await expect(
+      db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id, "Has PR text", 0)),
+    ).rejects.toThrow(/invalid error code/);
+    expect(
+      await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id, "llm_rate_limited", 90_000)),
+    ).toBe(true);
+    const { rows } = await superuser.query<{
+      status: string;
+      error_code: string;
+      lease_id: string | null;
+      delay: number;
+    }>(
+      `select status, error_code, lease_id,
+              extract(epoch from available_at - now())::int as delay
+         from analyses where id = $1`,
+      [id.analysisId],
+    );
+    expect(rows[0]).toMatchObject({
+      status: "queued",
+      error_code: "llm_rate_limited",
+      lease_id: null,
+    });
+    expect(rows[0]!.delay).toBeGreaterThan(80);
+    expect(rows[0]!.delay).toBeLessThanOrEqual(90);
+    // The old lease is spent.
+    expect(await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id, "llm_rate_limited", 0))).toBe(
+      false,
+    );
   });
 
   it("units without a finished document are refused by the database (CHECK)", async () => {
     const id = await running(A, "2".repeat(40));
     await expect(
       db.withOrg(A.orgId, (tx) =>
-        tx.query("update analyses set file_units = '[]'::jsonb where id = $1", [id]),
+        tx.query("update analyses set file_units = '[]'::jsonb where id = $1", [id.analysisId]),
       ),
     ).rejects.toThrow(/analyses_file_units_when_done/);
   });
@@ -267,11 +320,13 @@ describe("analyses store", () => {
     await db.withOrg(B.orgId, (tx) => completeAnalysis(tx, first, DOCUMENT, UNITS));
     await superuser.query(
       "update analyses set document = jsonb_set(document, '{findings,0,range,start}', '999') where id = $1",
-      [first],
+      [first.analysisId],
     );
     const second = await running(B, "4".repeat(40));
     expect(
-      await db.withOrg(B.orgId, (tx) => loadPreviousAnalysis(tx, B.pullRequestId, second)),
+      await db.withOrg(B.orgId, (tx) =>
+        loadPreviousAnalysis(tx, B.pullRequestId, second.analysisId),
+      ),
     ).toBeUndefined();
   });
 
@@ -281,26 +336,30 @@ describe("analyses store", () => {
     await superuser.query(
       `update analyses set file_units = (select jsonb_agg(u - 'reviewMinutes') from jsonb_array_elements(file_units) u)
         where id = $1`,
-      [first],
+      [first.analysisId],
     );
     const second = await running(B, "8".repeat(40));
     expect(
-      await db.withOrg(B.orgId, (tx) => loadPreviousAnalysis(tx, B.pullRequestId, second)),
+      await db.withOrg(B.orgId, (tx) =>
+        loadPreviousAnalysis(tx, B.pullRequestId, second.analysisId),
+      ),
     ).toBeUndefined();
   });
 
   describe("tenancy", () => {
-    it("another org cannot claim, finish, requeue or reuse a row", async () => {
-      const id = await running(A, "5".repeat(40));
-      await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, id));
+    it("another org cannot load, finish, requeue or reuse a row, even with its lease", async () => {
+      const lease = await running(A, "5".repeat(40));
       await db.withOrg(B.orgId, async (tx) => {
-        expect(await startAnalysis(tx, id)).toBeUndefined();
-        expect(await completeAnalysis(tx, id, DOCUMENT, UNITS)).toBe(false);
-        expect(await failAnalysis(tx, id, "internal_error")).toBe(false);
-        expect(await requeueAnalysis(tx, id)).toBe(false);
+        expect(await loadAnalysisTarget(tx, lease)).toBeUndefined();
+        expect(await completeAnalysis(tx, lease, DOCUMENT, UNITS)).toBe(false);
+        expect(await failAnalysis(tx, lease, "internal_error")).toBe(false);
+        expect(await requeueAnalysis(tx, lease, "internal_error", 0)).toBe(false);
         expect(await loadPreviousAnalysis(tx, A.pullRequestId, UNKNOWN)).toBeUndefined();
       });
-      expect((await row(id))?.status).toBe("queued");
+      expect((await row(lease))?.status).toBe("running");
+      expect(
+        await db.withOrg(A.orgId, (tx) => requeueAnalysis(tx, lease, "internal_error", 0)),
+      ).toBe(true);
     });
 
     it("an org cannot queue an analysis of another org's revision (composite FK)", async () => {
@@ -311,8 +370,11 @@ describe("analyses store", () => {
 
     it("ids are shape-checked before any query", async () => {
       await db.withOrg(A.orgId, async (tx) => {
-        await expect(startAnalysis(tx, "1; drop table analyses")).rejects.toThrow(
-          /invalid analysis id/,
+        await expect(
+          loadAnalysisTarget(tx, { analysisId: "1; drop table analyses", leaseId: UNKNOWN }),
+        ).rejects.toThrow(/invalid analysis id/);
+        await expect(loadAnalysisTarget(tx, { analysisId: UNKNOWN, leaseId: "x" })).rejects.toThrow(
+          /invalid lease/,
         );
         await expect(enqueueAnalysis(tx, "x")).rejects.toThrow(/invalid revision id/);
         await expect(loadPreviousAnalysis(tx, "x", UNKNOWN)).rejects.toThrow(

@@ -9,6 +9,7 @@ import {
 } from "@rocky-reviews/core";
 import {
   completeInTenantTx,
+  enqueueHeadAnalysis,
   mirroredPullRequest,
   recordRevision,
   upsertPullRequest,
@@ -37,8 +38,9 @@ import { CONTRADICTION_ATTEMPTS } from "./installations.js";
  * 4. the pull request as GitHub has it now; its head revision's diff is read (up to
  *    `MIRROR_DIFF_MAX_BYTES`, truncation flagged) only when the mirror has no reading for it;
  * 5. one `withOrg` transaction writes the repository, the pull request (unless the stored
- *    snapshot is newer) and the revision, and marks the inbox row processed, so a lost lease
- *    rolls everything back.
+ *    snapshot is newer) and the revision, queues an analysis of a new head revision of an open
+ *    pull request when automatic analysis is on (P4-6, ADR 0017; webhooks only, never the
+ *    rebuild), and marks the inbox row processed, so a lost lease rolls everything back.
  *
  * Logs (by the inbox drain) carry ids and outcome codes; never titles, logins, diffs or tokens.
  */
@@ -78,6 +80,11 @@ export interface PullRequestDeps {
   readonly db: Db;
   readonly forge: Forge;
   readonly maxDiffBytes?: number;
+  /**
+   * Queue an analysis of each new head revision read here (P4-6). On only with
+   * `ROCKY_ANALYSIS_AUTO=on`; off by default, so nothing spends until an operator turns it on.
+   */
+  readonly enqueueAnalyses?: boolean;
 }
 
 export interface MirrorResult {
@@ -88,6 +95,8 @@ export interface MirrorResult {
   readonly revision: RevisionWrite | null;
   /** Why the head revision's diff is incomplete, when it was read now and is. */
   readonly truncation: RevisionDiff["truncation"];
+  /** An analysis of the head revision was queued by this write (P4-6). */
+  readonly analysisQueued: boolean;
 }
 
 /** GitHub's answer disagrees with the event's head (a lagging replica, or a stale event): retry. */
@@ -133,6 +142,12 @@ export const mirrorPullRequest = async (
      * first attempts). The rebuild records it; a later event or rebuild replaces it.
      */
     readonly retryUnavailable?: boolean;
+    /**
+     * Queue an analysis of a new head revision of an open pull request (P4-6). Webhook-driven
+     * reads only: the rebuild leaves it off, so restoring or first mirroring a repository never
+     * queues every open pull request (review round 1, SF4).
+     */
+    readonly enqueueAnalysis?: boolean;
   } = {},
 ): Promise<MirrorResult> => {
   const known = await db.withOrg(orgId, (tx) =>
@@ -156,6 +171,13 @@ export const mirrorPullRequest = async (
     const { id, write } = await upsertPullRequest(tx, repoId, pr);
     const revision =
       write === "stale" || reading === undefined ? null : await recordRevision(tx, id, pr, reading);
+    // A head revision whose diff was read now, of an open pull request, is analysed (P4-6). Only
+    // new readings, and only when the caller asks (webhooks with automatic analysis on).
+    const analysisQueued =
+      options.enqueueAnalysis === true &&
+      pr.state === "open" &&
+      (revision === "created" || revision === "completed") &&
+      (await enqueueHeadAnalysis(tx, id, pr.headSha)) !== undefined;
     const outcome: PullRequestOutcome =
       write === "stale"
         ? "pr_stale_snapshot"
@@ -168,6 +190,7 @@ export const mirrorPullRequest = async (
       pullRequest: write,
       revision,
       truncation: revision === null ? null : (reading?.truncation ?? null),
+      analysisQueued,
     };
   });
 };
@@ -218,6 +241,7 @@ export const reconcilePullRequest = async (
       ...(deps.maxDiffBytes === undefined ? {} : { maxDiffBytes: deps.maxDiffBytes }),
       lease,
       retryUnavailable: retry,
+      enqueueAnalysis: deps.enqueueAnalyses === true,
     });
     // Recorded inside the tenant transaction together with the mirror's writes.
     return { outcome, completed: true };

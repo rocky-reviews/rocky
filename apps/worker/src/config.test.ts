@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { rsaPrivateKeyPem, testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { describe, expect, it } from "vitest";
 import {
+  analysisConfigFromEnv,
   ConfigError,
   databaseLoginHint,
+  DEFAULT_ANALYSIS_CONFIG,
   githubAppFromEnv,
   loadWorkerConfig,
   workerConfigFromEnv,
@@ -82,6 +84,7 @@ describe("workerConfigFromEnv", () => {
       databaseUrl: DB,
       githubApp: undefined,
       llm: llmConfigFromEnv({}),
+      analysis: DEFAULT_ANALYSIS_CONFIG,
     });
   });
 
@@ -96,6 +99,51 @@ describe("workerConfigFromEnv", () => {
     expect(
       messageOf(() => workerConfigFromEnv({ WORKER_DATABASE_URL: DB, ROCKY_LLM_TYPO: "x" })),
     ).toMatch(/ROCKY_LLM_TYPO: unknown variable/);
+  });
+});
+
+describe("analysisConfigFromEnv (P4-6)", () => {
+  it("defaults: automatic analysis off, a 150 000-token per-PR limit, 4 per worker, 2 per org", () => {
+    expect(analysisConfigFromEnv({})).toEqual({
+      auto: false,
+      tokenLimit: 150_000,
+      concurrency: 4,
+      orgConcurrency: 2,
+    });
+    expect(workerConfigFromEnv({ WORKER_DATABASE_URL: DB }).analysis).toEqual(
+      DEFAULT_ANALYSIS_CONFIG,
+    );
+  });
+
+  it("reads ROCKY_ANALYSIS_*, empty counting as unset", () => {
+    expect(
+      analysisConfigFromEnv({
+        ROCKY_ANALYSIS_TOKEN_LIMIT: "300000",
+        ROCKY_ANALYSIS_CONCURRENCY: "8",
+        ROCKY_ANALYSIS_ORG_CONCURRENCY: "",
+      }),
+    ).toEqual({ auto: false, tokenLimit: 300_000, concurrency: 8, orgConcurrency: 2 });
+    expect(analysisConfigFromEnv({ ROCKY_ANALYSIS_AUTO: "on" }).auto).toBe(true);
+    expect(analysisConfigFromEnv({ ROCKY_ANALYSIS_AUTO: "off" }).auto).toBe(false);
+    expect(analysisConfigFromEnv({ ROCKY_ANALYSIS_AUTO: "" }).auto).toBe(false);
+  });
+
+  it.each([
+    ["ROCKY_ANALYSIS_TOKEN_LIMIT", "999"],
+    ["ROCKY_ANALYSIS_TOKEN_LIMIT", "1e6"],
+    ["ROCKY_ANALYSIS_TOKEN_LIMIT", "-5"],
+    ["ROCKY_ANALYSIS_CONCURRENCY", "0"],
+    ["ROCKY_ANALYSIS_CONCURRENCY", "33"],
+    ["ROCKY_ANALYSIS_ORG_CONCURRENCY", "two"],
+    ["ROCKY_ANALYSIS_ORG_CONCURRENCY", "1.5"],
+    ["ROCKY_ANALYSIS_AUTO", "yes"],
+    ["ROCKY_ANALYSIS_AUTO", "ON"],
+  ])("refuses %s=%s, naming the variable only", (name, value) => {
+    const message = messageOf(() =>
+      workerConfigFromEnv({ WORKER_DATABASE_URL: DB, [name]: value }),
+    );
+    expect(message).toContain(name);
+    expect(message).not.toContain(`=${value}`);
   });
 });
 
