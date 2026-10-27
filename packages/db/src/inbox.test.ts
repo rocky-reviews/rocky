@@ -953,16 +953,64 @@ describe("claim cost and timing (review round 3)", () => {
     expect(seen).toContain(genuine.deliveryId);
     // Bounded per claim whatever the backlog (the old claim took seconds here). Generous for CI.
     expect(Math.max(...timings), timings.map((t) => t.toFixed(0)).join(",")).toBeLessThan(300);
-    // Clean up: the flood is finished so later tests see only their own rows.
+    // Clean up: the flood is finished so later tests see only their own rows. This one UPDATE
+    // also bounds the queue trigger on a bulk change: its OLD/NEW join once ran as a nested loop
+    // (~49 s for these 20k rows in CI; migration 0009).
+    const bulkStarted = performance.now();
     await superuser.query(
       "update app.webhook_deliveries set processed_at = now(), outcome = 'test', lease_token = null, lease_until = null where installation_id = $1 and processed_at is null and parked_at is null",
       [flooded],
     );
+    expect(performance.now() - bulkStarted).toBeLessThan(10_000);
     await superuser.query(
       "update app.webhook_deliveries set processed_at = now(), outcome = 'test' where delivery_id = $1 and processed_at is null and parked_at is null",
       [genuine.deliveryId],
     );
-  }, 120_000);
+  }, 60_000);
+
+  it("a bulk update stays linear on a connection whose trigger plan was made for one row (0009)", async () => {
+    // plpgsql plans the queue trigger's join once per connection and reuses it. A 1-row update
+    // first (the worker's claim/complete/fail) used to fix a nested loop over the OLD/NEW
+    // transition tables that the next bulk update reused: quadratic. One client, so the warm-up
+    // and the bulk update share the cached plan whatever the pool hands out.
+    const flooded = nextInstallation++;
+    const client = new pg.Client({ connectionString: pgs.superUrl });
+    client.on("error", ignoreIdleError);
+    await client.connect();
+    try {
+      const { rows: config } = await client.query<{ proconfig: string[] | null }>(
+        "select proconfig from pg_catalog.pg_proc where oid = 'worker.webhook_queue_on_update()'::regprocedure",
+      );
+      expect(config[0]?.proconfig).toContain("enable_nestloop=off");
+      await client.query(
+        `insert into app.webhook_deliveries
+           (forge, delivery_id, payload_sha256, event_type, installation_id, event)
+         select 'github',
+                (substr(h,1,8)||'-'||substr(h,9,4)||'-4'||substr(h,14,3)||'-8'||substr(h,18,3)||'-'||substr(h,21,12)),
+                sha256(convert_to('plan-' || i::text, 'utf8')), 'installation.created', $1::bigint,
+                jsonb_build_object('type', 'installation.created', 'installationId', $1::bigint,
+                  'account', jsonb_build_object('id', 5, 'login', 'a', 'kind', 'user'), 'sender', null)
+           from generate_series(1, 20000) i, lateral (select md5('plan-' || $1::text || '-' || i::text) h) x`,
+        [flooded],
+      );
+      // Warm the cached plan with a one-row statement, as the worker's first call would.
+      await client.query(
+        `update app.webhook_deliveries set available_at = available_at
+          where delivery_id = (select delivery_id from app.webhook_deliveries
+                                where installation_id = $1 limit 1)`,
+        [flooded],
+      );
+      const started = performance.now();
+      const { rowCount } = await client.query(
+        "update app.webhook_deliveries set processed_at = now(), outcome = 'test' where installation_id = $1 and processed_at is null and parked_at is null",
+        [flooded],
+      );
+      expect(rowCount).toBe(20_000);
+      expect(performance.now() - started).toBeLessThan(10_000);
+    } finally {
+      await client.end();
+    }
+  }, 60_000);
 
   it("a claim waiting on the claim lock gives up after its statement timeout", async () => {
     const holder = await superuser.connect();

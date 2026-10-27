@@ -43,6 +43,19 @@ Task log for the project plan. Agents append a row when a task is merged.
 - P4-2: map provider errors onto `LlmCallError` kinds (input over the context window → `context_too_long`; a generation cut off at the cap or window → `truncated`), and the cache-write split onto `cacheWrite5mInputTokens`/`cacheWrite1hInputTokens`.
 - Needs human: choose a default embedding provider (if any) before P8 (ADR 0012 §6).
 
+### P3-3 fix: webhook queue trigger plan (migration 0009)
+
+`worker.webhook_queue_on_update()` joins the statement's OLD and NEW transition tables. plpgsql
+plans that join once per connection and reuses the plan; the first firing is usually a 1-row
+worker update, so the cached plan was a nested loop, quadratic for every later bulk update on that
+connection (a 20k-row UPDATE took ~49 s; `inbox.test.ts` timed out in CI on #15). Migration 0009
+sets `enable_nestloop = off` on that one function, which leaves hash or merge join; the trigger's
+result is unchanged. Tests: `inbox.test.ts` "a bulk update stays linear on a connection whose
+trigger plan was made for one row (0009)" warms the plan with a 1-row update on one client, then
+bounds a 20k-row update at 10 s (49 s without 0009, 0.6 s with it), and checks the function's
+setting; "a 20k-row backlog…" also bounds its cleanup update. Lesson for transition-table
+triggers: the plan is cached per connection, so choose a join strategy that is safe at any size.
+
 ### P2-3 / P2-4 final-review follow-ups
 
 Approved with these minor items open:
