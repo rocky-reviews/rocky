@@ -953,16 +953,20 @@ describe("claim cost and timing (review round 3)", () => {
     expect(seen).toContain(genuine.deliveryId);
     // Bounded per claim whatever the backlog (the old claim took seconds here). Generous for CI.
     expect(Math.max(...timings), timings.map((t) => t.toFixed(0)).join(",")).toBeLessThan(300);
-    // Clean up: the flood is finished so later tests see only their own rows.
+    // Clean up: the flood is finished so later tests see only their own rows. This one UPDATE
+    // also bounds the queue trigger on a bulk change: its OLD/NEW join once ran as a nested loop
+    // (~49 s for these 20k rows in CI; migration 0009).
+    const bulkStarted = performance.now();
     await superuser.query(
       "update app.webhook_deliveries set processed_at = now(), outcome = 'test', lease_token = null, lease_until = null where installation_id = $1 and processed_at is null and parked_at is null",
       [flooded],
     );
+    expect(performance.now() - bulkStarted).toBeLessThan(10_000);
     await superuser.query(
       "update app.webhook_deliveries set processed_at = now(), outcome = 'test' where delivery_id = $1 and processed_at is null and parked_at is null",
       [genuine.deliveryId],
     );
-  }, 120_000);
+  }, 60_000);
 
   it("a claim waiting on the claim lock gives up after its statement timeout", async () => {
     const holder = await superuser.connect();
