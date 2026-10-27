@@ -45,7 +45,7 @@ describe("JSON Schema emit", () => {
       "schemaVersion",
       "triage",
     ]);
-    expect(schema.properties.schemaVersion!.pattern).toBe("^1\\.(0)\\.\\d+$");
+    expect(schema.properties.schemaVersion!.pattern).toBe("^1\\.(0|1)\\.\\d+$");
     expect(schema.properties.findings!.maxItems).toBe(200);
     expect(schema.properties.findings!.items!.properties!.path!.maxLength).toBe(1024);
     expect(Object.keys(schema.$defs).sort()).toEqual(["JsonValue", "View"]);

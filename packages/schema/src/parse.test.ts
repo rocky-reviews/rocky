@@ -109,14 +109,14 @@ describe("parseAnalysisDocument: shape", () => {
 
 describe("parseAnalysisDocument: version", () => {
   it("rejects an unsupported minor or major", () => {
-    for (const version of ["1.1.0", "2.0.0", "0.9.0"]) {
+    for (const version of ["1.2.0", "2.0.0", "0.9.0"]) {
       const doc = pr847();
       doc.schemaVersion = version;
       expectRejected(doc, "UNSUPPORTED_SCHEMA_VERSION", "schemaVersion");
     }
   });
 
-  it("accepts any patch of the current minor", () => {
+  it("accepts any patch of the current minor (and of an older minor: schema 1.1)", () => {
     const doc = pr847();
     doc.schemaVersion = SCHEMA_VERSION.replace(/\d+$/, "7");
     expectAccepted(doc);

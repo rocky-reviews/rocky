@@ -44,7 +44,7 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 | Section         | Written by          | What it holds                                                                                                                                                                                                                                                      |
 | --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `schemaVersion` | **Rocky**           | `"1.0.0"`. Patch and minor versions only add optional fields; a major may remove fields.                                                                                                                                                                           |
+| `schemaVersion` | **Rocky**           | `"1.1.0"`. Patch and minor versions add optional fields; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                                                        |
 | `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what. |
 | `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                               |
 | `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                              |
@@ -59,7 +59,7 @@ count or a hunk range. Every other section is then checked against those facts.
 
 ```jsonc
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.1.0",
   "provenance": {
     // From git, never from the model. The only files the rest of the document may name.
     "repo": { "owner": "acme", "name": "rocky-app" },
@@ -274,6 +274,25 @@ it first).
 real thing to draw). A node's `group` is a free label, not a reference: groups have no
 registry to point at. Ids are compared case-insensitively because anchors often are.
 
+## Schema 1.1 (P4-4, ADR 0015)
+
+- **Version policy:** the reader accepts `1.0.x` and `1.1.x` (`SUPPORTED_VERSION_PATTERN`
+  `^1\.(0|1)\.\d+$`); a newer minor is still refused.
+- **`provenance.briefingUnavailable`** (optional, `{ reason }`: `analysis-failed`, `timeout`,
+  `too-large`): the AI briefing failed after its repair round and the pipeline wrote a fixed one:
+  a fixed summary and reason, the verdict at Rocky's deterministic floor, the review path in
+  triage order, nothing in `checkedOk`. Pipeline-owned, like `graphUnavailable`.
+- **`provenance.readByHand`** (array, default empty, `{ path }`): risky files (migration or auth
+  path, or triaged critical) that the AI reviewed and drafted no finding for. The UI says "AI
+  found nothing; read by hand". Each entry must be a triaged file of the PR with no finding
+  (`READ_BY_HAND_MISMATCH`), and paths are unique (`DUPLICATE_PATH`).
+- **No links or images in model text:** prose, single-line text and agent prompts may not hold a
+  markdown image, a link to an absolute or protocol-relative URL, an autolink or a link
+  definition (`INVALID_SHAPE`). An image loads on sight, so a steered model could exfiltrate
+  through one; a link can phish. Relative links, bracketed words and call-like code stay; code
+  lines (suggestions) are code and keep everything. This tightens 1.0 text rules; no producer had
+  stored analyses outside tests (decision 1 and 7 below still hold for raw HTML).
+
 ## How this is tested
 
 - 300+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
@@ -301,8 +320,8 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 ## Decisions (gate H2)
 
 The open questions from the first draft, with the decision taken at the H2 gate and why. The
-schema version stays `1.0.0`: no producer has consumed the contract yet, and H2 is the gate
-that fixes it.
+schema version stayed `1.0.0` at H2: no producer had consumed the contract yet, and H2 was the
+gate that fixed it. P4-4 moved it to `1.1.0` (above).
 
 NFD handling (above) was never a question: the facts keep git's spelling, collisions under NFC
 are refused, and model paths must match exactly.

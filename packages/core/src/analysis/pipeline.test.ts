@@ -9,14 +9,21 @@ import {
 } from "./instructions.js";
 import {
   analyzePullRequest,
+  FALLBACK_REASON,
+  FALLBACK_SUMMARY,
   GRAPH_MAX_INPUT_CHARS,
+  RAISED_FOR_FINDINGS,
+  RAISED_FOR_TRIAGE,
+  RAISED_FOR_UNREVIEWED,
   type AnalysisDeps,
   type AnalysisOutcome,
   type AnalysisRequest,
 } from "./pipeline.js";
-import { MAX_REPAIR_ROUNDS } from "./repair.js";
+import { PROMPT_CANARY, PROMPT_CANARY_MARKER, systemPrompt } from "../prompt.js";
+import { completeWithRepair, MAX_REPAIR_ROUNDS } from "./repair.js";
 import { scriptedRoles, type Script, type ScriptedAnswer, type ScriptedCall } from "./testing.js";
 import { PIPELINE_VERSION } from "./units.js";
+import { belowVerdictFloor } from "./verdict.js";
 
 /**
  * P4-3 pipeline: failure modes and threats (ADR 0014, threat model A1–A14). Every model is the
@@ -262,15 +269,17 @@ describe("A2 validate/repair is bounded and fails closed", () => {
     expect(document.provenance.unanalysed.map((f) => f.path)).toEqual(["src/auth/session.ts"]);
   });
 
-  it("a briefing that stays invalid fails the analysis: no document at all", async () => {
+  it("a briefing that stays invalid is replaced by Rocky's fallback (P4-4 round 1)", async () => {
     const bad = script((call) =>
       is("review")(call) && call.part("file_path") === undefined
         ? { value: { ...BRIEFING, reviewPath: [{ path: "src/not-in-pr.ts", why: "x" }] } }
         : undefined,
     );
     const { outcome, calls } = await analyze(bad);
-    expect(outcome).toMatchObject({ status: "failed", code: "briefing_failed" });
-    expect("document" in outcome).toBe(false);
+    const { document } = done(outcome);
+    expect(document.provenance.briefingUnavailable).toEqual({ reason: "analysis-failed" });
+    expect(document.briefing.summary).toBe(FALLBACK_SUMMARY);
+    expect(document.findings).toHaveLength(1);
     expect(
       calls.filter((c) => c.role === "review" && c.part("file_path") === undefined),
     ).toHaveLength(2);
@@ -426,7 +435,7 @@ describe("A5 incremental reuse is keyed and conservative", () => {
   });
 
   it("keys bind the pipeline version", () => {
-    expect(PIPELINE_VERSION).toMatch(/^p4-3\.\d+$/);
+    expect(PIPELINE_VERSION).toMatch(/^p4-4\.\d+$/);
   });
 
   it("a file that could not be analysed is tried again", async () => {
@@ -759,14 +768,16 @@ describe("A20 files with no hunks are not deletion-only (review round 2, SF1)", 
       "src/auth/e.ts",
     ],
   ])(
-    "%s stays triaged, is not reviewed, and does not raise the verdict",
+    "%s stays triaged, is not reviewed, and is not counted as unreviewed",
     async (_name, lines, path) => {
       const { outcome, calls } = await analyze(crit, { diff: lines.join("\n") });
       const { document } = done(outcome);
       expect(document.provenance.unanalysed).toEqual([]);
+      expect(document.provenance.readByHand).toEqual([]);
       expect(document.triage.files.map((f) => f.path)).toEqual([path]);
       expect(calls.filter(is("review", path))).toHaveLength(0);
-      expect(document.briefing.verdict.level).toBe("low");
+      // The unreviewed floor does not apply; the critical triage does (P4-4 round 1, item 2).
+      expect(document.briefing.verdict).toEqual({ level: "high", reason: RAISED_FOR_TRIAGE });
     },
   );
 });
@@ -855,5 +866,324 @@ describe("A5c old-shape units are not reused (review round 2)", () => {
       previous: { document: previous.document, units: old },
     });
     expect(done(outcome).stats).toMatchObject({ analysed: 2, reused: 0 });
+  });
+});
+
+describe("A23 the leak guard keeps instruction text out of the document (P4-4, ADR 0015 §3)", () => {
+  const prompt = (call: ScriptedCall) => systemPrompt(call.instructions);
+
+  it("a finding that copies the system prompt goes back for repair, and a fixed answer is stored", async () => {
+    const leaky = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? {
+            value: {
+              findings: [
+                call.repair ? finding("high", 2) : { ...finding("high", 2), body: prompt(call) },
+              ],
+            },
+          }
+        : undefined,
+    );
+    const { outcome, calls } = await analyze(leaky);
+    const repair = calls.find((c) => c.repair)!;
+    expect(repair.part("validation_issues")).toBe("findings[0].body: instruction_leak");
+    const { document } = done(outcome);
+    expect(document.findings).toHaveLength(1);
+    expect(JSON.stringify(document)).not.toContain(PROMPT_CANARY);
+  });
+
+  it("a review that keeps leaking leaves the file unanalysed and floors the verdict", async () => {
+    const leaky = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? { value: { findings: [{ ...finding("low", 2), agentPrompt: prompt(call) }] } }
+        : undefined,
+    );
+    const { document } = done((await analyze(leaky)).outcome);
+    expect(document.findings).toEqual([]);
+    expect(document.provenance.unanalysed).toEqual([
+      { path: "src/auth/session.ts", reason: "analysis-failed" },
+    ]);
+    expect(document.briefing.verdict).toEqual({ level: "high", reason: RAISED_FOR_UNREVIEWED });
+  });
+
+  it("a triage reason that leaks the canary is refused", async () => {
+    const leaky = script((call) =>
+      is("triage", "src/util/format.ts")(call)
+        ? { value: { ...triage("normal", 30), reason: `Marker ${PROMPT_CANARY_MARKER}.` } }
+        : undefined,
+    );
+    const { document } = done((await analyze(leaky)).outcome);
+    expect(document.provenance.unanalysed.map((f) => f.path)).toEqual(["src/util/format.ts"]);
+  });
+
+  it("a change map that leaks is unavailable; a briefing that leaks is replaced by the fallback", async () => {
+    const graph = script((call) =>
+      call.role === "graph"
+        ? { value: { ...GRAPH, nodes: [{ ...GRAPH.nodes[0], label: prompt(call).slice(0, 80) }] } }
+        : undefined,
+    );
+    const mapped = done((await analyze(graph)).outcome).document;
+    expect(mapped.graph).toBeUndefined();
+    expect(mapped.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+
+    const briefing = script((call) =>
+      is("review")(call) && call.part("file_path") === undefined
+        ? { value: { ...briefingFor(call), summary: prompt(call).slice(0, 1000) } }
+        : undefined,
+    );
+    const { outcome } = await analyze(briefing);
+    const stored = done(outcome).document;
+    expect(stored.provenance.briefingUnavailable).toEqual({ reason: "analysis-failed" });
+    expect(JSON.stringify(stored)).not.toContain(PROMPT_CANARY);
+  });
+
+  it("a PR that quotes Rocky's instructions can be reviewed quoting them back", async () => {
+    const quoted = REVIEW_INSTRUCTIONS.text.split("\n")[2]!;
+    const diff = addedFile("src/prompts/review.ts", [`export const TEXT = "${quoted}";`]);
+    const quoting = script((call) =>
+      call.role === "triage"
+        ? { value: triage("important", 60) }
+        : is("review", "src/prompts/review.ts")(call)
+          ? { value: { findings: [{ ...finding("medium", 1), body: `Changes: ${quoted}` }] } }
+          : undefined,
+    );
+    const { document } = done((await analyze(quoting, { diff })).outcome);
+    expect(document.findings).toHaveLength(1);
+    expect(document.provenance.unanalysed).toEqual([]);
+  });
+});
+
+describe("A24 a repair round's issue list cannot allow what the answer copied (P4-4)", () => {
+  it("instruction text echoed into the issues still leaks in the second answer", async () => {
+    const sentence = TRIAGE_INSTRUCTIONS.text.split("\n")[2]!;
+    let checks = 0;
+    const llm = scriptedRoles((call) => ({ value: { text: sentence, repair: call.repair } }));
+    const result = await completeWithRepair(
+      llm.roles,
+      {
+        role: "triage",
+        instructions: TRIAGE_INSTRUCTIONS,
+        untrusted: [{ label: "diff", text: "+const a = 1;" }],
+        output: {
+          name: "t",
+          jsonSchema: { type: "object" },
+          parse: (value) => ({ success: true, data: value }),
+        },
+        maxOutputTokens: 100,
+        // A check whose first issue line carries the copied text (as a model-chosen key would);
+        // it passes the second answer, so only the leak guard can refuse it.
+        check: () => (checks++ === 0 ? [`${sentence}: custom`] : []),
+      },
+      { onResult: () => undefined },
+      undefined,
+    );
+    expect(result).toEqual({ ok: false, reason: "invalid" });
+    expect(llm.calls).toHaveLength(1 + MAX_REPAIR_ROUNDS);
+    expect(llm.calls[1]!.part("validation_issues")).toContain(sentence);
+    expect(checks).toBe(2);
+  });
+});
+
+describe("A25 the stored document is checked whole for instruction text (P4-4)", () => {
+  it("a reused unit that carries prompt text is analysed again, not failed (round 1, N5)", async () => {
+    const previous = done((await analyze()).outcome);
+    const tampered = structuredClone(previous.document);
+    tampered.triage.files[0]!.reason = `${PROMPT_CANARY_MARKER} leaked`;
+    const { outcome } = await analyze(script(), {
+      previous: { document: tampered, units: previous.units },
+    });
+    const { document, stats } = done(outcome);
+    expect(stats).toMatchObject({ reused: 1, analysed: 1 });
+    expect(JSON.stringify(document)).not.toContain(PROMPT_CANARY);
+  });
+
+  it("a copy spread thinly over several answers is caught by the final check (round 1, item 4)", async () => {
+    // Each triage reason holds a fifth of the review instructions with a filler word every seven
+    // words: no answer alone reaches the guard's thresholds, all of them together do.
+    const words = REVIEW_INSTRUCTIONS.text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    const paths = ["a", "b", "c", "d", "e"].map((name) => `src/util/${name}.ts`);
+    const slice = (index: number) => {
+      const part = words.slice(
+        Math.floor((index * words.length) / paths.length),
+        Math.floor(((index + 1) * words.length) / paths.length),
+      );
+      return Array.from({ length: Math.ceil(part.length / 7) }, (_, i) =>
+        part.slice(i * 7, i * 7 + 7).join(" "),
+      ).join(" plum ");
+    };
+    const spread = script((call) => {
+      const index = paths.indexOf(call.part("file_path") ?? "");
+      return call.role === "triage" && index >= 0
+        ? { value: { ...triage("normal", 30), reason: slice(index) } }
+        : undefined;
+    });
+    const diff = paths.map((path) => addedFile(path, LINES)).join("\n");
+    const { outcome, calls } = await analyze(spread, { diff });
+    expect(calls.filter((c) => c.role === "triage" && c.repair)).toHaveLength(0);
+    expect(outcome).toMatchObject({ status: "failed", code: "document_invalid" });
+  });
+});
+
+const briefingCall = (call: ScriptedCall) =>
+  call.role === "review" && call.part("file_path") === undefined;
+
+describe("A26 a briefing that fails is replaced by Rocky's own (P4-4 review round 1, item 1)", () => {
+  it.each([
+    [
+      "invalid",
+      { value: { ...BRIEFING, reviewPath: [{ path: "nope.ts", why: "x" }] } },
+      "analysis-failed",
+    ],
+    ["refused", { status: "refused" }, "analysis-failed"],
+    ["truncated", { status: "truncated" }, "analysis-failed"],
+    ["timed out", { error: new LlmCallError("timeout") }, "timeout"],
+    ["too large", { error: new LlmCallError("context_too_long") }, "too-large"],
+  ] as const)(
+    "%s: the document is stored with the fallback briefing",
+    async (_name, answer, reason) => {
+      const { outcome } = await analyze(
+        script((call) => (briefingCall(call) ? answer : undefined)),
+      );
+      const { document } = done(outcome);
+      expect(document.provenance.briefingUnavailable).toEqual({ reason });
+      // Floors: a critical triage (high) and a high finding (medium).
+      expect(document.briefing).toEqual({
+        summary: FALLBACK_SUMMARY,
+        verdict: { level: "high", reason: FALLBACK_REASON },
+        estimatedReviewMinutes: 4,
+        reviewPath: [
+          { path: "src/auth/session.ts", why: "Triaged critical (score 90)." },
+          { path: "src/util/format.ts", why: "Triaged normal (score 30)." },
+        ],
+        checkedOk: [],
+        memoryApplied: [],
+      });
+      expect(document.findings).toHaveLength(1);
+    },
+  );
+
+  it("with nothing that raises it, the fallback verdict is low, with Rocky's reason", async () => {
+    const { outcome } = await analyze(
+      script((call) => (briefingCall(call) ? { status: "refused" } : undefined)),
+      { diff: addedFile("src/util/format.ts", LINES) },
+    );
+    expect(done(outcome).document.briefing.verdict).toEqual({
+      level: "low",
+      reason: FALLBACK_REASON,
+    });
+  });
+
+  it("a retryable error in the briefing is still thrown for the queue", async () => {
+    await expect(
+      analyze(
+        script((call) =>
+          briefingCall(call) ? { error: new LlmCallError("overloaded") } : undefined,
+        ),
+      ),
+    ).rejects.toMatchObject({ kind: "overloaded" });
+  });
+});
+
+describe("A27 a file triaged critical floors the verdict at high (P4-4 review round 1, item 2)", () => {
+  const clean = script((call) =>
+    is("review", "src/auth/session.ts")(call) ? { value: { findings: [] } } : undefined,
+  );
+
+  it("a 'low' briefing next to a critical triage with no finding stores high, with Rocky's reason", async () => {
+    const { document } = done((await analyze(clean)).outcome);
+    expect(document.findings).toEqual([]);
+    expect(document.briefing.verdict).toEqual({ level: "high", reason: RAISED_FOR_TRIAGE });
+  });
+
+  it("the findings' reason wins when the findings set the level", async () => {
+    const critical = script((call) =>
+      is("review", "src/auth/session.ts")(call)
+        ? { value: { findings: [finding("critical", 1)] } }
+        : undefined,
+    );
+    const { document } = done((await analyze(critical)).outcome);
+    expect(document.briefing.verdict).toEqual({ level: "critical", reason: RAISED_FOR_FINDINGS });
+  });
+
+  it("important triage does not raise the verdict: 'low' keeps its meaning", async () => {
+    const diff = addedFile("src/billing/charge.ts", LINES);
+    const important = script((call) =>
+      call.role === "triage"
+        ? { value: triage("important", 60) }
+        : is("review", "src/billing/charge.ts")(call)
+          ? { value: { findings: [] } }
+          : undefined,
+    );
+    const { document } = done((await analyze(important, { diff })).outcome);
+    expect(document.briefing.verdict).toEqual(BRIEFING.verdict);
+  });
+
+  it("the stored-document check knows the triage floor", async () => {
+    const { document } = done((await analyze(clean)).outcome);
+    expect(belowVerdictFloor(document)).toBe(false);
+    const lowered = structuredClone(document);
+    lowered.briefing.verdict.level = "medium";
+    expect(belowVerdictFloor(lowered)).toBe(true);
+    lowered.triage.files[0]!.level = "important";
+    lowered.triage.files[0]!.score = 60;
+    expect(belowVerdictFloor(lowered)).toBe(false);
+  });
+});
+
+describe("A28 risky files reviewed with no finding are marked read-by-hand (P4-4 review round 1, item 3)", () => {
+  it("an auth file reviewed clean is listed; a normal file is not", async () => {
+    const clean = script((call) =>
+      is("review", "src/auth/session.ts")(call) ? { value: { findings: [] } } : undefined,
+    );
+    const { document } = done((await analyze(clean)).outcome);
+    expect(document.provenance.readByHand).toEqual([{ path: "src/auth/session.ts" }]);
+  });
+
+  it("a non-rule file triaged critical and reviewed clean is listed; one triaged important is not", async () => {
+    const diff = [
+      addedFile("src/billing/charge.ts", LINES),
+      addedFile("src/billing/fees.ts", LINES),
+    ].join("\n");
+    const s = script((call) =>
+      is("triage", "src/billing/charge.ts")(call)
+        ? { value: triage("critical", 90) }
+        : is("triage", "src/billing/fees.ts")(call)
+          ? { value: triage("important", 60) }
+          : is("review")(call) && call.part("file_path") !== undefined
+            ? { value: { findings: [] } }
+            : undefined,
+    );
+    const { document } = done((await analyze(s, { diff })).outcome);
+    expect(document.provenance.readByHand).toEqual([{ path: "src/billing/charge.ts" }]);
+  });
+
+  it("a file with findings, an unanalysed file, or a risky file never reviewed is not listed", async () => {
+    // Default script: the auth file has a finding.
+    expect(done((await analyze()).outcome).document.provenance.readByHand).toEqual([]);
+    const refused = script((call) =>
+      is("review", "src/auth/session.ts")(call) ? { status: "refused" } : undefined,
+    );
+    expect(done((await analyze(refused)).outcome).document.provenance.readByHand).toEqual([]);
+    const rename = [
+      "diff --git a/src/auth/old.ts b/src/auth/new.ts",
+      "similarity index 100%",
+      "rename from src/auth/old.ts",
+      "rename to src/auth/new.ts",
+    ].join("\n");
+    const { document } = done((await analyze(script(), { diff: rename })).outcome);
+    expect(document.provenance.readByHand).toEqual([]);
+  });
+
+  it("a reused file keeps its mark", async () => {
+    const clean = script((call) =>
+      is("review", "src/auth/session.ts")(call) ? { value: { findings: [] } } : undefined,
+    );
+    const first = done((await analyze(clean)).outcome);
+    const second = done(
+      (await analyze(clean, { previous: { document: first.document, units: first.units } }))
+        .outcome,
+    );
+    expect(second.stats.reused).toBe(2);
+    expect(second.document.provenance.readByHand).toEqual([{ path: "src/auth/session.ts" }]);
   });
 });

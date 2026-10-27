@@ -12,7 +12,8 @@ Decisions behind this page:
 [ADR 0011 repository access check](adr/0011-repository-access-check.md),
 [ADR 0012 LLM roles and provider port](adr/0012-llm-roles-and-provider-port.md),
 [ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md),
-[ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md).
+[ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md),
+[ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md).
 
 ## Runtime
 
@@ -90,7 +91,11 @@ packages/schema (analysis document; shared contract)
     with `ANTHROPIC_CUSTOM_HEADERS` (or, for Vertex, `GOOGLE_SDK_NODE_LOGGING`) set. Every failure
     becomes a body-free `LlmCallError`.
   - **Instructions** are a `RockyInstructions` value from the `rockyInstructions` template tag
-    (literal text only), never a string, so PR content cannot reach the system slot.
+    (literal text only), never a string, so PR content cannot reach the system slot. The system
+    slot is `systemPrompt(instructions)` from core (`prompt.ts`): a fixed preamble carrying a
+    canary, then the instructions (ADR 0015).
+  - **OpenAI-compatible:** chat-template control tokens (`<|im_start|>`, `[INST]`, …) in PR
+    content are broken before sending, since self-hosted servers parse them (ADR 0015 I7).
 
 ## Analysis pipeline
 
@@ -111,6 +116,12 @@ packages/schema (analysis document; shared contract)
 - PR content and model-derived text travel only as `untrusted` parts under fixed labels;
   instructions are `rockyInstructions` literals. The pipeline has no forge handle; output is a
   draft for a human.
+- ADR 0015: every schema-valid answer passes a **leak guard** (the canary, or 8-word runs of
+  prompt text the PR does not contain) before it is accepted; a leaking answer is repaired or
+  fails closed, and the whole document is checked again before it is returned. The injection
+  corpus (`packages/evals/fixtures/injection-corpus.json`) runs against adversarial fakes that
+  obey every payload; the invariants are the verdict floor, containment, fixed reasons, findings
+  inside the diff and no stored prompt text.
 - Incremental: each analysed file has a unit key (sha256 over version, role-config salt, path,
   status and patch) stored in `analyses.file_units` (migration 0010). On a push only files whose
   key changed go to a model again; the rest are reused from the pull request's previous analysis

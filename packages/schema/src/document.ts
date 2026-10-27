@@ -17,16 +17,18 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.0.0" as const;
+export const SCHEMA_VERSION = "1.1.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 const [currentMajor = "1", currentMinor = "0"] = SCHEMA_VERSION.split(".");
 
 /**
- * Which versions this package reads. A newer minor than this package knows is refused: it may
+ * Which versions this package reads: the current major, at this minor or an older one (an older
+ * minor only lacks optional fields). A newer minor than this package knows is refused: it may
  * carry a field this parser would reject as invented.
  */
-export const SUPPORTED_VERSION_PATTERN = `^${currentMajor}\\.(${currentMinor})\\.\\d+$`;
+const minors = Array.from({ length: Number(currentMinor) + 1 }, (_, minor) => String(minor));
+export const SUPPORTED_VERSION_PATTERN = `^${currentMajor}\\.(${minors.join("|")})\\.\\d+$`;
 
 export const isSupportedVersion = (version: string): boolean =>
   new RegExp(SUPPORTED_VERSION_PATTERN).test(version);

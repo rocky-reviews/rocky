@@ -207,6 +207,27 @@ export const GraphUnavailable = z
   .describe("Why the change map is missing. Written by the pipeline, never by a model.");
 export type GraphUnavailable = z.infer<typeof GraphUnavailable>;
 
+/**
+ * Schema 1.1 (P4-4, ADR 0015): the AI briefing could not be produced (the review role's answer
+ * failed validation after the repair round, or did not come in time), so the pipeline wrote a
+ * fixed one: a fixed summary and reason, the verdict at Rocky's deterministic floor, the review
+ * path in triage order. Only a fixed reason; the UI shows fixed text for it.
+ */
+export const BriefingUnavailable = z
+  .strictObject({ reason: GraphUnavailableReason })
+  .describe("Why Rocky wrote the briefing itself. Written by the pipeline, never by a model.");
+export type BriefingUnavailable = z.infer<typeof BriefingUnavailable>;
+
+/**
+ * Schema 1.1 (P4-4, ADR 0015 R1): a file that carries risk (a migration or auth path, or triaged
+ * critical) that the AI reviewed and found nothing in. A model steered by the file's own content
+ * can say "nothing here", so the UI tells the reviewer to read it by hand. Pipeline-owned.
+ */
+export const ReadByHandFile = z
+  .strictObject({ path: RepositoryPath.describe("Must be a triaged file with no finding.") })
+  .describe("A risky file the AI reviewed and drafted nothing for: read it by hand.");
+export type ReadByHandFile = z.infer<typeof ReadByHandFile>;
+
 export const Provenance = z
   .strictObject({
     repo: z.strictObject({ owner: RepoOwner, name: RepoName }),
@@ -225,6 +246,16 @@ export const Provenance = z
     graphUnavailable: GraphUnavailable.optional().describe(
       "Present only when the pipeline could not produce the change map; the document then has no graph.",
     ),
+    briefingUnavailable: BriefingUnavailable.optional().describe(
+      "Present only when the pipeline wrote the briefing itself (schema 1.1).",
+    ),
+    readByHand: z
+      .array(ReadByHandFile)
+      .max(MAX_FILES)
+      .default([])
+      .describe(
+        "Risky files reviewed with no finding: the reviewer reads them by hand (schema 1.1).",
+      ),
     generatedAt: z.iso.datetime().describe("When the pipeline produced the document (UTC)."),
     generator: Generator,
   })

@@ -231,7 +231,7 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
   };
 
   return {
-    schemaVersion: "1.0.0",
+    schemaVersion: "1.1.0",
     provenance: {
       repo: { owner: "acme", name: "rocky-app" },
       pullRequest: { number: 1200 },
@@ -243,6 +243,7 @@ export const buildLargeFixture = (): AnalysisDocumentInput => {
         reason: "too-large" as const,
         detail: "Minified bundle over the per-file token budget.",
       })),
+      readByHand: [],
       generatedAt: "2026-10-25T12:00:00.000Z",
       generator: { name: "rocky", version: "0.0.0", roles: [{ role: "review", model: "fixture" }] },
     },

