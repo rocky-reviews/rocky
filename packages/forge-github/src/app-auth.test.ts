@@ -6,7 +6,7 @@ import {
   githubAppJwt,
   parseGitHubAppAuth,
 } from "./app-auth.js";
-import { testAppKeys } from "./testing.js";
+import { rsaPrivateKeyPem, testAppKeys } from "./testing.js";
 
 /** P3-3: app credentials are validated at boot and the app JWT is built with node:crypto only. */
 
@@ -35,9 +35,7 @@ describe("parseGitHubAppAuth", () => {
   });
 
   it("refuses keys that are not an unencrypted RSA key of at least 2048 bits, naming no value", () => {
-    const small = generateKeyPairSync("rsa", { modulusLength: 1024 })
-      .privateKey.export({ type: "pkcs1", format: "pem" })
-      .toString();
+    const small = rsaPrivateKeyPem(1024);
     const ec = generateKeyPairSync("ec", { namedCurve: "P-256" })
       .privateKey.export({ type: "pkcs8", format: "pem" })
       .toString();

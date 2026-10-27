@@ -132,6 +132,15 @@ export const testAppKeys = (): { privateKeyPem: string; publicKey: KeyObject } =
   };
 };
 
+/**
+ * A throwaway RSA private key (PKCS#1 PEM) of the given size, for tests that prove a key below
+ * 2048 bits is refused. Never used to sign anything.
+ */
+export const rsaPrivateKeyPem = (bits: number): string =>
+  generateKeyPairSync("rsa", { modulusLength: bits })
+    .privateKey.export({ type: "pkcs1", format: "pem" })
+    .toString();
+
 export interface FakeAccount {
   readonly id: number;
   readonly login: string;

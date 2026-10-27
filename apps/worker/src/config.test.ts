@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { testAppKeys } from "@rocky-reviews/forge-github/testing";
+import { rsaPrivateKeyPem, testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
@@ -55,9 +54,7 @@ describe("githubAppFromEnv", () => {
   });
 
   it("refuses half a configuration and bad values everywhere, never echoing the key", () => {
-    const small = generateKeyPairSync("rsa", { modulusLength: 1024 })
-      .privateKey.export({ type: "pkcs1", format: "pem" })
-      .toString();
+    const small = rsaPrivateKeyPem(1024);
     for (const env of [
       { GITHUB_APP_ID: "42" },
       { GITHUB_APP_PRIVATE_KEY: keys.privateKeyPem },
