@@ -5,6 +5,16 @@ export {
   type RepositoryAccessContext,
   type RepositoryAccessTarget,
 } from "./access.js";
+export {
+  AnalysisStoreError,
+  completeAnalysis,
+  enqueueAnalysis,
+  failAnalysis,
+  loadPreviousAnalysis,
+  requeueAnalysis,
+  startAnalysis,
+  type AnalysisTarget,
+} from "./analyses.js";
 export { audit, AUDIT_METADATA_MAX_BYTES, type AuditActor, type AuditTarget } from "./audit.js";
 export {
   createDb,

@@ -67,6 +67,15 @@ describe("core forge neutrality (P3-7)", () => {
 
   it("finds the production sources", () => {
     expect(sources.map((s) => s.file)).toContain("forge.ts");
+    expect(sources.map((s) => s.file)).toContain("analysis/pipeline.ts");
+  });
+
+  it("a relative import that leaves core's src is refused (the check itself)", () => {
+    const escapes = (file: string, specifier: string) =>
+      new URL(specifier, new URL(file, SRC)).href.startsWith(SRC.href);
+    expect(escapes("analysis/pipeline.ts", "../llm.js")).toBe(true);
+    expect(escapes("analysis/pipeline.ts", "../../../llm/src/index.js")).toBe(false);
+    expect(escapes("forge.ts", "../package.json")).toBe(false);
   });
 
   it("imports nothing from Octokit, a forge adapter or any other package", () => {
@@ -74,11 +83,13 @@ describe("core forge neutrality (P3-7)", () => {
       for (const match of text.matchAll(SPECIFIER)) {
         const specifier = match[1]!;
         expect(specifier, `${file}: ${specifier}`).not.toMatch(/octokit|github|gitlab|gitea/i);
-        // Only core's own files (and zod / the shared schema, per the ESLint allowlist).
+        // Only core's own files (and zod / the shared schema, per the ESLint allowlist). A
+        // relative specifier must resolve inside core's src (subdirectories since P4-3).
+        const own =
+          (specifier.startsWith("./") || specifier.startsWith("../")) &&
+          new URL(specifier, new URL(file, SRC)).href.startsWith(SRC.href);
         expect(
-          specifier.startsWith("./") ||
-            specifier === "zod" ||
-            specifier === "@rocky-reviews/schema",
+          own || specifier === "zod" || specifier === "@rocky-reviews/schema",
           `${file}: ${specifier}`,
         ).toBe(true);
       }

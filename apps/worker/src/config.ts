@@ -4,6 +4,7 @@ import {
   parseGitHubAppAuth,
   type GitHubAppAuth,
 } from "@rocky-reviews/forge-github";
+import { LlmConfigError, llmConfigFromEnv, type LlmConfig } from "@rocky-reviews/llm";
 
 /**
  * Worker configuration (P3-3, ADR 0009). Validated before anything is opened; messages name the
@@ -39,6 +40,11 @@ export interface WorkerConfig {
    * inbox (they wait, they are not lost) instead of acting on them unverified.
    */
   readonly githubApp: GitHubAppConfig | undefined;
+  /**
+   * LLM roles (P4-1, ADR 0012), validated at boot (P4-3): a bad `ROCKY_LLM_*` stops the worker
+   * before it claims work. Holds variable names, never keys.
+   */
+  readonly llm: LlmConfig;
 }
 
 export const githubAppFromEnv = (env: Env): GitHubAppConfig | undefined => {
@@ -83,7 +89,15 @@ export const workerConfigFromEnv = (env: Env): WorkerConfig => {
       "WORKER_DATABASE_URL is required: the worker's own login, a member of rocky_app and rocky_worker (see .env.example; `pnpm seed` creates the dev role)",
     );
   }
-  return { databaseUrl, githubApp: githubAppFromEnv(env) };
+  let llm: LlmConfig;
+  try {
+    llm = llmConfigFromEnv(env);
+  } catch (error) {
+    // The messages name variables and problems, never values (ADR 0012 §3).
+    if (error instanceof LlmConfigError) throw new ConfigError(error.message);
+    throw new ConfigError("ROCKY_LLM_*: invalid LLM configuration");
+  }
+  return { databaseUrl, githubApp: githubAppFromEnv(env), llm };
 };
 
 /**

@@ -242,6 +242,7 @@ export const LLM_FATAL_ERROR_KINDS = [
 ] as const;
 export const LLM_ERROR_KINDS = [...LLM_RETRYABLE_ERROR_KINDS, ...LLM_FATAL_ERROR_KINDS] as const;
 export type LlmErrorKind = (typeof LLM_ERROR_KINDS)[number];
+export type LlmFatalErrorKind = (typeof LLM_FATAL_ERROR_KINDS)[number];
 
 const ERROR_MESSAGES: Readonly<Record<LlmErrorKind, string>> = {
   rate_limited: "the provider rate-limited the request",
