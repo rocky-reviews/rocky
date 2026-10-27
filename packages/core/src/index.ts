@@ -100,6 +100,7 @@ export {
   type LlmRole,
   type LlmRoles,
   type LlmUntrustedText,
+  type LlmAttemptUsage,
   type LlmUsage,
   type ProviderCompletionCall,
   type ProviderEmbeddingCall,

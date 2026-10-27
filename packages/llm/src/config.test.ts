@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { LlmConfigError, parseLlmConfig } from "./config.js";
-import { CLAUDE_MODELS, PROVIDER_CAPABILITIES, PROVIDER_KINDS } from "./providers.js";
+import {
+  BEDROCK_MODELS,
+  CLAUDE_MODELS,
+  PROVIDER_CAPABILITIES,
+  PROVIDER_KINDS,
+} from "./providers.js";
 
 /** P4-1: the role config as one validated object, whatever source it came from. */
 
@@ -125,9 +130,21 @@ describe("provider capabilities", () => {
   });
 
   it("offers the Claude catalogue on the four Claude platforms and any model on OpenAI-compatible", () => {
-    for (const kind of ["anthropic", "bedrock", "vertex", "foundry"] as const) {
+    for (const kind of ["anthropic", "vertex", "foundry"] as const) {
       expect(PROVIDER_CAPABILITIES[kind].models).toBe(CLAUDE_MODELS);
+    }
+    for (const kind of ["anthropic", "bedrock", "vertex", "foundry"] as const) {
       expect(PROVIDER_CAPABILITIES[kind].embeddings).toBe(false);
+    }
+    // Bedrock (P4-2): the catalogue less the models only the legacy InvokeModel API serves.
+    expect(PROVIDER_CAPABILITIES.bedrock.models).toBe(BEDROCK_MODELS);
+    expect([...CLAUDE_MODELS.keys()].filter((model) => !BEDROCK_MODELS.has(model))).toEqual([
+      "claude-opus-4-6",
+      "claude-opus-4-5",
+      "claude-sonnet-4-6",
+    ]);
+    for (const [model, capabilities] of BEDROCK_MODELS) {
+      expect(capabilities).toBe(CLAUDE_MODELS.get(model));
     }
     expect(PROVIDER_CAPABILITIES["openai-compatible"].models).toBeUndefined();
     expect(PROVIDER_CAPABILITIES["openai-compatible"].embeddings).toBe(true);

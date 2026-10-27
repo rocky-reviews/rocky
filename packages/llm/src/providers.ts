@@ -46,6 +46,17 @@ export const CLAUDE_MODELS: ReadonlyMap<string, ModelCapabilities> = new Map([
   ["claude-haiku-4-5", { efforts: [] }],
 ]);
 
+/**
+ * Claude on Amazon Bedrock serves the Messages API (Mantle, the adapter's client) for Opus 4.7 and
+ * later and Haiku 4.5. Opus 4.6, Opus 4.5 and Sonnet 4.6 exist only on the legacy InvokeModel
+ * integration, so config refuses them on Bedrock (P4-2, ADR 0013 §1; source: Claude in Amazon
+ * Bedrock, supported models, read 2026-10-27).
+ */
+const BEDROCK_LEGACY_ONLY = new Set(["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6"]);
+export const BEDROCK_MODELS: ReadonlyMap<string, ModelCapabilities> = new Map(
+  [...CLAUDE_MODELS].filter(([model]) => !BEDROCK_LEGACY_ONLY.has(model)),
+);
+
 export interface ProviderCapabilities {
   readonly completions: boolean;
   readonly embeddings: boolean;
@@ -65,7 +76,7 @@ const claudePlatform: ProviderCapabilities = {
 
 export const PROVIDER_CAPABILITIES: Readonly<Record<ProviderKind, ProviderCapabilities>> = {
   anthropic: claudePlatform,
-  bedrock: claudePlatform,
+  bedrock: { ...claudePlatform, models: BEDROCK_MODELS },
   vertex: claudePlatform,
   foundry: claudePlatform,
   // OpenAI-compatible servers (Ollama, vLLM) take `reasoning_effort` on the levels that scale has.

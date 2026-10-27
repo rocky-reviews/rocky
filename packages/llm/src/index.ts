@@ -22,6 +22,7 @@ export {
 } from "./config.js";
 export { DEFAULT_PROVIDER, DEFAULT_ROLE_TARGETS, llmConfigFromEnv } from "./env.js";
 export {
+  BEDROCK_MODELS,
   CLAUDE_MODELS,
   effortsFor,
   isProviderKind,
@@ -38,3 +39,8 @@ export {
   type ProviderAdapters,
   type SecretSource,
 } from "./registry.js";
+export {
+  providerAdapters,
+  type AdapterTransport,
+  type VertexAuthSource,
+} from "./adapters/index.js";

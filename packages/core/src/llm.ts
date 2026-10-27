@@ -67,30 +67,37 @@ export interface StructuredCompletionRequest<T> {
   readonly signal?: AbortSignal;
 }
 
+/** One billed attempt of a call that the provider ran on more than one model (P4-2, ADR 0013). */
+export interface LlmAttemptUsage {
+  readonly model: string;
+  readonly usage: LlmUsage;
+}
+
+interface ProviderResultBase {
+  /** The model that produced the answer (a refusal fallback may have switched it). */
+  readonly model: string;
+  /** Usage of the attempt that produced the answer. */
+  readonly usage: LlmUsage;
+  /**
+   * Every billed attempt, in order, when a server-side refusal fallback re-ran the call on another
+   * model; absent otherwise. Metering (P4-5) sums these instead of `usage` when present.
+   */
+  readonly attempts?: readonly LlmAttemptUsage[];
+}
+
 /**
  * What an adapter returns. No side effects either way: a result is data for a human to accept or
  * dismiss. `truncated`: generation stopped at the output cap or the context window mid-answer.
  * An input that cannot fit at all is thrown as `LlmCallError("context_too_long")` instead.
  */
 export type ProviderCompletionResult<T> =
-  | {
-      readonly status: "ok";
-      readonly value: T;
-      readonly model: string;
-      readonly usage: LlmUsage;
-    }
-  | {
-      readonly status: "refused" | "truncated";
-      readonly model: string;
-      readonly usage: LlmUsage;
-    }
-  | {
+  | (ProviderResultBase & { readonly status: "ok"; readonly value: T })
+  | (ProviderResultBase & { readonly status: "refused" | "truncated" })
+  | (ProviderResultBase & {
       readonly status: "invalid_output";
-      readonly model: string;
-      readonly usage: LlmUsage;
       /** Schema paths and issue codes only (see `LlmParseResult`). */
       readonly issues?: readonly string[];
-    };
+    });
 
 /** What a role returns: the adapter's result, stamped by the registry with the provider kind. */
 export type StructuredCompletionResult<T> = ProviderCompletionResult<T> & {
