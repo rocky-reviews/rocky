@@ -31,6 +31,12 @@ const ALLOWED_NON_TENANT_TABLES = [
   "app.webhook_deliveries",
   // The claim queue (review round 3): one row per installation lane with pending work; ids only.
   "app.webhook_queue",
+  // Login and sessions (P7-1, ADR 0020): user-level, not tenant-level; ids, hashes and times.
+  // sessions.test.ts covers them; the matrix below pins what the app role may do with them.
+  "app.login_attempts",
+  "app.session_orgs",
+  "app.sessions",
+  "app.users",
 ];
 
 /**
@@ -38,6 +44,8 @@ const ALLOWED_NON_TENANT_TABLES = [
  * purges. Erasure moved to the worker in P3-3 (ADR 0009).
  */
 const ALLOWED_SECURITY_DEFINER = [
+  // Login (P7-1, ADR 0020): live org ids for the installations GitHub lists for the user.
+  "auth.login_orgs",
   "retention.purge_analyses",
   "retention.purge_audit_events",
   "retention.purge_jobs",
@@ -72,6 +80,12 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "app.webhook_deliveries": ["INSERT"],
   // The claim queue is the worker functions' alone (its triggers run as rocky_lifecycle).
   "app.webhook_queue": [],
+  // P7-1: consuming an attempt is DELETE … RETURNING (hence SELECT); never UPDATE.
+  "app.login_attempts": ["DELETE", "INSERT", "SELECT"],
+  "app.session_orgs": ["INSERT", "SELECT"],
+  // Plus column-level UPDATE (SESSIONS_COLUMN_PRIVILEGES); DELETE only of ended rows (policy).
+  "app.sessions": ["DELETE", "INSERT", "SELECT"],
+  "app.users": ["INSERT", "SELECT"],
   "public.analyses": DML,
   "public.audit_events": ["INSERT", "SELECT"],
   "public.audit_events_id_seq": [],
@@ -105,6 +119,13 @@ const ORGS_COLUMN_PRIVILEGES = [
   "rocky_app:UPDATE:llm_api_key_version",
   "rocky_app:UPDATE:settings",
   "rocky_app:UPDATE:updated_at",
+  // P7-1: the login lookup's owner reads ids and the lifecycle state, never keys or settings.
+  "rocky_auth:SELECT:account_id",
+  "rocky_auth:SELECT:delete_after",
+  "rocky_auth:SELECT:erasing_at",
+  "rocky_auth:SELECT:forge",
+  "rocky_auth:SELECT:id",
+  "rocky_auth:SELECT:installation_id",
   "rocky_worker:UPDATE:delete_after",
   "rocky_worker:UPDATE:erasing_at",
   "rocky_worker:UPDATE:installation_id",
@@ -113,6 +134,19 @@ const ORGS_COLUMN_PRIVILEGES = [
   "rocky_worker:UPDATE:login",
   "rocky_worker:UPDATE:updated_at",
 ];
+
+/**
+ * P7-1 (ADR 0020): the app role may move a session's idle window, active org and revocation, and
+ * a user's last login; never a session's token hash, user, creation, idle timeout or absolute
+ * expiry (so it cannot extend or move a session).
+ */
+const SESSIONS_COLUMN_PRIVILEGES = [
+  "rocky_app:UPDATE:active_org_id",
+  "rocky_app:UPDATE:last_seen_at",
+  "rocky_app:UPDATE:revoked_at",
+  "rocky_app:UPDATE:revoked_reason",
+];
+const USERS_COLUMN_PRIVILEGES = ["rocky_app:UPDATE:last_login_at"];
 
 /**
  * The analysis claim (P4-6, migration 0012) reads and updates exactly the queue columns of
@@ -152,6 +186,8 @@ const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
     "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
     "public.orgs": ["SELECT"],
   },
+  // P7-1: column-level SELECT on orgs only (ORGS_COLUMN_PRIVILEGES), no table privilege.
+  rocky_auth: {},
 };
 
 /**
@@ -684,7 +720,12 @@ describe("other catalog objects (review #8)", () => {
         order by 1`,
     );
     for (const f of owners.rows) {
-      expect(f.owner, f.name).toBe(f.name.startsWith("worker.") ? LIFECYCLE_ROLE : RETENTION_ROLE);
+      const owner = f.name.startsWith("worker.")
+        ? LIFECYCLE_ROLE
+        : f.name.startsWith("auth.")
+          ? "rocky_auth"
+          : RETENTION_ROLE;
+      expect(f.owner, f.name).toBe(owner);
       expect(f.config, f.name).toContain("search_path=pg_catalog");
     }
   });
@@ -776,7 +817,7 @@ describe("other catalog objects (review #8)", () => {
       expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
       // The matrix above is the whole story: no column-level grants widen or narrow it, except
       // the orgs and analyses UPDATE columns pinned exactly below.
-      if (r.name !== "public.orgs" && r.name !== "public.analyses") {
+      if (!["public.orgs", "public.analyses", "app.sessions", "app.users"].includes(r.name)) {
         expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
       }
     }
@@ -792,6 +833,8 @@ describe("other catalog objects (review #8)", () => {
       ).rows.map((r) => r.g);
     expect(await columnGrants("public.orgs")).toEqual(ORGS_COLUMN_PRIVILEGES);
     expect(await columnGrants("public.analyses")).toEqual(ANALYSES_COLUMN_PRIVILEGES);
+    expect(await columnGrants("app.sessions")).toEqual(SESSIONS_COLUMN_PRIVILEGES);
+    expect(await columnGrants("app.users")).toEqual(USERS_COLUMN_PRIVILEGES);
   });
 
   it("lets the app role read but not change the retention settings", async () => {

@@ -26,6 +26,15 @@ export const createFixtureDiffSource = (): DiffDataSource => ({
   },
 });
 
-/** Which fixture PR the page shows: pr-847, or the large diff with `?fixture=large-diff`. */
-export const fixturePullFromSearch = (search: string): PullRef =>
-  new URLSearchParams(search).get("fixture") === "large-diff" ? LARGE_PULL : DEFAULT_PULL;
+/**
+ * Which fixture PR the page shows: the large diff with `?fixture=large-diff`, a briefing fixture
+ * PR with `?pr=<number>` (P6-2), otherwise pr-847.
+ */
+export const fixturePullFromSearch = (search: string): PullRef => {
+  const params = new URLSearchParams(search);
+  if (params.get("fixture") === "large-diff") return LARGE_PULL;
+  const requested = Number(params.get("pr"));
+  return Number.isSafeInteger(requested) && requested > 0
+    ? { ...DEFAULT_PULL, number: requested }
+    : DEFAULT_PULL;
+};

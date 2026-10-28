@@ -198,12 +198,15 @@ interface Started {
 
 /**
  * A read-only forge whose diff reads wait until the test releases them, so the test decides when
- * each analysis "finishes". It records which org's analysis started in which step.
+ * each analysis "finishes". It records which org's analysis started in which step. Runs finish in
+ * the order they started (openRepository order), not the order their diff reads happened to queue
+ * up, so a step's staggered finishes never depend on how the concurrent runs interleaved.
  */
 const steppedForge = (clock: { now(): Date }, diffFor: () => string) => {
   const calls: string[] = [];
   const started: Started[] = [];
-  let waiting: (() => void)[] = [];
+  // One gate per run, in start order; `reached` once its diff read is waiting on it.
+  let gates: { reached: boolean; open: () => void; opened: Promise<void> }[] = [];
   const forge = {
     kind: "github",
     openRepository: (ref: { installationId: number; repositoryId: number }) => {
@@ -212,10 +215,15 @@ const steppedForge = (clock: { now(): Date }, diffFor: () => string) => {
         org: orgByInstallation.get(ref.installationId)!,
         step: Math.round((clock.now().getTime() - BASE) / STEP_MS),
       });
+      let open = () => {};
+      const opened = new Promise<void>((resolve) => (open = resolve));
+      const gate = { reached: false, open, opened };
+      gates.push(gate);
       const session: Partial<RepositorySession> = {
         getDiff: async () => {
           calls.push("getDiff");
-          await new Promise<void>((resolve) => waiting.push(resolve));
+          gate.reached = true;
+          await gate.opened;
           return diffOf(diffFor());
         },
         close: () => {
@@ -230,12 +238,12 @@ const steppedForge = (clock: { now(): Date }, diffFor: () => string) => {
     forge,
     calls,
     started,
-    pending: () => waiting.length,
-    /** Lets the oldest `n` reads (default: all) finish. */
+    pending: () => gates.filter((g) => g.reached).length,
+    /** Lets the `n` earliest-started waiting reads (default: all) finish. */
     release: (n = Number.POSITIVE_INFINITY) => {
-      const now = waiting.slice(0, n);
-      waiting = waiting.slice(now.length);
-      for (const resolve of now) resolve();
+      const now = gates.filter((g) => g.reached).slice(0, n);
+      gates = gates.filter((g) => !now.includes(g));
+      for (const gate of now) gate.open();
     },
   };
 };

@@ -222,22 +222,33 @@ export const loadOrgLlmApiKey = (tx: TenantTx): Promise<StoredSecret | null> =>
   });
 
 /**
- * Stores a member's encrypted forge token (`rk1:…`, record id = member id). A member of another
- * org does not exist for this transaction (RLS), so the update matches no row and this throws.
+ * Stores a member's encrypted forge token (`rk1:…`, record id = member id) and, for an expiring
+ * token, when it expires (P7-1; `null` when it does not expire or the expiry is unknown). A
+ * member of another org does not exist for this transaction (RLS), so the update matches no row
+ * and this throws.
  */
 export const storeForgeToken = async (
   tx: TenantTx,
   memberId: string,
   ciphertext: string,
   keyVersion: number,
+  options: { readonly expiresAt?: Date | null } = {},
 ): Promise<void> => {
   assertMemberId(memberId);
   assertKeyVersion(keyVersion);
   assertCiphertext(ciphertext, keyVersion);
+  const expiresAt = options.expiresAt ?? null;
+  if (expiresAt !== null && !(expiresAt instanceof Date && Number.isFinite(expiresAt.getTime()))) {
+    throw new SecretStoreError("secrets: token expiry must be a date");
+  }
   await guarded(async () => {
     const updated = await tx.db
       .update(members)
-      .set({ forgeTokenCiphertext: toBytes(ciphertext), forgeTokenKeyVersion: keyVersion })
+      .set({
+        forgeTokenCiphertext: toBytes(ciphertext),
+        forgeTokenKeyVersion: keyVersion,
+        forgeAccessExpiresAt: expiresAt,
+      })
       .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId)))
       .returning({ id: members.id });
     if (updated.length !== 1) throw new SecretStoreError("secrets: no such member in this org");
@@ -255,5 +266,21 @@ export const loadForgeToken = (tx: TenantTx, memberId: string): Promise<StoredSe
       .from(members)
       .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId)));
     return row === undefined ? null : fromRow(row.ciphertext, row.keyVersion);
+  });
+};
+
+/**
+ * Deletes a member's stored forge token and its expiry (logout, ADR 0011 §6). Idempotent: a
+ * member without a token stays without one. Throws when there is no such member in this org.
+ */
+export const clearForgeToken = async (tx: TenantTx, memberId: string): Promise<void> => {
+  assertMemberId(memberId);
+  await guarded(async () => {
+    const updated = await tx.db
+      .update(members)
+      .set({ forgeTokenCiphertext: null, forgeTokenKeyVersion: null, forgeAccessExpiresAt: null })
+      .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId)))
+      .returning({ id: members.id });
+    if (updated.length !== 1) throw new SecretStoreError("secrets: no such member in this org");
   });
 };

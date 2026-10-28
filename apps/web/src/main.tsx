@@ -1,6 +1,7 @@
 import "./styles/tokens.css";
 import "./styles/shell.css";
 import "./styles/diff.css";
+import "./briefing/briefing.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -8,9 +9,10 @@ import { createFixtureDiffSource, fixturePullFromSearch } from "./data/diff-fixt
 import { createFixtureSource } from "./data/fixture-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
 
-// Until the server serves the shell's data (P7-1, P6-2), the pr-847 fixture stands in.
+// Until the server serves the shell's data, the fixtures stand in.
 const source = createFixtureSource();
-// P6-3: the diff has its own port; `?fixture=large-diff` opens the 5,000-line fixture.
+// P6-3: the diff has its own port; `?fixture=large-diff` opens the 5,000-line fixture, and
+// `?pr=<number>` the briefing's other fixture states (P6-2).
 const diffSource = createFixtureDiffSource();
 const pull = fixturePullFromSearch(window.location.search);
 

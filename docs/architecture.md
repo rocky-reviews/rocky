@@ -14,7 +14,8 @@ Decisions behind this page:
 [ADR 0013 LLM provider adapters](adr/0013-llm-provider-adapters.md),
 [ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md),
 [ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md),
-[ADR 0019 web app stack and PR page shell](adr/0019-web-app-shell.md).
+[ADR 0019 web app stack and PR page shell](adr/0019-web-app-shell.md),
+[ADR 0020 GitHub login and sessions](adr/0020-github-login-and-sessions.md).
 
 ## Runtime
 
@@ -47,7 +48,7 @@ packages/schema (analysis document; shared contract)
 
 | Path                         | Role                                                                                                                                                                                                                              |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, serves the web build                                                                                                                                                                   |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), serves the web build                                                                                                                                        |
 | `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later posting, indexing                     |
 | `apps/web`                   | React SPA on Vite (ADR 0019): PR review page shell (P6-1), later briefing, diff, inbox, settings, project memory                                                                                                                  |
 | `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)         |
@@ -203,9 +204,24 @@ packages/schema (analysis document; shared contract)
   route that touches a repository's data, after resolving the repository with
   `resolveRepositoryForAccess` and before loading anything else; every deny answers 404
   (ADR 0011 §6).
+- Login and sessions (ADR 0020, P7-1): GitHub App user authorization with PKCE S256 and a
+  single-use state bound to the browser (`__Host-rocky_login`, HMAC); the server exchanges the
+  code, identifies the person by `GET /user`'s numeric id and maps `GET /user/installations` to
+  live orgs through `auth.login_orgs` (SECURITY DEFINER, owner `rocky_auth`, ids only). Sessions
+  are user-level rows in `app` (`users`, `sessions`, `session_orgs`, `login_attempts`): only
+  sha256 of the cookie token and of the state is stored; idle 8 h, absolute ≤ 24 h and never
+  past the GitHub token, enforced at lookup; the app role cannot extend, move or revive a session.
+  `session_orgs` cascades from `members`, so a member removed in Rocky loses that org at once. The
+  user token is stored per org, envelope-encrypted (no refresh token). Cookies `__Host-`, Secure,
+  HttpOnly, SameSite=Lax, Path=/ (dev-only http-on-loopback exception). A global `onRequest` CSRF
+  guard covers every non-GET route (Sec-Fetch-Site, exact Origin or Referer, a session-bound
+  synchronizer token from `GET /api/session`); only the HMAC-signed webhook receiver is exempt.
+  `returnTo` must be a same-origin relative path. Routes reach org data through
+  `sessionAuth.activeMember`, which re-reads the member inside `withOrg`.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
-  only, one-time token printed to the terminal); four permissions (`contents:read`,
-  `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event
+  only, one-time token printed to the terminal); five permissions (`contents:read`,
+  `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
+  ADR 0020) and one subscribed event
   (`pull_request`), pinned by a test. The conversion's credentials are written once to a
   `0600` file for the operator's secret manager; they are never logged or stored in the database.
 - `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and

@@ -1,3 +1,4 @@
+import { CSRF_EXEMPT_HMAC } from "./auth/csrf.js";
 import type {
   WebhookInbox,
   WebhookIngress,
@@ -218,7 +219,8 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
 
     scope.post(
       `/webhooks/${forge}`,
-      { bodyLimit: WEBHOOK_BODY_LIMIT_BYTES },
+      // Authenticated by the body's HMAC signature, never by a cookie (ADR 0020 §5).
+      { bodyLimit: WEBHOOK_BODY_LIMIT_BYTES, config: { csrfExempt: CSRF_EXEMPT_HMAC } },
       async (request, reply) => {
         const input = webhookRequest(request);
         const bytes = input.body.byteLength;
