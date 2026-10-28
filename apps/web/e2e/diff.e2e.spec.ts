@@ -151,6 +151,44 @@ test.describe("keyboard", () => {
   });
 });
 
+test.describe("composer while scrolling", () => {
+  test("a draft and its focus survive scrolling the composer out of the window", async ({
+    page,
+  }) => {
+    await page.goto("/?fixture=large-diff");
+    await page.locator(`#sidebar button.nav-file[title="${LARGE}"]`).click();
+    await page.locator(".diff .ln").first().waitFor();
+    // Record whether focus ever falls back to <body> (checked after the focus change settles).
+    await page.evaluate(() => {
+      const w = window as unknown as { lost: string[] };
+      w.lost = [];
+      document.addEventListener("focusout", (e) =>
+        setTimeout(() => {
+          if (document.activeElement === document.body)
+            w.lost.push((e.target as HTMLElement).outerHTML.slice(0, 120));
+        }),
+      );
+    });
+    await page.getByRole("button", { name: "Comment on line 10", exact: true }).click();
+    const box = page.getByRole("textbox", { name: "Your comment on line 10" });
+    await box.pressSequentially("Keep this draft");
+    // Scroll about 3,000 px away (well past the rendered window) and back.
+    for (const top of [1000, 2000, 3200]) {
+      await page.locator("#main").evaluate((main, y) => main.scrollTo({ top: y }), top);
+      await page.waitForTimeout(100);
+    }
+    const lowest = await page
+      .locator(".diff button.no")
+      .evaluateAll((els) => els.map((el) => Number(el.textContent)).filter((n) => n > 20));
+    expect(lowest.length, "the window moved far from line 10").toBeGreaterThan(20);
+    await expect(box).toBeFocused();
+    await page.locator("#main").evaluate((main) => main.scrollTo({ top: 0 }));
+    await expect(box).toHaveValue("Keep this draft");
+    await expect(box).toBeFocused();
+    expect(await page.evaluate(() => (window as unknown as { lost: string[] }).lost)).toEqual([]);
+  });
+});
+
 test.describe("diff content", () => {
   test("hot lines and AI flags sit on their lines", async ({ page }) => {
     await openShell(page);
@@ -202,7 +240,10 @@ test.describe("virtualisation", () => {
     const lowest = () =>
       page
         .locator(".diff button.no")
-        .evaluateAll((els) => Math.min(...els.map((el) => Number(el.textContent))));
+        // Line 1 is the active (pinned) line and stays rendered; the rest follow the viewport.
+        .evaluateAll((els) =>
+          Math.min(...els.map((el) => Number(el.textContent)).filter((n) => n !== 1)),
+        );
     await expect.poll(lowest).toBeGreaterThan(1500);
     expect(await rows()).toBeGreaterThan(20);
     expect(await rows()).toBeLessThan(200);

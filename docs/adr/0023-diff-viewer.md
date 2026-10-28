@@ -25,7 +25,11 @@ shell's data port (ADR 0019 §3) carries the PR summary and the analysis, not th
    update and lookup); `use-virtual-list.ts` renders the rows near the viewport between two
    spacers, measures rendered rows with a `ResizeObserver` (heights are kept by row key, so
    inserting a comment block keeps the rest), and leaves scroll position steady to the
-   browser's scroll anchoring. Rows wrap (as in the POC), so heights vary, which a fixed-height
+   browser's scroll anchoring (verified in Chromium; Safari is a follow-up: if WebKit's
+   anchoring does not cover it, compensate `scrollTop` by the height change above the window).
+   The active line and an open composer are pinned: rendered between their own spacers even
+   when outside the window, so focus and a draft never unmount (drafts are also kept by line
+   in `DiffBody` state). Rows wrap (as in the POC), so heights vary, which a fixed-height
    library would not handle; a general library (react-window, TanStack Virtual) would be
    about 6 to 15 KB gz for roughly the same code.
 3. **A separate diff port.** `data/diff-data.ts` defines `DiffDataSource.load(ref)`, which
@@ -36,19 +40,25 @@ shell's data port (ADR 0019 §3) carries the PR summary and the analysis, not th
    diff once, on the first file opened, and holds the reviewer's own comments in memory.
    AI flags and hot lines are shown only when the analysis's head sha equals the diff's; after
    a new push they would point at the wrong lines.
-4. **Text safety in code.** Code, hunk headers and flag text render as text. Invisible bidi
-   controls (Trojan Source, CVE-2021-42574) render as visible `U+202E`-style markers, and each
-   code cell is `direction: ltr; unicode-bidi: isolate`. Paths sit in `<bdi>`.
+4. **Text safety in code.** Code, hunk headers, notes and flag text render as text, flag text
+   and notes inside `<bdi>`. Invisible characters (bidi controls and marks, zero-width and
+   invisible operators, U+FEFF, U+00AD, U+180E, U+2028/2029, tag characters U+E0000–E007F;
+   Trojan Source, CVE-2021-42574) render as visible `U+XXXX` markers titled "Invisible character
+   U+XXXX", and each code cell is `direction: ltr; unicode-bidi: isolate`. Paths sit in `<bdi>`.
 5. **Keyboard.** The new-side line numbers are buttons with a roving tabindex: one tab stop
    for the diff, arrow keys / Page Up / Page Down / Home / End move between lines (scrolling the
    virtualised list as needed), Enter opens the composer, ⌘/Ctrl+Enter adds, Escape cancels, and
    focus returns to the line.
 6. **Evidence.** `e2e/diff.perf.spec.ts` (Playwright project `perf`) runs on the production
-   build (`vite build` + `vite preview`), throttles the CPU 4x through CDP, scrolls the
-   generated 5,000-line fixture (`?fixture=large-diff`) top to bottom one step per frame while
-   recording a Chrome trace, and asserts on the trace (dropped frames from Chrome's
-   `PipelineReporter`, no main-thread task over 50 ms) and on rAF intervals. The project depends
-   on `visual` and `e2e` so it runs alone.
+   build (`vite build` + `vite preview`) with no Playwright clock (it would replace
+   requestAnimationFrame with a timer; the test asserts rAF is native), throttles the CPU 4x
+   through CDP, scrolls the generated 5,000-line fixture (`?fixture=large-diff`) top to bottom
+   one step per frame while recording a Chrome trace, and asserts on Chrome's `PipelineReporter`
+   (main frames only: FORKED reports skipped, deduplicated by sequence; ≤ 2 % dropped, ≤ 5 %
+   partial, presented frames ≥ 95 % of rAF steps), on long tasks (none over 50 ms) and on rAF
+   intervals (≥ 58 fps mean, ≤ 5 % over 25 ms). Measured (round 1, four runs): 847–849 of 851
+   frames presented, 0–2 dropped, 0 partial, 59.9–60 fps, 0 long tasks. The project depends on
+   `visual` and `e2e` so it runs alone.
 
 ## Consequences
 

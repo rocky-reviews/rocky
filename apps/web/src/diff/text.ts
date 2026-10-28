@@ -4,10 +4,17 @@
  */
 
 /**
- * Invisible characters that reorder text ("Trojan Source", CVE-2021-42574). In code they can
- * make a line read differently from what runs, so the view shows each one as a visible marker.
+ * Characters that are invisible or reorder text. In code they can make a line read differently
+ * from what runs ("Trojan Source", CVE-2021-42574; zero-width and tag characters hide content),
+ * so the view shows each one as a visible `U+XXXX` marker:
+ * - bidi controls and marks: U+061C, U+200E/F, U+202A–202E, U+2066–2069;
+ * - zero-width and invisible operators: U+200B–200D, U+2060–2064, U+FEFF;
+ * - soft hyphen U+00AD, Mongolian vowel separator U+180E;
+ * - line and paragraph separators U+2028/2029;
+ * - tag characters U+E0000–E007F.
  */
-const CONTROLS = /[؜‎‏‪-‮⁦-⁩]/g;
+const CONTROLS =
+  /[\u00AD\u061C\u180E\u200B-\u200F\u2028\u2029\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
 
 export type TextPart = { readonly control: boolean; readonly text: string };
 

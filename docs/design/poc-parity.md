@@ -150,7 +150,7 @@ Defect 6 is fixed in the coverage card.
   their text in `--text` and keep the level/AI/kind colour on a dot or mark. Below 760 px the path
   takes its own line in the sticky header. Only new-side lines take a comment (as in the POC).
   "✦ Polish with AI" is left out of the composer until there is an AI endpoint for it. Invisible
-  bidi controls in code show as visible `U+202E` markers. The AI notes are hidden when the
+  characters in code (bidi controls, zero-width, tag characters) show as visible `U+XXXX` markers. The AI notes are hidden when the
   analysis is for an older push than the diff.
 - **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
   bar until those tasks; the main column and right panel hold placeholders until P6-2/P6-4.

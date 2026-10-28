@@ -26,10 +26,19 @@ const app = read("apps/web/src/styles/tokens.css");
 
 /**
  * Tokens the app defines that the POC has no variable for. Anything else must come from the
- * POC, so the palette can't drift by adding tokens either. `--syn-*` (P6-3) are the diff's
- * syntax colours: the POC's `--tk-*` or an AA-contrast shade of the same hue.
+ * POC, so the palette can't drift by adding tokens either.
  */
-const DERIVED = /^--(font|text|radius|space|syn)-|^--shadow-modal$|^--overlay$/;
+const DERIVED = /^--(font|text|radius|space)-|^--shadow-modal$|^--overlay$/;
+
+/**
+ * P6-3 syntax colours: each `--syn-*` is a POC `--tk-*` token or one of these reviewed AA
+ * shades of the same hue, so the prefix cannot bring in arbitrary colours.
+ */
+const SYNTAX_SHADES: Record<"light" | "dark", readonly string[]> = {
+  light: ["#a3480a", "#5f6b7d"],
+  dark: ["#8d99ae"],
+};
+const SYNTAX = /^--syn-/;
 
 describe("design tokens match the POC", () => {
   for (const [mode, selector] of [
@@ -44,8 +53,13 @@ describe("design tokens match the POC", () => {
         expect(actual.get(name), name).toBe(value);
       }
       const unexpected = [...actual.keys()].filter(
-        (name) => !expected.has(name) && !DERIVED.test(name),
+        (name) => !expected.has(name) && !DERIVED.test(name) && !SYNTAX.test(name),
       );
+      for (const [name, value] of actual) {
+        if (!SYNTAX.test(name)) continue;
+        const ok = /^var\(--tk-[a-z]+\)$/.test(value) || SYNTAX_SHADES[mode].includes(value);
+        expect(ok, `${name}: ${value} is neither var(--tk-*) nor a listed shade`).toBe(true);
+      }
       expect(unexpected, "tokens not in the POC and not listed as derived").toEqual([]);
     });
   }

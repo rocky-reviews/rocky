@@ -4,7 +4,8 @@
  * scroll with it. Heights start as estimates and are replaced by measured ones (ResizeObserver),
  * kept by row key so they survive blocks being inserted. Spacers above and below stand in for
  * the rows that are not rendered; the browser's scroll anchoring keeps the view steady when a
- * measured height differs from its estimate.
+ * measured height differs from its estimate. Pinned rows (the focused line, an open composer)
+ * are rendered wherever they are, between their own spacers, so they never unmount.
  */
 import {
   type RefObject,
@@ -32,14 +33,50 @@ const scrollParent = (el: HTMLElement): HTMLElement => {
     : document.documentElement;
 };
 
+/** What to render, in order: spacers standing in for rows, and runs of rows `[start, end)`. */
+export type Part =
+  | { readonly kind: "spacer"; readonly key: string; readonly height: number }
+  | { readonly kind: "rows"; readonly start: number; readonly end: number };
+
+/** The window plus each pinned row, merged into sorted runs with spacers between them. */
+export const layoutParts = (
+  index: HeightIndex,
+  range: Range,
+  pinned: readonly number[],
+): Part[] => {
+  const runs = [
+    ...(range.end > range.start ? [range] : []),
+    ...pinned.filter((i) => i >= 0 && i < index.size).map((i) => ({ start: i, end: i + 1 })),
+  ].sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const run of runs) {
+    const last = merged.at(-1);
+    if (last !== undefined && run.start <= last.end) last.end = Math.max(last.end, run.end);
+    else merged.push({ ...run });
+  }
+  const parts: Part[] = [];
+  let at = 0;
+  merged.forEach((run, n) => {
+    parts.push({
+      kind: "spacer",
+      key: `s${n}`,
+      height: index.offsetOf(run.start) - index.offsetOf(at),
+    });
+    parts.push({ kind: "rows", start: run.start, end: run.end });
+    at = run.end;
+  });
+  parts.push({ kind: "spacer", key: "s-end", height: index.total - index.offsetOf(at) });
+  return parts;
+};
+
 export type VirtualList = {
   /** Attach to the element that holds the spacers and the rows. */
   listRef: RefObject<HTMLDivElement | null>;
   /** Attach to every rendered row (stable, so rows are observed once). Needs `data-vkey`. */
   measureRef: (el: HTMLElement | null) => (() => void) | undefined;
   range: Range;
-  padTop: number;
-  padBottom: number;
+  /** Spacers and row runs to render, in order. */
+  parts: Part[];
   /**
    * Scrolls so row `i` is fully visible (if it is not), then renders around it. Pass the row's
    * element when it is rendered: its measured box is exact, the index may still hold estimates.
@@ -50,6 +87,8 @@ export type VirtualList = {
 export const useVirtualList = (
   keys: readonly string[],
   estimate: (i: number) => number,
+  /** Rows to render even outside the window. */
+  pinned: readonly number[] = [],
 ): VirtualList => {
   const listRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
@@ -160,8 +199,7 @@ export const useVirtualList = (
     listRef,
     measureRef,
     range,
-    padTop: index.offsetOf(range.start),
-    padBottom: index.total - index.offsetOf(range.end),
+    parts: layoutParts(index, range, pinned),
     reveal,
   };
 };

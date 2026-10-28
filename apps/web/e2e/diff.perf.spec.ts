@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { FIXTURE_NOW } from "./support.js";
 
 /**
  * P6-3 acceptance: a 5,000-line diff scrolls at 60 fps on a mid-range laptop.
@@ -13,9 +12,14 @@ import { FIXTURE_NOW } from "./support.js";
  * records. Moving `scrollTop` from requestAnimationFrame keeps the main thread in every frame
  * (rows must be rendered as they arrive), which is stricter than a compositor-only wheel scroll.
  *
+ * No Playwright clock is installed: it would replace requestAnimationFrame with a 16 ms timer
+ * (the test checks rAF is native before measuring). The "updated N ago" text is not asserted.
+ *
  * Asserted:
- * - Chrome's own frame accounting in the trace (PipelineReporter, between the scroll markers):
- *   at most 5 % of frames dropped;
+ * - Chrome's own frame accounting in the trace (PipelineReporter, main frames only: FORKED
+ *   reports duplicate a frame's sequence number and are skipped, and frames are deduplicated by
+ *   sequence): at most 2 % dropped, at most 5 % presented partially, and at least 95 % as many
+ *   presented frames as rAF callbacks;
  * - frame intervals seen by requestAnimationFrame: mean rate ≥ 58 fps and at most 5 % of
  *   intervals over 1.5 frames (25 ms);
  * - no long task (over 50 ms) on the renderer main thread while scrolling;
@@ -48,10 +52,12 @@ type TraceEvent = {
   args?: {
     name?: string;
     data?: { message?: string };
-    frame_reporter?: { state?: string };
-    chrome_frame_reporter?: { state?: string };
+    frame_reporter?: FrameReport;
+    chrome_frame_reporter?: FrameReport;
   };
 };
+
+type FrameReport = { state?: string; frame_type?: string; frame_sequence?: number };
 
 const round = (n: number) => Math.round(n * 10) / 10;
 
@@ -65,16 +71,22 @@ const analyseTrace = (events: readonly TraceEvent[]) => {
   const inWindow = (e: TraceEvent) => e.ts >= start.ts && e.ts <= end.ts;
   const renderer = start.pid;
 
-  const states = new Map<string, number>();
+  // One report per main frame: FORKED reports repeat a sequence number for a forked pipeline.
+  const bySequence = new Map<number, string>();
   for (const e of events) {
     if (e.name !== "PipelineReporter" || e.ph !== "b" || e.pid !== renderer || !inWindow(e))
       continue;
-    const state = e.args?.frame_reporter?.state ?? e.args?.chrome_frame_reporter?.state ?? "?";
-    states.set(state, (states.get(state) ?? 0) + 1);
+    const report = e.args?.frame_reporter ?? e.args?.chrome_frame_reporter;
+    if (report === undefined || report.frame_type === "FORKED") continue;
+    const sequence = report.frame_sequence ?? -bySequence.size - 1;
+    if (!bySequence.has(sequence)) bySequence.set(sequence, report.state ?? "?");
   }
-  const presented =
-    (states.get("STATE_PRESENTED_ALL") ?? 0) + (states.get("STATE_PRESENTED_PARTIAL") ?? 0);
+  const states = new Map<string, number>();
+  for (const state of bySequence.values()) states.set(state, (states.get(state) ?? 0) + 1);
+  const all = states.get("STATE_PRESENTED_ALL") ?? 0;
+  const partial = states.get("STATE_PRESENTED_PARTIAL") ?? 0;
   const dropped = states.get("STATE_DROPPED") ?? 0;
+  const counted = Math.max(1, all + partial + dropped);
 
   const longTasks = events
     .filter(
@@ -90,9 +102,11 @@ const analyseTrace = (events: readonly TraceEvent[]) => {
   return {
     traceDurationMs: Math.round((end.ts - start.ts) / 1000),
     frameStates: Object.fromEntries(states),
-    framesPresented: presented,
+    framesPresented: all + partial,
+    framesPresentedPartial: partial,
     framesDropped: dropped,
-    droppedRatio: round((dropped / Math.max(1, presented + dropped)) * 100) / 100,
+    droppedRatio: Math.round((dropped / counted) * 1000) / 1000,
+    partialRatio: Math.round((partial / counted) * 1000) / 1000,
     longTasks: longTasks.length,
     longestTaskMs: Math.round(Math.max(0, ...longTasks)),
   };
@@ -104,8 +118,12 @@ test("a 5,000-line diff scrolls at 60 fps (Chrome trace, CPU throttled)", async 
 }, testInfo) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.clock.setFixedTime(FIXTURE_NOW);
   await page.goto("/?fixture=large-diff");
+  // Measure real frames: requestAnimationFrame must be the browser's, not a fake timer.
+  const rafSource = await page.evaluate(() =>
+    Function.prototype.toString.call(requestAnimationFrame),
+  );
+  expect(rafSource).toMatch(/\[native code\]/);
   await page.getByRole("button", { name: "src/billing/ledger-rules.ts" }).click();
   await page.locator(".diff .ln").first().waitFor();
   const fullHeight = await page.evaluate(
@@ -202,7 +220,11 @@ test("a 5,000-line diff scrolls at 60 fps (Chrome trace, CPU throttled)", async 
   expect(raf.slowFrames, "frame intervals over 25 ms").toBeLessThanOrEqual(
     Math.floor(raf.frames * 0.05),
   );
-  expect(chrome.framesPresented, "Chrome presented frames while scrolling").toBeGreaterThan(500);
-  expect(chrome.droppedRatio, "share of frames Chrome dropped").toBeLessThanOrEqual(0.05);
+  expect(
+    chrome.framesPresented,
+    "Chrome presented a frame for (nearly) every rAF step",
+  ).toBeGreaterThanOrEqual(Math.floor(raf.frames * 0.95));
+  expect(chrome.droppedRatio, "share of frames Chrome dropped").toBeLessThanOrEqual(0.02);
+  expect(chrome.partialRatio, "share of frames presented partially").toBeLessThanOrEqual(0.05);
   expect(chrome.longTasks, "main-thread tasks over 50 ms while scrolling").toBe(0);
 });

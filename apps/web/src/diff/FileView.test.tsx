@@ -155,7 +155,7 @@ describe("untrusted content", () => {
     const html = render("x.ts", { kind: "ready", data });
     expect(html).not.toMatch(/[‮⁦]/);
     expect(html).toContain(
-      '<span class="bidi-ctl" title="Invisible text-direction character">U+202E</span>',
+      '<span class="bidi-ctl" title="Invisible character U+202E">U+202E</span>',
     );
     expect(html).toContain(">U+2066</span>");
   });

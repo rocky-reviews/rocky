@@ -66,8 +66,6 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
   );
   const keys = useMemo(() => items.map((item) => item.key), [items]);
   const estimate = useCallback((i: number) => ESTIMATE[items[i]?.kind ?? "line"], [items]);
-  const { listRef, measureRef, range, padTop, padBottom, reveal } = useVirtualList(keys, estimate);
-
   // New-side line numbers in order, and where each one's row is.
   const lines = useMemo(
     () =>
@@ -78,6 +76,28 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
   );
   const [active, setActive] = useState<number | null>(() => lines[0]?.n ?? null);
   const activeIndex = lines.findIndex((l) => l.n === active);
+  // The active line and an open composer stay rendered while scrolled away, so neither
+  // focus nor the draft is lost when the window moves.
+  const activeItem = lines[activeIndex]?.i ?? -1;
+  const composerItem = useMemo(
+    () => (composing === null ? -1 : keys.indexOf(`i${composing}`)),
+    [keys, composing],
+  );
+  const pinned = useMemo(() => [activeItem, composerItem], [activeItem, composerItem]);
+  const { listRef, measureRef, range, parts, reveal } = useVirtualList(keys, estimate, pinned);
+  // Drafts by line, kept here so they outlive the composer element.
+  const [drafts, setDrafts] = useState<ReadonlyMap<number, string>>(() => new Map());
+  const setDraft = useCallback(
+    (n: number, text: string | null) =>
+      setDrafts((current) => {
+        const next = new Map(current);
+        if (text === null) next.delete(n);
+        else next.set(n, text);
+        return next;
+      }),
+    [],
+  );
+  const composerFocus = useRef(false);
   const activeRendered =
     activeIndex !== -1 &&
     (lines[activeIndex]?.i ?? -1) >= range.start &&
@@ -94,7 +114,21 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
       `button[data-line="${pending.line}"]`,
     );
     if (at === undefined || pending.tries > 10) {
+      // Give up on the exact line: focus the nearest rendered one, never leave focus on <body>.
       pendingFocus.current = null;
+      const target = at?.i ?? 0;
+      const nearest = [
+        ...(listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-line]") ?? []),
+      ]
+        .map((b) => ({
+          b,
+          d: Math.abs((lines.find((l) => l.n === Number(b.dataset.line))?.i ?? 0) - target),
+        }))
+        .sort((x, y) => x.d - y.d)[0]?.b;
+      if (nearest) {
+        setActive(Number(nearest.dataset.line));
+        nearest.focus({ preventScroll: true });
+      }
     } else if (button) {
       reveal(at.i, button.closest<HTMLElement>(".ln") ?? button);
       button.focus({ preventScroll: true });
@@ -146,21 +180,25 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
 
   const compose = useCallback((n: number) => {
     setActive(n);
+    composerFocus.current = true;
     setComposing(n);
   }, []);
-  const closeComposer = useCallback(() => {
-    setComposing((n) => {
-      if (n !== null) focusAfterRender(n);
-      return null;
-    });
-  }, []);
-  const submit = useCallback(
-    (n: number, body: string) => {
-      addComment(path, n, body);
+  const closeComposer = useCallback(
+    (n: number) => {
+      setDraft(n, null);
       focusAfterRender(n);
       setComposing(null);
     },
-    [addComment, path],
+    [setDraft],
+  );
+  const submit = useCallback(
+    (n: number, body: string) => {
+      addComment(path, n, body);
+      setDraft(n, null);
+      focusAfterRender(n);
+      setComposing(null);
+    },
+    [addComment, path, setDraft],
   );
   const remove = useCallback(
     (comment: OwnComment) => {
@@ -187,53 +225,64 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
       onKeyDown={onKeyDown}
       onFocus={onFocusList}
     >
-      <div style={{ height: padTop }} aria-hidden="true" />
-      {items.slice(range.start, range.end).map((item) => {
-        switch (item.kind) {
-          case "hunk":
-            return (
-              <div key={item.key} ref={measureRef} data-vkey={item.key} className="hunk-head">
-                <code>
-                  <Code text={item.header} language="plain" />
-                </code>
-              </div>
-            );
-          case "note":
-            return (
-              <div key={item.key} ref={measureRef} data-vkey={item.key} className="diff-note">
-                {item.text}
-              </div>
-            );
-          case "line":
-            return (
-              <LineRow
-                key={item.key}
-                vkey={item.key}
-                measureRef={measureRef}
-                row={item.row}
-                hot={item.hot}
-                language={language}
-                focusable={item.row.newNo !== null && item.row.newNo === active}
-                onCompose={compose}
-              />
-            );
-          case "inline":
-            return (
-              <div key={item.key} ref={measureRef} data-vkey={item.key} className="inline">
-                {item.flags.map((flag, i) => (
-                  <FlagNote key={i} flag={flag} />
-                ))}
-                {item.comments.map((comment) => (
-                  <MyComment key={comment.id} comment={comment} onDelete={remove} />
-                ))}
-                {item.composing && (
-                  <Composer line={item.line} onCancel={closeComposer} onSubmit={submit} />
-                )}
-              </div>
-            );
-        }
-      })}
-      <div style={{ height: padBottom }} aria-hidden="true" />
+      {parts.map((part) =>
+        part.kind === "spacer" ? (
+          <div key={part.key} style={{ height: part.height }} aria-hidden="true" />
+        ) : (
+          items.slice(part.start, part.end).map((item) => {
+            switch (item.kind) {
+              case "hunk":
+                return (
+                  <div key={item.key} ref={measureRef} data-vkey={item.key} className="hunk-head">
+                    <code>
+                      <Code text={item.header} language="plain" />
+                    </code>
+                  </div>
+                );
+              case "note":
+                return (
+                  <div key={item.key} ref={measureRef} data-vkey={item.key} className="diff-note">
+                    <bdi>{item.text}</bdi>
+                  </div>
+                );
+              case "line":
+                return (
+                  <LineRow
+                    key={item.key}
+                    vkey={item.key}
+                    measureRef={measureRef}
+                    row={item.row}
+                    hot={item.hot}
+                    language={language}
+                    focusable={item.row.newNo !== null && item.row.newNo === active}
+                    onCompose={compose}
+                  />
+                );
+              case "inline":
+                return (
+                  <div key={item.key} ref={measureRef} data-vkey={item.key} className="inline">
+                    {item.flags.map((flag, i) => (
+                      <FlagNote key={i} flag={flag} />
+                    ))}
+                    {item.comments.map((comment) => (
+                      <MyComment key={comment.id} comment={comment} onDelete={remove} />
+                    ))}
+                    {item.composing && (
+                      <Composer
+                        line={item.line}
+                        body={drafts.get(item.line) ?? ""}
+                        focusOnMount={composerFocus}
+                        onChange={setDraft}
+                        onCancel={closeComposer}
+                        onSubmit={submit}
+                      />
+                    )}
+                  </div>
+                );
+            }
+          })
+        ),
+      )}
     </div>
   );
 };
@@ -241,12 +290,12 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
 const lineMax = (row: DiffRow): number =>
   row.kind === "line" ? Math.max(row.oldNo ?? 0, row.newNo ?? 0) : 0;
 
-/** Code as highlighted text; invisible bidi controls show as visible markers. */
+/** Code as highlighted text; invisible characters show as visible markers. */
 const Code = ({ text, language }: { text: string; language: Language }) =>
   tokenize(text, language).map((token, i) => {
     const parts = splitControls(token.text).map((part, j) =>
       part.control ? (
-        <span key={j} className="bidi-ctl" title="Invisible text-direction character">
+        <span key={j} className="bidi-ctl" title={`Invisible character ${codePoint(part.text)}`}>
           {codePoint(part.text)}
         </span>
       ) : (
@@ -326,9 +375,9 @@ const FlagNote = ({ flag }: { flag: Flag }) => (
       {FLAG_LABEL[flag.kind]}
       <span className="sr-only"> (AI)</span>
     </span>
-    <span>
+    <bdi>
       <Prose text={flag.text} />
-    </span>
+    </bdi>
   </div>
 );
 
@@ -360,18 +409,30 @@ const MyComment = ({
   </div>
 );
 
+const MAC = typeof navigator !== "undefined" && /Mac OS X|iPhone|iPad/.test(navigator.userAgent);
+
 const Composer = ({
   line,
+  body,
+  focusOnMount,
+  onChange,
   onCancel,
   onSubmit,
 }: {
   line: number;
-  onCancel: () => void;
+  body: string;
+  /** Set when the composer was just opened; it takes focus once, not on a later remount. */
+  focusOnMount: { current: boolean };
+  onChange: (line: number, body: string) => void;
+  onCancel: (line: number) => void;
   onSubmit: (line: number, body: string) => void;
 }) => {
-  const [body, setBody] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => box.current?.focus({ preventScroll: true }), []);
+  useEffect(() => {
+    if (!focusOnMount.current) return;
+    focusOnMount.current = false;
+    box.current?.focus({ preventScroll: true });
+  }, [focusOnMount]);
   const empty = body.trim() === "";
   const id = `compose-${line}`;
   return (
@@ -387,11 +448,11 @@ const Composer = ({
         maxLength={MAX_COMMENT_CHARS}
         placeholder={`Leave a comment on line ${line}…`}
         aria-keyshortcuts="Meta+Enter Control+Enter Escape"
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => onChange(line, e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Escape") {
             e.preventDefault();
-            onCancel();
+            onCancel(line);
           } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !empty) {
             e.preventDefault();
             onSubmit(line, body);
@@ -400,9 +461,9 @@ const Composer = ({
       />
       <div className="compose-actions">
         <span className="compose-hint">
-          <span>⌘↵ to add</span> · <span>Esc to cancel</span>
+          <span>{MAC ? "⌘↵" : "Ctrl+Enter"} to add</span> · <span>Esc to cancel</span>
         </span>
-        <button type="button" className="btn btn-sm btn-ghost" onClick={onCancel}>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => onCancel(line)}>
           Cancel
         </button>
         <button
