@@ -90,7 +90,8 @@ server's clock (testable), bounded by the database:
   only while the session is live (idle window included), and the touch reports the stored value,
   so `idleExpiresAt` is the real `last_seen_at + idle`. In the database, the trigger
   `sessions_guard_touch` lets `last_seen_at` move only forward and by less than the idle timeout
-  (an idle-expired row cannot be touched back to life by any writer), and
+  (a single UPDATE cannot jump an idle-expired row to now; defence in depth against bugs, not
+  against code running SQL as `rocky_app`, see L8), and
   `CHECK (last_seen_at <= expires_at)` holds.
 - **Lookup:** a session is live only when not revoked, `created_at ≤ now < expires_at` and
   `now < last_seen_at + idle`. The active org counts only while `session_orgs` links it.

@@ -116,9 +116,10 @@ CREATE INDEX sessions_user_idx ON app.sessions (user_id);
 CREATE INDEX sessions_expires_idx ON app.sessions (expires_at);
 CREATE INDEX sessions_active_org_idx ON app.sessions (active_org_id) WHERE active_org_id IS NOT NULL;
 
--- Review round 1: `last_seen_at` only moves forward, and by less than the idle timeout, so an
--- idle-expired session cannot be touched back to life by any writer (the server's touch already
--- refuses it in SQL; this holds for any UPDATE). Clock-free: it compares the row with itself.
+-- Review round 1: `last_seen_at` only moves forward, and by less than the idle timeout, so a
+-- single UPDATE cannot jump an idle-expired session to now (the server's touch already refuses it
+-- in SQL). Defence in depth against bugs, not against a compromised app role, which can step it
+-- forward or insert a session outright (ADR 0020 L8). Clock-free: it compares the row with itself.
 CREATE FUNCTION app.sessions_guard_touch() RETURNS trigger
   LANGUAGE plpgsql
   SET search_path = pg_catalog

@@ -403,7 +403,8 @@ export const createSessionStore = (pool: pg.Pool): SessionStore => {
     const id = assertUuid(sessionId, "session id");
     const at = assertDate(now, "now");
     // Live means the idle window too: an idle-expired session is never touched back to life
-    // (the sessions_guard_touch trigger refuses that for any writer as well).
+    // (the sessions_guard_touch trigger stops a single UPDATE jumping one back to now). A clock
+    // behind the stored last_seen_at (another instance, an NTP step) still sees a live session.
     const { rows } = await guarded(() =>
       pool.query<{ last_seen_at: Date; touched: boolean }>(
         `with touched as (
@@ -416,7 +417,7 @@ export const createSessionStore = (pool: pg.Pool): SessionStore => {
          union all
          select s.last_seen_at, false from app.sessions s
           where s.id = $1 and not exists (select 1 from touched)
-            and s.revoked_at is null and s.expires_at > $2 and s.last_seen_at <= $2
+            and s.revoked_at is null and s.expires_at > $2
             and s.last_seen_at + make_interval(secs => s.idle_timeout_seconds) > $2`,
         [id, at, SESSION_TOUCH_INTERVAL_MS],
       ),

@@ -34,6 +34,7 @@ import {
 } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
+import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 import { MEMBER_TOKEN_PURPOSE } from "../repository-access.js";
@@ -899,6 +900,17 @@ describe("only real members count (review round 1)", () => {
         (await tx.query("select id from members where forge_user_id = $1", [outsider.id])).rows,
     );
     expect(rows).toEqual([]);
+    // The user row is written only after a membership is confirmed (review round 2).
+    const superuser = new pg.Client({ connectionString: pgs.superUrl });
+    await superuser.connect();
+    try {
+      const users = await superuser.query("select 1 from app.users where forge_user_id = $1", [
+        outsider.id,
+      ]);
+      expect(users.rowCount).toBe(0);
+    } finally {
+      await superuser.end();
+    }
     expect(lines.join("\n")).toContain('"outcome":"not_a_member"');
   });
 
