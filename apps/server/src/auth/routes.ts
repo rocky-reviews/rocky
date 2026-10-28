@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { OrgId } from "@rocky-reviews/core";
+import type { OrgId, Role } from "@rocky-reviews/core";
 import {
   decodeWrappedDataKey,
   encodeWrappedDataKey,
@@ -9,9 +9,11 @@ import {
 } from "@rocky-reviews/crypto";
 import {
   audit,
+  claimFirstOwner,
   clearForgeToken,
   loadOrgDataKey,
   loadSessionMember,
+  memberLeftForge,
   SecretStoreError,
   storeForgeToken,
   storeOrgDataKey,
@@ -31,6 +33,7 @@ import {
   pkceChallenge,
   type GitHubIdentity,
   type GitHubLogin,
+  type GitHubOrgRole,
   type GitHubUserInstallation,
   type GitHubUserToken,
 } from "@rocky-reviews/forge-github";
@@ -52,6 +55,7 @@ import {
   SESSION_COOKIE,
   sha256,
 } from "./cookies.js";
+import { publicRoute, SESSION_ROUTE } from "./policy.js";
 import { DEFAULT_RETURN_TO, returnUrl, safeReturnTo } from "./return-to.js";
 
 /**
@@ -118,18 +122,29 @@ export interface ActiveMember {
   readonly userId: string;
   readonly orgId: OrgId;
   readonly memberId: string;
-  readonly role: SessionMember["role"];
+  /** Read from the member row inside `withOrg` for this request: never cached in the session. */
+  readonly role: Role;
 }
+
+/**
+ * `activeMember`'s answer (P7-2): the member, or why there is none, as the status the policy
+ * answers with.
+ */
+export type MemberResolution =
+  | { readonly ok: true; readonly session: SessionContext; readonly member: ActiveMember }
+  | { readonly ok: false; readonly status: 401; readonly error: "unauthenticated" }
+  | { readonly ok: false; readonly status: 409; readonly error: "no_active_org" }
+  | { readonly ok: false; readonly status: 403; readonly error: "not_a_member" };
 
 export interface SessionAuth {
   /** The live session of this request's cookie, or `null`. Moves its idle window. */
   authenticate(request: FastifyRequest): Promise<SessionContext | null>;
   /**
-   * The session's member in its active org, verified inside `withOrg` (the member row exists,
-   * belongs to the session's GitHub user, and the org is not being deleted), or `null`. P7-2
-   * routes start here.
+   * The session's member in its active org, verified inside `withOrg` (the member row exists, is
+   * not removed, belongs to the session's GitHub user, and the org is not being deleted), with
+   * its role as stored now. The access policy (`policy.ts`) calls it once per request.
    */
-  activeMember(request: FastifyRequest): Promise<ActiveMember | null>;
+  activeMember(request: FastifyRequest): Promise<MemberResolution>;
 }
 
 const escapeHtml = (value: string): string =>
@@ -219,20 +234,24 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
       loadSessionMember(tx, { memberId: link.memberId, forgeUserId: session.forgeUserId }),
     );
 
-  const activeMember = async (request: FastifyRequest): Promise<ActiveMember | null> => {
+  const activeMember = async (request: FastifyRequest): Promise<MemberResolution> => {
     const context = await authenticate(request);
-    if (context === null) return null;
+    if (context === null) return { ok: false, status: 401, error: "unauthenticated" };
     const { session } = context;
     const link = session.orgs.find((o) => o.orgId === session.activeOrgId);
-    if (link === undefined) return null;
+    if (link === undefined) return { ok: false, status: 409, error: "no_active_org" };
     const member = await memberOf(session, link);
-    if (member === null) return null;
+    if (member === null) return { ok: false, status: 403, error: "not_a_member" };
     return {
-      sessionId: session.sessionId,
-      userId: session.userId,
-      orgId: link.orgId,
-      memberId: member.memberId,
-      role: member.role,
+      ok: true,
+      session: context,
+      member: {
+        sessionId: session.sessionId,
+        userId: session.userId,
+        orgId: link.orgId,
+        memberId: member.memberId,
+        role: member.role,
+      },
     };
   };
 
@@ -275,16 +294,23 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
   /**
    * Stores the user's token for one org's member, encrypted under that org's data key. `null`
    * when the member was removed in Rocky: sign-in does not revive them (review round 1).
+   * `ownerCandidate` (P7-2, ADR 0024 §2): an admin of the GitHub organization, or the owner of a
+   * User account, becomes the org's owner while it has none; never later.
    */
   const bindOrg = async (
     orgId: OrgId,
     identity: GitHubIdentity,
     token: GitHubUserToken,
+    ownerCandidate: boolean,
   ): Promise<SessionOrg | null> => {
-    const first = await db.withOrg(orgId, async (tx) => ({
-      member: await upsertLoginMember(tx, { forgeUserId: identity.id, login: identity.login }),
-      dataKey: await loadOrgDataKey(tx),
-    }));
+    const first = await db.withOrg(orgId, async (tx) => {
+      const member = await upsertLoginMember(tx, {
+        forgeUserId: identity.id,
+        login: identity.login,
+      });
+      if (member !== null && ownerCandidate) await claimFirstOwner(tx, member.memberId);
+      return { member, dataKey: await loadOrgDataKey(tx) };
+    });
     if (first.member === null) return null;
     const { memberId } = first.member;
     let dataKey: StoredSecret | null = first.dataKey;
@@ -356,18 +382,22 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
 
   /**
    * Only real members count (review round 1, the user's decision): on an Organization account,
-   * an active member of that organization as GitHub reports it; on a User account, its owner.
-   * Outside collaborators and everyone else get no member row. Fail closed: an error is "no".
+   * an active member of that organization as GitHub reports it, with their GitHub role (P7-2:
+   * only used for the first owner); on a User account, its owner (as `admin`). Outside
+   * collaborators and everyone else get no member row. `"error"` when GitHub could not answer:
+   * not a member for this sign-in (fail closed), but nothing stored is changed on an outage.
    */
-  const isMember = async (
+  const membership = async (
     request: FastifyRequest,
     installation: GitHubUserInstallation,
     identity: GitHubIdentity,
     accessToken: string,
-  ): Promise<boolean> => {
-    if (installation.accountType === "User") return installation.accountId === identity.id;
+  ): Promise<GitHubOrgRole | null | "error"> => {
+    if (installation.accountType === "User") {
+      return installation.accountId === identity.id ? "admin" : null;
+    }
     try {
-      return await deps.login.isActiveOrgMember(
+      return await deps.login.orgMembershipRole(
         accessToken,
         { id: installation.accountId, login: installation.accountLogin },
         identity.id,
@@ -379,7 +409,30 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
         reason: e?.reason ?? "unknown",
         ...(e?.status === undefined ? {} : { status: e.status }),
       });
-      return false;
+      return "error";
+    }
+  };
+
+  /**
+   * GitHub positively says this person is not a member of the org (P7-1 follow-up): a member row
+   * from earlier loses its stored token and this org in every live session. Failures are logged
+   * and never block the sign-in into the other orgs.
+   */
+  const leftOrg = async (request: FastifyRequest, orgId: OrgId, forgeUserId: number) => {
+    try {
+      const left = await db.withOrg(orgId, (tx) =>
+        memberLeftForge(tx, { forgeUserId, source: "sign_in", actorId: "sign_in" }),
+      );
+      if (left !== null) {
+        changed(orgId, left.memberId);
+        log(request, "info", "member_left_org", { orgId, sessionsCut: left.sessionsCut });
+      }
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      log(request, "error", "member_left_org_failed", {
+        orgId,
+        ...(typeof code === "string" && SQLSTATE.test(code) ? { errorCode: code } : {}),
+      });
     }
   };
 
@@ -408,234 +461,248 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
         : page(reply, status, "Invalid request", "<p>Start again from Rocky.</p>");
     });
 
-    scope.get(LOGIN_PATH, async (request, reply) => {
-      const raw = param(request, "returnTo");
-      const returnTo = (typeof raw === "string" ? safeReturnTo(raw) : null) ?? DEFAULT_RETURN_TO;
-      if (raw !== undefined && returnTo === DEFAULT_RETURN_TO && raw !== DEFAULT_RETURN_TO) {
-        log(request, "warn", "return_to_refused");
-      }
-      const state = randomToken();
-      const verifier = newPkceVerifier();
-      const at = now();
-      await db.sessions.createLoginAttempt({
-        stateSha256: sha256(state),
-        returnTo,
-        now: new Date(at),
-        ttlMs: LOGIN_TTL_MS,
-      });
-      const cookie = encodeLoginCookie(deps.secret, {
-        state,
-        verifier,
-        expiresAt: Math.floor((at + LOGIN_TTL_MS) / 1000),
-      });
-      const location = deps.login.authorizeUrl({
-        redirectUri,
-        state,
-        codeChallenge: pkceChallenge(verifier),
-      });
-      log(request, "info", "login_started");
-      return noStore(reply)
-        .code(302)
-        .header(
-          "set-cookie",
-          serializeCookie(LOGIN_COOKIE, cookie, {
-            secure: deps.cookieSecure,
-            maxAgeSeconds: LOGIN_TTL_MS / 1000,
-          }),
-        )
-        .header("location", location.href)
-        .send();
-    });
-
-    scope.get(OAUTH_CALLBACK_PATH, async (request, reply) => {
-      // The login cookie is spent whatever happens next.
-      void reply.header("set-cookie", clearLogin);
-      const state = param(request, "state");
-      const code = param(request, "code");
-      if (param(request, "error") !== undefined) {
-        log(request, "info", "login_cancelled");
-        return page(reply, 400, "Sign-in cancelled", "<p>GitHub did not sign you in.</p>");
-      }
-      if (typeof state !== "string" || !STATE.test(state) || !isOAuthCode(code)) {
-        log(request, "warn", "bad_parameters");
-        return page(reply, 400, "Invalid sign-in link", "<p>Start again from Rocky.</p>");
-      }
-      const at = now();
-      const binding = decodeLoginCookie(
-        deps.secret,
-        readCookie(request.headers.cookie, loginCookie),
-        at,
-      );
-      // Login CSRF: the state must be the one this browser was given.
-      if (binding === undefined || !sameSecret(binding.state, state)) {
-        log(request, "warn", binding === undefined ? "no_login_cookie" : "state_mismatch");
-        return page(reply, 403, "Sign-in expired", "<p>Start again from Rocky.</p>");
-      }
-      const attempt = await db.sessions.consumeLoginAttempt(sha256(state), new Date(at));
-      if (attempt === null) {
-        log(request, "warn", "state_unknown_or_used");
-        return page(reply, 403, "Sign-in expired", "<p>Start again from Rocky.</p>");
-      }
-
-      let token: GitHubUserToken;
-      let identity: GitHubIdentity;
-      let installations;
-      try {
-        token = await deps.login.exchangeCode({
-          code,
-          codeVerifier: binding.verifier,
+    scope.get(
+      LOGIN_PATH,
+      { config: { policy: publicRoute("starts the login") } },
+      async (request, reply) => {
+        const raw = param(request, "returnTo");
+        const returnTo = (typeof raw === "string" ? safeReturnTo(raw) : null) ?? DEFAULT_RETURN_TO;
+        if (raw !== undefined && returnTo === DEFAULT_RETURN_TO && raw !== DEFAULT_RETURN_TO) {
+          log(request, "warn", "return_to_refused");
+        }
+        const state = randomToken();
+        const verifier = newPkceVerifier();
+        const at = now();
+        await db.sessions.createLoginAttempt({
+          stateSha256: sha256(state),
+          returnTo,
+          now: new Date(at),
+          ttlMs: LOGIN_TTL_MS,
+        });
+        const cookie = encodeLoginCookie(deps.secret, {
+          state,
+          verifier,
+          expiresAt: Math.floor((at + LOGIN_TTL_MS) / 1000),
+        });
+        const location = deps.login.authorizeUrl({
           redirectUri,
+          state,
+          codeChallenge: pkceChallenge(verifier),
         });
-        identity = await deps.login.readUser(token.accessToken);
-        installations = await deps.login.listInstallations(token.accessToken);
-      } catch (error) {
-        const e = error instanceof GitHubLoginError ? error : undefined;
-        log(request, "warn", "github_failed", {
-          reason: e?.reason ?? "unknown",
-          ...(e?.status === undefined ? {} : { status: e.status }),
-        });
-        return e?.reason === "bad_verification_code"
-          ? page(reply, 400, "Sign-in expired", "<p>Start again from Rocky.</p>")
-          : page(reply, 502, "GitHub sign-in failed", "<p>Try again in a moment.</p>");
-      }
+        log(request, "info", "login_started");
+        return noStore(reply)
+          .code(302)
+          .header(
+            "set-cookie",
+            serializeCookie(LOGIN_COOKIE, cookie, {
+              secure: deps.cookieSecure,
+              maxAgeSeconds: LOGIN_TTL_MS / 1000,
+            }),
+          )
+          .header("location", location.href)
+          .send();
+      },
+    );
 
-      const after = now();
-      let expiresAt = after + maxLifetime;
-      if (token.expiresAt === null && deps.requireTokenExpiry === true) {
-        log(request, "error", "token_without_expiry");
-        return page(
-          reply,
-          502,
-          "Token expiry must be enabled in the GitHub App",
-          "<p>GitHub issued a sign-in token that never expires. An operator must turn on \u201cExpire user authorization tokens\u201d in the GitHub App\u2019s settings.</p>",
+    scope.get(
+      OAUTH_CALLBACK_PATH,
+      { config: { policy: publicRoute("the login's return; checked against the login cookie") } },
+      async (request, reply) => {
+        // The login cookie is spent whatever happens next.
+        void reply.header("set-cookie", clearLogin);
+        const state = param(request, "state");
+        const code = param(request, "code");
+        if (param(request, "error") !== undefined) {
+          log(request, "info", "login_cancelled");
+          return page(reply, 400, "Sign-in cancelled", "<p>GitHub did not sign you in.</p>");
+        }
+        if (typeof state !== "string" || !STATE.test(state) || !isOAuthCode(code)) {
+          log(request, "warn", "bad_parameters");
+          return page(reply, 400, "Invalid sign-in link", "<p>Start again from Rocky.</p>");
+        }
+        const at = now();
+        const binding = decodeLoginCookie(
+          deps.secret,
+          readCookie(request.headers.cookie, loginCookie),
+          at,
         );
-      }
-      if (token.expiresAt !== null) {
-        if (token.expiresAt.getTime() - after < MIN_TOKEN_REMAINING_MS) {
-          log(request, "warn", "token_expiring");
-          return page(reply, 502, "GitHub sign-in failed", "<p>Try again in a moment.</p>");
+        // Login CSRF: the state must be the one this browser was given.
+        if (binding === undefined || !sameSecret(binding.state, state)) {
+          log(request, "warn", binding === undefined ? "no_login_cookie" : "state_mismatch");
+          return page(reply, 403, "Sign-in expired", "<p>Start again from Rocky.</p>");
         }
-        // A session never outlives the token it was created with (ADR 0020 §4).
-        expiresAt = Math.min(expiresAt, token.expiresAt.getTime());
-      }
+        const attempt = await db.sessions.consumeLoginAttempt(sha256(state), new Date(at));
+        if (attempt === null) {
+          log(request, "warn", "state_unknown_or_used");
+          return page(reply, 403, "Sign-in expired", "<p>Start again from Rocky.</p>");
+        }
 
-      const byInstallation = new Map(installations.map((i) => [i.installationId, i]));
-      const candidates = await db.sessions.loginOrgs("github", installations);
-      const bound: SessionOrg[] = [];
-      for (const candidate of candidates) {
-        const installation = byInstallation.get(candidate.installationId);
-        if (
-          installation === undefined ||
-          !(await isMember(request, installation, identity, token.accessToken))
-        ) {
-          log(request, "info", "not_a_member", { installationId: candidate.installationId });
-          continue;
-        }
+        let token: GitHubUserToken;
+        let identity: GitHubIdentity;
+        let installations;
         try {
-          const link = await bindOrg(candidate.orgId, identity, token);
-          if (link === null) {
-            log(request, "info", "member_removed", { orgId: candidate.orgId });
+          token = await deps.login.exchangeCode({
+            code,
+            codeVerifier: binding.verifier,
+            redirectUri,
+          });
+          identity = await deps.login.readUser(token.accessToken);
+          installations = await deps.login.listInstallations(token.accessToken);
+        } catch (error) {
+          const e = error instanceof GitHubLoginError ? error : undefined;
+          log(request, "warn", "github_failed", {
+            reason: e?.reason ?? "unknown",
+            ...(e?.status === undefined ? {} : { status: e.status }),
+          });
+          return e?.reason === "bad_verification_code"
+            ? page(reply, 400, "Sign-in expired", "<p>Start again from Rocky.</p>")
+            : page(reply, 502, "GitHub sign-in failed", "<p>Try again in a moment.</p>");
+        }
+
+        const after = now();
+        let expiresAt = after + maxLifetime;
+        if (token.expiresAt === null && deps.requireTokenExpiry === true) {
+          log(request, "error", "token_without_expiry");
+          return page(
+            reply,
+            502,
+            "Token expiry must be enabled in the GitHub App",
+            "<p>GitHub issued a sign-in token that never expires. An operator must turn on \u201cExpire user authorization tokens\u201d in the GitHub App\u2019s settings.</p>",
+          );
+        }
+        if (token.expiresAt !== null) {
+          if (token.expiresAt.getTime() - after < MIN_TOKEN_REMAINING_MS) {
+            log(request, "warn", "token_expiring");
+            return page(reply, 502, "GitHub sign-in failed", "<p>Try again in a moment.</p>");
+          }
+          // A session never outlives the token it was created with (ADR 0020 §4).
+          expiresAt = Math.min(expiresAt, token.expiresAt.getTime());
+        }
+
+        const byInstallation = new Map(installations.map((i) => [i.installationId, i]));
+        const candidates = await db.sessions.loginOrgs("github", installations);
+        const bound: SessionOrg[] = [];
+        for (const candidate of candidates) {
+          const installation = byInstallation.get(candidate.installationId);
+          const role =
+            installation === undefined
+              ? null
+              : await membership(request, installation, identity, token.accessToken);
+          if (role === null || role === "error") {
+            log(request, "info", "not_a_member", { installationId: candidate.installationId });
+            if (role === null) await leftOrg(request, candidate.orgId, identity.id);
             continue;
           }
-          bound.push(link);
-        } catch (error) {
-          // That org is left out of the session (fail closed for it, not for the others).
-          const code = (error as { code?: unknown }).code;
-          log(request, "error", "org_bind_failed", {
-            orgId: candidate.orgId,
-            ...(typeof code === "string" ? { errorCode: code } : {}),
-          });
-        }
-      }
-
-      // Members only: someone who is a member of no Rocky org gets no session.
-      if (bound.length === 0) {
-        log(request, "info", "no_org");
-        return page(
-          reply,
-          403,
-          "No Rocky organization",
-          "<p>You are not a member of any organization or account where Rocky is installed. Ask an owner to install Rocky, or to add you to their organization on GitHub.</p>",
-        );
-      }
-      const { userId } = await db.sessions.upsertUser("github", identity.id, new Date(after));
-
-      // Session fixation: whatever session this browser presented ends here.
-      const presented = readCookie(request.headers.cookie, sessionCookie);
-      if (isRandomToken(presented)) {
-        const old = await db.sessions.findSession(sha256(presented), new Date(after));
-        if (old !== null) {
-          const revoked = await db.sessions.revokeSession(
-            old.sessionId,
-            "superseded",
-            new Date(after),
-          );
-          if (revoked !== null) {
-            await auditIn(revoked.orgs, "auth.session_revoked", revoked.sessionId, {
-              reason: "superseded",
+          try {
+            const link = await bindOrg(candidate.orgId, identity, token, role === "admin");
+            if (link === null) {
+              log(request, "info", "member_removed", { orgId: candidate.orgId });
+              continue;
+            }
+            bound.push(link);
+          } catch (error) {
+            // That org is left out of the session (fail closed for it, not for the others).
+            const code = (error as { code?: unknown }).code;
+            log(request, "error", "org_bind_failed", {
+              orgId: candidate.orgId,
+              ...(typeof code === "string" ? { errorCode: code } : {}),
             });
-            // Another person's session: their token goes with their last session, as at logout.
-            if (revoked.userId !== userId) await dropTokensIfLast(revoked, new Date(after));
           }
         }
-      }
 
-      const sessionToken = randomToken();
-      const { sessionId } = await db.sessions.createSession({
-        tokenSha256: sha256(sessionToken),
-        userId,
-        orgs: bound,
-        activeOrgId: bound.length === 1 ? (bound[0]?.orgId ?? null) : null,
-        now: new Date(after),
-        idleTimeoutSeconds: idle,
-        expiresAt: new Date(expiresAt),
-      });
-      try {
-        await auditIn(bound, "auth.login", sessionId);
-      } catch (error) {
-        // No unaudited session: revoke it and fail.
-        await db.sessions.revokeSession(sessionId, "logout", new Date(now()));
-        throw error;
-      }
-      log(request, "info", "login", { userId, orgs: bound.length, sessionRecord: sessionId });
-      const target = returnUrl(attempt.returnTo, deps.publicUrl);
-      return noStore(reply)
-        .code(303)
-        .header("set-cookie", [
-          clearLogin,
-          serializeCookie(SESSION_COOKIE, sessionToken, {
-            secure: deps.cookieSecure,
-            maxAgeSeconds: Math.floor((expiresAt - after) / 1000),
-          }),
-        ])
-        .header("location", target.href)
-        .send();
-    });
+        // Members only: someone who is a member of no Rocky org gets no session.
+        if (bound.length === 0) {
+          log(request, "info", "no_org");
+          return page(
+            reply,
+            403,
+            "No Rocky organization",
+            "<p>You are not a member of any organization or account where Rocky is installed. Ask an owner to install Rocky, or to add you to their organization on GitHub.</p>",
+          );
+        }
+        const { userId } = await db.sessions.upsertUser("github", identity.id, new Date(after));
 
-    scope.post(LOGOUT_PATH, async (request, reply) => {
-      const clear = clearCookie(SESSION_COOKIE, deps.cookieSecure);
-      const context = await authenticate(request);
-      if (context === null) return noStore(reply).code(204).header("set-cookie", clear).send();
-      const at = new Date(now());
-      const revoked = await db.sessions.revokeSession(context.session.sessionId, "logout", at);
-      if (revoked !== null) {
-        await auditIn(revoked.orgs, "auth.logout", revoked.sessionId);
-        await dropTokensIfLast(revoked, at);
-        log(request, "info", "logout", { sessionRecord: revoked.sessionId });
-      }
-      return noStore(reply).code(204).header("set-cookie", clear).send();
-    });
+        // Session fixation: whatever session this browser presented ends here.
+        const presented = readCookie(request.headers.cookie, sessionCookie);
+        if (isRandomToken(presented)) {
+          const old = await db.sessions.findSession(sha256(presented), new Date(after));
+          if (old !== null) {
+            const revoked = await db.sessions.revokeSession(
+              old.sessionId,
+              "superseded",
+              new Date(after),
+            );
+            if (revoked !== null) {
+              await auditIn(revoked.orgs, "auth.session_revoked", revoked.sessionId, {
+                reason: "superseded",
+              });
+              // Another person's session: their token goes with their last session, as at logout.
+              if (revoked.userId !== userId) await dropTokensIfLast(revoked, new Date(after));
+            }
+          }
+        }
 
-    scope.get(SESSION_PATH, async (request, reply) => {
-      const context = await authenticate(request);
+        const sessionToken = randomToken();
+        const { sessionId } = await db.sessions.createSession({
+          tokenSha256: sha256(sessionToken),
+          userId,
+          orgs: bound,
+          activeOrgId: bound.length === 1 ? (bound[0]?.orgId ?? null) : null,
+          now: new Date(after),
+          idleTimeoutSeconds: idle,
+          expiresAt: new Date(expiresAt),
+        });
+        try {
+          await auditIn(bound, "auth.login", sessionId);
+        } catch (error) {
+          // No unaudited session: revoke it and fail.
+          await db.sessions.revokeSession(sessionId, "logout", new Date(now()));
+          throw error;
+        }
+        log(request, "info", "login", { userId, orgs: bound.length, sessionRecord: sessionId });
+        const target = returnUrl(attempt.returnTo, deps.publicUrl);
+        return noStore(reply)
+          .code(303)
+          .header("set-cookie", [
+            clearLogin,
+            serializeCookie(SESSION_COOKIE, sessionToken, {
+              secure: deps.cookieSecure,
+              maxAgeSeconds: Math.floor((expiresAt - after) / 1000),
+            }),
+          ])
+          .header("location", target.href)
+          .send();
+      },
+    );
+
+    scope.post(
+      LOGOUT_PATH,
+      { config: { policy: publicRoute("ends the presented session, if any (CSRF-checked)") } },
+      async (request, reply) => {
+        const clear = clearCookie(SESSION_COOKIE, deps.cookieSecure);
+        const context = await authenticate(request);
+        if (context === null) return noStore(reply).code(204).header("set-cookie", clear).send();
+        const at = new Date(now());
+        const revoked = await db.sessions.revokeSession(context.session.sessionId, "logout", at);
+        if (revoked !== null) {
+          await auditIn(revoked.orgs, "auth.logout", revoked.sessionId);
+          await dropTokensIfLast(revoked, at);
+          log(request, "info", "logout", { sessionRecord: revoked.sessionId });
+        }
+        return noStore(reply).code(204).header("set-cookie", clear).send();
+      },
+    );
+
+    scope.get(SESSION_PATH, { config: { policy: SESSION_ROUTE } }, async (request, reply) => {
+      const context = request.access?.session ?? null;
       if (context === null) return noStore(reply).code(401).send({ authenticated: false });
       return noStore(reply)
         .code(200)
         .send(await view(context));
     });
 
-    scope.post(ACTIVE_ORG_PATH, async (request, reply) => {
-      const context = await authenticate(request);
+    scope.post(ACTIVE_ORG_PATH, { config: { policy: SESSION_ROUTE } }, async (request, reply) => {
+      const context = request.access?.session ?? null;
       if (context === null) return noStore(reply).code(401).send({ authenticated: false });
       const body = request.body as { orgId?: unknown } | null | undefined;
       const orgId = body?.orgId;

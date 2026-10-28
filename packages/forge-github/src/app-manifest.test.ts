@@ -35,7 +35,7 @@ describe("GitHub App manifest (P3-1)", () => {
       redirect_url: "https://rocky.example.com/setup/github-app/callback",
       callback_urls: ["https://rocky.example.com/auth/github/callback"],
       public: false,
-      default_events: ["pull_request"],
+      default_events: ["pull_request", "organization"],
       default_permissions: {
         contents: "read",
         pull_requests: "write",
@@ -48,7 +48,7 @@ describe("GitHub App manifest (P3-1)", () => {
     });
   });
 
-  it("requests exactly the four permissions of the plan, org Members: read (P7-1), and one event", () => {
+  it("requests exactly the four permissions of the plan, org Members: read (P7-1), and two events (organization: P7-2)", () => {
     expect(GITHUB_APP_PERMISSIONS).toStrictEqual({
       contents: "read",
       pull_requests: "write",
@@ -56,7 +56,7 @@ describe("GitHub App manifest (P3-1)", () => {
       metadata: "read",
       members: "read",
     });
-    expect(GITHUB_APP_EVENTS).toStrictEqual(["pull_request"]);
+    expect(GITHUB_APP_EVENTS).toStrictEqual(["pull_request", "organization"]);
     expect(Object.isFrozen(GITHUB_APP_PERMISSIONS)).toBe(true);
     expect(Object.isFrozen(GITHUB_APP_EVENTS)).toBe(true);
   });

@@ -64,7 +64,7 @@ export const members = pgTable("members", {
   orgId: orgIdColumn(),
   forgeUserId: bigint("forge_user_id", { mode: "number" }).notNull(),
   login: text("login").notNull(),
-  role: text("role", { enum: ["admin", "member"] })
+  role: text("role", { enum: ["owner", "admin", "member"] })
     .notNull()
     .default("member"),
   forgeTokenCiphertext: bytea("forge_token_ciphertext"),

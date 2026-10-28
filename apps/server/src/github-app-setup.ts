@@ -11,6 +11,7 @@ import {
   type GitHubEndpoints,
 } from "@rocky-reviews/forge-github";
 import rateLimit from "@fastify/rate-limit";
+import { publicRoute } from "./auth/policy.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   checkCredentialsTarget,
@@ -205,7 +206,9 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       return undefined;
     });
 
-    scope.get(SETUP_PATH, async (request, reply) => {
+    // Development only, before any org exists: guarded by the one-time token and the state cookie.
+    const policy = publicRoute("one-time setup token from the server's terminal (development)");
+    scope.get(SETUP_PATH, { config: { policy } }, async (request, reply) => {
       const token = param(request, "token");
       const org = param(request, "org");
       if (org === null || (org !== undefined && !isOrganizationLogin(org))) {
@@ -318,7 +321,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       );
     });
 
-    scope.get(SETUP_CALLBACK, async (request, reply) => {
+    scope.get(SETUP_CALLBACK, { config: { policy } }, async (request, reply) => {
       const session = sessionOf(request);
       if (session === undefined) {
         log(request, "warn", "no_session");

@@ -439,7 +439,7 @@ describe("readUser and listInstallations", () => {
   });
 });
 
-describe("isActiveOrgMember (review round 1: only real members count)", () => {
+describe("orgMembershipRole (review round 1: only real members count; P7-2: the role)", () => {
   const ACME = { id: 9001, login: "acme" };
   const signedIn = async () => {
     const env = setup();
@@ -454,34 +454,42 @@ describe("isActiveOrgMember (review round 1: only real members count)", () => {
     return { ...env, accessToken };
   };
 
-  it("true only for an active membership of that organization, for that user", async () => {
+  it("a role only for an active membership of that organization, for that user", async () => {
     const { api, login, accessToken } = await signedIn();
     // An outside collaborator: the installation is visible, but there is no membership (404).
-    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(false);
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBe(null);
     api.setOrgMembership(ACME.id, ALICE.id, "pending");
-    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(false);
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBe(null);
     api.setOrgMembership(ACME.id, ALICE.id, "active");
-    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(true);
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBe("member");
+    api.setOrgMembership(ACME.id, ALICE.id, "active", "admin");
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBe("admin");
+    // A billing manager (or any other role) is not an organization member: fail closed.
+    api.setOrgMembership(ACME.id, ALICE.id, "active", "billing_manager");
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBeNull();
+    api.setOrgMembership(ACME.id, ALICE.id, "pending", "admin");
+    expect(await login.orgMembershipRole(accessToken, ACME, ALICE.id)).toBeNull();
+    api.setOrgMembership(ACME.id, ALICE.id, "active");
     // The answer must be about the asked org and user (ids, not logins).
-    expect(await login.isActiveOrgMember(accessToken, { ...ACME, id: 9002 }, ALICE.id)).toBe(false);
-    expect(await login.isActiveOrgMember(accessToken, ACME, 9999)).toBe(false);
+    expect(await login.orgMembershipRole(accessToken, { ...ACME, id: 9002 }, ALICE.id)).toBe(null);
+    expect(await login.orgMembershipRole(accessToken, ACME, 9999)).toBe(null);
   });
 
   it("fails closed: 401, 403, other statuses, a non-JSON 404 and bad shapes are errors", async () => {
     const { api, login, accessToken } = await signedIn();
     api.setOrgMembership(ACME.id, ALICE.id, "active");
     api.failRoute("org_membership", 401);
-    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "token_rejected", 401);
+    await failsWith(login.orgMembershipRole(accessToken, ACME, ALICE.id), "token_rejected", 401);
     api.failRoute("org_membership", 403);
-    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "forbidden", 403);
+    await failsWith(login.orgMembershipRole(accessToken, ACME, ALICE.id), "forbidden", 403);
     api.failRoute("org_membership", 500);
-    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "http_status", 500);
-    await failsWith(login.isActiveOrgMember("bad token", ACME, ALICE.id), "token_rejected");
+    await failsWith(login.orgMembershipRole(accessToken, ACME, ALICE.id), "http_status", 500);
+    await failsWith(login.orgMembershipRole("bad token", ACME, ALICE.id), "token_rejected");
     await expect(
-      login.isActiveOrgMember(accessToken, { id: 9001, login: "../evil" }, ALICE.id),
+      login.orgMembershipRole(accessToken, { id: 9001, login: "../evil" }, ALICE.id),
     ).rejects.toThrow("invalid organization login");
     await expect(
-      login.isActiveOrgMember(accessToken, { id: 0, login: "acme" }, ALICE.id),
+      login.orgMembershipRole(accessToken, { id: 0, login: "acme" }, ALICE.id),
     ).rejects.toThrow("invalid id");
     const answer = (status: number, body: string, type = "application/json") =>
       createGitHubLogin({
@@ -495,12 +503,22 @@ describe("isActiveOrgMember (review round 1: only real members count)", () => {
           })) as unknown as typeof fetch,
       });
     await failsWith(
-      answer(404, "<html>", "text/html").isActiveOrgMember("x".repeat(40), ACME, ALICE.id),
+      answer(404, "<html>", "text/html").orgMembershipRole("x".repeat(40), ACME, ALICE.id),
       "invalid_response",
     );
     const fixture = githubFixture("get-user-org-membership");
     await failsWith(
-      answer(200, JSON.stringify({ ...fixture, state: 1 })).isActiveOrgMember(
+      answer(200, JSON.stringify({ ...fixture, state: 1 })).orgMembershipRole(
+        "x".repeat(40),
+        ACME,
+        ALICE.id,
+      ),
+      "invalid_response",
+    );
+    const noRole: Record<string, unknown> = { ...fixture };
+    delete noRole["role"];
+    await failsWith(
+      answer(200, JSON.stringify({ ...noRole, state: "active" })).orgMembershipRole(
         "x".repeat(40),
         ACME,
         ALICE.id,

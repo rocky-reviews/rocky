@@ -1,4 +1,4 @@
-import type { ForgeKind, OrgId } from "@rocky-reviews/core";
+import type { ForgeKind, OrgId, Role } from "@rocky-reviews/core";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type pg from "pg";
 import type { TenantTx } from "./client.js";
@@ -513,8 +513,8 @@ const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 /**
  * The member row of this org for a forge user whose membership GitHub just confirmed, created
- * on first login with the default role (`member`; roles are P7-2's). An existing row keeps its
- * role; only the display login is refreshed. A member removed in Rocky stays removed: the
+ * on first login with the default role (`member`; the first owner is `claimFirstOwner`'s, P7-2).
+ * An existing row keeps its role; only the display login is refreshed. A member removed in Rocky stays removed: the
  * answer is `null` and nothing changes (re-adding is an explicit admin action, P7-2). RLS keeps
  * this inside the transaction's org.
  */
@@ -566,7 +566,7 @@ export const markMemberRemoved = async (tx: TenantTx, memberId: string): Promise
 export interface SessionMember {
   readonly memberId: string;
   readonly login: string;
-  readonly role: "admin" | "member";
+  readonly role: Role;
   readonly orgLogin: string;
 }
 

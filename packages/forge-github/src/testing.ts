@@ -47,6 +47,44 @@ export const installationPayload = (
   sender: { id: 5, login: "alice", type: "User", email: PLANTED.email },
 });
 
+/**
+ * An `organization` webhook payload (P7-2), shaped like GitHub's documentation example for
+ * `member_removed`: the membership's user is the person who left.
+ */
+export const organizationPayload = (
+  action: string,
+  options: {
+    installationId?: number;
+    organizationId?: number;
+    login?: string;
+    memberId?: number;
+  } = {},
+): Record<string, unknown> => ({
+  action,
+  membership: {
+    url: "https://api.github.com/orgs/acme/memberships/octo-dev",
+    state: "active",
+    role: "member",
+    organization_url: "https://api.github.com/orgs/acme",
+    user: {
+      login: "octo-dev",
+      id: options.memberId ?? 9101,
+      type: "User",
+      email: PLANTED.email,
+    },
+  },
+  organization: {
+    login: options.login ?? "acme",
+    id: options.organizationId ?? 9001,
+    description: PLANTED.title,
+  },
+  installation: {
+    id: options.installationId ?? 4242,
+    node_id: "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNDI0Mg==",
+  },
+  sender: { id: 5, login: "alice", type: "User" },
+});
+
 export const pullRequestPayload = (
   action: string,
   options: {
@@ -268,7 +306,13 @@ export interface FakeGitHubApi {
    * P7-1 review round 1: the user's membership of an organization account (by account id), as
    * `GET /user/memberships/orgs/{org}` reports it; `null` removes it (GitHub's 404).
    */
-  setOrgMembership(accountId: number, userId: number, state: "active" | "pending" | null): void;
+  setOrgMembership(
+    accountId: number,
+    userId: number,
+    state: "active" | "pending" | null,
+    /** GitHub's role in the organization (P7-2, the first owner). Default `member`. */
+    role?: "admin" | "member" | "billing_manager",
+  ): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -346,7 +390,10 @@ export const fakeGitHubApi = (options: {
   const permissions = new Map<string, FakePermission>();
   const visibilities = new Map<number, "public" | "internal">();
   const installationGrants = new Set<string>();
-  const orgMemberships = new Map<string, "active" | "pending">();
+  const orgMemberships = new Map<
+    string,
+    { state: "active" | "pending"; role: "admin" | "member" | "billing_manager" }
+  >();
 
   const flags = (role: FakePermission | undefined, readable: boolean) => {
     const rank = role === undefined ? -1 : ROLES.indexOf(role);
@@ -745,15 +792,16 @@ export const fakeGitHubApi = (options: {
       const account = [...installed.values()]
         .map((e) => e.account)
         .find((a) => a.type === "Organization" && a.login.toLowerCase() === login);
-      const state =
+      const membership =
         account === undefined ? undefined : orgMemberships.get(`${account.id}:${user.id}`);
-      if (account === undefined || state === undefined) {
+      if (account === undefined || membership === undefined) {
         return json(404, githubFixture("get-installation.not-found"));
       }
       const fixture = githubFixture("get-user-org-membership");
       return json(200, {
         ...fixture,
-        state,
+        state: membership.state,
+        role: membership.role,
         organization: {
           ...(fixture["organization"] as Record<string, unknown>),
           id: account.id,
@@ -899,9 +947,9 @@ export const fakeGitHubApi = (options: {
       const user = users.get(value);
       if (user !== undefined) user.revoked = true;
     },
-    setOrgMembership: (accountId, userId, state) => {
+    setOrgMembership: (accountId, userId, state, role) => {
       if (state === null) orgMemberships.delete(`${accountId}:${userId}`);
-      else orgMemberships.set(`${accountId}:${userId}`, state);
+      else orgMemberships.set(`${accountId}:${userId}`, { state, role: role ?? "member" });
     },
     grantInstallation: (userId, installationId, granted = true) => {
       if (granted) installationGrants.add(`${userId}:${installationId}`);

@@ -10,6 +10,7 @@ export {
   ANALYSIS_MAX_ATTEMPTS,
   ANALYSIS_MAX_RETRY_DELAY_MS,
   AnalysisStoreError,
+  analysisRepository,
   approveAnalysisOverLimit,
   completeAnalysis,
   enqueueAnalysis,
@@ -154,6 +155,22 @@ export {
   type SessionRevocation,
   type SessionStore,
 } from "./sessions.js";
+export {
+  changeMemberRole,
+  claimFirstOwner,
+  listMembers,
+  MAX_MEMBER_LISTING,
+  memberLeftForge,
+  MemberStoreError,
+  removeMember,
+  restoreMember,
+  transferOwnership,
+  type OrgMemberView,
+  type RemoveMemberResult,
+  type RestoreMemberResult,
+  type RoleChangeResult,
+  type TransferResult,
+} from "./members.js";
 export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,

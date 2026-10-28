@@ -23,9 +23,11 @@ export const GITHUB_APP_PERMISSIONS: Readonly<Record<string, "read" | "write">> 
 
 /**
  * Subscribed webhook events. `installation` is delivered to every app without subscribing; the
- * receiver (P3-2) decodes only `installation`, `pull_request` and `ping`.
+ * receiver (P3-2) decodes only `installation`, `pull_request`, `organization` and `ping`.
+ * `organization` (P7-2, ADR 0024; needs the Members permission above) tells Rocky when someone
+ * leaves the organization, so their token and live sessions go at once.
  */
-export const GITHUB_APP_EVENTS: readonly string[] = Object.freeze(["pull_request"]);
+export const GITHUB_APP_EVENTS: readonly string[] = Object.freeze(["pull_request", "organization"]);
 
 const DESCRIPTION =
   "Rocky Reviews (self-hosted): AI does the reading, a human makes the call. Only a person posts reviews.";

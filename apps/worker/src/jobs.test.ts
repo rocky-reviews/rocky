@@ -28,8 +28,11 @@ const settings = {
 const stubDb = (overrides: Partial<Db> = {}) => {
   const calls: string[] = [];
   const db = {
-    claimWebhookDeliveries: () => {
-      calls.push("claim");
+    claimWebhookDeliveries: (options: { eventTypes: readonly string[] }) => {
+      // The org member lane (P7-2) reads nothing from GitHub, so it runs without the app check.
+      calls.push(
+        options.eventTypes.every((t) => t.startsWith("org_member.")) ? "claim:org_member" : "claim",
+      );
       return Promise.resolve([]);
     },
     orgsDueForDeletion: () => {
@@ -87,6 +90,8 @@ describe("startJobs", () => {
     await expect.poll(() => calls.filter((c) => c === "purge_inbox").length).toBeGreaterThan(2);
     await jobs.stop();
     expect(calls).not.toContain("claim");
+    // P7-2: departures from the GitHub org only take access away and need no GitHub read.
+    expect(calls).toContain("claim:org_member");
     // The sweep re-verifies every uninstall with GitHub first (review round 1, S1c).
     expect(calls).not.toContain("due");
     expect(

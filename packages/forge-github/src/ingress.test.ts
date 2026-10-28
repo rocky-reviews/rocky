@@ -4,6 +4,7 @@ import { createGitHubWebhookIngress } from "./ingress.js";
 import { payloadSha256, signWebhookBody } from "./signature.js";
 import {
   installationPayload,
+  organizationPayload,
   PLANTED,
   pullRequestPayload,
   signedDelivery,
@@ -440,6 +441,72 @@ describe("precheck (headers only, before the body is read)", () => {
           }
         }
       }
+    }
+  });
+});
+
+describe("organization events (P7-2, ADR 0024)", () => {
+  it("decodes member_removed to the organization, the installation and the person's id only", () => {
+    const d = signedDelivery("organization", organizationPayload("member_removed"));
+    const r = receive(d);
+    expect(r).toEqual({
+      outcome: "accepted",
+      delivery: {
+        forge: "github",
+        deliveryId: d.headers["x-github-delivery"],
+        payloadSha256: payloadSha256(d.body),
+        event: {
+          type: "org_member.removed",
+          installationId: 4242,
+          account: { id: 9001, login: "acme", kind: "organization" },
+          memberForgeUserId: 9101,
+        },
+      },
+    });
+    const serialised = JSON.stringify(r);
+    for (const planted of [PLANTED.email, PLANTED.title, "octo-dev", "node_id", "memberships"]) {
+      expect(serialised).not.toContain(planted);
+    }
+  });
+
+  it("ignores every other organization action: nothing is ever granted from a webhook", () => {
+    for (const action of [
+      "member_added",
+      "member_invited",
+      "renamed",
+      "deleted",
+      "MEMBER_REMOVED",
+      "__proto__",
+    ]) {
+      expect(receive(signedDelivery("organization", organizationPayload(action))).outcome).toBe(
+        "ignored",
+      );
+    }
+  });
+
+  it("ignores team membership events: leaving a team is not leaving the organization", () => {
+    const d = signedDelivery("membership", { ...organizationPayload("removed"), scope: "team" });
+    expect(receive(d)).toEqual({
+      outcome: "ignored",
+      deliveryId: d.headers["x-github-delivery"],
+      eventName: "membership",
+    });
+  });
+
+  it("refuses a member_removed payload without usable ids", () => {
+    const base = organizationPayload("member_removed");
+    for (const payload of [
+      { ...base, membership: { user: { id: 0 } } },
+      { ...base, membership: { user: { id: "9101" } } },
+      { ...base, membership: null },
+      { ...base, organization: { id: 9001, login: "../etc" } },
+      { ...base, organization: { id: -1, login: "acme" } },
+      { ...base, installation: undefined },
+    ]) {
+      expect(receive(signedDelivery("organization", payload))).toEqual({
+        outcome: "rejected",
+        reason: "bad_payload",
+      });
     }
   });
 });

@@ -6,7 +6,7 @@ import { runAnalysis } from "./analysis.js";
 import { createAnalysisLane, type AnalysisLane } from "./analysis-lane.js";
 import { createAppCheck } from "./app-check.js";
 import { sweepOrgDeletions } from "./deletion-sweep.js";
-import { drainInstallationEvents, drainPullRequestEvents } from "./inbox.js";
+import { drainInstallationEvents, drainOrgMemberEvents, drainPullRequestEvents } from "./inbox.js";
 
 /**
  * The worker's recurring jobs (P3-3, P3-4; the analysis lane P4-6). Each runs on its own timer,
@@ -117,6 +117,25 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
     };
     tick();
   };
+
+  // People who left the GitHub organization (P7-2): no GitHub read, so it runs without the app
+  // credentials too. GitHub is the only forge adapter.
+  const memberBatchSize = 20;
+  const alwaysReady = { ready: () => Promise.resolve(true) };
+  every("org_members", intervals.inboxMs, async () => {
+    const report = await drainOrgMemberEvents({
+      db: deps.db,
+      forge: { kind: deps.forge?.kind ?? "github" },
+      appCheck: alwaysReady,
+      clock: deps.clock,
+      log: deps.log,
+      batchSize: memberBatchSize,
+    });
+    if (report.claimed > 0) deps.log.info({ job: "org_members", ...report }, "inbox drained");
+    return (
+      report.claimed === memberBatchSize && report.processed + report.parked === memberBatchSize
+    );
+  });
 
   if (deps.forge === undefined) {
     deps.log.warn(

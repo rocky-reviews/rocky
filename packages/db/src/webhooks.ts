@@ -1,6 +1,7 @@
 import {
   isForgeEventType,
   isInstallationEvent,
+  isOrgMemberEvent,
   type ForgeEvent,
   type WebhookDelivery,
 } from "@rocky-reviews/core";
@@ -84,6 +85,21 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
       installationId: event.installationId,
       account: { id: account.id, login: account.login, kind: account.kind },
       sender: sender === null ? null : { id: sender.id, login: sender.login },
+    };
+  }
+  if (isOrgMemberEvent(event)) {
+    const account = event.account;
+    if (typeof account !== "object" || account === null) return invalid("account");
+    if (!isId(account.id)) return invalid("account id");
+    if (typeof account.login !== "string" || !LOGIN.test(account.login)) return invalid("login");
+    // Only an organization has members to lose; a User account's owner is its only member.
+    if (account.kind !== "organization") return invalid("account kind");
+    if (!isId(event.memberForgeUserId)) return invalid("member id");
+    return {
+      type: event.type,
+      installationId: event.installationId,
+      account: { id: account.id, login: account.login, kind: account.kind },
+      memberForgeUserId: event.memberForgeUserId,
     };
   }
   if (!isId(event.repositoryId)) return invalid("repository id");

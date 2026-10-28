@@ -1,9 +1,12 @@
+import type { RepositoryAccessCheck } from "@rocky-reviews/core";
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
 import { registerCsrfGuard } from "./auth/csrf.js";
+import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/policy.js";
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { registerRoleRoutes } from "./roles/routes.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
@@ -21,6 +24,11 @@ export interface AppDeps {
    * state-changing route except the signed webhook receiver is refused by the CSRF guard.
    */
   auth?: AuthDeps;
+  /**
+   * The repository access check (P3-6) for routes that touch a repository's data; such routes
+   * refuse (503) without it (P7-2).
+   */
+  repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -58,6 +66,9 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       ? Fastify({ logger: false, ...timeouts })
       : Fastify({ ...fastifyLoggerOptions(deps.log), ...timeouts });
   if (deps.log !== undefined) addRequestIdHeader(app);
+  // Before any route: every route must declare its access policy, or it fails to register (P7-2).
+  const policies = registerAccessPolicy(app, () => app.sessionAuth);
+  app.decorate("routePolicies", policies.routes);
   // Before any route: every state-changing route is CSRF-checked unless it opts out (ADR 0020 §5).
   registerCsrfGuard(
     app,
@@ -71,14 +82,27 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
   );
 
   // Health probes arrive every few seconds; log them only when something is wrong.
-  app.get("/healthz", { logLevel: "warn" }, async (_req, reply) => {
-    const database = await deps.checkDatabase().catch(() => false);
-    return reply.code(database ? 200 : 503).send({ ok: database, database });
-  });
+  app.get(
+    "/healthz",
+    { logLevel: "warn", config: { policy: publicRoute("health probe") } },
+    async (_req, reply) => {
+      const database = await deps.checkDatabase().catch(() => false);
+      return reply.code(database ? 200 : 503).send({ ok: database, database });
+    },
+  );
 
   if (deps.webhooks !== undefined) registerWebhooks(app, deps.webhooks);
   if (deps.githubAppSetup !== undefined) registerGitHubAppSetup(app, deps.githubAppSetup);
-  if (deps.auth !== undefined) app.decorate("sessionAuth", registerAuth(app, deps.auth));
+  if (deps.auth !== undefined) {
+    app.decorate("sessionAuth", registerAuth(app, deps.auth));
+    registerRoleRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.auth.onMemberTokenChanged === undefined
+        ? {}
+        : { onMemberChanged: deps.auth.onMemberTokenChanged }),
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+    });
+  }
 
   return app;
 };
@@ -87,5 +111,7 @@ declare module "fastify" {
   interface FastifyInstance {
     /** Session lookups for routes (P7-1); present when login is configured. */
     sessionAuth?: SessionAuth;
+    /** Every registered route and its declared access policy (P7-2; the matrix test reads it). */
+    routePolicies: () => readonly PolicyEntry[];
   }
 }
