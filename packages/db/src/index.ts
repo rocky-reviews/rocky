@@ -105,6 +105,7 @@ export {
 } from "./retention.js";
 export {
   APP_ROLE,
+  AUTH_ROLE,
   checkServerLogin,
   ensureLoginRole,
   LIFECYCLE_ROLE,
@@ -116,6 +117,7 @@ export {
 } from "./roles.js";
 export {
   CIPHERTEXT_PREFIX,
+  clearForgeToken,
   loadForgeToken,
   loadOrgDataKey,
   loadOrgLlmApiKey,
@@ -128,6 +130,30 @@ export {
   WRAPPED_KEY_PREFIX,
   type StoredSecret,
 } from "./secrets.js";
+export {
+  createSessionStore,
+  loadSessionMember,
+  LOGIN_ATTEMPT_MAX_TTL_MS,
+  LOGIN_ATTEMPT_PRUNE_BATCH,
+  markMemberRemoved,
+  MAX_LOGIN_ORGS,
+  RETURN_TO_MAX_BYTES,
+  SESSION_IDLE_MAX_SECONDS,
+  SESSION_IDLE_MIN_SECONDS,
+  SESSION_MAX_LIFETIME_MS,
+  SESSION_PURGE_AFTER_MS,
+  SESSION_TOUCH_INTERVAL_MS,
+  SessionStoreError,
+  upsertLoginMember,
+  type LiveSession,
+  type LoginInstallation,
+  type NewSession,
+  type RevokedSession,
+  type SessionMember,
+  type SessionOrg,
+  type SessionRevocation,
+  type SessionStore,
+} from "./sessions.js";
 export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,

@@ -1,3 +1,4 @@
+import { generateLocalKek } from "@rocky-reviews/crypto";
 import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -280,5 +281,43 @@ describe("GitHub App setup at boot (P3-1)", () => {
     expect(printed).toHaveLength(0);
     const res = await running.app.inject({ method: "GET", url: "/setup/github-app" });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("GitHub login at boot (P7-1, ADR 0020)", () => {
+  const CLIENT = {
+    GITHUB_APP_CLIENT_ID: "Iv23liTestClient01",
+    GITHUB_APP_CLIENT_SECRET: "test-only-client-secret-0123456789abcdef",
+  };
+  const KEK = { ROCKY_KEK_KEYS: `v1=${generateLocalKek()}` };
+
+  it("registers login with the client credentials and a KEK; warns about the dev-only exceptions", async () => {
+    const { log, lines } = capture();
+    running = await startServer({ ...BASE_ENV, ...CLIENT, ...KEK }, log);
+    expect(running.auth).toBe(true);
+    const res = await running.app.inject({ method: "GET", url: "/api/session" });
+    expect(res.statusCode).toBe(401);
+    const warnings = lines.map((l) => l["msg"]);
+    expect(warnings).toContain(
+      "ROCKY_SESSION_SECRET is not set: generated for this process (development only)",
+    );
+    expect(JSON.stringify(lines)).not.toContain(CLIENT.GITHUB_APP_CLIENT_SECRET);
+  });
+
+  it("refuses to start with login configured but no KEK, and in production without login", async () => {
+    const { log } = capture();
+    await expect(startServer({ ...BASE_ENV, ...CLIENT }, log)).rejects.toThrow(/ROCKY_KEK_KEYS/);
+    await expect(
+      startServer({ ...BASE_ENV, NODE_ENV: "production", GITHUB_WEBHOOK_SECRET: GOOD }, log),
+    ).rejects.toThrow(/GITHUB_APP_CLIENT_ID/);
+  });
+
+  it("without client credentials outside production: no login routes, state changes refused", async () => {
+    const { log } = capture();
+    running = await startServer(BASE_ENV, log);
+    expect(running.auth).toBe(false);
+    expect(
+      (await running.app.inject({ method: "GET", url: "/auth/github/login" })).statusCode,
+    ).toBe(404);
   });
 });
