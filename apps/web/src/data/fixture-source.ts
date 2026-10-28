@@ -4,6 +4,7 @@
  * returns unchecked parts; the app runs them through `parseShellData`.
  */
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
+import { largeShellData } from "./large-fixture.js";
 import {
   type PullRef,
   type RawShellData,
@@ -29,7 +30,11 @@ export const PR_847_PULL = {
   commentCount: 4,
 } as const;
 
-const FIXTURES: readonly RawShellData[] = [{ pull: PR_847_PULL, myReview: null, analysis: pr847 }];
+const FIXTURES: readonly RawShellData[] = [
+  { pull: PR_847_PULL, myReview: null, analysis: pr847 },
+  // P6-3: a 5,000-line diff for the performance trace (`?fixture=large-diff`).
+  largeShellData(),
+];
 
 const matches = (fixture: RawShellData, ref: PullRef): boolean => {
   const pull = fixture.pull as Partial<PullRef>;

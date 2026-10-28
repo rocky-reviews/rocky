@@ -45,17 +45,18 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## File view (P6-3)
 
-- [ ] Sticky header: risk label + score, path, +/−, "Mark viewed (v)" / "✓ Viewed"
-- [ ] AI strip: "What changed", "Why <level>", "Drafts: n findings"
-- [ ] Hunk headers
-- [ ] Old/new line numbers, +/− signs, add/del backgrounds
-- [ ] Syntax highlighting (keywords, strings, comments, numbers)
-- [ ] Hot-line marker on the left edge coloured by severity / flag kind
-- [ ] AI flags under lines: "✦ Look here", "✦ Your call" (question for the reviewer), "✓ Checked"
-- [ ] Click a new-line number → compose your own comment (Add / Cancel / "✦ Polish with AI", ⌘↵ to add)
-- [ ] Your own pending comments inline with Delete
-- [ ] Footer: "Mark viewed & next →" / "Next file →"
-- [ ] Noise file view: AI summary + "Show raw diff"
+- [x] P6-3 · Sticky header: risk label + score, path, +/−, "Mark viewed (v)" / "✓ Viewed" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `v` itself is P6-5, so the button shows no key hint yet
+- [x] P6-3 · AI strip: "What changed", "Why <level>", "Drafts: n findings" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); "Accept, edit or dismiss each one inline" comes with the inline drafts (P6-4)
+- [x] P6-3 · Hunk headers — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); modified files: `diff.e2e.spec.ts` "a modified file shows old and new numbers, signs and hunk headers"
+- [x] P6-3 · Old/new line numbers, +/− signs, add/del backgrounds — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-noise-raw-1024-light](../../apps/web/e2e/__screenshots__/file-noise-raw-1024-light.png) (removed lines); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png), `diff.e2e.spec.ts`
+- [x] P6-3 · Syntax highlighting (keywords, strings, comments, numbers) — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); tokenizer tests in `tokenize.test.ts` (ADR 0023)
+- [x] P6-3 · Hot-line marker on the left edge coloured by severity / flag kind — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `diff.e2e.spec.ts` "hot lines and AI flags sit on their lines"
+- [x] P6-3 · AI flags under lines: "✦ Look here", "✦ Your call" (question for the reviewer), "✓ Checked" — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png)
+- [x] P6-3 · Click a new-line number → compose your own comment (Add / Cancel / "✦ Polish with AI", ⌘↵ to add) — [file-own-comment-1440-light](../../apps/web/e2e/__screenshots__/file-own-comment-1440-light.png), [file-own-comment-375-dark](../../apps/web/e2e/__screenshots__/file-own-comment-375-dark.png); keyboard path in `diff.e2e.spec.ts`. "✦ Polish with AI" is not built (see Intentional differences)
+- [x] P6-3 · Your own pending comments inline with Delete — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-pending-comment-375-dark](../../apps/web/e2e/__screenshots__/file-pending-comment-375-dark.png); `diff.e2e.spec.ts` "arrows move between lines, Enter composes…" (in memory until P6-4 persists drafts)
+- [x] P6-3 · Footer: "Mark viewed & next →" / "Next file →" — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `diff.e2e.spec.ts` "Mark viewed & next…"
+- [x] P6-3 · Noise file view: AI summary + "Show raw diff" — [file-noise-raw-1024-light](../../apps/web/e2e/__screenshots__/file-noise-raw-1024-light.png); [file-noise-1440-light](../../apps/web/e2e/__screenshots__/file-noise-1440-light.png), [file-noise-375-dark](../../apps/web/e2e/__screenshots__/file-noise-375-dark.png); the raw diff really expands (the POC showed a toast)
+- [x] P6-3 (not in the POC) · Large files are virtualised: a 5,000-line diff scrolls at 60 fps with the CPU throttled 4x (`diff.perf.spec.ts`, Chrome trace)
 
 ## AI drafts (P6-4)
 
@@ -143,5 +144,13 @@ Defect 6 is fixed in the coverage card.
   about 96 px tall, close to the POC's 92 px.
 - **Drawer toggles (P6-1).** The top bar gains a Files toggle (≤ 760 px) and a Review panel
   toggle (≤ 1180 px), and a skip link; the POC has neither (defect 5).
+- **File view (P6-3).** Line numbers use `--muted` (POC `--faint`, 2.4–2.6:1); comments and
+  numbers in code use `--syn-com` / `--syn-num`, AA shades of the POC's `--tk-com` / `--tk-num`
+  (3.2–4.5:1 on the diff backgrounds); the risk label, the AI-strip labels and the flag labels set
+  their text in `--text` and keep the level/AI/kind colour on a dot or mark. Below 760 px the path
+  takes its own line in the sticky header. Only new-side lines take a comment (as in the POC).
+  "✦ Polish with AI" is left out of the composer until there is an AI endpoint for it. Invisible
+  bidi controls in code show as visible `U+202E` markers. The AI notes are hidden when the
+  analysis is for an older push than the diff.
 - **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
   bar until those tasks; the main column and right panel hold placeholders until P6-2/P6-4.

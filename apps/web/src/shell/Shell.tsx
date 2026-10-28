@@ -134,7 +134,11 @@ export const Shell = ({ data, now }: Props) => {
           )}
         </nav>
         <main id="main" className="col main" tabIndex={-1} inert={overlay !== null}>
-          <MainContent selection={selection} analysis={data.analysis} />
+          <MainContent
+            selection={selection}
+            analysis={data.analysis}
+            files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+          />
         </main>
         <aside
           id="review-panel"

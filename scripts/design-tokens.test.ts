@@ -26,9 +26,10 @@ const app = read("apps/web/src/styles/tokens.css");
 
 /**
  * Tokens the app defines that the POC has no variable for. Anything else must come from the
- * POC, so the palette can't drift by adding tokens either.
+ * POC, so the palette can't drift by adding tokens either. `--syn-*` (P6-3) are the diff's
+ * syntax colours: the POC's `--tk-*` or an AA-contrast shade of the same hue.
  */
-const DERIVED = /^--(font|text|radius|space)-|^--shadow-modal$|^--overlay$/;
+const DERIVED = /^--(font|text|radius|space|syn)-|^--shadow-modal$|^--overlay$/;
 
 describe("design tokens match the POC", () => {
   for (const [mode, selector] of [
