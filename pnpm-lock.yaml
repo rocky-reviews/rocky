@@ -285,7 +285,11 @@ importers:
         specifier: 5.12.7
         version: 5.12.7
 
-  packages/renderer: {}
+  packages/renderer:
+    dependencies:
+      '@rocky-reviews/schema':
+        specifier: workspace:*
+        version: link:../schema
 
   packages/schema:
     dependencies:

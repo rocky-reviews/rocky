@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cm" viewBox="0 0 542 182" width="542" height="182" role="img" aria-label="Change map">
+<defs><marker id="cm-arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-added" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-modified" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-modified" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-removed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-removed" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-unchanged" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-unchanged" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-hero" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-hero" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<g class="cm-lanes"><g class="cm-lane"><title>AAAAAAAAAA VERY LONG LABEL THAT KEEPS GOING  VERY LONG LABEL THAT KEEPS GOING  VERY LONG LABEL THAT KEEPS GOING  VERY LO · SUBTITLE THAT ALSO RUNS ON</title>
+<rect class="cm-lane-bg" x="8" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="20" y="20">AAAAAAAAAA VERY LON…</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="302" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="314" y="20">SECOND</text></g></g>
+<g class="cm-edges"><path class="cm-edge cm-added cm-hero cm-animated" data-edge="long-changed" d="M178,68.5 C247,68.5 247,57.5 316,57.5" marker-end="url(#cm-arrow-hero)"><title>AAAAAAAAAA very long label that keeps going  very long label that keeps going  very long label that keeps going  very lo → ChangedThing · AAAAAAAAAA very long label that keeps going  very long label that keeps going  very long label that keeps going  very lo</title></path>
+<path class="cm-edge cm-removed" data-edge="gone-changed" d="M178,134 C247,134 247,66.5 316,66.5" marker-end="url(#cm-arrow-removed)"><title>RemovedThing → ChangedThing · old call</title></path>
+<path class="cm-edge cm-unchanged cm-muted" data-edge="changed-ctx" d="M394,84 L394,112" marker-end="url(#cm-arrow-unchanged)"><title>ChangedThing → Context</title></path>
+<path class="cm-edge cm-added" data-edge="loop" d="M472,54 C492,42 492,82 472,70" marker-end="url(#cm-arrow-added)"><title>ChangedThing → ChangedThing · retries</title></path></g>
+<g class="cm-nodes"><g class="cm-node cm-added" data-node="long"><title>AAAAAAAAAA very long label that keeps going  very long label that keeps going  very long label that keeps going  very lo · src/deeply/nested/deeply/nested/deeply/nested/deeply/nested/deeply/nested/deeply/nested/file.ts · hot path · 12 findings, worst high</title>
+<rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="59">AAAAAAAAAA very…</text>
+<text class="cm-node-sub" x="32" y="74">src/deeply/nested/deeply/nes…</text>
+<g class="cm-badge cm-high" data-findings="F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12"><rect class="cm-badge-bg" x="166.26" y="33" width="19.48" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">9+</text></g></g>
+<g class="cm-node cm-removed" data-node="gone"><title>RemovedThing · was here</title>
+<rect class="cm-card" x="22" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="131">RemovedThing</text>
+<text class="cm-node-sub" x="32" y="146">was here</text></g>
+<g class="cm-node cm-modified" data-node="changed"><title>ChangedThing</title>
+<rect class="cm-card" x="316" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="326" y="59">ChangedThing</text></g>
+<g class="cm-node cm-unchanged" data-node="ctx"><title>Context</title>
+<rect class="cm-card" x="316" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="326" y="131">Context</text></g></g>
+<g class="cm-labels"><g class="cm-label" data-edge="long-changed" aria-hidden="true"><rect class="cm-pill" x="184.5" y="56" width="125" height="14" rx="7"/><text class="cm-pill-text" x="247" y="66.3" text-anchor="middle">AAAAAAAAAA very long l…</text></g>
+<g class="cm-label" data-edge="gone-changed" aria-hidden="true"><rect class="cm-pill" x="227.22" y="93.25" width="39.56" height="14" rx="7"/><text class="cm-pill-text" x="247" y="103.55" text-anchor="middle">old call</text></g>
+<g class="cm-label" data-edge="loop" aria-hidden="true"><rect class="cm-pill" x="495" y="55" width="36.39" height="14" rx="7"/><text class="cm-pill-text" x="513.2" y="65.3" text-anchor="middle">retries</text></g></g>
+</svg>

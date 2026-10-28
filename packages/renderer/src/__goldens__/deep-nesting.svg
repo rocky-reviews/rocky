@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cm" viewBox="0 0 429 614" width="429" height="614" role="img" aria-label="Change map">
+<defs><marker id="cm-arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-added" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-modified" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-modified" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-removed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-removed" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-unchanged" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-unchanged" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-hero" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-hero" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<g class="cm-lanes"><g class="cm-lane"><rect class="cm-lane-bg" x="8" y="0" width="184" height="614" rx="10"/>
+<text class="cm-lane-label" x="20" y="20">PIPELINE</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="236.09" y="0" width="184" height="614" rx="10"/>
+<text class="cm-lane-label" x="248.09" y="20">STORE</text></g></g>
+<g class="cm-edges"><path class="cm-edge cm-added" data-edge="step-1-step-2" d="M100,84 L100,112" marker-end="url(#cm-arrow-added)"><title>step-1 → step-2</title></path>
+<path class="cm-edge cm-added" data-edge="step-2-step-3" d="M100,156 L100,184" marker-end="url(#cm-arrow-added)"><title>step-2 → step-3</title></path>
+<path class="cm-edge cm-added" data-edge="step-3-step-4" d="M100,228 L100,256" marker-end="url(#cm-arrow-added)"><title>step-3 → step-4</title></path>
+<path class="cm-edge cm-added" data-edge="step-4-step-5" d="M100,300 L100,328" marker-end="url(#cm-arrow-added)"><title>step-4 → step-5</title></path>
+<path class="cm-edge cm-added" data-edge="step-5-step-6" d="M100,372 L100,400" marker-end="url(#cm-arrow-added)"><title>step-5 → step-6</title></path>
+<path class="cm-edge cm-added" data-edge="step-6-step-7" d="M100,444 L100,472" marker-end="url(#cm-arrow-added)"><title>step-6 → step-7</title></path>
+<path class="cm-edge cm-added" data-edge="step-7-step-8" d="M100,516 L100,544" marker-end="url(#cm-arrow-added)"><title>step-7 → step-8</title></path>
+<path class="cm-edge cm-modified" data-edge="retry" d="M178,566 L205.55,566 Q211.55,566 211.55,560 L211.55,68 Q211.55,62 205.55,62 L178,62" marker-end="url(#cm-arrow-modified)"><title>step-8 → step-1 · retry</title></path>
+<path class="cm-edge cm-added" data-edge="shortcut" d="M178,134 L210.55,134 Q216.55,134 216.55,140 L216.55,416 Q216.55,422 210.55,422 L178,422" marker-end="url(#cm-arrow-added)"><title>step-2 → step-6 · short-circuit</title></path>
+<path class="cm-edge cm-added" data-edge="step-4-db" d="M178,278 C214.05,278 214.05,57.5 250.09,57.5" marker-end="url(#cm-arrow-added)"><title>step-4 → db · write</title></path>
+<path class="cm-edge cm-added" data-edge="db-step-7" d="M250.09,66.5 C214.05,66.5 214.05,494 178,494" marker-end="url(#cm-arrow-added)"><title>db → step-7 · read back</title></path></g>
+<g class="cm-nodes"><g class="cm-node cm-added" data-node="step-1"><title>step-1 · depth 1</title>
+<rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="59">step-1</text>
+<text class="cm-node-sub" x="32" y="74">depth 1</text></g>
+<g class="cm-node cm-added" data-node="step-2"><title>step-2 · depth 2</title>
+<rect class="cm-card" x="22" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="131">step-2</text>
+<text class="cm-node-sub" x="32" y="146">depth 2</text></g>
+<g class="cm-node cm-added" data-node="step-3"><title>step-3 · depth 3</title>
+<rect class="cm-card" x="22" y="184" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="203">step-3</text>
+<text class="cm-node-sub" x="32" y="218">depth 3</text></g>
+<g class="cm-node cm-added" data-node="step-4"><title>step-4 · depth 4</title>
+<rect class="cm-card" x="22" y="256" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="275">step-4</text>
+<text class="cm-node-sub" x="32" y="290">depth 4</text></g>
+<g class="cm-node cm-added" data-node="step-5"><title>step-5 · depth 5</title>
+<rect class="cm-card" x="22" y="328" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="347">step-5</text>
+<text class="cm-node-sub" x="32" y="362">depth 5</text></g>
+<g class="cm-node cm-added" data-node="step-6"><title>step-6 · depth 6</title>
+<rect class="cm-card" x="22" y="400" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="419">step-6</text>
+<text class="cm-node-sub" x="32" y="434">depth 6</text></g>
+<g class="cm-node cm-added" data-node="step-7"><title>step-7 · depth 7</title>
+<rect class="cm-card" x="22" y="472" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="491">step-7</text>
+<text class="cm-node-sub" x="32" y="506">depth 7</text></g>
+<g class="cm-node cm-added" data-node="step-8"><title>step-8 · depth 8</title>
+<rect class="cm-card" x="22" y="544" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="563">step-8</text>
+<text class="cm-node-sub" x="32" y="578">depth 8</text></g>
+<g class="cm-node cm-unchanged" data-node="db"><title>db</title>
+<rect class="cm-card" x="250.09" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="260.09" y="59">db</text></g></g>
+<g class="cm-labels"><g class="cm-label" data-edge="retry" aria-hidden="true"><rect class="cm-pill" x="197.05" y="307" width="29" height="14" rx="7"/><text class="cm-pill-text" x="211.55" y="317.3" text-anchor="middle">retry</text></g>
+<g class="cm-label" data-edge="shortcut" aria-hidden="true"><rect class="cm-pill" x="187" y="271" width="59.09" height="14" rx="7"/><text class="cm-pill-text" x="216.55" y="281.3" text-anchor="middle">short-circuit</text></g>
+<g class="cm-label" data-edge="step-4-db" aria-hidden="true"><rect class="cm-pill" x="199.02" y="160.75" width="30.05" height="14" rx="7"/><text class="cm-pill-text" x="214.05" y="171.05" text-anchor="middle">write</text></g>
+<g class="cm-label" data-edge="db-step-7" aria-hidden="true"><rect class="cm-pill" x="190.06" y="251.36" width="51.71" height="14" rx="7"/><text class="cm-pill-text" x="215.91" y="261.66" text-anchor="middle">read back</text></g></g>
+</svg>

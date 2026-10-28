@@ -1,0 +1,193 @@
+/*
+ * Change-map styles (P5-1). The SVG from renderChangeMap carries classes only; every colour
+ * here is a Slate token from apps/web/src/styles/tokens.css, so light and dark follow
+ * <html data-mode>. Font sizes must match packages/renderer/src/design.ts (text is measured
+ * from a table there). Values follow the POC diagram (design-poc/index.html, .diagram).
+ */
+
+.cm {
+  display: block;
+  font-family: var(--font-ui);
+}
+
+.cm-lane-bg {
+  fill: var(--panel-2);
+}
+
+.cm-lane-label {
+  /* --muted rather than the POC's --faint: --faint fails AA contrast on --panel-2. */
+  fill: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.cm-card {
+  stroke-width: 1.5;
+}
+
+.cm-added .cm-card {
+  fill: var(--add-bg);
+  stroke: var(--add-sign);
+}
+
+.cm-modified .cm-card {
+  fill: var(--med-bg);
+  stroke: var(--med);
+}
+
+.cm-unchanged .cm-card {
+  fill: var(--panel);
+  stroke: var(--border);
+}
+
+.cm-removed .cm-card {
+  fill: var(--del-bg);
+  stroke: var(--del-sign);
+  stroke-dasharray: 4 3;
+}
+
+.cm-node-title {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cm-node-sub {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.cm-removed .cm-node-title {
+  text-decoration: line-through;
+}
+
+.cm-removed .cm-node-title,
+.cm-removed .cm-node-sub {
+  fill: var(--muted);
+}
+
+/* Finding badge: coloured by the worst open finding on the card. */
+.cm-badge-bg {
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+.cm-critical .cm-badge-bg {
+  fill: var(--crit);
+}
+
+.cm-high .cm-badge-bg {
+  fill: var(--high);
+}
+
+.cm-medium .cm-badge-bg {
+  fill: var(--med);
+}
+
+.cm-low .cm-badge-bg {
+  fill: var(--low);
+}
+
+.cm-badge-count {
+  fill: var(--panel);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+.cm-edge {
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.4;
+}
+
+.cm-edge.cm-added {
+  stroke: var(--add-sign);
+}
+
+.cm-edge.cm-modified {
+  stroke: var(--med);
+}
+
+.cm-edge.cm-removed {
+  stroke: var(--del-sign);
+  stroke-dasharray: 3 3;
+}
+
+.cm-edge.cm-muted {
+  opacity: 0.45;
+}
+
+/* Where the change matters: the AI's emphasis, so the AI colour. */
+.cm-edge.cm-hero {
+  stroke: var(--ai);
+  stroke-width: 2.4;
+  stroke-dasharray: 6 5;
+}
+
+.cm-edge.cm-animated {
+  animation: cm-flow 1s linear infinite;
+}
+
+.cm-edge.cm-animated:not(.cm-hero) {
+  stroke-dasharray: 6 5;
+}
+
+@keyframes cm-flow {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-edge.cm-animated {
+    animation: none;
+  }
+}
+
+.cm-arrow {
+  fill: var(--faint);
+}
+
+.cm-arrow-added {
+  fill: var(--add-sign);
+}
+
+.cm-arrow-modified {
+  fill: var(--med);
+}
+
+.cm-arrow-removed {
+  fill: var(--del-sign);
+}
+
+.cm-arrow-hero {
+  fill: var(--ai);
+}
+
+/* Edge labels: opaque pills on their own line, placed clear of cards (POC defect 3). */
+.cm-pill {
+  fill: var(--panel);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.cm-pill-text {
+  fill: var(--muted);
+  font-size: 9.5px;
+}
+
+.cm-unavailable-bg {
+  fill: var(--panel-2);
+}
+
+.cm-unavailable-title {
+  fill: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.cm-unavailable-reason {
+  fill: var(--muted);
+  font-size: 12px;
+}

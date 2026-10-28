@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cm" viewBox="0 0 844 758" width="844" height="758" role="img" aria-label="Change map">
+<defs><marker id="cm-arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-added" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-modified" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-modified" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-removed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-removed" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-unchanged" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-unchanged" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-hero" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-hero" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<g class="cm-lanes"><g class="cm-lane"><rect class="cm-lane-bg" x="8" y="0" width="184" height="758" rx="10"/>
+<text class="cm-lane-label" x="20" y="20">HUB</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="222.38" y="0" width="184" height="758" rx="10"/>
+<text class="cm-lane-label" x="234.38" y="20">LEAVES</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="436.76" y="0" width="184" height="758" rx="10"/>
+<text class="cm-lane-label" x="448.76" y="20">MIDDLE</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="651.14" y="0" width="184" height="758" rx="10"/>
+<text class="cm-lane-label" x="663.14" y="20">FAR</text></g></g>
+<g class="cm-edges"><path class="cm-edge cm-added cm-hero cm-animated" data-edge="hub-leaf-00" d="M178,61 C207.19,61 207.19,62 236.38,62" marker-end="url(#cm-arrow-hero)"><title>hub → leaf-00 · dispatch</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-01" d="M178,65.09 C207.19,65.09 207.19,134 236.38,134" marker-end="url(#cm-arrow-added)"><title>hub → leaf-01</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-02" d="M178,66.45 C207.19,66.45 207.19,206 236.38,206" marker-end="url(#cm-arrow-added)"><title>hub → leaf-02</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-03" d="M178,67.82 C207.19,67.82 207.19,278 236.38,278" marker-end="url(#cm-arrow-added)"><title>hub → leaf-03</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-04" d="M178,69.18 C207.19,69.18 207.19,350 236.38,350" marker-end="url(#cm-arrow-added)"><title>hub → leaf-04</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-05" d="M178,70.55 C207.19,70.55 207.19,422 236.38,422" marker-end="url(#cm-arrow-added)"><title>hub → leaf-05</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-06" d="M178,71.91 C207.19,71.91 207.19,494 236.38,494" marker-end="url(#cm-arrow-added)"><title>hub → leaf-06</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-07" d="M178,73.27 C207.19,73.27 207.19,566 236.38,566" marker-end="url(#cm-arrow-added)"><title>hub → leaf-07</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-08" d="M178,74.64 C207.19,74.64 207.19,638 236.38,638" marker-end="url(#cm-arrow-added)"><title>hub → leaf-08</title></path>
+<path class="cm-edge cm-added" data-edge="hub-leaf-09" d="M178,76 C207.19,76 207.19,710 236.38,710" marker-end="url(#cm-arrow-added)"><title>hub → leaf-09</title></path>
+<path class="cm-edge cm-added" data-edge="hub-far-a" d="M178,62.36 L198.69,62.36 Q204.69,62.36 204.69,68.36 L204.69,89.5 Q204.69,95.5 210.69,95.5 L627.45,95.5 Q633.45,95.5 633.45,89.5 L633.45,68 Q633.45,62 639.45,62 L665.14,62" marker-end="url(#cm-arrow-added)"><title>hub → far-a · enqueue far-a</title></path>
+<path class="cm-edge cm-added" data-edge="hub-far-b" d="M178,63.73 L203.69,63.73 Q209.69,63.73 209.69,69.73 L209.69,94.5 Q209.69,100.5 215.69,100.5 L632.45,100.5 Q638.45,100.5 638.45,106.5 L638.45,128 Q638.45,134 644.45,134 L665.14,134" marker-end="url(#cm-arrow-added)"><title>hub → far-b · enqueue far-b</title></path></g>
+<g class="cm-nodes"><g class="cm-node cm-added" data-node="hub"><title>hub · src/hub.ts · 2 findings, worst critical</title>
+<rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="59">hub</text>
+<text class="cm-node-sub" x="32" y="74">src/hub.ts</text>
+<g class="cm-badge cm-critical" data-findings="F1 F2"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">2</text></g></g>
+<g class="cm-node cm-modified" data-node="leaf-00"><title>leaf-00</title>
+<rect class="cm-card" x="236.38" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="59">leaf-00</text></g>
+<g class="cm-node cm-unchanged" data-node="leaf-01"><title>leaf-01</title>
+<rect class="cm-card" x="236.38" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="131">leaf-01</text></g>
+<g class="cm-node cm-unchanged" data-node="leaf-02"><title>leaf-02</title>
+<rect class="cm-card" x="236.38" y="184" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="203">leaf-02</text></g>
+<g class="cm-node cm-modified" data-node="leaf-03"><title>leaf-03 · 1 finding, worst medium</title>
+<rect class="cm-card" x="236.38" y="256" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="275">leaf-03</text>
+<g class="cm-badge cm-medium" data-findings="F3"><rect class="cm-badge-bg" x="381.38" y="249" width="18" height="18" rx="9"/><text class="cm-badge-count" x="390.38" y="261.5" text-anchor="middle">1</text></g></g>
+<g class="cm-node cm-unchanged" data-node="leaf-04"><title>leaf-04</title>
+<rect class="cm-card" x="236.38" y="328" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="347">leaf-04</text></g>
+<g class="cm-node cm-unchanged" data-node="leaf-05"><title>leaf-05</title>
+<rect class="cm-card" x="236.38" y="400" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="419">leaf-05</text></g>
+<g class="cm-node cm-modified" data-node="leaf-06"><title>leaf-06</title>
+<rect class="cm-card" x="236.38" y="472" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="491">leaf-06</text></g>
+<g class="cm-node cm-unchanged" data-node="leaf-07"><title>leaf-07</title>
+<rect class="cm-card" x="236.38" y="544" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="563">leaf-07</text></g>
+<g class="cm-node cm-unchanged" data-node="leaf-08"><title>leaf-08</title>
+<rect class="cm-card" x="236.38" y="616" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="635">leaf-08</text></g>
+<g class="cm-node cm-modified" data-node="leaf-09"><title>leaf-09</title>
+<rect class="cm-card" x="236.38" y="688" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="246.38" y="707">leaf-09</text></g>
+<g class="cm-node cm-unchanged" data-node="middle"><title>middle</title>
+<rect class="cm-card" x="450.76" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="460.76" y="59">middle</text></g>
+<g class="cm-node cm-added" data-node="far-a"><title>far-a</title>
+<rect class="cm-card" x="665.14" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="675.14" y="59">far-a</text></g>
+<g class="cm-node cm-added" data-node="far-b"><title>far-b · 1 finding, worst low</title>
+<rect class="cm-card" x="665.14" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="675.14" y="131">far-b</text>
+<g class="cm-badge cm-low" data-findings="F4"><rect class="cm-badge-bg" x="810.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="819.14" y="117.5" text-anchor="middle">1</text></g></g></g>
+<g class="cm-labels"><g class="cm-label" data-edge="hub-leaf-00" aria-hidden="true"><rect class="cm-pill" x="187.42" y="50.6" width="45.38" height="14" rx="7"/><text class="cm-pill-text" x="210.11" y="60.9" text-anchor="middle">dispatch</text></g>
+<g class="cm-label" data-edge="hub-far-a" aria-hidden="true"><rect class="cm-pill" x="384.5" y="88.5" width="69.15" height="14" rx="7"/><text class="cm-pill-text" x="419.07" y="98.8" text-anchor="middle">enqueue far-a</text></g>
+<g class="cm-label" data-edge="hub-far-b" aria-hidden="true"><rect class="cm-pill" x="303.74" y="93.5" width="69.15" height="14" rx="7"/><text class="cm-pill-text" x="338.32" y="103.8" text-anchor="middle">enqueue far-b</text></g></g>
+</svg>
