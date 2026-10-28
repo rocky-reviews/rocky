@@ -32,4 +32,5 @@ exec docker run --rm -v "$PROJECT_DIR:/src:ro" -w /src $GIT_SAFE_DIR_ENV \
   --disable-version-check \
   --error \
   --exclude node_modules --exclude dist --exclude coverage --exclude design-poc \
+  --exclude test-results --exclude playwright-report --exclude artifacts \
   .

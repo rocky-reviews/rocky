@@ -149,6 +149,7 @@ export const Shell = ({ data, now }: Props) => {
             run={data.analysisRun}
             headSha={data.pull.headSha}
             onOpenFile={openFile}
+            files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
           />
         </main>
         <aside

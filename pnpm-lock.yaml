@@ -105,6 +105,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@rocky-reviews/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@rocky-reviews/evals':
+        specifier: workspace:*
+        version: link:../../packages/evals
       '@rocky-reviews/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer
