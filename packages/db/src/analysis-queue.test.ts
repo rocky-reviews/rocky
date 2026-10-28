@@ -408,6 +408,43 @@ describe("per-PR token limit and Analyze anyway", () => {
     expect(target?.approvedTokens).toBe(212_345);
   });
 
+  it("is refused for a plain member or a removed admin, in the same transaction (P7-2)", async () => {
+    const c = await hold(A);
+    const plain = await app.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "insert into members (forge_user_id, login, role) values (7701, 'plain', 'member') returning id",
+      );
+      return rows[0]!.id;
+    });
+    const removedAdmin = await app.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into members (forge_user_id, login, role, removed_at)
+         values (7702, 'gone', 'admin', now()) returning id`,
+      );
+      return rows[0]!.id;
+    });
+    for (const memberId of [plain, removedAdmin]) {
+      expect(
+        await app.withOrg(A.orgId, (tx) =>
+          approveAnalysisOverLimit(tx, c.analysisId, { memberId }),
+        ),
+      ).toBeUndefined();
+    }
+    expect((await stateOf(c.analysisId)).status).toBe("awaiting_approval");
+    // An owner may (and so may the seeded admin, above).
+    const owner = await app.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "insert into members (forge_user_id, login, role) values (7703, 'boss', 'owner') returning id",
+      );
+      return rows[0]!.id;
+    });
+    expect(
+      await app.withOrg(A.orgId, (tx) =>
+        approveAnalysisOverLimit(tx, c.analysisId, { memberId: owner }),
+      ),
+    ).toMatchObject({ analysisId: c.analysisId });
+  });
+
   it("is refused for another org's row, a non-member, or a row that is not waiting", async () => {
     const c = await hold(A);
     expect(

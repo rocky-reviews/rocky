@@ -82,7 +82,9 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "app.webhook_queue": [],
   // P7-1: consuming an attempt is DELETE … RETURNING (hence SELECT); never UPDATE.
   "app.login_attempts": ["DELETE", "INSERT", "SELECT"],
-  "app.session_orgs": ["INSERT", "SELECT"],
+  // P7-2 (migration 0014): DELETE of the current tenant's links only (policy), so removing a
+  // member or a GitHub departure cuts the org from their live sessions.
+  "app.session_orgs": ["DELETE", "INSERT", "SELECT"],
   // Plus column-level UPDATE (SESSIONS_COLUMN_PRIVILEGES); DELETE only of ended rows (policy).
   "app.sessions": ["DELETE", "INSERT", "SELECT"],
   "app.users": ["INSERT", "SELECT"],
@@ -554,6 +556,64 @@ describe("org A against org B's rows, per table", () => {
         ).rows,
     );
     expect(rows[0]?.n).toBe("1");
+  });
+});
+
+describe("roles across tenants (P7-2, migration 0014)", () => {
+  const asSuperuser = async <T extends pg.QueryResultRow>(sql: string, values: unknown[]) => {
+    const pool = new pg.Pool({ connectionString: pgs.superUrl, max: 1 }).on(
+      "error",
+      ignoreIdleError,
+    );
+    try {
+      return (await pool.query<T>(sql, values)).rows;
+    } finally {
+      await pool.end();
+    }
+  };
+
+  it("org A cannot promote, demote, remove, restore or delete org B's members, even with a crafted query", async () => {
+    const read = () =>
+      asSuperuser<{ role: string; removed: boolean }>(
+        "select role, removed_at is not null as removed from members where id = $1",
+        [b.memberId],
+      );
+    const before = await read();
+    expect(before).toHaveLength(1);
+    for (const sql of [
+      "update members set role = 'owner' where id = $1",
+      "update members set role = 'member' where id = $1 or true",
+      "update members set removed_at = now() where org_id <> app.current_org_id() or id = $1",
+      "update members set removed_at = null where id = $1",
+      "delete from members where id = $1",
+    ]) {
+      await db.withOrg(a.orgId, (tx) => tx.query(sql, [b.memberId]));
+    }
+    expect(await read()).toEqual(before);
+    // The crafted `or true` touched org A's own fixture member only: put it back.
+    await db.withOrg(a.orgId, (tx) =>
+      tx.query("update members set role = 'admin', removed_at = null where id = $1", [a.memberId]),
+    );
+  });
+
+  it("org A cannot cut org B's session links, even with a crafted query", async () => {
+    const now = new Date();
+    const { userId } = await db.sessions.upsertUser("github", 424_242, now);
+    await db.sessions.createSession({
+      tokenSha256: Buffer.alloc(32, 9),
+      userId,
+      orgs: [{ orgId: b.orgId, memberId: b.memberId }],
+      activeOrgId: b.orgId,
+      now,
+      idleTimeoutSeconds: 3600,
+      expiresAt: new Date(now.getTime() + 3_600_000),
+    });
+    const deleted = await db.withOrg(a.orgId, (tx) =>
+      tx.query("delete from app.session_orgs where org_id = $1 or true", [b.orgId]),
+    );
+    expect(deleted.rowCount).toBe(0);
+    const links = await asSuperuser("select 1 from app.session_orgs where org_id = $1", [b.orgId]);
+    expect(links).toHaveLength(1);
   });
 });
 

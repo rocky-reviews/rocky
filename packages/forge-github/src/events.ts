@@ -54,6 +54,17 @@ const PullRequestPayload = z.object({
   installation: z.object({ id: ForgeId }),
 });
 
+/**
+ * `organization` with `member_removed` (P7-2): only the ids. `membership.user` is the person who
+ * left; the installation object of organization events carries no account, so the organization
+ * itself is the account (bound to the org by both ids, as at login).
+ */
+const OrganizationMemberRemovedPayload = z.object({
+  membership: z.object({ user: z.object({ id: ForgeId }) }),
+  organization: z.object({ id: ForgeId, login: Login }),
+  installation: z.object({ id: ForgeId }),
+});
+
 const Action = z.object({ action: z.string().max(64) });
 
 const INSTALLATION_ACTIONS: Readonly<Record<string, InstallationEventType>> = {
@@ -68,8 +79,12 @@ const PULL_REQUEST_ACTIONS: Readonly<Record<string, PullRequestEventType>> = {
   reopened: "pull_request.reopened",
 };
 
-/** Webhook event names (`X-GitHub-Event`) this adapter decodes. Everything else is ignored. */
-export const HANDLED_EVENTS = ["installation", "pull_request"] as const;
+/**
+ * Webhook event names (`X-GitHub-Event`) this adapter decodes. Everything else is ignored.
+ * `membership` (team membership) is deliberately not one: leaving a team is not leaving the
+ * organization, and repository access through teams is the access check's (P3-6, ADR 0024 §7).
+ */
+export const HANDLED_EVENTS = ["installation", "pull_request", "organization"] as const;
 
 export type DecodeResult =
   | { readonly kind: "event"; readonly event: ForgeEvent }
@@ -138,6 +153,24 @@ export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeRe
         number: p.number,
         headSha: p.pull_request.head.sha,
         merged: type === "pull_request.closed" && p.pull_request.merged === true,
+      },
+    };
+  }
+
+  if (eventName === "organization") {
+    // Only a departure is acted on; joins, invitations and renames grant nothing here (a new
+    // member signs in and GitHub is asked then).
+    if (action.data.action !== "member_removed") return { kind: "ignored" };
+    const parsed = OrganizationMemberRemovedPayload.safeParse(payload);
+    if (!parsed.success) return { kind: "invalid" };
+    const p = parsed.data;
+    return {
+      kind: "event",
+      event: {
+        type: "org_member.removed",
+        installationId: p.installation.id,
+        account: { id: p.organization.id, login: p.organization.login, kind: "organization" },
+        memberForgeUserId: p.membership.user.id,
       },
     };
   }

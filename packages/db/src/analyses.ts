@@ -444,7 +444,30 @@ export const renewAnalysisLease = async (
   return rowCount === 1;
 };
 
-/** Who said "Analyze anyway": a member of the org (P7-2 adds the role check before this). */
+/**
+ * The forge repository id of an analysis of this org (P7-2: the repository access check runs
+ * before "Analyze anyway"), or `null` when there is no such analysis here (unknown, another
+ * org's: RLS).
+ */
+export const analysisRepository = async (
+  tx: TenantTx,
+  analysisId: string,
+): Promise<{ readonly forgeRepoId: number } | null> => {
+  checkId(analysisId, "analysis id");
+  const { rows } = await tx.query<{ forge_repo_id: string }>(
+    `select r.forge_repo_id::text as forge_repo_id
+       from analyses a
+       join pr_revisions v on v.org_id = a.org_id and v.id = a.revision_id
+       join pull_requests p on p.org_id = v.org_id and p.id = v.pull_request_id
+       join repos r on r.org_id = p.org_id and r.id = p.repo_id
+      where a.org_id = $1 and a.id = $2`,
+    [tx.orgId, analysisId],
+  );
+  const row = rows[0];
+  return row === undefined ? null : { forgeRepoId: Number(row.forge_repo_id) };
+};
+
+/** Who said "Analyze anyway": an admin or the owner of the org (P7-2, ADR 0024). */
 export interface AnalysisApprover {
   readonly memberId: string;
 }
@@ -459,11 +482,13 @@ export interface AnalysisApproval {
 /**
  * "Analyze anyway" (P4-6): an analysis waiting over the per-PR token limit goes back to the queue,
  * approved up to the estimate the person saw, with an audit event in the same transaction. It is
- * explicit (a member id; P7-2 adds the role check in front of it), applies to this row, that is
+ * explicit (a member id; the server's policy requires `analysis.approve_over_limit`, and this
+ * re-checks the role in the same transaction), applies to this row, that is
  * this revision, only (a new push is a new row, estimated again), and resets the attempts: the
  * hold was not a failure. Returns undefined when the row is not waiting (already approved,
  * finished, unknown, or another org's: RLS), when its revision is no longer the head of an open
- * pull request (review round 1, SF3), or when the approver is not a member of the org.
+ * pull request (review round 1, SF3), or when the approver is not an active admin or owner of the
+ * org (removed, a plain member, another org's).
  */
 export const approveAnalysisOverLimit = async (
   tx: TenantTx,
@@ -473,10 +498,12 @@ export const approveAnalysisOverLimit = async (
   checkId(analysisId, "analysis id");
   if (typeof approver !== "object" || approver === null) invalid("approver");
   checkId(approver.memberId, "member id");
-  const member = await tx.query("select 1 from members where org_id = $1 and id = $2", [
-    tx.orgId,
-    approver.memberId,
-  ]);
+  const member = await tx.query(
+    `select 1 from members
+      where org_id = $1 and id = $2 and removed_at is null and role in ('owner', 'admin')
+      for share`,
+    [tx.orgId, approver.memberId],
+  );
   if (member.rowCount !== 1) return undefined;
   const { rows } = await tx.query<{
     revision_id: string;

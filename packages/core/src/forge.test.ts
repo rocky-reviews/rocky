@@ -13,10 +13,11 @@ const SRC = new URL("./", import.meta.url);
 const PACKAGE_JSON = new URL("../package.json", import.meta.url);
 
 describe("forge event types", () => {
-  it("covers installation created/deleted and the four pull request actions", () => {
+  it("covers installation created/deleted, the four pull request actions and org member removal", () => {
     expect([...FORGE_EVENT_TYPES].sort()).toEqual([
       "installation.created",
       "installation.deleted",
+      "org_member.removed",
       "pull_request.closed",
       "pull_request.opened",
       "pull_request.reopened",

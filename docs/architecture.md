@@ -15,7 +15,8 @@ Decisions behind this page:
 [ADR 0014 analysis pipeline](adr/0014-analysis-pipeline.md),
 [ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md),
 [ADR 0019 web app stack and PR page shell](adr/0019-web-app-shell.md),
-[ADR 0020 GitHub login and sessions](adr/0020-github-login-and-sessions.md).
+[ADR 0020 GitHub login and sessions](adr/0020-github-login-and-sessions.md),
+[ADR 0024 roles per org and the access policy](adr/0024-org-roles-and-access-policy.md).
 
 ## Runtime
 
@@ -46,23 +47,23 @@ packages/core  (domain + ports; no I/O — enforced by ESLint)
 packages/schema (analysis document; shared contract)
 ```
 
-| Path                         | Role                                                                                                                                                                                                                              |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), serves the web build                                                                                                                                        |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later posting, indexing                     |
-| `apps/web`                   | React SPA on Vite (ADR 0019): PR review page shell (P6-1), later briefing, diff, inbox, settings, project memory                                                                                                                  |
-| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)         |
-| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                                                         |
-| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                                               |
-| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                                                             |
-| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible), metering (`meterRoles`) and the versioned list-price table (`prices.ts`, ADR 0016) |
-| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                                                          |
-| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                                                              |
-| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                                                |
-| `packages/config`            | Config loading and validation                                                                                                                                                                                                     |
-| `packages/evals`             | Seeded PRs and scoring for the AI pipeline (pr-847 diff, scripted answers, finding scorer; P4-7 adds the suite)                                                                                                                   |
-| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                                                                    |
-| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                                                               |
+| Path                         | Role                                                                                                                                                                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), the access policy and org administration routes (P7-2), serves the web build                                                                                             |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror, members who left the GitHub org), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later posting, indexing |
+| `apps/web`                   | React SPA on Vite (ADR 0019): PR review page shell (P6-1), later briefing, diff, inbox, settings, project memory                                                                                                                               |
+| `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)                      |
+| `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                                                                      |
+| `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                                                            |
+| `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                                                                          |
+| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible), metering (`meterRoles`) and the versioned list-price table (`prices.ts`, ADR 0016)              |
+| `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                                                                       |
+| `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                                                                           |
+| `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                                                             |
+| `packages/config`            | Config loading and validation                                                                                                                                                                                                                  |
+| `packages/evals`             | Seeded PRs and scoring for the AI pipeline (pr-847 diff, scripted answers, finding scorer; P4-7 adds the suite)                                                                                                                                |
+| `ee/`                        | Commercial features (SSO, audit-log UI, org policies, insights) — `ee/LICENSE`                                                                                                                                                                 |
+| `rocky-cloud` (private repo) | Billing (Paddle), entitlements, managed LLM keys, infra, compliance                                                                                                                                                                            |
 
 ## LLM roles
 
@@ -218,11 +219,24 @@ packages/schema (analysis document; shared contract)
   synchronizer token from `GET /api/session`); only the HMAC-signed webhook receiver is exempt.
   `returnTo` must be a same-origin relative path. Routes reach org data through
   `sessionAuth.activeMember`, which re-reads the member inside `withOrg`.
+- Roles and the access policy (ADR 0024, P7-2): `owner` > `admin` > `member` on `members.role`;
+  routes declare a permission (`packages/core/src/roles.ts`, `can`), never a role. Every route
+  declares `config.policy` (`publicRoute`, `SESSION_ROUTE`, `requires(permission)`) or fails to
+  register (`apps/server/src/auth/policy.ts`, an `onRoute` hook); the hook resolves the member
+  once per request (401 no session, 409 no active org, 403 not a member or not permitted) and
+  puts it on `request.access`. The role is read inside `withOrg` on every request, never cached.
+  An org with an owner always keeps one (trigger `members_keep_an_owner`, serialised by
+  `app.lock_org_owners`). The first GitHub org admin to sign in (or a User account's owner)
+  becomes the owner while the org has none; GitHub role changes are not mirrored after that.
+  `organization.member_removed` webhooks (worker lane `org_member`) and "not a member" sign-ins
+  delete the person's stored token and cut the org from their sessions. Roles never widen GitHub
+  access: repository routes still run the P3-6 check. The route-permission matrix
+  (`policy.db.test.ts`) enumerates Fastify's routes × personas.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
-  ADR 0020) and one subscribed event
-  (`pull_request`), pinned by a test. The conversion's credentials are written once to a
+  ADR 0020) and two subscribed events
+  (`pull_request`; `organization` for members who leave, ADR 0024), pinned by a test. The conversion's credentials are written once to a
   `0600` file for the operator's secret manager; they are never logged or stored in the database.
 - `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and
   it refuses transaction-control, role and `app.*` statements. Detached work (timers, listeners)

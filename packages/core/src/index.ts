@@ -1,6 +1,19 @@
 export type { Clock, Entitlements, Feature, OrgId } from "./ports.js";
 export { selfHostEntitlements } from "./entitlements.js";
 export {
+  ASSIGNABLE_ROLES,
+  can,
+  isAssignableRole,
+  isPermission,
+  isRole,
+  PERMISSION_MIN_ROLE,
+  PERMISSIONS,
+  ROLES,
+  type AssignableRole,
+  type Permission,
+  type Role,
+} from "./roles.js";
+export {
   EXTERNAL_TENANT_STORES,
   nothingStoredYet,
   type ExternalTenantStore,
@@ -31,7 +44,9 @@ export {
   INSTALLATION_EVENT_TYPES,
   isForgeEventType,
   isInstallationEvent,
+  isOrgMemberEvent,
   isPullRequestEvent,
+  ORG_MEMBER_EVENT_TYPES,
   PULL_REQUEST_EVENT_TYPES,
   type CollaboratorReader,
   type DiffTruncation,
@@ -54,6 +69,8 @@ export {
   type InstallationReader,
   type InstallationEvent,
   type InstallationEventType,
+  type OrgMemberEvent,
+  type OrgMemberEventType,
   type PullRequestEvent,
   type PullRequestEventType,
   type PullRequestRef,

@@ -10,13 +10,13 @@ import {
   createDb,
   loadForgeToken,
   loadOrgDataKey,
-  markMemberRemoved,
   scheduleOrgDeletion,
   type Db,
 } from "@rocky-reviews/db";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
+  markMemberRemoved,
   newOrgId,
   seedOrg,
   startPostgres,
@@ -39,6 +39,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
 import { MEMBER_TOKEN_PURPOSE } from "../repository-access.js";
 import { CSRF_HEADER } from "./cookies.js";
+import { publicRoute, SESSION_ROUTE } from "./policy.js";
 import { LOGIN_TTL_MS, SESSION_IDLE_SECONDS } from "./routes.js";
 import { OPEN_REDIRECT_VECTORS } from "./test-support.js";
 
@@ -433,11 +434,15 @@ describe("login with GitHub (PKCE, state, sessions in the database)", () => {
     const { session } = await login();
     const request = { headers: { cookie: `${SESSION}=${session}` } } as never;
     expect(await app.sessionAuth?.activeMember(request)).toMatchObject({
-      orgId: A.orgId,
-      memberId: A.memberId,
-      role: "admin",
+      ok: true,
+      member: { orgId: A.orgId, memberId: A.memberId, role: "admin" },
     });
-    expect(await app.sessionAuth?.activeMember({ headers: {} } as never)).toBeNull();
+    // P7-2: a discriminated answer, never a bare null.
+    expect(await app.sessionAuth?.activeMember({ headers: {} } as never)).toEqual({
+      ok: false,
+      status: 401,
+      error: "unauthenticated",
+    });
   });
 });
 
@@ -557,11 +562,12 @@ describe("CSRF (acceptance criterion)", () => {
     await app.close();
     app = build();
     let reached = false;
-    app.post("/api/later", async () => {
+    // P7-2: every route must declare an access policy; these are the loosest (session only).
+    app.post("/api/later", { config: { policy: SESSION_ROUTE } }, async () => {
       reached = true;
       return { ok: true };
     });
-    app.delete("/api/later", async () => ({ ok: true }));
+    app.delete("/api/later", { config: { policy: SESSION_ROUTE } }, async () => ({ ok: true }));
     const { session } = await login();
     for (const method of ["POST", "DELETE"] as const) {
       const res = await app.inject({
@@ -582,7 +588,7 @@ describe("CSRF (acceptance criterion)", () => {
 
   it("without login configured, every non-exempt state-changing route is refused", async () => {
     const bare = buildApp({ checkDatabase: () => Promise.resolve(true) });
-    bare.post("/api/x", async () => ({ ok: true }));
+    bare.post("/api/x", { config: { policy: publicRoute("test") } }, async () => ({ ok: true }));
     const res = await bare.inject({ method: "POST", url: "/api/x", headers: { origin: ORIGIN } });
     expect(res.statusCode).toBe(403);
     await bare.close();
@@ -981,6 +987,136 @@ describe("only real members count (review round 1)", () => {
     expect(view.orgs.map((o) => o.id)).toEqual([D.orgId]);
     // No org-membership call is made for a User account.
     expect(lines.join("\n")).not.toContain('"outcome":"membership_check_failed"');
+  });
+});
+
+describe("roles at sign-in (P7-2, ADR 0024)", () => {
+  const roleIn = (orgId: OrgId, forgeUserId: number) =>
+    db.withOrg(orgId, async (tx) => {
+      const { rows } = await tx.query<{ role: string }>(
+        "select role from members where forge_user_id = $1",
+        [forgeUserId],
+      );
+      return rows[0]?.role;
+    });
+
+  it("the first GitHub org admin to sign in becomes the owner; later admins and role changes on GitHub do not", async () => {
+    // Org B has no owner yet (seedOrg makes alice an admin, not an owner).
+    const carol = { id: 7001, login: "carol" };
+    const dave = { id: 7002, login: "dave" };
+    const erin = { id: 7003, login: "erin" };
+    github.grantInstallation(erin.id, 82);
+    github.setOrgMembership(1_000_082, erin.id, "active"); // a plain member first
+    expect((await login({ user: erin })).res.statusCode).toBe(303);
+    expect(await roleIn(B.orgId, erin.id)).toBe("member");
+    for (const user of [carol, dave]) {
+      github.grantInstallation(user.id, 82);
+      github.setOrgMembership(1_000_082, user.id, "active", "admin");
+    }
+    expect((await login({ user: carol })).res.statusCode).toBe(303);
+    expect(await roleIn(B.orgId, carol.id)).toBe("owner");
+    expect((await login({ user: dave })).res.statusCode).toBe(303);
+    expect(await roleIn(B.orgId, dave.id)).toBe("member");
+    // Erin is promoted on GitHub later: Rocky's role does not follow (the org has an owner).
+    github.setOrgMembership(1_000_082, erin.id, "active", "admin");
+    await login({ user: erin });
+    expect(await roleIn(B.orgId, erin.id)).toBe("member");
+    // Carol is demoted on GitHub: still the owner in Rocky.
+    github.setOrgMembership(1_000_082, carol.id, "active", "member");
+    await login({ user: carol });
+    expect(await roleIn(B.orgId, carol.id)).toBe("owner");
+    const audited = await db.withOrg(
+      B.orgId,
+      async (tx) =>
+        (await tx.query("select 1 from audit_events where action = 'member.first_owner'")).rowCount,
+    );
+    expect(audited).toBe(1);
+  });
+
+  it("a billing manager is not an organization member and gets no session", async () => {
+    const bill = { id: 7004, login: "bill" };
+    github.grantInstallation(bill.id, 81);
+    github.setOrgMembership(1_000_081, bill.id, "active", "billing_manager");
+    expect((await login({ user: bill })).res.statusCode).toBe(403);
+  });
+
+  it("on a User-account installation the account owner is the owner", async () => {
+    const owner = { id: 1_000_084, login: "owner-84" };
+    github.grantInstallation(owner.id, 84);
+    expect((await login({ user: owner })).res.statusCode).toBe(303);
+    expect(await roleIn(D.orgId, owner.id)).toBe("owner");
+  });
+
+  it("a sign-in where GitHub says 'not a member' clears that org's stored token and cuts it from live sessions", async () => {
+    const frank = { id: 7005, login: "frank" };
+    member(frank, 81);
+    member(frank, 82);
+    const first = await login({ user: frank });
+    const view = (await sessionOf(first.session)).json() as {
+      orgs: { id: string; memberId: string }[];
+    };
+    const inB = view.orgs.find((o) => o.id === B.orgId)?.memberId ?? "";
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, inB))).not.toBeNull();
+    // Frank leaves org B on GitHub and signs in again (from another browser).
+    github.setOrgMembership(1_000_082, frank.id, null);
+    const second = await login({ user: frank });
+    expect(second.res.statusCode).toBe(303);
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, inB))).toBeNull();
+    expect(changed).toContain(`${B.orgId}:${inB}`);
+    // The first browser's session no longer reaches B.
+    const after = (await sessionOf(first.session)).json() as { orgs: { id: string }[] };
+    expect(after.orgs.map((o) => o.id)).toEqual([A.orgId]);
+    expect(lines.join("\n")).toContain('"outcome":"member_left_org"');
+    expect(lines.join("\n")).not.toContain("frank");
+  });
+
+  it("a pending GitHub membership counts as 'not a member': token cleared, an admin demoted to member (ADR 0024 §2, §6)", async () => {
+    const hana = { id: 7007, login: "hana" };
+    member(hana, 82);
+    await login({ user: hana });
+    const memberId = await db.withOrg(B.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from members where forge_user_id = $1",
+        [hana.id],
+      );
+      await tx.query("update members set role = 'admin' where id = $1", [rows[0]?.id]);
+      return rows[0]?.id ?? "";
+    });
+    // Hana leaves and is re-invited: the invitation is pending.
+    github.setOrgMembership(1_000_082, hana.id, "pending");
+    await login({ user: hana });
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, memberId))).toBeNull();
+    const row = await db.withOrg(B.orgId, (tx) =>
+      tx.query<{ role: string; removed: boolean }>(
+        "select role, removed_at is not null as removed from members where id = $1",
+        [memberId],
+      ),
+    );
+    expect(row.rows).toEqual([{ role: "member", removed: false }]);
+    // Accepting the invitation brings her back as a plain member, not as the admin she was.
+    github.setOrgMembership(1_000_082, hana.id, "active", "admin");
+    await login({ user: hana });
+    const back = await db.withOrg(B.orgId, (tx) =>
+      tx.query<{ role: string }>("select role from members where id = $1", [memberId]),
+    );
+    expect(back.rows).toEqual([{ role: "member" }]);
+  });
+
+  it("an outage of the membership check changes nothing stored (fail closed for this sign-in only)", async () => {
+    const gina = { id: 7006, login: "gina" };
+    member(gina, 82);
+    await login({ user: gina });
+    const memberId = await db.withOrg(B.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from members where forge_user_id = $1",
+        [gina.id],
+      );
+      return rows[0]?.id ?? "";
+    });
+    github.failRoute("org_membership", 500);
+    const res = await login({ user: gina });
+    expect(res.res.statusCode).toBe(403);
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, memberId))).not.toBeNull();
   });
 });
 

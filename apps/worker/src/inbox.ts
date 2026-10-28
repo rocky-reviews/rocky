@@ -1,10 +1,12 @@
 import {
   ForgeReadError,
   isInstallationEvent,
+  isOrgMemberEvent,
   isPullRequestEvent,
   type Clock,
   type ForgeEvent,
   type InstallationEvent,
+  type OrgMemberEvent,
   type PullRequestEvent,
 } from "@rocky-reviews/core";
 import {
@@ -24,6 +26,11 @@ import {
   reconcileInstallation,
   type InstallationDeps,
 } from "./installations.js";
+import {
+  OrgBindingMismatchError,
+  ORG_MEMBER_ROW_BUDGET_SECONDS,
+  reconcileOrgMember,
+} from "./org-members.js";
 import {
   DiffNotReadyError,
   HeadMismatchError,
@@ -112,7 +119,9 @@ const errorCodeOf = (error: unknown): string => {
 const TRANSIENT_SQLSTATE = /^(?:08|40|53|57|58)[0-9A-Z]{3}$/;
 
 export const failureKindOf = (error: unknown): InboxFailure["kind"] => {
-  if (error instanceof ParkDeliveryError) return "permanent";
+  if (error instanceof ParkDeliveryError || error instanceof OrgBindingMismatchError) {
+    return "permanent";
+  }
   if (error instanceof ForgeReadError) return error.transient ? "transient" : "strike";
   if (
     error instanceof ContradictionError ||
@@ -133,7 +142,7 @@ const resultOf = (result: "retry" | "parked" | "stale"): RowResult =>
 
 /** One lane of the inbox and what to do with its rows. */
 interface Lane<E extends ForgeEvent> {
-  readonly name: "installation" | "pull_request";
+  readonly name: "installation" | "pull_request" | "org_member";
   /** Worst-case time for one row (the lease budget). */
   readonly rowBudgetSeconds: number;
   readonly accepts: (event: ForgeEvent) => event is E;
@@ -288,4 +297,20 @@ export const drainPullRequestEvents = (deps: PullRequestInboxDeps): Promise<Drai
       number: event.number,
     }),
     label: "pull request",
+  });
+
+/**
+ * Org member events (P7-2, ADR 0024): someone left the GitHub organization. No GitHub read (the
+ * event only takes access away), so it needs no app credentials and no app check.
+ */
+export const drainOrgMemberEvents = (
+  deps: DrainDeps & { readonly forge: { readonly kind: ClaimedDelivery["forge"] } },
+): Promise<DrainReport> =>
+  drainLane<OrgMemberEvent>(deps, {
+    name: "org_member",
+    rowBudgetSeconds: ORG_MEMBER_ROW_BUDGET_SECONDS,
+    accepts: isOrgMemberEvent,
+    handle: (row, event) => reconcileOrgMember(deps, row, event),
+    ids: (event) => ({ installationId: event.installationId }),
+    label: "org member",
   });

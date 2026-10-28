@@ -75,6 +75,7 @@ export {
   type GitHubLogin,
   type GitHubLoginFailure,
   type GitHubLoginOptions,
+  type GitHubOrgRole,
   type GitHubUserInstallation,
   type GitHubUserToken,
 } from "./oauth.js";

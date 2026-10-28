@@ -14,7 +14,7 @@ export interface SessionOrg {
   readonly memberId: string;
   /** The user's own GitHub login in that org (display only). */
   readonly memberLogin: string;
-  readonly role: "admin" | "member";
+  readonly role: "owner" | "admin" | "member";
 }
 
 export interface Session {

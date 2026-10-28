@@ -8,7 +8,12 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { createGitHubWebhookIngress } from "./ingress.js";
 import { signWebhookBody } from "./signature.js";
-import { installationPayload, pullRequestPayload, TEST_WEBHOOK_SECRET } from "./testing.js";
+import {
+  installationPayload,
+  organizationPayload,
+  pullRequestPayload,
+  TEST_WEBHOOK_SECRET,
+} from "./testing.js";
 
 const SEED = 20261026;
 const RUNS = 400;
@@ -20,7 +25,17 @@ const ID = (v: number) => Number.isSafeInteger(v) && v > 0;
 const assertEventInvariants = (event: ForgeEvent): void => {
   expect(isForgeEventType(event.type)).toBe(true);
   expect(ID(event.installationId)).toBe(true);
-  if ("account" in event) {
+  if ("memberForgeUserId" in event) {
+    expect(ID(event.account.id)).toBe(true);
+    expect(event.account.kind).toBe("organization");
+    expect(ID(event.memberForgeUserId)).toBe(true);
+    expect(Object.keys(event).sort()).toEqual([
+      "account",
+      "installationId",
+      "memberForgeUserId",
+      "type",
+    ]);
+  } else if ("account" in event) {
     expect(ID(event.account.id)).toBe(true);
     expect(event.account.login).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/);
     expect(["organization", "user"]).toContain(event.account.kind);
@@ -108,7 +123,7 @@ describe("ingress under fuzzing", () => {
   it("never throws on signed random bytes under any event name", () => {
     fc.assert(
       fc.property(
-        fc.constantFrom("installation", "pull_request", "ping", "issues", "push"),
+        fc.constantFrom("installation", "pull_request", "organization", "ping", "issues", "push"),
         fc.uint8Array({ maxLength: 4096 }),
         fc.uuid(),
         (event, body, delivery) => {
@@ -124,7 +139,7 @@ describe("ingress under fuzzing", () => {
   it("never throws on signed arbitrary JSON values", () => {
     fc.assert(
       fc.property(
-        fc.constantFrom("installation", "pull_request"),
+        fc.constantFrom("installation", "pull_request", "organization"),
         fc.jsonValue({ maxDepth: 6 }),
         fc.uuid(),
         (event, value, delivery) => {
@@ -144,6 +159,9 @@ describe("ingress under fuzzing", () => {
       fc
         .constantFrom("opened", "synchronize", "closed", "reopened", "labeled")
         .map((a) => ["pull_request", pullRequestPayload(a)] as const),
+      fc
+        .constantFrom("member_removed", "member_added")
+        .map((a) => ["organization", organizationPayload(a)] as const),
     );
     fc.assert(
       fc.property(

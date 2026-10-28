@@ -119,6 +119,7 @@ export interface GitHubUserInstallation {
 /** `GET /user/memberships/orgs/{org}`: the user's own membership of an organization. */
 const MembershipJson = z.object({
   state: z.string().max(32),
+  role: z.string().max(32),
   organization: z.object({ id: ForgeId }),
   user: z.object({ id: ForgeId }),
 });
@@ -140,17 +141,22 @@ export interface GitHubLogin {
    */
   listInstallations(accessToken: string): Promise<GitHubUserInstallation[]>;
   /**
-   * Whether the token's user is an **active** member of the organization (review round 1):
-   * `GET /user/memberships/orgs/{org}` as the user (needs the app's organization permission
-   * Members: read). `true` only for `state: "active"` with the same organization and user ids;
-   * GitHub's JSON 404 is `false`; any other answer throws `GitHubLoginError`.
+   * The token's user's role in the organization when they are an **active** member (review
+   * round 1; the role since P7-2): `GET /user/memberships/orgs/{org}` as the user (needs the
+   * app's organization permission Members: read). `"admin"` or `"member"` only for
+   * `state: "active"` with the same organization and user ids and one of those two roles (a
+   * billing manager is not an organization member); `null` otherwise, GitHub's JSON 404
+   * included; any other answer throws `GitHubLoginError`.
    */
-  isActiveOrgMember(
+  orgMembershipRole(
     accessToken: string,
     org: { readonly id: number; readonly login: string },
     userId: number,
-  ): Promise<boolean>;
+  ): Promise<GitHubOrgRole | null>;
 }
+
+/** An active organization member's role on GitHub (only used for the first owner, ADR 0024). */
+export type GitHubOrgRole = "admin" | "member";
 
 export interface GitHubLoginOptions {
   readonly endpoints: GitHubEndpoints;
@@ -299,17 +305,17 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
       };
     },
 
-    isActiveOrgMember: async (accessToken, org, userId) => {
+    orgMembershipRole: async (accessToken, org, userId) => {
       if (
         !Number.isSafeInteger(org.id) ||
         org.id < 1 ||
         !Number.isSafeInteger(userId) ||
         userId < 1
       ) {
-        throw new Error("isActiveOrgMember: invalid id");
+        throw new Error("orgMembershipRole: invalid id");
       }
       if (typeof org.login !== "string" || !Login.safeParse(org.login).success) {
-        throw new Error("isActiveOrgMember: invalid organization login");
+        throw new Error("orgMembershipRole: invalid organization login");
       }
       if (typeof accessToken !== "string" || !TOKEN.test(accessToken)) {
         throw new GitHubLoginError("token_rejected");
@@ -330,18 +336,17 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
       if (answer.status === 404) {
         if (!NotFound.safeParse(answer.body).success)
           throw new GitHubLoginError("invalid_response");
-        return false;
+        return null;
       }
       if (answer.status === 401) throw new GitHubLoginError("token_rejected", 401);
       if (answer.status === 403) throw new GitHubLoginError("forbidden", 403);
       if (answer.status !== 200) throw new GitHubLoginError("http_status", answer.status);
       const parsed = MembershipJson.safeParse(answer.body);
       if (!parsed.success) throw new GitHubLoginError("invalid_response");
-      return (
-        parsed.data.state === "active" &&
-        parsed.data.organization.id === org.id &&
-        parsed.data.user.id === userId
-      );
+      const { state, role } = parsed.data;
+      if (state !== "active" || parsed.data.organization.id !== org.id) return null;
+      if (parsed.data.user.id !== userId) return null;
+      return role === "admin" || role === "member" ? role : null;
     },
 
     readUser: async (accessToken) => {

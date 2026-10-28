@@ -43,14 +43,18 @@ export const PULL_REQUEST_EVENT_TYPES = [
   "pull_request.closed",
   "pull_request.reopened",
 ] as const;
+/** Someone stopped being a member of the organization on the forge (P7-2, ADR 0024). */
+export const ORG_MEMBER_EVENT_TYPES = ["org_member.removed"] as const;
 /** Every event the domain consumes. Anything else a forge sends is acknowledged and ignored. */
 export const FORGE_EVENT_TYPES = [
   ...INSTALLATION_EVENT_TYPES,
   ...PULL_REQUEST_EVENT_TYPES,
+  ...ORG_MEMBER_EVENT_TYPES,
 ] as const;
 
 export type InstallationEventType = (typeof INSTALLATION_EVENT_TYPES)[number];
 export type PullRequestEventType = (typeof PULL_REQUEST_EVENT_TYPES)[number];
+export type OrgMemberEventType = (typeof ORG_MEMBER_EVENT_TYPES)[number];
 export type ForgeEventType = (typeof FORGE_EVENT_TYPES)[number];
 
 /** The forge user who triggered an event (for installations: who installed or removed the app). */
@@ -82,7 +86,21 @@ export interface PullRequestEvent extends PullRequestRef {
   readonly merged: boolean;
 }
 
-export type ForgeEvent = InstallationEvent | PullRequestEvent;
+/**
+ * A person left (or was removed from) the organization the installation is on (P7-2). Rocky
+ * clears their stored token and cuts the org from their live sessions; it never grants anything
+ * on such an event, so a replayed or reordered delivery can at most sign someone out early.
+ */
+export interface OrgMemberEvent {
+  readonly type: OrgMemberEventType;
+  readonly installationId: ForgeNumericId;
+  /** The organization (bound to the org by installation and account id, as at login). */
+  readonly account: ForgeAccount;
+  /** The forge user id of the person who is no longer a member. */
+  readonly memberForgeUserId: ForgeNumericId;
+}
+
+export type ForgeEvent = InstallationEvent | PullRequestEvent | OrgMemberEvent;
 
 const EVENT_TYPES: ReadonlySet<string> = new Set(FORGE_EVENT_TYPES);
 
@@ -96,6 +114,9 @@ const PULL_REQUEST_TYPES: ReadonlySet<string> = new Set(PULL_REQUEST_EVENT_TYPES
 
 export const isPullRequestEvent = (event: ForgeEvent): event is PullRequestEvent =>
   PULL_REQUEST_TYPES.has(event.type);
+
+export const isOrgMemberEvent = (event: ForgeEvent): event is OrgMemberEvent =>
+  event.type === "org_member.removed";
 
 // --- Inbound: webhook deliveries ---------------------------------------------------------------
 
