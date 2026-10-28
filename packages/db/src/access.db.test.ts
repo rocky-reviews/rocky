@@ -6,6 +6,7 @@ import {
   resolveRepositoryForAccess,
 } from "./access.js";
 import { createDb, type Db } from "./client.js";
+import { markMemberRemoved } from "./sessions.js";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
@@ -110,5 +111,14 @@ describe("loadRepositoryAccessContext", () => {
       loadRepositoryAccessContext(tx, { memberId: B.memberId, forgeRepoId: 2001 }),
     );
     expect(other).toMatchObject({ member: false, forgeUserId: null });
+  });
+
+  it("a member removed in Rocky is not a member any more (P7-1 review round 1)", async () => {
+    const C = await asWorker(pgs.workerUrl, (w) => seedOrg(w, newOrgId(), { installationId: 63 }));
+    expect(await db.withOrg(C.orgId, (tx) => markMemberRemoved(tx, C.memberId))).toBe(true);
+    const context = await db.withOrg(C.orgId, (tx) =>
+      loadRepositoryAccessContext(tx, { memberId: C.memberId, forgeRepoId: 2001 }),
+    );
+    expect(context).toMatchObject({ member: false, forgeUserId: null, token: null });
   });
 });

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   nothingStoredYet,
   type ExternalTenantStore,
@@ -353,8 +353,22 @@ describe("uninstall → scheduled → grace elapses → sweep → erased everywh
     await drain();
     const org = await orgOf(5000);
     // Tenant data in every table.
-    await seedOrg(workerDb, org!.id as OrgId, { orgExists: true });
+    const leaving = await seedOrg(workerDb, org!.id as OrgId, { orgExists: true });
     const control = await seedOrg(workerDb, newOrgId(), { installationId: 5999 });
+    // P7-1: a signed-in member of each org (session links hold an org id too).
+    const { userId } = await workerDb.sessions.upsertUser("github", 1001, new Date());
+    for (const seeded of [leaving, control]) {
+      const now = new Date();
+      await workerDb.sessions.createSession({
+        tokenSha256: randomBytes(32),
+        userId,
+        orgs: [{ orgId: seeded.orgId, memberId: seeded.memberId }],
+        activeOrgId: seeded.orgId,
+        now,
+        idleTimeoutSeconds: 3600,
+        expiresAt: new Date(now.getTime() + 3_600_000),
+      });
+    }
     const before = await rowsFor(org!.id);
     for (const [table, n] of Object.entries(before)) expect(n, table).toBeGreaterThan(0);
 

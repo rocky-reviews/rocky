@@ -62,3 +62,19 @@ export {
   USER_ACCESS_TIMEOUT_MS,
   type GitHubUserAccessReaderOptions,
 } from "./user-access.js";
+export {
+  createGitHubLogin,
+  GitHubLoginError,
+  isOAuthCode,
+  LOGIN_TIMEOUT_MS,
+  MAX_INSTALLATION_PAGES,
+  MAX_LOGIN_RESPONSE_BYTES,
+  newPkceVerifier,
+  pkceChallenge,
+  type GitHubIdentity,
+  type GitHubLogin,
+  type GitHubLoginFailure,
+  type GitHubLoginOptions,
+  type GitHubUserInstallation,
+  type GitHubUserToken,
+} from "./oauth.js";

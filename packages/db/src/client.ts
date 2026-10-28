@@ -37,6 +37,7 @@ import {
   type InstallationOrgRow,
 } from "./installations.js";
 import * as schema from "./schema.js";
+import { createSessionStore, type SessionStore } from "./sessions.js";
 import {
   inboxDatabaseError,
   inboxInsert,
@@ -158,6 +159,11 @@ export interface Db {
   recordWebhookDelivery(delivery: WebhookDelivery): Promise<"queued" | "duplicate">;
   /** Purges inbox rows past their retention period (retention.purge_webhook_deliveries). */
   purgeWebhookDeliveries(asOf: Date): Promise<number>;
+  /**
+   * Login attempts, users and sessions (P7-1, ADR 0020): user-level rows in `app`, outside tenant
+   * RLS, holding ids, hashes and times only. Org data is still read only inside `withOrg`.
+   */
+  readonly sessions: SessionStore;
   close(): Promise<void>;
 }
 
@@ -661,6 +667,7 @@ export const createDb = (options: DbOptions): Db => {
     retentionSettings,
     recordWebhookDelivery,
     purgeWebhookDeliveries,
+    sessions: createSessionStore(pool),
     close: () => pool.end(),
   };
 };
