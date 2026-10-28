@@ -18,6 +18,7 @@ describe("fixture source", () => {
     expect(pull.additions).toBe(files.reduce((s, f) => s + f.additions, 0));
     expect(pull.deletions).toBe(files.reduce((s, f) => s + f.deletions, 0));
     expect(pull.headRef).toBe(analysis?.provenance.head.ref);
+    expect(pull.headSha).toBe(analysis?.provenance.head.sha);
     expect(pull.baseRef).toBe(analysis?.provenance.base.ref);
   });
 
@@ -85,6 +86,8 @@ describe("parseShellData", () => {
     ["title", { title: "" }],
     ["author", { author: "<img src=x>" }],
     ["headRef", { headRef: "a..b" }],
+    ["headSha", { headSha: "9b4e1d7" }],
+    ["headSha case", { headSha: "9B4E1D7A3C5F2E8B6D0A4C7E1F3B5D9A2C6E8F4B" }],
     ["updatedAt", { updatedAt: "yesterday" }],
     ["approvers", { approvers: ["ok", "not ok"] }],
     ["commentCount", { commentCount: -1 }],

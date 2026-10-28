@@ -1,0 +1,487 @@
+/*
+ * The briefing (P6-2), after design-poc/index.html (`renderBrief`). Colours only through
+ * tokens.css. Differences from the POC are marked "POC:" with the reason.
+ */
+
+.brief > .section + .section {
+  border-top: 1px solid var(--border);
+}
+.brief .main-title {
+  margin-bottom: 10px;
+}
+.brief p {
+  margin: 0;
+}
+.eyebrow-hint {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.brief-summary {
+  font-size: var(--text-lg);
+  line-height: 1.55;
+}
+.brief .brief-notice,
+.brief .read-by-hand {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border-left: 3px solid var(--low);
+  background: var(--low-bg);
+  font-size: var(--text-md);
+}
+.brief .read-by-hand {
+  margin: var(--space-3) 0 0;
+  border-left-color: var(--high);
+  background: var(--high-bg);
+}
+
+/* POC: the level colour as text on its tint (below WCAG AA in light mode); here a level bar. */
+.verdict {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) 14px;
+  border-radius: var(--radius-lg);
+  border-left: 4px solid var(--low);
+  background: var(--low-bg);
+  margin-top: 14px;
+}
+.verdict.v-critical {
+  background: var(--crit-bg);
+  border-left-color: var(--crit);
+}
+.verdict.v-high {
+  background: var(--high-bg);
+  border-left-color: var(--high);
+}
+.verdict.v-medium {
+  background: var(--med-bg);
+  border-left-color: var(--med);
+}
+.verdict-level {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---------- risk table ---------- */
+.risk-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.risk-table th,
+.risk-table td {
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+  text-align: left;
+  font-weight: inherit;
+}
+.risk-table tr:first-child > * {
+  border-top: 0;
+}
+.rt-label,
+.rt-text {
+  width: 1%;
+  white-space: nowrap;
+}
+.rt-files {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+/* POC: level colour on its tint (3.2-4.1:1 in light mode); the tint carries the level. */
+.risk-label {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.risk-label.r-critical {
+  background: var(--crit-bg);
+}
+.risk-label.r-important {
+  background: var(--high-bg);
+}
+.risk-label.r-normal {
+  background: var(--low-bg);
+}
+.risk-label.r-ignore {
+  color: var(--muted);
+}
+.risk-label.r-unanalysed {
+  background: var(--med-bg);
+}
+.file-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.read-by-hand .file-link {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.file-link:hover {
+  color: var(--you);
+  text-decoration: underline;
+}
+
+/* ---------- change map slot ---------- */
+/* The map scrolls inside its own box at narrow widths (POC defect 1). */
+.map-canvas {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(150px, 1fr);
+  gap: var(--space-3);
+  overflow-x: auto;
+  /* Room for the finding badges that sit over the cards' top-right corners. */
+  padding: 0 6px 2px 0;
+}
+.map-lane {
+  background: var(--panel-2);
+  border-radius: var(--radius-lg);
+  padding: 10px var(--space-2) var(--space-2);
+  min-width: 0;
+}
+/* POC: lane labels in --faint (below AA on the lane background). */
+.map-lane-label {
+  font-size: var(--text-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 var(--space-1) var(--space-2);
+}
+.map-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.map-card {
+  position: relative;
+}
+.map-card-body {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--panel);
+  font: inherit;
+  color: var(--text);
+}
+button.map-card-body:hover {
+  border-width: 2px;
+  padding: 6.5px 9.5px;
+}
+.d-added .map-card-body {
+  background: var(--add-bg);
+  border-color: var(--add-sign);
+}
+.d-modified .map-card-body {
+  background: var(--med-bg);
+  border-color: var(--med);
+}
+.d-removed .map-card-body {
+  background: var(--del-bg);
+  border-color: var(--del-sign);
+}
+.map-card-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.map-card-sub {
+  font-size: var(--text-2xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.map-badge {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--low);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.map-badge.sev-critical {
+  border-color: var(--crit);
+}
+.map-badge.sev-high {
+  border-color: var(--high);
+}
+.map-badge.sev-medium {
+  border-color: var(--med);
+}
+.legend {
+  display: flex;
+  gap: 6px 14px;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.legend li::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+.lg-add::before {
+  background: var(--add-bg);
+  border: 1.5px solid var(--add-sign);
+}
+.lg-mod::before {
+  background: var(--med-bg);
+  border: 1.5px solid var(--med);
+}
+.lg-unch::before {
+  background: var(--panel);
+  border: 1.5px solid var(--border);
+}
+.legend .lg-hero::before {
+  background: var(--ai);
+  height: 3px;
+  vertical-align: 3px;
+}
+.legend .lg-find::before {
+  background: var(--crit);
+  border-radius: 50%;
+}
+.map-unavailable {
+  display: grid;
+  gap: var(--space-1);
+  padding: 14px var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+}
+.map-unavailable-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ---------- suggested path ---------- */
+.path-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: step;
+}
+.path-list li {
+  counter-increment: step;
+}
+.path-list button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 7px var(--space-2);
+  border-radius: var(--radius-md);
+}
+.path-list button:hover {
+  background: var(--panel-2);
+}
+.path-list button::before {
+  content: counter(step);
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  background: var(--you-bg);
+  color: var(--you);
+}
+.path-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  overflow-wrap: anywhere;
+}
+.path-list .why {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+/* ---------- memory and checks ---------- */
+.two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.mini-list li {
+  display: flex;
+  gap: var(--space-2);
+  font-size: var(--text-code);
+}
+.mini-list .ic {
+  flex: none;
+  width: 18px;
+  text-align: center;
+}
+.ic.memory::before {
+  content: "◆";
+  color: var(--ai);
+}
+.ic.ok::before {
+  content: "✓";
+  color: var(--ok);
+}
+/* POC: the source in --faint (below AA). */
+.mini-list .source {
+  color: var(--muted);
+}
+.empty-note {
+  color: var(--muted);
+}
+
+.brief-start {
+  text-align: center;
+  margin-top: var(--space-4);
+}
+.btn-primary {
+  background: var(--you);
+  border-color: var(--you);
+  color: var(--on-you);
+}
+.btn-primary:hover {
+  background: var(--you);
+  filter: brightness(1.08);
+}
+
+/* ---------- no document yet ---------- */
+.brief-state {
+  display: grid;
+  gap: 6px;
+  padding: 14px var(--space-4);
+  border-radius: var(--radius-lg);
+  border-left: 4px solid var(--low);
+  background: var(--low-bg);
+}
+.brief-state.tone-ai {
+  border-left-color: var(--ai);
+  background: var(--ai-bg);
+}
+.brief-state.tone-warn {
+  border-left-color: var(--med);
+  background: var(--med-bg);
+}
+.brief-state.tone-crit {
+  border-left-color: var(--crit);
+  background: var(--crit-bg);
+}
+.brief-state-title {
+  font-weight: 650;
+  font-size: var(--text-lg);
+}
+.brief-state-code {
+  color: var(--muted);
+}
+
+/* The risk table stacks at phone width (POC defect 1: it overflowed at 375 px). */
+@media (max-width: 760px) {
+  .risk-table,
+  .risk-table tbody,
+  .risk-table tr,
+  .risk-table th,
+  .risk-table td {
+    display: block;
+    width: auto;
+  }
+  .risk-table tr {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+  }
+  .risk-table tr:first-child {
+    border-top: 0;
+  }
+  .risk-table th,
+  .risk-table td {
+    border-top: 0;
+    padding: 2px 10px 2px 0;
+    white-space: normal;
+  }
+  .risk-table .rt-files {
+    grid-column: 1 / -1;
+  }
+  .verdict {
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+  .two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A file name and its comma wrap together; the line breaks after the comma. */
+.file-item {
+  display: inline-block;
+  max-width: 100%;
+  margin-right: 0.4em;
+}
+
+/* Over a document that is not the latest word (a newer run, or another commit than the head). */
+.brief .brief-banner {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 var(--space-3);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--low);
+  background: var(--low-bg);
+}
+.brief-banner.tone-ai {
+  border-left-color: var(--ai);
+  background: var(--ai-bg);
+}
+.brief-banner.tone-warn {
+  border-left-color: var(--med);
+  background: var(--med-bg);
+}
+.brief-banner.tone-crit {
+  border-left-color: var(--crit);
+  background: var(--crit-bg);
+}
+.brief-banner-title {
+  font-weight: 650;
+}

@@ -57,6 +57,29 @@ matching the POC at 375/1024/1440 px in light and dark.
    keyboard paths and the theme checks. Component markup is tested in Vitest with
    `react-dom/server`, so unit tests need no DOM library.
 
+### Amendment to §3 (P6-2): `analysisRun` and the head commit
+
+`ShellData` carries `analysisRun`, where the PR's latest analysis stands (the `analyses` row,
+P4-6), and `PullSummary` carries `headSha`, the PR's current head commit (40 lowercase hex, the
+schema's `FullSha`). `parseShellData` checks both; the server endpoint for the shell data
+implements exactly these rules.
+
+- `analysisRun` is one of: `none` (no analysis row), `queued`, `running`,
+  `awaiting_approval` with `estimatedTokens` and `limitTokens` (integers, 0 to 10⁹), `failed`
+  with `code`, or `done`. Strict objects: no other fields.
+- A failure carries only the pipeline's fixed code (`[a-z][a-z0-9_]{0,63}`, the shape
+  `analyses.error_code` stores), never a message, a prompt or model output. The page maps the
+  code to its own fixed text and shows the code itself.
+- Without a document every state but `done` is allowed. With a document: `done`, or a newer run
+  that has not produced its document yet (`queued`, `running`, `awaiting_approval`, `failed`);
+  the page then shows that previous document under a fixed banner. `none` and a `superseded`
+  failure contradict a document and are refused. A source that omits `analysisRun` gets `done`
+  with a document and `none` without one.
+- Head rule: when `analysis.provenance.head.sha` differs from `pull.headSha`, the briefing is
+  marked out of date with a banner naming both short SHAs, whatever the run state, `done`
+  included.
+- An invalid or contradictory state fails the load ("invalid analysis state"), naming no value.
+
 ## Consequences
 
 - Later P6 tasks fill `MainContent` and `RightPanelContent` and extend `ShellData`; the frame,

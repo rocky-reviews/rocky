@@ -174,6 +174,6 @@ describe("sidebar", () => {
   it("says when there is no analysis yet", () => {
     const t = text(render({ ...data, analysis: null }));
     expect(t).toContain("Files appear here once the analysis is ready.");
-    expect(t).toContain("not ready yet");
+    expect(t).toContain("No analysis yet");
   });
 });
