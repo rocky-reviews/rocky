@@ -46,42 +46,88 @@ const SPACE = /^[\s\p{Z}]$/u;
 /** Combining marks kept in a row (the schema's single-line cap): Zalgo text cannot tower. */
 const MAX_MARK_RUN = 6;
 
+/** A base a variation selector may follow (the schema's rule). */
+const EMOJI_OR_SYMBOL = /^[\p{Extended_Pictographic}\p{S}]$/u;
+/** Joiners and selectors per string, whatever its length (the schema's MAX_JOINERS). */
+const MAX_JOINERS = 32;
+
+/** Drawn and not a joiner, selector, space or mark: what a joiner may join to. */
+const isBase = (character: string | undefined): boolean => {
+  if (character === undefined) return false;
+  const point = character.codePointAt(0);
+  return !isJoiner(point) && !isSelector(point) && !SPACE.test(character) && !MARK.test(character);
+};
+
 /**
- * Keeps a joiner or variation selector only where it can join something: never first, never
- * straight after one of its own kind (no invisible runs to carry hidden bits), and ZWNJ/ZWJ
- * never before a space or last. Caps runs of combining marks. Works on code points.
+ * Keeps a joiner or variation selector only where it joins something, after the schema's rules
+ * (primitives.ts), so no run of invisible characters can carry hidden bits:
+ * - VS15/VS16 only straight after an emoji or symbol (never after a space, a mark, a joiner or
+ *   another selector);
+ * - ZWNJ/ZWJ only after a drawn character or a placed selector, and before a drawn character
+ *   that is not a mark. A ZWJ after a placed VS16 is allowed, so the heart-on-fire emoji
+ *   (U+2764 U+FE0F U+200D U+1F525) survives; the schema refuses it (docs/progress.md);
+ * - at most MAX_JOINERS of both, and ZWNJ/ZWJ at most one per two drawn characters, counted as
+ *   the text goes, so cutting a label never changes what comes before the cut.
+ * Runs of combining marks are capped too. Works on code points, after `DROPPED`.
  */
 const placeJoiners = (text: string): string => {
+  const input = [...text];
   const kept: string[] = [];
-  const last = (): number | undefined => kept.at(-1)?.codePointAt(0);
   let marks = 0;
-  for (const character of text) {
-    const point = character.codePointAt(0) ?? 0;
-    if (isJoiner(point) || isSelector(point)) {
-      const previous = last();
-      const same = isJoiner(point) ? isJoiner(previous) : isSelector(previous);
-      if (previous !== undefined && !same) kept.push(character);
+  let invisible = 0;
+  let joiners = 0;
+  let drawn = 0;
+  for (const [index, character] of input.entries()) {
+    const point = character.codePointAt(0);
+    const previous = kept.at(-1);
+    if (isSelector(point)) {
+      if (previous !== undefined && EMOJI_OR_SYMBOL.test(previous) && invisible < MAX_JOINERS) {
+        kept.push(character);
+        invisible += 1;
+      }
+      continue; // joiners and selectors do not break a run of marks
+    }
+    if (isJoiner(point)) {
+      const after = isBase(input[index + 1]);
+      const before =
+        previous !== undefined && !isJoiner(previous.codePointAt(0)) && !SPACE.test(previous);
+      if (before && after && invisible < MAX_JOINERS && joiners + 1 <= Math.ceil((drawn + 1) / 2)) {
+        kept.push(character);
+        invisible += 1;
+        joiners += 1;
+      }
       continue;
     }
-    if (SPACE.test(character) && isJoiner(last())) kept.pop();
     if (MARK.test(character)) {
       marks += 1;
-      if (marks > MAX_MARK_RUN) continue;
-    } else marks = 0;
+      if (marks <= MAX_MARK_RUN) kept.push(character);
+      continue;
+    }
+    marks = 0;
+    if (!SPACE.test(character)) drawn += 1;
     kept.push(character);
   }
-  while (isJoiner(last())) kept.pop();
   return kept.join("");
 };
 
 /**
  * The documented normalisation every drawn string goes through (README "Safety seam"):
  * line breaks become spaces, invisible, control and unspellable characters are dropped, joiners
- * are kept only where they join, and combining-mark runs are capped. Idempotent. No Unicode
+ * and selectors are kept only where they join (and are capped), and combining-mark runs are
+ * capped. Idempotent, and stable under cutting: a prefix of clean text is clean. No Unicode
  * normalisation form is applied: the text is drawn as the model wrote it.
  */
 export const cleanText = (value: string): string =>
   placeJoiners(value.replace(LINE_BREAK, " ").replace(DROPPED, ""));
+
+/** The XML escape alone, for values the tree already holds normalised and checked. */
+const escapeOnly = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 /** Longest tooltip (`<title>`), in code points, before an ellipsis. */
 export const MAX_TITLE_LENGTH = 400;
@@ -99,13 +145,7 @@ const cap = (text: string, max: number): string => {
 };
 
 /** For text nodes and attribute values alike; attributes are always double-quoted. */
-export const escapeXml = (value: string): string =>
-  cleanText(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+export const escapeXml = (value: string): string => escapeOnly(cleanText(value));
 
 // --- Allowlists ---------------------------------------------------------------------------------
 
@@ -296,10 +336,12 @@ export const textElement = (
   name: "text" | "title",
   attributes: Attributes,
   content: string,
-): SvgElement =>
-  build(name, attributes, [
+): SvgElement => {
+  if (!TEXT_ELEMENTS.has(name)) throw new Error("change map: textElement is for text and title");
+  return build(name, attributes, [
     cap(cleanText(content), name === "title" ? MAX_TITLE_LENGTH : MAX_TEXT_LENGTH),
   ]);
+};
 
 /** Separates elements with newlines, dropping the ones that were not drawn. */
 export const lines = (fragments: readonly (SvgElement | undefined)[]): SvgNode[] =>
@@ -345,10 +387,11 @@ export const isSafeSvg = (value: unknown): value is SafeSvg =>
 
 /** The tree as markup: values escaped, double-quoted, in the order they were written. */
 export const serialise = (node: SvgNode): string => {
-  // `lines` newlines are kept as written; any other text is normalised (again) and escaped.
-  if (typeof node === "string") return node === "\n" ? node : escapeXml(node);
+  // Text and values were normalised and checked when the tree was built, so the string and the
+  // React rendering of the same tree hold exactly the same characters. `lines` newlines stay.
+  if (typeof node === "string") return node === "\n" ? node : escapeOnly(node);
   const attributes = node.attributes
-    .map(([name, value]) => ` ${name}="${escapeXml(value)}"`)
+    .map(([name, value]) => ` ${name}="${escapeOnly(value)}"`)
     .join("");
   if (node.children === undefined) return `<${node.name}${attributes}/>`;
   return `<${node.name}${attributes}>${node.children.map(serialise).join("")}</${node.name}>`;

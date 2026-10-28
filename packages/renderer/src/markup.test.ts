@@ -48,9 +48,45 @@ describe("text normalisation", () => {
     ["a trailing variation selector stays", "❤\uFE0F", "❤\uFE0F"],
     ["mark runs are capped at six", `e${"\u0301".repeat(20)}x`, `e${"\u0301".repeat(6)}x`],
     ["the braille blank goes", "a\u2800b", "ab"],
+    ["alternating joiner and selector runs go", `a${"\u200D\uFE0F\u200C\uFE0E".repeat(20)}b`, "ab"],
+    ["a selector after a space goes", "x \uFE0F y", "x  y"],
+    ["a selector after a letter or a selector goes", "a\uFE0F\u2764\uFE0F\uFE0E", "a\u2764\uFE0F"],
+    ["a joiner before a mark or a space goes", "a\u200D\u0301 b\u200D c", "a\u0301 b c"],
+    [
+      "heart on fire keeps its joiner",
+      "\u2764\uFE0F\u200D\u{1F525}",
+      "\u2764\uFE0F\u200D\u{1F525}",
+    ],
+    [
+      "a long family keeps one joiner per two emoji",
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}",
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u{1F466}",
+    ],
   ])("%s", (_, input, output) => {
     expect(cleanText(input)).toBe(output);
     expect(normalised(input)).toBe(output);
+  });
+
+  it("keeps at most 32 joiners and selectors, and one joiner per two drawn characters", () => {
+    const input = `${"\u{1F600}\uFE0F\u200D".repeat(60)}\u{1F600}`;
+    const out = cleanText(input);
+    const invisible = [...out].filter((c) => ["\u200D", "\uFE0F"].includes(c)).length;
+    const joiners = [...out].filter((c) => c === "\u200D").length;
+    const drawn = [...out].filter((c) => c === "\u{1F600}").length;
+    expect(invisible).toBe(32);
+    expect(joiners).toBeLessThanOrEqual(Math.ceil(drawn / 2));
+    expect(out).toBe(normalised(input));
+  });
+
+  it("is stable under cutting: a prefix of clean text is clean", () => {
+    const clean = cleanText(
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} \u2764\uFE0F\u200D\u{1F525} x",
+    );
+    const characters = [...clean];
+    for (let end = 0; end <= characters.length; end += 1) {
+      const prefix = characters.slice(0, end).join("");
+      expect(cleanText(`${prefix}\u2026`)).toBe(`${prefix}\u2026`);
+    }
   });
 
   it("is idempotent", () => {
@@ -143,6 +179,10 @@ describe("the markup layer refuses what could run, load or restyle", () => {
         "data-findings": "F1 F2",
       }),
     ).not.toThrow();
+  });
+
+  it("writes text only into text and title", () => {
+    expect(() => textElement("g" as "text", {}, "x")).toThrow(/text and title/);
   });
 
   it("refuses text where only markup belongs", () => {

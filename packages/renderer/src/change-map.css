@@ -10,6 +10,22 @@
   font-family: var(--font-ui);
 }
 
+/*
+ * P5-2: every label is its own left-to-right run, isolated from its neighbours, so right-to-left
+ * text in one label cannot reorder another and the layout (measured from the start) holds.
+ * Bidi control characters are already stripped by the renderer (ADR 0022).
+ */
+.cm-lane-label,
+.cm-node-title,
+.cm-node-sub,
+.cm-pill-text,
+.cm-badge-count,
+.cm-unavailable-title,
+.cm-unavailable-reason {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
 .cm-lane-bg {
   fill: var(--panel-2);
 }

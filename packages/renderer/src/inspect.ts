@@ -90,7 +90,23 @@ const FIXED: Readonly<Record<string, ReadonlySet<string>>> = {
   "text-anchor": new Set(["middle"]),
   orient: new Set(["auto-start-reverse"]),
 };
-const CLASS_TOKEN = /^cm(?:-[a-z]+)*$/;
+const DELTA = "(?:added|modified|removed|unchanged)";
+const SEVERITY = "(?:critical|high|medium|low)";
+/**
+ * The exact class lists the renderer writes, per element, in the order it writes them. A token
+ * on the wrong element (`cm-hero` on a card, `cm-critical` on a lane) fails the walk.
+ */
+const CLASSES: Readonly<Record<string, RegExp>> = {
+  svg: /^cm(?: cm-unavailable)?$/,
+  rect: /^(?:cm-unavailable-bg|cm-lane-bg|cm-card|cm-badge-bg|cm-pill)$/,
+  text: /^(?:cm-unavailable-title|cm-unavailable-reason|cm-lane-label|cm-node-title|cm-node-sub|cm-badge-count|cm-pill-text)$/,
+  g: new RegExp(
+    `^(?:cm-lanes|cm-lane|cm-edges|cm-nodes|cm-labels|cm-label|cm-node cm-${DELTA}|cm-badge cm-${SEVERITY})$`,
+  ),
+  path: new RegExp(
+    `^(?:cm-edge cm-${DELTA}(?: cm-hero)?(?: cm-muted)?(?: cm-animated)?|cm-arrow cm-arrow-(?:added|modified|removed|unchanged|hero))$`,
+  ),
+};
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const ID_LIST = /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?: [A-Za-z0-9][A-Za-z0-9._:/-]*)*$/;
 const PATH_DATA = /^[MLCQZz0-9 ,.-]+$/;
@@ -171,8 +187,8 @@ const checkAttribute = (
       if (!PATH_DATA.test(value)) throw new Error(`d="${value}"`);
       return;
     case "class":
-      if (!value.split(" ").every((token) => CLASS_TOKEN.test(token)))
-        throw new Error(`class="${value}"`);
+      if (!(CLASSES[element]?.test(value) ?? false))
+        throw new Error(`class="${value}" on <${element}>`);
       return;
     case "id":
       if (!value.startsWith(`${prefix}-`) || !/^[a-z][a-z0-9-]*$/.test(value))
@@ -206,10 +222,50 @@ const checkAttribute = (
 const INVISIBLE_OR_CONTROL =
   /[\p{Cc}\p{Cs}\p{Noncharacter_Code_Point}\u2800]|(?!\u200C|\u200D|\uFE0E|\uFE0F)[\p{Default_Ignorable_Code_Point}\p{Cf}]/u;
 
+const isJoiner = (c: string | undefined) => c === "\u200C" || c === "\u200D";
+const isSelector = (c: string | undefined) => c === "\uFE0E" || c === "\uFE0F";
+const EMOJI_OR_SYMBOL = /^[\p{Extended_Pictographic}\p{S}]$/u;
+const SPACE_OR_MARK = /^[\s\p{Z}\p{M}]$/u;
+
+/**
+ * Joiners and selectors must join something, independently of how the renderer decides:
+ * a selector straight after an emoji or symbol; a ZWNJ/ZWJ after a non-space character that is
+ * not another ZWNJ/ZWJ and before a character that is not a space, mark, joiner or selector.
+ * So no two of them are adjacent, except a selector followed by a joiner (U+2764 U+FE0F U+200D
+ * U+1F525). At most 32 per string, and ZWNJ/ZWJ at most half (rounded up) the drawn characters.
+ */
+const checkJoiners = (value: string): void => {
+  const characters = [...value];
+  let invisible = 0;
+  let joiners = 0;
+  let drawn = 0;
+  for (const [index, character] of characters.entries()) {
+    const previous = characters[index - 1];
+    const next = characters[index + 1];
+    if (isSelector(character)) {
+      invisible += 1;
+      if (previous === undefined || !EMOJI_OR_SYMBOL.test(previous))
+        throw new Error("a variation selector without an emoji or symbol before it");
+    } else if (isJoiner(character)) {
+      invisible += 1;
+      joiners += 1;
+      if (previous === undefined || isJoiner(previous) || /^[\s\p{Z}]$/u.test(previous))
+        throw new Error("a joiner without a character before it");
+      if (next === undefined || isJoiner(next) || isSelector(next) || SPACE_OR_MARK.test(next))
+        throw new Error("a joiner without a character after it");
+    } else if (!SPACE_OR_MARK.test(character)) {
+      drawn += 1;
+    }
+  }
+  if (invisible > 32) throw new Error("more than 32 joiners and selectors");
+  if (joiners > Math.ceil(drawn / 2)) throw new Error("more joiners than half the drawn text");
+};
+
 const checkVisible = (value: string): void => {
   const found = INVISIBLE_OR_CONTROL.exec(value);
   if (found !== null)
     throw new Error(`U+${found[0].codePointAt(0)?.toString(16).toUpperCase()} in output`);
+  checkJoiners(value);
 };
 
 /** Parses and walks in one step; returns what the walk found. */

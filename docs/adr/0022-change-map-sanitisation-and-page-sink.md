@@ -49,8 +49,16 @@ Two questions were open:
      default-ignorable or format character (zero-width space, word joiner, BOM, soft hyphen, the
      TAG block, bidi embeddings, overrides, isolates and marks), and the braille blank, except
      ZWNJ, ZWJ, VS15 and VS16;
-  3. ZWNJ/ZWJ are dropped at the start, after another ZWNJ/ZWJ, before a space and at the end;
-     VS15/VS16 are dropped at the start and after another VS15/VS16;
+  3. joiners and selectors are kept only where they join something, after the schema's rules
+     (`packages/schema/src/primitives.ts`): VS15/VS16 only straight after an emoji or symbol
+     (`\p{Extended_Pictographic}` or `\p{S}`), never after a space, mark, joiner or selector;
+     ZWNJ/ZWJ only after a drawn character or a placed selector and before a drawn character
+     that is not a mark; at most 32 of the four per string; ZWNJ/ZWJ at most one per two drawn
+     characters, counted as the text goes so that a prefix of clean text is still clean (cutting a
+     label never changes what precedes the cut). No two of them can be adjacent except a
+     selector followed by a joiner, which the heart-on-fire emoji (U+2764 U+FE0F U+200D U+1F525)
+     needs; the schema refuses that sequence today (follow-up in `docs/progress.md`). A tooltip
+     that joins several labels is normalised again as one string, so the budget is per string;
   4. runs of combining marks keep their first six;
   5. a `<title>` is cut at 400 code points and a `<text>` at 200, with an ellipsis (the layout
      already cuts drawn text far shorter, by width).
@@ -69,6 +77,9 @@ into visibility at all. Stripping matches what the schema already refuses, so in
 ever removes characters the parser would have rejected. Real right-to-left text needs no
 controls: each `<text>` is its own bidi paragraph and the Unicode algorithm orders it from the
 characters themselves. The joiners emoji and some scripts need are kept, only where they can join.
+As a second layer, `change-map.css` gives every text class `direction: ltr; unicode-bidi: isolate`,
+so right-to-left letters in one label cannot reorder a neighbour and the layout, measured from
+the start of each run, holds (goldens and screenshots unchanged).
 
 **Proof is structural.** Tests parse every output with saxes (a strict XML 1.0 parser with
 namespace checking, the one jsdom uses for XML; exact-pinned dev dependency, one transitive
@@ -86,6 +97,13 @@ renders the tree with `SafeSvgView` (`apps/web/src/change-map/SafeSvg.ts`): one
 `createElement` per node, attribute names mapped from a fixed table. `SafeSvgView` accepts only a
 tree that `svgDocument` checked (a module-private `WeakSet`, not a property), so a copy, a
 fragment or an object literal throws.
+
+**Same realm, same module instance.** The tree must be built by `renderChangeMap` in the same
+JavaScript realm and the same instance of `@rocky-reviews/renderer` that renders it. A tree built
+on a server and shipped to the browser as JSON, or built by a second copy of the module (a
+duplicated bundle chunk, an iframe), is not in that `WeakSet` and is refused. That is the point:
+the brand cannot be serialised or forged. If maps are ever rendered server-side, the server sends
+the analysis document and the browser renders it, never the tree.
 
 | Option                                                    | Scripts                         | Clicks (P5-3)            | Theming via page CSS                       | CSP (P7-3)                                  | Parser in the browser                                                 |
 | --------------------------------------------------------- | ------------------------------- | ------------------------ | ------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------- |
@@ -122,7 +140,10 @@ stylesheet to have coloured the cards.
 - A document that skipped the parser and carries a bad enum or id fails the whole map rather
   than a single card. Production documents are always parsed, so this only bites tests and new
   callers, loudly.
-- Mixed-direction text joined into one tooltip (`label · subtitle`) can still look reordered
-  around the `·` separators when parts are right-to-left; no hidden content is involved.
+- Accepted residuals: strong right-to-left letters (Hebrew, Arabic) are drawn as written; within
+  one tooltip (`label · subtitle`, a native `<title>` the stylesheet cannot reach) they can look
+  reordered around the `·` separators, though no hidden content is involved. Homoglyphs (Cyrillic
+  `а` for Latin `a`, confusable digits) are drawn as written: the map shows the model's own labels,
+  and files are opened from the document's paths, not from the drawn text.
 - The Playwright CSP test runs with `pnpm test:e2e`, not in `pnpm verify`; the structural CSP
   checks (`packages/renderer/src/csp.test.ts`) do run in `pnpm verify`.

@@ -12,7 +12,14 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: COVERED,
-      exclude: ["**/*.test.{ts,tsx}"],
+      // Test helpers are not product code: the renderer's corpus, inspector, reference
+      // normaliser and fixtures would otherwise lift its own floor.
+      exclude: [
+        "**/*.test.{ts,tsx}",
+        ...["inspect", "hostile-corpus", "reference-normalise", "testing", "test-support"].map(
+          (file) => `packages/renderer/src/${file}.ts`,
+        ),
+      ],
       thresholds: { lines: 85, functions: 85, branches: 80, statements: 85 },
     },
   },

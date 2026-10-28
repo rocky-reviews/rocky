@@ -61,8 +61,9 @@ Every element and attribute is built by `src/svg/markup.ts`, which:
   from a list, prefixed ids, `url(#id)` markers, schema ids in `data-*`);
 - normalises every text: line breaks become spaces; control, bidi, zero-width, tag and other
   invisible characters, lone surrogates and non-characters are dropped (ZWNJ, ZWJ, VS15, VS16 are
-  kept only where they join something); combining-mark runs keep six; `<title>` is capped at 400
-  code points and `<text>` at 200;
+  kept only where they join something, at most 32 per string and one joiner per two drawn
+  characters); combining-mark runs keep six; `<title>` is capped at 400 code points and `<text>`
+  at 200;
 - checks the finished document (ids unique and prefixed, every reference resolves) and brands it
   `SafeSvg`.
 

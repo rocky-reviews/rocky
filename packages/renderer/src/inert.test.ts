@@ -25,8 +25,10 @@ const codePoints = (text: string): number => [...text].length;
 const checkTexts = (report: InertReport, label: string): void => {
   const clean = normalised(label);
   const lane = normalised(`${clean} · ${clean}`.toUpperCase());
-  const edge = `${clean} → ${clean} · ${clean}`;
-  const card = `${clean} · ${clean} · ${clean}`;
+  // A tooltip joins several labels and is normalised again as one string (the joiner budget is
+  // per string), so the expected text is the normalised join.
+  const edge = normalised(`${clean} → ${clean} · ${clean}`);
+  const card = normalised(`${clean} · ${clean} · ${clean}`);
   for (const { element, className, parentClass, text } of report.texts) {
     const where = `${element}.${className ?? parentClass}: ${JSON.stringify(text)}`;
     expect(codePoints(text), where).toBeLessThanOrEqual(
@@ -112,6 +114,13 @@ describe("hostile labels render inert", () => {
     const report = inspectSvg(renderChangeMap(withLabels("straße")).svg);
     const lanes = report.texts.filter(({ className }) => className === "cm-lane-label");
     expect(lanes[0]?.text).toBe("STRASSE · STRASSE");
+  });
+
+  it("keeps the heart-on-fire emoji whole", () => {
+    const heart = "\u2764\uFE0F\u200D\u{1F525}";
+    const report = inspectSvg(renderChangeMap(withLabels(`hot ${heart}`)).svg);
+    const title = report.texts.find(({ className }) => className === "cm-node-title");
+    expect(title?.text).toBe(`hot ${heart}`);
   });
 
   it("keeps the joiners real text needs and drops the ones that hide", () => {
@@ -252,6 +261,22 @@ describe("the inspector itself", () => {
     ["text in a group", svg("<g>hello</g>")],
     ["a bidi control", svg("<text>a\u202Eb</text>")],
     ["a zero-width space", svg('<g aria-label="a\u200Bb"/>')],
+    ["a joiner run", svg("<text>a\u200D\u200Db</text>")],
+    ["a joiner before a selector", svg("<text>a\u200D\uFE0Fb</text>")],
+    ["alternating joiners", svg(`<text>a${"\u200D\uFE0F".repeat(4)}b</text>`)],
+    ["a selector after a space", svg("<text>a \uFE0F</text>")],
+    ["a selector after a letter", svg("<text>a\uFE0F</text>")],
+    ["two selectors", svg("<text>\u2764\uFE0F\uFE0F</text>")],
+    ["a trailing joiner", svg("<title>a\u200D</title>")],
+    ["a joiner before a space", svg("<title>a\u200D b</title>")],
+    [
+      "too many joiners for the text",
+      svg("<text>\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}</text>"),
+    ],
+    ["33 selectors", svg(`<text>${"\u2764\uFE0F".repeat(33)}</text>`)],
+    ["a stray class on a lane", svg('<g class="cm-lane cm-hero"/>')],
+    ["a severity on a lane", svg('<g class="cm-lane cm-critical"/>')],
+    ["hero on a card", svg('<rect class="cm-card cm-hero"/>')],
     ["a comment", svg("<!-- x -->")],
     ["CDATA", svg("<text><![CDATA[x]]></text>")],
     ["a processing instruction", svg("<?x y?>")],
@@ -266,5 +291,15 @@ describe("the inspector itself", () => {
 
   it("accepts what the renderer writes", () => {
     expect(() => parseXml(renderChangeMap(pr847()).svg)).not.toThrow();
+  });
+
+  it("accepts the joiners real text needs", () => {
+    for (const text of [
+      "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}",
+      "\u2764\uFE0F\u200D\u{1F525}",
+      "\u{1F3F3}\uFE0F\u200D\u{1F308} flag",
+      "\u2764\uFE0F",
+    ])
+      expect(() => inspectSvg(svg(`<text>${text}</text>`)), text).not.toThrow();
   });
 });
