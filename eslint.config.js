@@ -80,6 +80,8 @@ export default tseslint.config(
       "coverage/**",
       "design-poc/**",
       "artifacts/**",
+      "test-results/**",
+      "playwright-report/**",
       ".claude/worktrees/**",
     ],
   },

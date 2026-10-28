@@ -5,6 +5,7 @@
  */
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { briefingFixtures } from "../briefing/fixtures.js";
+import { largeShellData } from "./large-fixture.js";
 import {
   type PullRef,
   type RawShellData,
@@ -33,6 +34,8 @@ export const PR_847_PULL = {
 
 const FIXTURES: readonly RawShellData[] = [
   { pull: PR_847_PULL, myReview: null, analysis: pr847 },
+  // P6-3: a 5,000-line diff for the performance trace (`?fixture=large-diff`).
+  largeShellData(),
   // The briefing's empty and failed states (P6-2).
   ...briefingFixtures(PR_847_PULL),
 ];

@@ -76,6 +76,14 @@
   --tk-str: #0e7490;
   --tk-com: #7c8799;
   --tk-num: #b45309;
+  /*
+   * Syntax colours the diff view uses (P6-3): the POC's --tk-* where they reach WCAG AA (4.5:1)
+   * on every diff background, a darker or lighter shade of the same hue where they do not.
+   */
+  --syn-kw: var(--tk-kw);
+  --syn-str: var(--tk-str);
+  --syn-num: #a3480a;
+  --syn-com: #5f6b7d;
   /* Elevation */
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
 }
@@ -119,6 +127,8 @@
   --tk-str: #67e8f9;
   --tk-com: #6b7a93;
   --tk-num: #fdba74;
+  --syn-num: var(--tk-num);
+  --syn-com: #8d99ae;
   /* Elevation */
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.35);
 }

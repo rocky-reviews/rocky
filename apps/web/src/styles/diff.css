@@ -1,0 +1,463 @@
+/*
+ * File view and diff (P6-3), after design-poc/index.html ("file view"). Colours only through
+ * tokens.css. Differences from the POC are marked "POC:" with the reason.
+ */
+
+.file-card .btn-primary {
+  background: var(--you);
+  border-color: var(--you);
+  color: var(--on-you);
+}
+.file-card .btn-primary:hover {
+  background: var(--you);
+  filter: brightness(1.08);
+}
+.file-card .btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---------- header and AI strip ---------- */
+.file-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  /* The main column's top padding, so the header sticks to the column's top edge. */
+  top: -18px;
+  z-index: 2;
+  background: var(--panel);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+.file-head .file-path {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 13px;
+}
+.file-head .file-path:focus {
+  outline: none;
+}
+.file-head .file-path:focus-visible {
+  outline: 2px solid var(--you);
+}
+.file-size {
+  font-size: var(--text-base);
+  white-space: nowrap;
+}
+.file-size .add {
+  color: var(--add-sign);
+}
+.file-size .del {
+  color: var(--del-sign);
+}
+/* POC: level colour on its tint (3.2–4.1:1 in light mode); the text is --text, the dot coloured. */
+.file-card .risk-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  white-space: nowrap;
+}
+.file-card .risk-label::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.file-card .risk-label.r-critical {
+  background: var(--crit-bg);
+}
+.file-card .risk-label.r-critical::before {
+  background: var(--crit);
+}
+.file-card .risk-label.r-important {
+  background: var(--high-bg);
+}
+.file-card .risk-label.r-important::before {
+  background: var(--high);
+}
+.file-card .risk-label.r-normal,
+.file-card .risk-label.r-low {
+  background: var(--low-bg);
+}
+.file-card .risk-label.r-normal::before,
+.file-card .risk-label.r-low::before {
+  background: var(--low);
+}
+.file-card .risk-label.r-noise {
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.file-card .risk-label.r-noise::before {
+  display: none;
+}
+
+.file-ai {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--ai-bg);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: var(--space-1);
+  font-size: 13px;
+}
+.file-ai .row {
+  display: flex;
+  gap: var(--space-2);
+}
+.file-ai dd {
+  margin: 0;
+  min-width: 0;
+}
+/* POC: the label in --ai (3.3:1 on --ai-bg in light mode); here only the mark is cyan. */
+.file-ai .k {
+  font-weight: 650;
+  min-width: 108px;
+  flex: none;
+}
+.file-ai .k::before {
+  content: "✦ ";
+  color: var(--ai);
+}
+
+/* ---------- diff ---------- */
+.diff {
+  font-family: var(--font-mono);
+  font-size: var(--text-code);
+  line-height: 1.6;
+  /* Overridden per file from its longest line number. */
+  --ln-digits: 3;
+  --ln-w: calc(var(--ln-digits) * 1ch + 14px);
+}
+.diff:focus {
+  outline: none;
+}
+.diff:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: -2px;
+}
+.diff-status {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--muted);
+}
+.hunk-head {
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--text-base);
+  line-height: 20px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.hunk-head code {
+  font-size: inherit;
+}
+.diff-note {
+  padding: 0 var(--space-4) 0 calc(2 * var(--ln-w) + 18px);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+.ln {
+  display: grid;
+  grid-template-columns: var(--ln-w) var(--ln-w) 18px minmax(0, 1fr);
+  position: relative;
+}
+/* POC: --faint (2.4–2.6:1) for line numbers; --muted reaches AA on every diff background. */
+.ln .no {
+  /* A wrapped line keeps its numbers on its first visual line. */
+  align-self: start;
+  color: var(--muted);
+  text-align: right;
+  padding: 0 var(--space-2) 0 0;
+  user-select: none;
+  font-size: var(--text-sm);
+  font-family: inherit;
+  line-height: inherit;
+}
+.ln button.no {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.ln button.no:hover {
+  color: var(--you);
+  text-decoration: underline;
+}
+.ln button.no:focus-visible {
+  outline-offset: -2px;
+}
+.ln .sign {
+  color: var(--muted);
+  user-select: none;
+  text-align: center;
+}
+.ln .src {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--code);
+  padding-right: var(--space-4);
+  font-size: inherit;
+  /* Code reads left to right; bidi controls inside it are shown, not applied. */
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.ln.add {
+  background: var(--add-bg);
+}
+.ln.add .sign {
+  color: var(--add-sign);
+}
+.ln.del {
+  background: var(--del-bg);
+}
+.ln.del .sign {
+  color: var(--del-sign);
+}
+.ln.hot::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+}
+.ln.hot-critical::before {
+  background: var(--crit);
+}
+.ln.hot-high::before {
+  background: var(--high);
+}
+.ln.hot-medium::before {
+  background: var(--med);
+}
+.ln.hot-low::before {
+  background: var(--low);
+}
+.ln.hot-look::before {
+  background: var(--med);
+}
+.ln.hot-question::before {
+  background: var(--ai);
+}
+.ln.hot-ok::before {
+  background: var(--ok);
+}
+/* POC: --tk-com and --tk-num fall below AA on the diff backgrounds; --syn-* keep the hues. */
+.tk-kw {
+  color: var(--syn-kw);
+}
+.tk-str {
+  color: var(--syn-str);
+}
+.tk-com {
+  color: var(--syn-com);
+  font-style: italic;
+}
+.tk-num {
+  color: var(--syn-num);
+}
+.bidi-ctl {
+  border: 1px solid var(--crit);
+  border-radius: var(--radius-xs);
+  padding: 0 2px;
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+/* ---------- blocks under a line: flags, own comments, composer ---------- */
+.inline {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 10px calc(2 * var(--ln-w) + 18px);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.flag {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-code);
+}
+.flag.look {
+  background: var(--med-bg);
+}
+.flag.question {
+  background: var(--ai-bg);
+}
+.flag.ok {
+  background: var(--ok-bg);
+}
+/* POC: the label in the kind's colour (3.3:1 for look/question in light mode); the mark keeps it. */
+.flag .k {
+  font-weight: 650;
+  white-space: nowrap;
+}
+.flag.look .mark {
+  color: var(--med);
+}
+.flag.question .mark {
+  color: var(--ai);
+}
+.flag.ok .mark {
+  color: var(--ok);
+}
+.flag code,
+.mine code {
+  background: var(--panel-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-base);
+}
+.mine {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--you);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  padding: 9px var(--space-3);
+  box-shadow: var(--shadow);
+}
+.mine-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+.mine-head b {
+  color: var(--text);
+}
+.mine-head .spacer {
+  flex: 1;
+}
+.avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--you);
+  color: var(--on-you);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.pending {
+  color: var(--you);
+  font-weight: 600;
+}
+.mine-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.compose {
+  border: 1px solid var(--you);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2);
+  background: var(--panel);
+}
+.compose textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) 10px;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+.compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 6px;
+}
+.compose-hint span {
+  white-space: nowrap;
+}
+.compose-hint {
+  flex: 1;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* ---------- noise file and footer ---------- */
+.noise-card {
+  padding: 28px var(--space-4);
+  text-align: center;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.noise-title {
+  margin: 0 0 6px;
+  font-size: var(--text-lg);
+}
+.noise-summary {
+  margin: 0 auto var(--space-3);
+  max-width: 480px;
+  color: var(--text);
+}
+.file-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.file-foot .hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+@media (max-width: 760px) {
+  .file-head {
+    top: -12px;
+    padding: 10px var(--space-3);
+  }
+  /* The path gets its own line; the label, size and button share the next. */
+  .file-head .file-path {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .file-head .file-size {
+    flex: 1;
+  }
+  .file-ai {
+    padding: 10px var(--space-3);
+  }
+  .file-ai .row {
+    flex-direction: column;
+    gap: 0;
+  }
+  .hunk-head {
+    padding: var(--space-1) var(--space-3);
+  }
+  .inline,
+  .diff-note {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+  .ln .src {
+    padding-right: var(--space-2);
+  }
+}

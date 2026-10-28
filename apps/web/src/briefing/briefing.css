@@ -93,7 +93,7 @@
   font-size: var(--text-sm);
 }
 /* POC: level colour on its tint (3.2-4.1:1 in light mode); the tint carries the level. */
-.risk-label {
+.risk-table .risk-label {
   font-size: var(--text-xs);
   font-weight: 700;
   padding: 2px var(--space-2);
@@ -101,19 +101,19 @@
   background: var(--panel-2);
   color: var(--text);
 }
-.risk-label.r-critical {
+.risk-table .risk-label.r-critical {
   background: var(--crit-bg);
 }
-.risk-label.r-important {
+.risk-table .risk-label.r-important {
   background: var(--high-bg);
 }
-.risk-label.r-normal {
+.risk-table .risk-label.r-normal {
   background: var(--low-bg);
 }
-.risk-label.r-ignore {
+.risk-table .risk-label.r-ignore {
   color: var(--muted);
 }
-.risk-label.r-unanalysed {
+.risk-table .risk-label.r-unanalysed {
   background: var(--med-bg);
 }
 .file-link {
