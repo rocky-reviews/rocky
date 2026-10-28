@@ -8,6 +8,7 @@ import {
   PLANTED,
   pullRequestPayload,
   signedDelivery,
+  TEST_APP_ID,
   TEST_WEBHOOK_SECRET,
   webhookRequest,
   type SignedDelivery,
@@ -508,5 +509,40 @@ describe("organization events (P7-2, ADR 0024)", () => {
         reason: "bad_payload",
       });
     }
+  });
+});
+
+describe("claimsOwnSender (rate-limit bucketing only, P7-3)", () => {
+  const ours = createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET, appId: TEST_APP_ID });
+  const claims = (i: typeof ours, d: SignedDelivery) =>
+    i.claimsOwnSender?.((name) => d.headers[name]) ?? false;
+
+  it("true only for GitHub's hook target headers naming this app", () => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    expect(claims(ours, d)).toBe(true);
+    for (const target of [
+      { type: "integration", id: String(TEST_APP_ID + 1) },
+      // A repository whose id happens to equal the app id is another hook.
+      { type: "repository", id: String(TEST_APP_ID) },
+      { type: "integration", id: ` ${TEST_APP_ID}` },
+    ]) {
+      const other = signedDelivery("pull_request", pullRequestPayload("opened"), {
+        hookTarget: target,
+      });
+      expect(claims(ours, other), JSON.stringify(target)).toBe(false);
+    }
+    expect(
+      claims(ours, withHeaders(d, { "x-github-hook-installation-target-id": undefined })),
+    ).toBe(false);
+  });
+
+  it("without an app id nothing is ours, and a throwing header lookup is false", () => {
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    expect(claims(ingress, d)).toBe(false);
+    expect(
+      ours.claimsOwnSender?.(() => {
+        throw new Error("boom");
+      }),
+    ).toBe(false);
   });
 });

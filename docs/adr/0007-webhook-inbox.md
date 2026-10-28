@@ -230,9 +230,13 @@ application's database credential.
   timeout per request) and make the server compute one HMAC per body. Slow or lying clients
   cannot: only bytes actually received count. During such a flood genuine deliveries get 503 and
   are lost unless redelivered (see the reconcile follow-up). Since P7-3 (ADR 0025 §3) one
-  address can try at most `webhook.ip` times a minute (before the body is read) and one
-  authenticated installation `webhook.installation` times; a distributed flood is for the edge
-  (Cloudflare in front in Cloud).
+  address gets at most `webhook.ip` rejected deliveries (bad precheck, bad signature, oversized
+  body) a minute before it is refused ahead of the body, kept apart from deliveries that claim
+  this deployment's own App so another App's rejected deliveries from GitHub's shared addresses
+  cannot block ours; and one authenticated installation gets at most `webhook.installation`
+  newly queued deliveries a minute (replays are inbox duplicates and do not count). A flood of
+  well-signed-looking junk that passes the precheck still costs one HMAC per body until the
+  budget is spent; a distributed flood is for the edge (Cloudflare in front in Cloud).
 - **Installer may be unknown:** `sender` is `null` when GitHub sends no usable actor. P3-3 handles
   it (ADR 0009 §2): the org gets no installer candidate, and P7-1 falls back to the first user who
   signs in and is verified as an admin.

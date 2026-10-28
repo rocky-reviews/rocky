@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
  * Security headers (P7-3, ADR 0025): the one place that decides them. A root `onSend` hook adds
@@ -66,25 +66,37 @@ export interface SecurityHeadersOptions {
 const isHtml = (contentType: unknown): boolean =>
   typeof contentType === "string" && /^text\/html\b/i.test(contentType);
 
+/**
+ * Adds every header the reply does not already carry. Called from the `onSend` hook and from the
+ * `frameworkErrors` handler (`security/errors.ts`): Fastify answers a malformed URL (`GET /%`)
+ * before routing, without running hooks, so that answer would otherwise go out bare.
+ */
+export const applySecurityHeaders = (
+  reply: FastifyReply,
+  options: SecurityHeadersOptions,
+): void => {
+  for (const [name, value] of Object.entries(BASELINE_HEADERS)) {
+    if (!reply.hasHeader(name)) void reply.header(name, value);
+  }
+  if (!reply.hasHeader("content-security-policy")) {
+    void reply.header(
+      "content-security-policy",
+      isHtml(reply.getHeader("content-type")) ? APP_CSP : NON_DOCUMENT_CSP,
+    );
+  }
+  // Authenticated and API answers must never be stored; only static assets opt in to caching.
+  if (!reply.hasHeader("cache-control")) void reply.header("cache-control", "no-store");
+  if (options.hsts) void reply.header("strict-transport-security", HSTS);
+  reply.removeHeader("x-powered-by");
+  reply.removeHeader("server");
+};
+
 export const registerSecurityHeaders = (
   app: FastifyInstance,
   options: SecurityHeadersOptions,
 ): void => {
   app.addHook("onSend", async (_request, reply, payload) => {
-    for (const [name, value] of Object.entries(BASELINE_HEADERS)) {
-      if (!reply.hasHeader(name)) void reply.header(name, value);
-    }
-    if (!reply.hasHeader("content-security-policy")) {
-      void reply.header(
-        "content-security-policy",
-        isHtml(reply.getHeader("content-type")) ? APP_CSP : NON_DOCUMENT_CSP,
-      );
-    }
-    // Authenticated and API answers must never be stored; only static assets opt in to caching.
-    if (!reply.hasHeader("cache-control")) void reply.header("cache-control", "no-store");
-    if (options.hsts) void reply.header("strict-transport-security", HSTS);
-    reply.removeHeader("x-powered-by");
-    reply.removeHeader("server");
+    applySecurityHeaders(reply, options);
     return payload;
   });
 };

@@ -12,7 +12,6 @@ import {
 } from "@rocky-reviews/forge-github";
 import rateLimit from "@fastify/rate-limit";
 import { publicRoute } from "./auth/policy.js";
-import { pageCsp } from "./security/headers.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   checkCredentialsTarget,
@@ -20,6 +19,7 @@ import {
   credentialsEnvText,
   writeCredentialsOnce,
 } from "./credentials-file.js";
+import { pageCsp } from "./security/headers.js";
 
 /**
  * GitHub App manifest flow for self-hosters (P3-1, ADR 0008).

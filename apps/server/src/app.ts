@@ -7,6 +7,7 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerRoleRoutes } from "./roles/routes.js";
+import { frameworkErrors, registerErrorHandler } from "./security/errors.js";
 import { registerSecurityHeaders } from "./security/headers.js";
 import type { RateLimits } from "./security/rate-limit.js";
 import { registerWebApp, type WebApp } from "./web-app.js";
@@ -62,7 +63,10 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
   // headersTimeout keeps its 60 s default, which leaves slow uploads unbounded (found in review
   // round 2; "cuts off a slow upload at the request timeout" proves the effective setting).
   const requestTimeout = deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
-  const timeouts = {
+  const headers = { hsts: deps.hsts ?? false };
+  const options = {
+    // Malformed URLs (`GET /%`) are refused before routing and without hooks (review round 1).
+    frameworkErrors: frameworkErrors(headers),
     requestTimeout,
     http: {
       requestTimeout,
@@ -72,10 +76,12 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
   };
   const app: FastifyInstance =
     deps.log === undefined
-      ? Fastify({ logger: false, ...timeouts })
-      : Fastify({ ...fastifyLoggerOptions(deps.log), ...timeouts });
+      ? Fastify({ logger: false, ...options })
+      : Fastify({ ...fastifyLoggerOptions(deps.log), ...options });
   if (deps.log !== undefined) addRequestIdHeader(app);
-  registerSecurityHeaders(app, { hsts: deps.hsts ?? false });
+  registerSecurityHeaders(app, headers);
+  // Fixed error bodies for every route, including root-level ones added later (review round 1).
+  registerErrorHandler(app);
   if (deps.rateLimits !== undefined) app.decorate("rateLimits", deps.rateLimits);
   // Before any route: every route must declare its access policy, or it fails to register (P7-2).
   const policies = registerAccessPolicy(app, () => app.sessionAuth);

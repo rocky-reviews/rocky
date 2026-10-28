@@ -42,6 +42,12 @@ const MAX_FILES = 2_000;
 const MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 const SAFE_PATH = /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
+/**
+ * What an SPA route can look like: non-empty segments of unreserved characters, none of them only dots. No `//`, `;`,
+ * `%`, `\\` or the like, so `//api/session` or `/api;x` cannot dodge `NOT_SPA` (review round 1).
+ */
+const SPA_PATH = /^(?:\/(?!\.+(?:\/|$))[A-Za-z0-9._~@+-]+)*\/?$/;
+
 /** Paths that are never the SPA, even when nothing matches (fixed 404 instead). */
 const NOT_SPA = /^\/(?:api|auth|webhooks|setup|assets|healthz)(?:\/|$)/;
 
@@ -138,10 +144,9 @@ export const registerWebApp = (app: FastifyInstance, web: WebApp | undefined): v
     if (
       web !== undefined &&
       (request.method === "GET" || request.method === "HEAD") &&
+      SPA_PATH.test(path) &&
       !NOT_SPA.test(path.toLowerCase()) &&
-      !last.includes(".") &&
-      !path.includes("%") &&
-      !path.includes("\\")
+      !last.includes(".")
     ) {
       return sendFile(reply, web.index);
     }

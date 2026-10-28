@@ -77,6 +77,16 @@ describe("serving the built web app", () => {
       "/assets/missing.js",
       "/favicon.ico",
       "/robots.txt",
+      // Review round 1: odd spellings of API paths are not the SPA either.
+      "//api/session",
+      "//auth/github/login",
+      "/api;x",
+      "/api;/session",
+      "/inbox;x",
+      "/./api/session",
+      "/a/../api",
+      "/inbox//x",
+      "/%2Fapi",
     ]) {
       const res = await app.inject({ url, headers: { accept: "text/html" } });
       expect(res.statusCode, url).toBe(404);

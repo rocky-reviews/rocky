@@ -180,6 +180,13 @@ export interface WebhookIngress {
    * for the same headers, or `undefined` to go on. Must not throw.
    */
   precheck(header: WebhookRequest["header"]): WebhookRejection | undefined;
+  /**
+   * Whether the unauthenticated headers claim the delivery comes from this deployment's own
+   * registration (e.g. GitHub's hook target app id). Proves nothing: used only to keep rate-limit
+   * buckets for rejected deliveries apart, since a forge sends every customer's deliveries from
+   * the same addresses. Optional; must not throw.
+   */
+  claimsOwnSender?(header: WebhookRequest["header"]): boolean;
   receive(request: WebhookRequest): WebhookReceipt;
 }
 

@@ -55,7 +55,7 @@ const setup = (max = 2) => {
       }),
       db,
       keys: {} as KeyWrapper,
-      rateLimit: authRateLimit(limits),
+      rateLimit: authRateLimit(limits, { secret, cookieSecure: true }),
     },
   });
   return { app, lines, createLoginAttempt, findSession, secret };
@@ -119,6 +119,43 @@ describe("auth rate limits (P7-3)", () => {
     expect((await logout()).statusCode).toBe(429);
     // The limited logout never reached the session lookup.
     expect(findSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("logout counts per session, so one client on a shared address cannot stop others signing out", async () => {
+    const { app, secret } = setup(2);
+    const logout = (token: string, csrf = csrfTokenFor(secret, token)) =>
+      app.inject({
+        method: "POST",
+        url: "/auth/logout",
+        headers: {
+          origin: PUBLIC.origin,
+          "sec-fetch-site": "same-origin",
+          cookie: `__Host-rocky_session=${token}`,
+          [CSRF_HEADER]: csrf,
+        },
+        ...from("198.51.100.9"),
+      });
+    const noisy = randomToken();
+    for (let i = 0; i < 2; i += 1) expect((await logout(noisy)).statusCode).toBe(204);
+    expect((await logout(noisy)).statusCode).toBe(429);
+    // Another person behind the same NAT still signs out.
+    expect((await logout(randomToken())).statusCode).toBe(204);
+  });
+
+  it("a cookie without its CSRF token gets no bucket of its own (refused before the limiter)", async () => {
+    const { app } = setup(1);
+    const res = await app.inject({
+      method: "POST",
+      url: "/auth/logout",
+      headers: {
+        origin: PUBLIC.origin,
+        "sec-fetch-site": "same-origin",
+        cookie: `__Host-rocky_session=${randomToken()}`,
+        [CSRF_HEADER]: randomToken(),
+      },
+      ...from("198.51.100.10"),
+    });
+    expect(res.statusCode).toBe(403);
   });
 
   it("a spoofed X-Forwarded-For does not get a fresh bucket when no proxy is trusted", async () => {

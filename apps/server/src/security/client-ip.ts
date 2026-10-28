@@ -13,7 +13,13 @@ import { ConfigError, isProduction } from "../config.js";
  *              (Cloudflare in front of Fly: xff:2)
  *
  * Anything missing or malformed falls back to the socket's peer: the proxy's own address, one
- * shared bucket, never an exemption.
+ * shared bucket, never an exemption. `resolveClientAddress` says when it did, so the limiter can
+ * warn (a proxy that stopped setting the header would otherwise silently merge every client).
+ *
+ * `xff:<n>` is only sound when the origin accepts traffic from the proxy alone: a client that
+ * reaches the origin directly can write the whole header itself. On Fly.io prefer `fly`.
+ * `none` is refused on Fly.io (FLY_APP_NAME set): there every request comes through Fly's proxy,
+ * so `none` would put all clients in the proxy's one bucket.
  */
 
 export type TrustProxy =
@@ -35,7 +41,14 @@ export const trustProxyFromEnv = (env: Env): TrustProxy => {
     }
     return { kind: "none" };
   }
-  if (raw === "none") return { kind: "none" };
+  if (raw === "none") {
+    if ((env["FLY_APP_NAME"] ?? "") !== "") {
+      throw new ConfigError(
+        "ROCKY_TRUST_PROXY=none is refused on Fly.io (FLY_APP_NAME set): every request comes through Fly's proxy, so all clients would share one rate-limit bucket; use fly",
+      );
+    }
+    return { kind: "none" };
+  }
   if (raw === "fly") {
     if ((env["FLY_APP_NAME"] ?? "") === "") {
       throw new ConfigError(
@@ -67,21 +80,43 @@ const plainAddress = (value: string): string | undefined => {
   return isIP(unzoned) === 0 ? undefined : unzoned;
 };
 
-export const clientAddress = (request: RequestLike, trust: TrustProxy): string => {
+/** For the boot log: the mode only, never an address. */
+export const describeTrustProxy = (trust: TrustProxy): string =>
+  trust.kind === "xff" ? `xff:${trust.hops}` : trust.kind;
+
+/** Why a trusted mode used the socket's peer instead of the proxy's header. */
+export type ClientAddressFallback = "missing" | "malformed";
+
+export interface ResolvedClientAddress {
+  readonly address: string;
+  /** Set when a trusted mode (`fly`, `xff`) fell back to the peer. */
+  readonly fallback?: ClientAddressFallback;
+}
+
+export const resolveClientAddress = (
+  request: RequestLike,
+  trust: TrustProxy,
+): ResolvedClientAddress => {
   const peer = request.socket.remoteAddress ?? UNKNOWN;
-  if (trust.kind === "none") return peer;
+  if (trust.kind === "none") return { address: peer };
   if (trust.kind === "fly") {
     const value = request.headers["fly-client-ip"];
-    return (typeof value === "string" ? plainAddress(value.trim()) : undefined) ?? peer;
+    if (value === undefined) return { address: peer, fallback: "missing" };
+    const address = typeof value === "string" ? plainAddress(value.trim()) : undefined;
+    return address === undefined ? { address: peer, fallback: "malformed" } : { address };
   }
   // Node joins repeated X-Forwarded-For headers with ", ", which is what a proxy chain means.
   const value = request.headers["x-forwarded-for"];
   const raw = Array.isArray(value) ? value.join(",") : value;
-  if (raw === undefined) return peer;
+  if (raw === undefined) return { address: peer, fallback: "missing" };
   const entries = raw.split(",").map((e) => e.trim());
-  if (entries.length < trust.hops) return peer;
-  return plainAddress(entries[entries.length - trust.hops] ?? "") ?? peer;
+  if (entries.length < trust.hops) return { address: peer, fallback: "missing" };
+  const address = plainAddress(entries[entries.length - trust.hops] ?? "");
+  return address === undefined ? { address: peer, fallback: "malformed" } : { address };
 };
+
+export const clientAddress = (request: RequestLike, trust: TrustProxy): string =>
+  resolveClientAddress(request, trust).address;
 
 /** Eight 16-bit groups of an IPv6 address, or undefined. */
 const ipv6Groups = (address: string): number[] | undefined => {

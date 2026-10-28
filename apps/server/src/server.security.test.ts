@@ -5,6 +5,7 @@ import { generateLocalKek } from "@rocky-reviews/crypto";
 import {
   pullRequestPayload,
   signedDelivery,
+  TEST_APP_ID,
   TEST_WEBHOOK_SECRET as WEBHOOK_SECRET,
 } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
@@ -80,6 +81,55 @@ describe("startServer security wiring (P7-3)", () => {
       payload: d.body,
     });
     expect(limited.statusCode).toBe(429);
+  });
+
+  it("webhooks: GITHUB_APP_ID keeps another app's forged deliveries out of our bucket", async () => {
+    const { log } = capture();
+    running = await startServer(
+      {
+        ...BASE_ENV,
+        GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
+        GITHUB_APP_ID: String(TEST_APP_ID),
+        ROCKY_RATE_LIMIT_WEBHOOK_IP: "1/60",
+      },
+      log,
+    );
+    for (let i = 0; i < 3; i += 1) {
+      const forged = signedDelivery("pull_request", pullRequestPayload("opened"), {
+        secret: "attacker-secret-that-is-long-enough-000000",
+        hookTarget: { type: "integration", id: "999" },
+      });
+      await running.app.inject({
+        method: "POST",
+        url: "/webhooks/github",
+        headers: forged.headers,
+        payload: forged.body,
+      });
+    }
+    const d = signedDelivery("pull_request", pullRequestPayload("opened"));
+    const genuine = await running.app.inject({
+      method: "POST",
+      url: "/webhooks/github",
+      headers: d.headers,
+      payload: d.body,
+    });
+    // Not rate limited (the database is unreachable here, so the inbox answers 503).
+    expect(genuine.statusCode).not.toBe(429);
+  });
+
+  it("logs the trusted-proxy mode at boot, never an address", async () => {
+    const { log, lines } = capture();
+    running = await startServer({ ...BASE_ENV, ROCKY_TRUST_PROXY: "xff:2" }, log);
+    const boot = lines.find((l) => l.includes('"trustProxy"'));
+    expect(boot).toBeDefined();
+    expect(JSON.parse(boot ?? "{}")).toMatchObject({ trustProxy: "xff:2" });
+  });
+
+  it("refuses ROCKY_TRUST_PROXY=none on Fly.io", async () => {
+    const { log } = capture();
+    await expect(
+      startServer({ ...PRODUCTION, FLY_APP_NAME: "rocky", ROCKY_TRUST_PROXY: "none" }, log),
+    ).rejects.toThrow(/refused on Fly.io/);
   });
 
   it("refuses a malformed limit or proxy setting at boot", async () => {
