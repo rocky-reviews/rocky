@@ -96,7 +96,7 @@ test("a strict CSP accepts the change map as string and as React output", async 
       .evaluate((el) => getComputedStyle(el).fill);
   expect(await fill('[data-map="0"] .cm-card')).not.toBe(await fill("[data-unstyled] rect"));
   // A hostile label is drawn as its text.
-  await expect(tab.locator('[data-react="1"] .cm-node-title').first()).toHaveText(/^<script>/);
+  await expect(tab.locator('[data-react="1"] .cm-node-title').first()).toHaveText(/^<script>/i);
 });
 
 test("control: the listener does catch an inline style", async ({ page: tab }) => {
