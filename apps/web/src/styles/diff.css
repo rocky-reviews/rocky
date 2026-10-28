@@ -55,7 +55,7 @@
   color: var(--del-sign);
 }
 /* POC: level colour on its tint (3.2–4.1:1 in light mode); the text is --text, the dot coloured. */
-.risk-label {
+.file-card .risk-label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -66,37 +66,37 @@
   color: var(--text);
   white-space: nowrap;
 }
-.risk-label::before {
+.file-card .risk-label::before {
   content: "";
   width: 7px;
   height: 7px;
   border-radius: 50%;
 }
-.risk-label.r-critical {
+.file-card .risk-label.r-critical {
   background: var(--crit-bg);
 }
-.risk-label.r-critical::before {
+.file-card .risk-label.r-critical::before {
   background: var(--crit);
 }
-.risk-label.r-important {
+.file-card .risk-label.r-important {
   background: var(--high-bg);
 }
-.risk-label.r-important::before {
+.file-card .risk-label.r-important::before {
   background: var(--high);
 }
-.risk-label.r-normal,
-.risk-label.r-low {
+.file-card .risk-label.r-normal,
+.file-card .risk-label.r-low {
   background: var(--low-bg);
 }
-.risk-label.r-normal::before,
-.risk-label.r-low::before {
+.file-card .risk-label.r-normal::before,
+.file-card .risk-label.r-low::before {
   background: var(--low);
 }
-.risk-label.r-noise {
+.file-card .risk-label.r-noise {
   background: var(--panel-2);
   color: var(--muted);
 }
-.risk-label.r-noise::before {
+.file-card .risk-label.r-noise::before {
   display: none;
 }
 

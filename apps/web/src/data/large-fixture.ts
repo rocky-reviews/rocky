@@ -91,6 +91,7 @@ export const largeShellData = () => {
       author: "perf-bot",
       state: "open",
       headRef: "perf/large-ledger",
+      headSha: LARGE_HEAD_SHA,
       baseRef: "main",
       additions,
       deletions,

@@ -124,7 +124,10 @@ test("a 5,000-line diff scrolls at 60 fps (Chrome trace, CPU throttled)", async 
     Function.prototype.toString.call(requestAnimationFrame),
   );
   expect(rafSource).toMatch(/\[native code\]/);
-  await page.getByRole("button", { name: "src/billing/ledger-rules.ts" }).click();
+  await page
+    .locator("#sidebar")
+    .getByRole("button", { name: "src/billing/ledger-rules.ts" })
+    .click();
   await page.locator(".diff .ln").first().waitFor();
   const fullHeight = await page.evaluate(
     () => document.querySelector<HTMLElement>(".diff")?.offsetHeight ?? 0,
