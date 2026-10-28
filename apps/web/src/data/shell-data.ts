@@ -8,6 +8,7 @@
  */
 import {
   type AnalysisDocument,
+  FullSha,
   GitRef,
   limits,
   parseAnalysisDocument,
@@ -15,6 +16,7 @@ import {
   RepoOwner,
 } from "@rocky-reviews/schema";
 import { z } from "zod";
+import { type AnalysisRun, parseAnalysisRun } from "../briefing/analysis-run.js";
 
 /**
  * A login shown as text (author, approvers), including app bots (`dependabot[bot]`). Looser
@@ -38,6 +40,8 @@ export const PullSummary = z.strictObject({
   state: z.enum(["open", "closed", "merged"]),
   headRef: GitRef,
   baseRef: GitRef,
+  /** The PR's current head commit; an analysis of another commit is shown as out of date. */
+  headSha: FullSha,
   additions: z.number().int().min(0),
   deletions: z.number().int().min(0),
   changedFiles: z.number().int().min(0),
@@ -57,13 +61,21 @@ export type MyReview = z.infer<typeof MyReview>;
  * What a source hands over: unchecked parts. Only `parseShellData` turns them into `ShellData`,
  * and the app calls it on every load, so no source can skip validation.
  */
-export type RawShellData = { pull: unknown; myReview: unknown; analysis: unknown };
+export type RawShellData = {
+  pull: unknown;
+  myReview: unknown;
+  analysis: unknown;
+  /** Where the analysis stands (P6-2); optional, see `parseAnalysisRun`. */
+  analysisRun?: unknown;
+};
 
 export type ShellData = {
   pull: PullSummary;
   myReview: MyReview | null;
   /** Null while the analysis is queued, running or failed (P6-2 designs those states). */
   analysis: AnalysisDocument | null;
+  /** Why there is no document yet, or `done` (P6-2). */
+  analysisRun: AnalysisRun;
 };
 
 export type PullRef = Pick<PullSummary, "owner" | "repo" | "number">;
@@ -104,5 +116,7 @@ export const parseShellData = (input: RawShellData): ShellData => {
     )
       throw new ShellDataError("analysis does not match pull request");
   }
-  return { pull: pull.data, myReview: myReview.data, analysis };
+  const analysisRun = parseAnalysisRun(input.analysisRun, analysis !== null);
+  if (analysisRun === undefined) throw new ShellDataError("invalid analysis state");
+  return { pull: pull.data, myReview: myReview.data, analysis, analysisRun };
 };

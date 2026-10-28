@@ -23,7 +23,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 ## Sidebar (triage)
 
 - [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, minutes of high-risk code left, "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); minutes from `triage.files[].reviewMinutes` (defect 6)
-- [ ] P6-2 · "Briefing & change map" entry
+- [x] P6-2 · "Briefing & change map" entry — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); built with the P6-1 sidebar, returns to the briefing (`briefing.e2e.spec.ts` "the Briefing & change map entry returns to the briefing")
 - [x] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the faded state needs draft decisions (P6-4)
 - [x] P6-1 · Viewed files struck through — `shell.e2e.spec.ts` "viewed checkboxes update coverage and strike the file through"
@@ -32,16 +32,17 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Briefing (P6-2)
 
-- [ ] "✦ AI briefing · est. ~N min review" header
-- [ ] Summary paragraph (intent of the PR)
-- [ ] Risk verdict box (level + why)
-- [ ] Risk table: Critical "need your attention", Important "worth a careful look", Normal "to skim", Ignore "don't matter" (low + noise), with clickable file names
-- [ ] Change map (P5-1/P5-3): lanes, cards coloured by delta, hero edges animated, edge labels, finding-count badges by worst severity, click card → file, legend
-- [ ] Change map unavailable (H2 #2, not in the POC): when the document has no `graph`, the rest of the briefing still renders and the map area shows "Change map unavailable", the reason from `provenance.graphUnavailable` (none when the field is absent) and a Retry button
-- [ ] Suggested review path: numbered, file + why + score, clickable
-- [ ] "Project memory applied" list with source PR
-- [ ] "AI checked, looks fine" list
-- [ ] "Start with the riskiest file (k)" button
+- [x] "✦ AI briefing · est. ~N min review" header — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-1440-dark](../../apps/web/e2e/__screenshots__/brief-1440-dark.png); "Briefing by Rocky" when the pipeline wrote it ([brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png))
+- [x] Summary paragraph (intent of the PR) — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); `**bold**` and `` `code` `` render as elements, the rest as text (`inline-text.test.tsx`)
+- [x] Risk verdict box (level + why) — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-375-dark](../../apps/web/e2e/__screenshots__/brief-375-dark.png)
+- [x] Risk table: Critical "need your attention", Important "worth a careful look", Normal "to skim", Ignore "don't matter" (low + noise), with clickable file names — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), stacked at phone width [brief-375-light](../../apps/web/e2e/__screenshots__/brief-375-light.png); a click selects the file in the sidebar and main column (`briefing.e2e.spec.ts` "clickable files"); a "Not analysed" row when `provenance.unanalysed` is not empty ([brief-map-unavailable-1024-light](../../apps/web/e2e/__screenshots__/brief-map-unavailable-1024-light.png))
+- [ ] Change map (P5-1/P5-3): lanes, cards coloured by delta, hero edges animated, edge labels, finding-count badges by worst severity, click card → file, legend. P6-2 built the slot ([brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png)): heading, hint and legend as page HTML, and `ChangeMapCanvas` (the seam for the renderer) lays out lanes and delta-coloured cards with finding badges, a card opening its file; edges, edge labels and the hero animation come with the renderer
+- [ ] Change map unavailable (H2 #2, not in the POC): when the document has no `graph`, the rest of the briefing still renders and the map area shows "Change map unavailable", the reason from `provenance.graphUnavailable` (none when the field is absent) and a Retry button. P6-2: all but Retry ([brief-map-unavailable-1440-light](../../apps/web/e2e/__screenshots__/brief-map-unavailable-1440-light.png), [brief-map-unavailable-375-dark](../../apps/web/e2e/__screenshots__/brief-map-unavailable-375-dark.png)); Retry needs a server endpoint (see `docs/progress.md`, P6-2 follow-ups)
+- [x] Suggested review path: numbered, file + why + score, clickable — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png)
+- [x] "Project memory applied" list with source PR — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); "Not available without the AI briefing." when Rocky wrote the briefing ([brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png))
+- [x] "AI checked, looks fine" list — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); the same "Not available" line when Rocky wrote the briefing
+- [x] "Start with the riskiest file (k)" button — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); the `k` hint comes with the shortcuts (P6-5)
+- [x] Analysis states (P6-2, not in the POC), with the sidebar's "Files appear here once the analysis is ready": no analysis yet [brief-none-1440-light](../../apps/web/e2e/__screenshots__/brief-none-1440-light.png), analysing (a live status) [brief-running-1440-light](../../apps/web/e2e/__screenshots__/brief-running-1440-light.png), waiting for approval with the token estimate and limit [brief-awaiting-approval-1440-dark](../../apps/web/e2e/__screenshots__/brief-awaiting-approval-1440-dark.png), failed with plain words and the fixed code [brief-failed-1440-light](../../apps/web/e2e/__screenshots__/brief-failed-1440-light.png), out of date (`superseded`) [brief-superseded-375-light](../../apps/web/e2e/__screenshots__/brief-superseded-375-light.png); a previous briefing under a banner while the latest push is re-analysed [brief-reanalysing-1440-light](../../apps/web/e2e/__screenshots__/brief-reanalysing-1440-light.png) or when the document is of an earlier commit than the head [brief-out-of-date-375-dark](../../apps/web/e2e/__screenshots__/brief-out-of-date-375-dark.png); every state at 375/1024/1440 × light/dark in the same folder
 
 ## File view (P6-3)
 
@@ -126,6 +127,11 @@ below their breakpoints ([pr-panel-drawer-375-light](../../apps/web/e2e/__screen
 horizontal scroll at 375 px, `shell.e2e.spec.ts`); the risk table and change map are P6-2.
 Defect 6 is fixed in the coverage card.
 
+Status (P6-2): defect 1 is fixed for the briefing: the risk table stacks at 375 px and the change
+map scrolls inside its own box (`briefing.e2e.spec.ts` "layout"). Defect 4 is fixed: the risk
+table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
+`routes/invitations.ts`). Defect 3 belongs to the renderer (P5-1).
+
 ## Intentional differences
 
 - **Contrast (P6-1).** Where the POC's colours fall below WCAG AA (4.5:1) for small text, the app
@@ -143,5 +149,16 @@ Defect 6 is fixed in the coverage card.
   about 96 px tall, close to the POC's 92 px.
 - **Drawer toggles (P6-1).** The top bar gains a Files toggle (≤ 760 px) and a Review panel
   toggle (≤ 1180 px), and a skip link; the POC has neither (defect 5).
+- **Briefing contrast (P6-2).** As in the shell: the verdict level ("Critical risk") is set in
+  `--text` and the level is carried by the box tint and a bar on its left (POC: level colour on
+  tint); the risk-table labels use `--text` on the level tint; change-map lane labels and memory
+  sources use `--muted` (POC `--faint`); finding badges on map cards are outlined in the severity
+  colour with the count in `--text` (POC: filled circle with panel-coloured text).
+- **Briefing headings (P6-2).** The card keeps the P6-1 heading "Briefing & change map" and the
+  sections have headings (the POC's eyebrows), so screen readers can move between them.
+- **Change map legend (P6-2).** Adds "Changed" (modified cards), which the POC's map coloured but
+  its legend left out.
+- **Rocky's own briefing (P6-2, not in the POC).** When `provenance.briefingUnavailable` is set,
+  the eyebrow reads "Briefing by Rocky" without the AI mark and a note says why.
 - **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
-  bar until those tasks; the main column and right panel hold placeholders until P6-2/P6-4.
+  bar until those tasks; the right panel holds a placeholder until P6-4, and the file view until P6-3.

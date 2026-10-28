@@ -1,0 +1,24 @@
+{
+  "url": "https://api.github.com/orgs/acme/memberships/octo-dev",
+  "state": "active",
+  "role": "member",
+  "organization_url": "https://api.github.com/orgs/acme",
+  "organization": {
+    "login": "acme",
+    "id": 9001,
+    "node_id": "O_kgDOAAAjKQ",
+    "url": "https://api.github.com/orgs/acme",
+    "repos_url": "https://api.github.com/orgs/acme/repos",
+    "avatar_url": "https://avatars.githubusercontent.com/u/9001?v=4",
+    "description": null
+  },
+  "user": {
+    "login": "octo-dev",
+    "id": 9101,
+    "node_id": "U_kgDOAAAjjQ",
+    "avatar_url": "https://avatars.githubusercontent.com/u/9101?v=4",
+    "url": "https://api.github.com/users/octo-dev",
+    "type": "User",
+    "site_admin": false
+  }
+}

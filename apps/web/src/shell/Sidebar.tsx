@@ -17,6 +17,8 @@ export type Selection = { kind: "briefing" } | { kind: "file"; path: string };
 type Props = {
   groups: readonly SidebarGroup[];
   noise: NoiseGroup;
+  /** Files the AI could not analyse (P6-2): listed so they can be opened and marked viewed. */
+  unanalysed?: readonly string[];
   coverage: Coverage;
   selection: Selection;
   viewed: ReadonlySet<string>;
@@ -55,6 +57,7 @@ const isSelected = (selection: Selection, path: string): boolean =>
 export const SidebarContent = ({
   groups,
   noise,
+  unanalysed = [],
   coverage,
   selection,
   viewed,
@@ -149,6 +152,28 @@ export const SidebarContent = ({
         </section>
       ))}
 
+      {unanalysed.length > 0 && (
+        <section aria-labelledby="group-unanalysed">
+          <h2 className="group-label" id="group-unanalysed">
+            <span>Not analysed</span>
+            <Count n={unanalysed.length} />
+          </h2>
+          <ul className="file-list">
+            {unanalysed.map((path) => (
+              <FileRow
+                key={path}
+                path={path}
+                level="unanalysed"
+                viewed={viewed.has(path)}
+                selected={isSelected(selection, path)}
+                onSelect={() => onSelect({ kind: "file", path })}
+                onToggleViewed={() => onToggleViewed(path)}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+
       {noise.files.length > 0 && (
         <section aria-labelledby="group-noise">
           <h2 className="group-label" id="group-noise">
@@ -205,7 +230,8 @@ export const SidebarContent = ({
 
 type RowProps = {
   path: string;
-  level: SidebarFile["level"];
+  /** `unanalysed`: a file the AI could not analyse, which has no risk level. */
+  level: SidebarFile["level"] | "unanalysed";
   viewed: boolean;
   selected: boolean;
   onSelect: () => void;

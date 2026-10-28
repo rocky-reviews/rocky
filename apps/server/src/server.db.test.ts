@@ -170,12 +170,17 @@ describe("the server's database login (review rounds 4 and 5)", () => {
       "grant rocky_app to %",
       `grant ${LIFECYCLE_ROLE} to %`,
     ]);
+    const auth = await makeLogin("rocky_auth_member_test", "", [
+      "grant rocky_app to %",
+      "grant rocky_auth to %",
+    ]);
     const asApp = new URL(pgs.workerUrl);
     asApp.searchParams.set("options", "-c role=rocky_app");
     Object.assign(logins, {
       bypass: () => bypass,
       setOnly: () => setOnly,
       lifecycle: () => lifecycle,
+      auth: () => auth,
       workerAsApp: () => asApp.toString(),
     });
   });
@@ -200,6 +205,8 @@ describe("the server's database login (review rounds 4 and 5)", () => {
       "session_user:membership",
     ],
     ["a member of rocky_lifecycle", () => logins["lifecycle"]!(), "session_user:forbidden_role"],
+    // P7-1 review round 1: the login lookup's owner is named, not only caught by the allow-list.
+    ["a member of rocky_auth", () => logins["auth"]!(), "session_user:forbidden_role"],
   ])("refuses to start on %s, before listening", async (_name, url, refusal) => {
     const { log, out } = capture();
     const error = await startServer(env(url()), log).catch((e: unknown) => e);

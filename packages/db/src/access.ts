@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { TenantTx } from "./client.js";
 import { members, orgs, repos } from "./schema.js";
 import { loadForgeToken, loadOrgDataKey, SecretStoreError, type StoredSecret } from "./secrets.js";
@@ -55,7 +55,8 @@ export const loadRepositoryAccessContext = async (
     const [member] = await tx.db
       .select({ id: members.id, forgeUserId: members.forgeUserId })
       .from(members)
-      .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId)));
+      // A member removed in Rocky is not a member (P7-1 review round 1).
+      .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId), isNull(members.removedAt)));
     const [repo] = await tx.db
       .select({ fullName: repos.fullName })
       .from(repos)
