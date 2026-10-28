@@ -10,13 +10,13 @@ import {
   createDb,
   loadForgeToken,
   loadOrgDataKey,
-  markMemberRemoved,
   scheduleOrgDeletion,
   type Db,
 } from "@rocky-reviews/db";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
+  markMemberRemoved,
   newOrgId,
   seedOrg,
   startPostgres,
@@ -1068,6 +1068,38 @@ describe("roles at sign-in (P7-2, ADR 0024)", () => {
     expect(after.orgs.map((o) => o.id)).toEqual([A.orgId]);
     expect(lines.join("\n")).toContain('"outcome":"member_left_org"');
     expect(lines.join("\n")).not.toContain("frank");
+  });
+
+  it("a pending GitHub membership counts as 'not a member': token cleared, an admin demoted to member (ADR 0024 §2, §6)", async () => {
+    const hana = { id: 7007, login: "hana" };
+    member(hana, 82);
+    await login({ user: hana });
+    const memberId = await db.withOrg(B.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from members where forge_user_id = $1",
+        [hana.id],
+      );
+      await tx.query("update members set role = 'admin' where id = $1", [rows[0]?.id]);
+      return rows[0]?.id ?? "";
+    });
+    // Hana leaves and is re-invited: the invitation is pending.
+    github.setOrgMembership(1_000_082, hana.id, "pending");
+    await login({ user: hana });
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, memberId))).toBeNull();
+    const row = await db.withOrg(B.orgId, (tx) =>
+      tx.query<{ role: string; removed: boolean }>(
+        "select role, removed_at is not null as removed from members where id = $1",
+        [memberId],
+      ),
+    );
+    expect(row.rows).toEqual([{ role: "member", removed: false }]);
+    // Accepting the invitation brings her back as a plain member, not as the admin she was.
+    github.setOrgMembership(1_000_082, hana.id, "active", "admin");
+    await login({ user: hana });
+    const back = await db.withOrg(B.orgId, (tx) =>
+      tx.query<{ role: string }>("select role from members where id = $1", [memberId]),
+    );
+    expect(back.rows).toEqual([{ role: "member" }]);
   });
 
   it("an outage of the membership check changes nothing stored (fail closed for this sign-in only)", async () => {

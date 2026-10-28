@@ -3,17 +3,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AccessDecision, RepositoryAccessRequest } from "@rocky-reviews/core";
 import { generateLocalKek, LocalKeyWrapper } from "@rocky-reviews/crypto";
-import {
-  claimFirstOwner,
-  createDb,
-  markMemberRemoved,
-  upsertLoginMember,
-  type Db,
-} from "@rocky-reviews/db";
+import { claimFirstOwner, createDb, upsertLoginMember, type Db } from "@rocky-reviews/db";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
   ignoreIdleError,
+  markMemberRemoved,
   newOrgId,
   seedOrg,
   startPostgres,
@@ -62,7 +57,8 @@ const PERSONAS: readonly Persona[] = [
 ];
 
 /**
- * - allow: the policy let the request through (the handler answered, whatever it said);
+ * - allow: the policy let the request through and the handler answered without a server error
+ *   (a 5xx is `server_error`, which no cell expects: a crash never counts as "allowed");
  * - not_found: allowed by the policy for the caller's own org, and the handler found nothing,
  *   because the target ids belong to another org (RLS);
  * - csrf: refused by the CSRF guard before the policy (no session cookie, so no token);
@@ -70,6 +66,7 @@ const PERSONAS: readonly Persona[] = [
  */
 type Outcome =
   | "allow"
+  | "server_error"
   | "not_found"
   | "csrf"
   | "unauthenticated"
@@ -318,6 +315,7 @@ const outcomeOf = (res: LightMyRequestResponse, from: number): Outcome => {
     .map((l) => JSON.parse(l) as { access?: { outcome: string; reason: Outcome } })
     .find((l) => l.access?.outcome === "denied");
   if (denial?.access !== undefined) return denial.access.reason;
+  if (res.statusCode >= 500) return "server_error";
   if (res.statusCode === 403 && res.body.includes('"error":"csrf"')) return "csrf";
   if (res.statusCode === 404 && res.body.includes('"error":"not_found"')) return "not_found";
   return "allow";
@@ -400,6 +398,7 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
         };
         const status = expectedStatus[outcome];
         if (status !== undefined) expect(res.statusCode, `${key} as ${persona}`).toBe(status);
+        if (outcome === "allow") expect(res.statusCode, `${key} as ${persona}`).toBeLessThan(500);
       }
     }, 60_000);
   }
@@ -456,6 +455,27 @@ describe("a route cannot skip the policy", () => {
     } finally {
       app = prev;
       await later.close();
+    }
+  });
+
+  it("the matrix never counts a server error as allowed (a 5xx is its own outcome)", async () => {
+    const crashing = build();
+    crashing.get("/api/crash", { config: { policy: requires("members.read") } }, async () => {
+      throw new Error("boom");
+    });
+    await crashing.ready();
+    const prev = app;
+    app = crashing;
+    try {
+      await reset();
+      const { res, outcome } = await call("GET /api/crash", "owner");
+      expect(res.statusCode).toBe(500);
+      expect(outcome).toBe("server_error");
+      // A policy denial is still reported as the denial, not as an error.
+      expect((await call("GET /api/crash", "member")).outcome).toBe("forbidden");
+    } finally {
+      app = prev;
+      await crashing.close();
     }
   });
 });

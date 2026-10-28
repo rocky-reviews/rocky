@@ -4,13 +4,14 @@ import { completeInTenantTx, memberLeftForge, type Db, type InboxLease } from "@
 /**
  * Someone left the GitHub organization (P7-2, ADR 0024 §6): the `organization` webhook's
  * `member_removed`, decoded to `org_member.removed`. Inside the org's `withOrg`, their stored
- * token is deleted and the org is cut from every live session of theirs, and the inbox row is
- * completed in the same transaction (a lost lease rolls it all back).
+ * token is deleted, the org is cut from every live session of theirs and an admin is demoted to
+ * member, and the inbox row is completed in the same transaction (a lost lease rolls it all back).
  *
  * Trust boundary: the event is authenticated by the webhook signature, and it can only take
  * access away; nothing is granted from it. So it is acted on without asking GitHub again: a
- * replayed or reordered delivery can at most sign someone out early, and they sign in again
- * (GitHub is asked then). The org must be bound to both the installation and the organization's
+ * replayed delivery is deduplicated, and a reordered one can at most sign someone out early (they
+ * sign in again; GitHub is asked then) and demote an admin to member (an owner promotes them
+ * again). The org must be bound to both the installation and the organization's
  * account id, as at login; an event naming another account is parked, never applied.
  *
  * Logs (by the inbox drain) carry ids and outcome codes; never logins or tokens.

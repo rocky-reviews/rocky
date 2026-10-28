@@ -514,7 +514,7 @@ describe("ownership transfer (transferOwnership)", () => {
 });
 
 describe("leaving the GitHub organization (memberLeftForge)", () => {
-  it("deletes the token and cuts the sessions, keeps the row and role, audits the forge as actor", async () => {
+  it("deletes the token, cuts the sessions, demotes an admin to member, keeps the row, audits the forge as actor", async () => {
     const org = await freshOrg();
     const target = await addMember(org, "admin");
     const forgeUserId = await forgeIdOf(org, target);
@@ -527,19 +527,44 @@ describe("leaving the GitHub organization (memberLeftForge)", () => {
     ).toEqual({ memberId: target, sessionsCut: 1 });
     expect(await linksOf(target)).toBe(0);
     expect(await db.withOrg(org.orgId, (tx) => loadForgeToken(tx, target))).toBeNull();
-    expect(await roleOf(org, target)).toEqual({ role: "admin", removed: false });
+    // A returning person gets no privilege back by default (as with restoreMember).
+    expect(await roleOf(org, target)).toEqual({ role: "member", removed: false });
     expect(await auditOf(org.orgId, "member.left_forge")).toEqual([
       {
         actor_type: "forge",
         actor_id: "delivery-1",
         target_id: target,
-        metadata: { source: "webhook", sessionsCut: 1 },
+        metadata: { source: "webhook", sessionsCut: 1, from: "admin", to: "member" },
       },
     ]);
-    // Signing in again (GitHub has them back) works: the row was never marked removed.
+    // Signing in again (GitHub has them back) works, as a plain member: the row was never
+    // marked removed, and the admin role did not come back with them.
     expect(
       await db.withOrg(org.orgId, (tx) => upsertLoginMember(tx, { forgeUserId, login: "back" })),
     ).toEqual({ memberId: target });
+    expect(
+      await db.withOrg(org.orgId, (tx) => loadSessionMember(tx, { memberId: target, forgeUserId })),
+    ).toMatchObject({ role: "member" });
+  });
+
+  it("keeps a plain member a member, and an owner the owner (the org must keep one)", async () => {
+    const org = await freshOrg();
+    const owner = await addMember(org, "owner");
+    const plain = await addMember(org);
+    for (const [memberId, role] of [
+      [owner, "owner"],
+      [plain, "member"],
+    ] as const) {
+      const forgeUserId = await forgeIdOf(org, memberId);
+      await db.withOrg(org.orgId, (tx) =>
+        memberLeftForge(tx, { forgeUserId, source: "sign_in", actorId: "sign_in" }),
+      );
+      expect(await roleOf(org, memberId)).toEqual({ role, removed: false });
+    }
+    expect((await auditOf(org.orgId, "member.left_forge")).map((a) => a.metadata)).toEqual([
+      { source: "sign_in", sessionsCut: 0, from: "owner", to: "owner" },
+      { source: "sign_in", sessionsCut: 0, from: "member", to: "member" },
+    ]);
   });
 
   it("touches only the transaction's org: the same person in another org keeps everything", async () => {
@@ -587,6 +612,165 @@ describe("leaving the GitHub organization (memberLeftForge)", () => {
       B.memberId,
     ]);
     expect(bare.rowCount).toBe(0);
+  });
+});
+
+describe("the actor is re-checked in the changing transaction (not_permitted)", () => {
+  it("refuses an actor whose role does not hold the permission, a removed actor and another org's member", async () => {
+    const org = await freshOrg();
+    const owner = await addMember(org, "owner");
+    const admin = await addMember(org, "admin");
+    const plain = await addMember(org);
+    const gone = await addMember(org, "admin");
+    const target = await addMember(org);
+    const removedTarget = await addMember(org);
+    await db.withOrg(org.orgId, (tx) =>
+      removeMember(tx, { actorMemberId: owner, targetMemberId: removedTarget }),
+    );
+    await db.withOrg(org.orgId, (tx) =>
+      removeMember(tx, { actorMemberId: owner, targetMemberId: gone }),
+    );
+    // roles.manage is owner-only: an admin, a member, a removed admin, B's admin (A's id space).
+    for (const actor of [admin, plain, gone, B.memberId]) {
+      expect(
+        await db.withOrg(org.orgId, (tx) =>
+          changeMemberRole(tx, { actorMemberId: actor, targetMemberId: target, role: "admin" }),
+        ),
+      ).toEqual({ outcome: "not_permitted" });
+    }
+    // members.manage is admin and up: a member, a removed admin, another org's admin.
+    for (const actor of [plain, gone, B.memberId]) {
+      expect(
+        await db.withOrg(org.orgId, (tx) =>
+          removeMember(tx, { actorMemberId: actor, targetMemberId: target }),
+        ),
+      ).toEqual({ outcome: "not_permitted" });
+      expect(
+        await db.withOrg(org.orgId, (tx) =>
+          restoreMember(tx, { actorMemberId: actor, targetMemberId: removedTarget }),
+        ),
+      ).toEqual({ outcome: "not_permitted" });
+    }
+    expect(await roleOf(org, target)).toEqual({ role: "member", removed: false });
+    expect(await roleOf(org, removedTarget)).toEqual({ role: "member", removed: true });
+    // Nothing was audited for the refused calls (only the two setup removals).
+    expect(await auditOf(org.orgId, "member.role_changed")).toEqual([]);
+    expect(await auditOf(org.orgId, "member.removed")).toHaveLength(2);
+    expect(await auditOf(org.orgId, "member.restored")).toEqual([]);
+    // The permitted actors still succeed.
+    expect(
+      await db.withOrg(org.orgId, (tx) =>
+        restoreMember(tx, { actorMemberId: admin, targetMemberId: removedTarget }),
+      ),
+    ).toEqual({ outcome: "restored" });
+  });
+
+  /**
+   * Runs `first` inside a transaction that stays open until `second` (started meanwhile, in its
+   * own transaction) has had time to reach its locks; `second` must then see `first`'s commit.
+   */
+  const whileOpen = async <T, U>(
+    org: SeededOrg,
+    first: (tx: TenantTx) => Promise<T>,
+    second: (tx: TenantTx) => Promise<U>,
+  ): Promise<[T, U]> => {
+    let started!: () => void;
+    const firstDone = new Promise<void>((resolve) => (started = resolve));
+    const one = db.withOrg(org.orgId, async (tx) => {
+      const result = await first(tx);
+      started();
+      // Hold the transaction (and its locks) while the second one queues behind them.
+      await new Promise((r) => setTimeout(r, 150));
+      return result;
+    });
+    await firstDone;
+    const two = db.withOrg(org.orgId, second);
+    return [await one, await two];
+  };
+
+  it("a role change racing an ownership transfer: the former owner can no longer change roles (race)", async () => {
+    const org = await freshOrg();
+    const owner = await addMember(org, "owner");
+    const heir = await addMember(org);
+    const target = await addMember(org);
+    const [transferred, changed] = await whileOpen(
+      org,
+      (tx) => transferOwnership(tx, { actorMemberId: owner, targetMemberId: heir }),
+      (tx) => changeMemberRole(tx, { actorMemberId: owner, targetMemberId: target, role: "admin" }),
+    );
+    expect(transferred).toEqual({ outcome: "transferred" });
+    expect(changed).toEqual({ outcome: "not_permitted" });
+    expect(await roleOf(org, target)).toEqual({ role: "member", removed: false });
+    expect(await auditOf(org.orgId, "member.role_changed")).toEqual([]);
+  });
+
+  it("two admins removing each other at once: exactly one removal commits (race)", async () => {
+    for (let round = 0; round < 5; round++) {
+      const org = await freshOrg();
+      await addMember(org, "owner");
+      const one = await addMember(org, "admin");
+      const two = await addMember(org, "admin");
+      const results = await Promise.all([
+        db.withOrg(org.orgId, (tx) =>
+          removeMember(tx, { actorMemberId: one, targetMemberId: two }),
+        ),
+        db.withOrg(org.orgId, (tx) =>
+          removeMember(tx, { actorMemberId: two, targetMemberId: one }),
+        ),
+      ]);
+      expect(results.map((r) => r.outcome).toSorted()).toEqual(["not_permitted", "removed"]);
+      const removed = [await roleOf(org, one), await roleOf(org, two)].filter((r) => r?.removed);
+      expect(removed).toHaveLength(1);
+      expect(await auditOf(org.orgId, "member.removed")).toHaveLength(1);
+    }
+  });
+
+  it("the same race with the order forced: the loser sees itself removed, never a deadlock", async () => {
+    const org = await freshOrg();
+    await addMember(org, "owner");
+    const one = await addMember(org, "admin");
+    const two = await addMember(org, "admin");
+    const [first, second] = await whileOpen(
+      org,
+      (tx) => removeMember(tx, { actorMemberId: one, targetMemberId: two }),
+      (tx) => removeMember(tx, { actorMemberId: two, targetMemberId: one }),
+    );
+    expect(first).toMatchObject({ outcome: "removed" });
+    expect(second).toEqual({ outcome: "not_permitted" });
+    expect(await roleOf(org, one)).toEqual({ role: "admin", removed: false });
+  });
+
+  it("a restore racing the actor's own removal is refused (race)", async () => {
+    const org = await freshOrg();
+    const owner = await addMember(org, "owner");
+    const admin = await addMember(org, "admin");
+    const target = await addMember(org);
+    await db.withOrg(org.orgId, (tx) =>
+      removeMember(tx, { actorMemberId: owner, targetMemberId: target }),
+    );
+    const [removed, restored] = await whileOpen(
+      org,
+      (tx) => removeMember(tx, { actorMemberId: owner, targetMemberId: admin }),
+      (tx) => restoreMember(tx, { actorMemberId: admin, targetMemberId: target }),
+    );
+    expect(removed).toMatchObject({ outcome: "removed" });
+    expect(restored).toEqual({ outcome: "not_permitted" });
+    expect(await roleOf(org, target)).toEqual({ role: "member", removed: true });
+  });
+
+  it("a demotion racing a removal by the demoted admin: the removal is refused (race)", async () => {
+    const org = await freshOrg();
+    const owner = await addMember(org, "owner");
+    const admin = await addMember(org, "admin");
+    const target = await addMember(org);
+    const [demoted, removed] = await whileOpen(
+      org,
+      (tx) => changeMemberRole(tx, { actorMemberId: owner, targetMemberId: admin, role: "member" }),
+      (tx) => removeMember(tx, { actorMemberId: admin, targetMemberId: target }),
+    );
+    expect(demoted).toEqual({ outcome: "changed", from: "admin", to: "member" });
+    expect(removed).toEqual({ outcome: "not_permitted" });
+    expect(await roleOf(org, target)).toEqual({ role: "member", removed: false });
   });
 });
 

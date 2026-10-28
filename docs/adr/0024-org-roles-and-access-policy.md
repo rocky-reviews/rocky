@@ -55,17 +55,24 @@ Routes declare a **permission**, never a role; the table is in `packages/core/sr
   promotion or demotion is not mirrored. Roles change only through the routes in §5.
 - A `billing_manager` (or any role other than `admin`/`member`) is not an organization member and
   does not sign in (fail closed; P7-1 accepted any active state).
+- Only `state: "active"` is membership. A `pending` membership (an invitation not yet accepted)
+  counts as **"not a member"** at sign-in, exactly like a 404: that org is left out of the
+  sign-in, and an existing member row gets the §6 treatment (token deleted, sessions cut, an admin
+  demoted to member).
 
 ### 3. Always an owner
 
 An org that has an owner keeps one: the trigger `members_keep_an_owner` (migration 0014) refuses
 any UPDATE of `role`/`removed_at` or DELETE that leaves no active owner, for every role. Changes
 to owners are serialised by `app.lock_org_owners(org)` (a transaction-scoped advisory lock taken
-by the trigger and by every owner-changing function first); under READ COMMITTED the count after
-the lock sees every committed change, so two concurrent demotions cannot both win (tested, and
-the test fails with the lock removed). Erasure (`retention.delete_org`, org `erasing_at` set) is
-not checked. Ownership moves only by transfer (§5), which promotes the target before demoting
-the actor in one transaction.
+by the trigger and by every membership-changing function first: role change, removal, re-adding,
+transfer, first owner, leaving the GitHub org); under READ COMMITTED the count after the lock
+sees every committed change, so two concurrent demotions cannot both win (tested, and the test
+fails with the lock removed). Taking it first also puts every membership change of an org in one
+order, so their row locks cannot deadlock. It is granted to `rocky_app` only (the worker login
+reaches it through its `rocky_app` membership): no other role changes members. Erasure
+(`retention.delete_org`, org `erasing_at` set) is not checked. Ownership moves only by transfer
+(§5), which promotes the target before demoting the actor in one transaction.
 
 ### 4. One policy module (`apps/server/src/auth/policy.ts`)
 
@@ -103,6 +110,15 @@ the actor in one transaction.
 | `POST /api/org/ownership {memberId}`                | `ownership.transfer`          | target owner, actor admin; re-checked with rows locked   |
 | `POST /api/analyses/:analysisId/approve-over-limit` | `analysis.approve_over_limit` | plus the P3-6 access check; 503 without it (fail closed) |
 
+**The actor is re-checked at commit.** The policy check runs in an earlier transaction, so each
+change re-reads the actor inside its own transaction, after the owner lock and with the row
+locked `FOR SHARE`: still an active member of this org whose role holds the route's permission
+(`can`). Otherwise the change is refused with `not_permitted` (403 `forbidden`; a transfer
+answers `not_owner`, 409) and nothing is written. So a role change racing an ownership transfer
+by the same owner, a removal racing the actor's own demotion or removal, or two admins removing
+each other resolve one after the other, and the loser is refused (race tests in
+`members.test.ts`, which fail with the re-check removed).
+
 Each change is audited in its own transaction (`member.role_changed` with from/to,
 `member.removed`, `member.restored`, `org.ownership_transferred`) and calls the access check's
 `invalidateMember` after the commit. Target ids are looked up inside the caller's `withOrg`, so
@@ -119,11 +135,15 @@ or owner in the same transaction (defence in depth).
   (as login does; a mismatch is parked `account_mismatch`) and, inside `withOrg`, deletes the
   person's stored token and their `session_orgs` links (the app role may delete links of the
   current tenant only), audited `member.left_forge` with the delivery id as actor, and completes
-  the inbox row in the same transaction. The member row and its role stay: they come back by
-  signing in once GitHub has them again.
+  the inbox row in the same transaction. **A non-owner is demoted to `member`** (the audit
+  metadata records `from` and `to`), so someone who comes back by signing in once GitHub has them
+  again gets no privilege back by default, as with re-adding (§5). The member row stays (it is
+  not a Rocky removal). **An owner stays the owner**: the org must keep one (§3), so this case is
+  the documented residual risk below.
 - Trust boundary: the delivery is authenticated by its HMAC signature, and the event can only
   take access away, so the worker does not ask GitHub again. A replay is deduplicated; a
-  reordered or stale removal can at most sign someone out early.
+  reordered or stale removal can at most sign someone out early and demote an admin to member
+  (an owner promotes them again).
 - `membership` (team membership) events are **not** handled: leaving a team is not leaving the
   organization, and repository access through teams is P3-6's (at most 5 minutes stale).
 - On a sign-in where GitHub positively answers "not a member" for an org where a member row
@@ -151,6 +171,8 @@ webhook-shaped requests; a future route that forgets the check.
 | R9  | A role stands in for GitHub access ("Analyze anyway" on an unreadable repo) | Approval route runs the P3-6 check (deny = 404) and fails closed without it; DB re-checks the approver's role  | "R8: approving … needs GitHub read access", "R8b: … fails closed (503)"; `analysis-queue.test.ts` "is refused for a plain member or a removed admin"    |
 | R10 | Body or path smuggles the actor or the org                                  | Ids from the session; path ids validated as uuids; body fields other than the documented one ignored           | "R7: ids in the path are validated; a body cannot choose the actor or the org"                                                                          |
 | R11 | Logs leak logins, tokens or cookies                                         | Denials log reason and permission; admin routes log outcome and ids                                            | "R9: denials are logged with a reason and a permission only"; e2e log assertions                                                                        |
+| R12 | The actor lost the right between the policy check and the change (race)     | Actor re-read `FOR SHARE` in the changing transaction after the owner lock; `not_permitted` otherwise          | `members.test.ts` "the actor is re-checked in the changing transaction" (transfer vs role change, two admins removing each other, restore vs removal)   |
+| R13 | An admin who left the GitHub org regains admin when re-invited              | Leaving demotes a non-owner to `member` (webhook and "not a member" sign-in)                                   | `members.test.ts` "deletes the token, cuts the sessions, demotes an admin…"; `org-members.e2e.test.ts`                                                  |
 
 ## Consequences
 

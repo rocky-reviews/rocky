@@ -6,10 +6,10 @@ import {
   resolveRepositoryForAccess,
 } from "./access.js";
 import { createDb, type Db } from "./client.js";
-import { markMemberRemoved } from "./sessions.js";
 import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
+  markMemberRemoved,
   newOrgId,
   seedOrg,
   startPostgres,

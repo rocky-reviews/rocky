@@ -160,7 +160,8 @@ describe("leaving the GitHub organization (organization webhook, member_removed)
     // The same person in org B keeps everything.
     expect(await serverDb.withOrg(B.orgId, (tx) => loadForgeToken(tx, B.memberId))).not.toBeNull();
     expect(await links(B)).toBeGreaterThan(0);
-    // The member row and its role stay; the event is audited with the forge as the actor.
+    // The member row stays, the admin is demoted to member (no privilege back on return); the
+    // event is audited with the forge as the actor.
     const audit = await superuser.query(
       "select actor_type, actor_id from audit_events where org_id = $1 and action = 'member.left_forge'",
       [A.orgId],
@@ -169,7 +170,7 @@ describe("leaving the GitHub organization (organization webhook, member_removed)
     const row = await superuser.query("select role, removed_at from members where id = $1", [
       A.memberId,
     ]);
-    expect(row.rows).toEqual([{ role: "admin", removed_at: null }]);
+    expect(row.rows).toEqual([{ role: "member", removed_at: null }]);
     // Logs carry ids and codes only.
     const joined = lines.join("\n");
     expect(joined).not.toContain("octo-dev");

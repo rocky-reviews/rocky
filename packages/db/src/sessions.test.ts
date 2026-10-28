@@ -9,7 +9,6 @@ import { clearForgeToken, loadForgeToken, storeForgeToken } from "./secrets.js";
 import {
   loadSessionMember,
   LOGIN_ATTEMPT_PRUNE_BATCH,
-  markMemberRemoved,
   SESSION_PURGE_AFTER_MS,
   SessionStoreError,
   upsertLoginMember,
@@ -20,6 +19,7 @@ import {
   asWorker,
   CONTAINER_TIMEOUT_MS,
   ignoreIdleError,
+  markMemberRemoved,
   newOrgId,
   seedOrg,
   startPostgres,

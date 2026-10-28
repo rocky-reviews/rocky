@@ -1,4 +1,11 @@
-import { isAssignableRole, isRole, type AssignableRole, type Role } from "@rocky-reviews/core";
+import {
+  can,
+  isAssignableRole,
+  isRole,
+  type AssignableRole,
+  type Permission,
+  type Role,
+} from "@rocky-reviews/core";
 import { audit } from "./audit.js";
 import type { TenantTx } from "./client.js";
 
@@ -7,12 +14,16 @@ import type { TenantTx } from "./client.js";
  * runs in the caller's `withOrg` transaction, so RLS keeps it to that org, and audits in the same
  * transaction: a change without its audit event never commits.
  *
- * Who may call what is the server's policy (`can(role, permission)`); these functions re-check
- * what the database alone can know at the moment of the change (the target exists here, is not
- * removed, is or is not an owner, the actor is still the owner) with the rows locked, so a check
- * made a moment earlier cannot be raced. Changes to an org's owners take the org's owner lock
- * first (`app.lock_org_owners`), and the database refuses any change that would leave an org with
- * owners without one (trigger `members_keep_an_owner`).
+ * Who may call what is the server's policy (`can(role, permission)`), checked when the request
+ * began, in an earlier transaction. Every function that changes a member therefore re-checks, in
+ * its own transaction and with the rows locked, both sides: the actor is still an active member
+ * whose role holds the permission (`not_permitted`, or `not_owner` for a transfer, otherwise) and
+ * the target exists here, is or is not removed, is or is not an owner. A check made a moment
+ * earlier cannot be raced: a role change racing an ownership transfer, or two admins removing
+ * each other, resolve one after the other. Every membership change takes the org's owner lock
+ * first (`app.lock_org_owners`), so they are serialised per org and lock rows in one order (no
+ * deadlocks), and the database refuses any change that would leave an org with owners without one
+ * (trigger `members_keep_an_owner`).
  *
  * Results are fixed codes; errors carry no values.
  */
@@ -96,6 +107,23 @@ const lockMember = async (tx: TenantTx, memberId: string): Promise<MemberRow | n
   return rows[0] ?? null;
 };
 
+/**
+ * The actor, locked against changes for this transaction (`FOR SHARE`; the owner lock taken first
+ * already serialises membership changes): `true` only while they are an active member here whose
+ * role holds `permission`. Read after the lock, so it sees every change committed before it.
+ */
+const actorMay = async (
+  tx: TenantTx,
+  actorId: string,
+  permission: Permission,
+): Promise<boolean> => {
+  const { rows } = await tx.query<{ role: string }>(
+    `select role from members where org_id = $1 and id = $2 and removed_at is null for share`,
+    [tx.orgId, actorId],
+  );
+  return can(rows[0]?.role, permission);
+};
+
 /** Ends this org in every live session of the member (the links are what sessions use). */
 const cutSessions = async (tx: TenantTx, memberId: string): Promise<number> => {
   const { rowCount } = await tx.query(
@@ -143,12 +171,14 @@ export type RoleChangeResult =
   | { readonly outcome: "unchanged" }
   | { readonly outcome: "not_found" }
   /** An owner's role moves only by transfer (and the org must keep one). */
-  | { readonly outcome: "target_is_owner" };
+  | { readonly outcome: "target_is_owner" }
+  /** The actor is no longer an active owner of this org (changed since the request began). */
+  | { readonly outcome: "not_permitted" };
 
 /**
  * Promotes a member to admin or demotes an admin to member (owners only, by the server's
- * policy). The actor must not be the target: an owner changes their own role by transferring
- * ownership. Audited `member.role_changed`.
+ * policy, re-checked here). The actor must not be the target: an owner changes their own role by
+ * transferring ownership. Audited `member.role_changed`.
  */
 export const changeMemberRole = async (
   tx: TenantTx,
@@ -163,6 +193,7 @@ export const changeMemberRole = async (
   if (!isAssignableRole(input.role)) throw new MemberStoreError("members: role not assignable");
   const role = input.role;
   await lockOwners(tx);
+  if (!(await actorMay(tx, actor, "roles.manage"))) return { outcome: "not_permitted" };
   const row = await lockMember(tx, target);
   if (row === null || row.removed_at !== null) return { outcome: "not_found" };
   if (row.role === "owner") return { outcome: "target_is_owner" };
@@ -192,7 +223,9 @@ export type RemoveMemberResult =
   | { readonly outcome: "not_found" }
   | { readonly outcome: "already_removed" }
   | { readonly outcome: "target_is_owner" }
-  | { readonly outcome: "self" };
+  | { readonly outcome: "self" }
+  /** The actor is no longer an active admin or owner of this org. */
+  | { readonly outcome: "not_permitted" };
 
 /**
  * Removes a member in Rocky (admins and owners, by the server's policy): durable `removed_at`,
@@ -209,6 +242,7 @@ export const removeMember = async (
   const target = assertUuid(input.targetMemberId, "member id");
   if (actor === target) return { outcome: "self" };
   await lockOwners(tx);
+  if (!(await actorMay(tx, actor, "members.manage"))) return { outcome: "not_permitted" };
   const row = await lockMember(tx, target);
   if (row === null) return { outcome: "not_found" };
   if (row.removed_at !== null) return { outcome: "already_removed" };
@@ -237,7 +271,9 @@ export const removeMember = async (
 export type RestoreMemberResult =
   | { readonly outcome: "restored" }
   | { readonly outcome: "not_found" }
-  | { readonly outcome: "not_removed" };
+  | { readonly outcome: "not_removed" }
+  /** The actor is no longer an active admin or owner of this org. */
+  | { readonly outcome: "not_permitted" };
 
 /**
  * Re-adds a member removed in Rocky (admins and owners): clears `removed_at` and resets the role
@@ -250,6 +286,8 @@ export const restoreMember = async (
 ): Promise<RestoreMemberResult> => {
   const actor = assertUuid(input.actorMemberId, "actor id");
   const target = assertUuid(input.targetMemberId, "member id");
+  await lockOwners(tx);
+  if (!(await actorMay(tx, actor, "members.manage"))) return { outcome: "not_permitted" };
   const row = await lockMember(tx, target);
   if (row === null) return { outcome: "not_found" };
   if (row.removed_at === null) return { outcome: "not_removed" };
@@ -307,11 +345,13 @@ export const transferOwnership = async (
 
 /**
  * The forge says this person is no longer a member of the organization (the `organization`
- * webhook, or a sign-in where GitHub answered "not a member"). Their stored token is deleted and
- * the org is cut from every live session of theirs; the member row and its role stay (they come
- * back by signing in once GitHub has them again). Nothing is granted here. Audited
- * `member.left_forge` when a row existed. Returns the member id, or `null` when there is none.
- * Call the access check's `invalidateMember` after the commit.
+ * webhook, or a sign-in where GitHub answered "not a member"). Their stored token is deleted, the
+ * org is cut from every live session of theirs, and an admin is demoted to `member`: someone who
+ * comes back (by signing in once GitHub has them again) gets no privilege back by default, as
+ * with `restoreMember`. An owner stays the owner (the org must keep one; ADR 0024 residual risk).
+ * The member row stays. Nothing is granted here. Audited `member.left_forge` (with the role
+ * before and after) when a row existed. Returns the member id, or `null` when there is none. Call
+ * the access check's `invalidateMember` after the commit.
  */
 export const memberLeftForge = async (
   tx: TenantTx,
@@ -325,12 +365,23 @@ export const memberLeftForge = async (
   if (input.source !== "webhook" && input.source !== "sign_in") {
     throw new MemberStoreError("members: unknown source");
   }
-  const { rows } = await tx.query<{ id: string }>(
-    "select id from members where org_id = $1 and forge_user_id = $2 for update",
+  await lockOwners(tx);
+  const { rows } = await tx.query<{ id: string; role: string }>(
+    "select id, role from members where org_id = $1 and forge_user_id = $2 for update",
     [tx.orgId, forgeUserId],
   );
-  const memberId = rows[0]?.id;
-  if (memberId === undefined) return null;
+  const row = rows[0];
+  if (row === undefined) return null;
+  const memberId = row.id;
+  if (!isRole(row.role)) throw new MemberStoreError("members: unknown role in a row");
+  const from = row.role;
+  const to: Role = from === "owner" ? "owner" : "member";
+  if (to !== from) {
+    await tx.query(
+      "update members set role = $3, updated_at = now() where org_id = $1 and id = $2",
+      [tx.orgId, memberId, to],
+    );
+  }
   await clearToken(tx, memberId);
   const sessionsCut = await cutSessions(tx, memberId);
   await audit(
@@ -338,7 +389,7 @@ export const memberLeftForge = async (
     { type: input.source === "webhook" ? "forge" : "system", id: input.actorId },
     "member.left_forge",
     { type: "member", id: memberId },
-    { source: input.source, sessionsCut },
+    { source: input.source, sessionsCut, from, to },
   );
   return { memberId, sessionsCut };
 };

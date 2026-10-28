@@ -157,6 +157,8 @@ export const registerRoleRoutes = (app: FastifyInstance, deps: RoleRoutesDeps): 
             return json(reply, 404, { error: "not_found" });
           case "target_is_owner":
             return json(reply, 409, { error: "target_is_owner" });
+          case "not_permitted":
+            return json(reply, 403, { error: "forbidden" });
         }
       },
     );
@@ -182,6 +184,8 @@ export const registerRoleRoutes = (app: FastifyInstance, deps: RoleRoutesDeps): 
           case "target_is_owner":
           case "self":
             return json(reply, 409, { error: result.outcome });
+          case "not_permitted":
+            return json(reply, 403, { error: "forbidden" });
         }
       },
     );
@@ -205,6 +209,8 @@ export const registerRoleRoutes = (app: FastifyInstance, deps: RoleRoutesDeps): 
             return json(reply, 404, { error: "not_found" });
           case "not_removed":
             return json(reply, 409, { error: "not_removed" });
+          case "not_permitted":
+            return json(reply, 403, { error: "forbidden" });
         }
       },
     );

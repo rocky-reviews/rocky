@@ -414,9 +414,10 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
   };
 
   /**
-   * GitHub positively says this person is not a member of the org (P7-1 follow-up): a member row
-   * from earlier loses its stored token and this org in every live session. Failures are logged
-   * and never block the sign-in into the other orgs.
+   * GitHub positively says this person is not a member of the org (P7-1 follow-up; a `pending`
+   * invitation included): a member row from earlier loses its stored token and this org in every
+   * live session, and an admin is demoted to member (ADR 0024 §6). Failures are logged and never
+   * block the sign-in into the other orgs.
    */
   const leftOrg = async (request: FastifyRequest, orgId: OrgId, forgeUserId: number) => {
     try {

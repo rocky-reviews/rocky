@@ -1,5 +1,5 @@
 import type { ForgeKind, OrgId, Role } from "@rocky-reviews/core";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type pg from "pg";
 import type { TenantTx } from "./client.js";
 import { members, orgs } from "./schema.js";
@@ -537,30 +537,6 @@ export const upsertLoginMember = async (
   );
   // No row: the conflict hit a removed member (the WHERE kept it untouched).
   return row === undefined ? null : { memberId: row.id };
-};
-
-/**
- * Removes a member in Rocky (review round 1): durable (`removed_at`), with the stored token
- * deleted. Their sessions lose this org at once (`loadSessionMember` is `null`), and the next
- * sign-in does not bring them back. Idempotent; `false` when there is no such member here.
- * Call the access check's `invalidateMember` after the commit (ADR 0011 §6).
- */
-export const markMemberRemoved = async (tx: TenantTx, memberId: string): Promise<boolean> => {
-  const id = assertUuid(memberId, "member id");
-  const rows = await guarded(() =>
-    tx.db
-      .update(members)
-      .set({
-        removedAt: sql`coalesce(${members.removedAt}, now())`,
-        forgeTokenCiphertext: null,
-        forgeTokenKeyVersion: null,
-        forgeAccessExpiresAt: null,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(members.orgId, tx.orgId), eq(members.id, id)))
-      .returning({ id: members.id }),
-  );
-  return rows.length === 1;
 };
 
 export interface SessionMember {

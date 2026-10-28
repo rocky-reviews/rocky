@@ -25,6 +25,10 @@ CREATE FUNCTION app.lock_org_owners(org uuid) RETURNS void
 AS $$
   SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('rocky.org_owners:' || org::text, 0))
 $$;
+-- Granted to rocky_app only: membership and role changes happen only inside withOrg as the
+-- application role (the worker login, whose "left the GitHub org" lane takes it, is a member of
+-- rocky_app; the trigger runs it as the role making the change). No other role changes members,
+-- so no other role needs it, and none can hold it to stall an org's membership changes.
 REVOKE ALL ON FUNCTION app.lock_org_owners(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app.lock_org_owners(uuid) TO rocky_app;
 

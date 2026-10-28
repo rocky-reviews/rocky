@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OrgId } from "@rocky-reviews/core";
 import type pg from "pg";
-import { createDb, type Db } from "../client.js";
+import { createDb, type Db, type TenantTx } from "../client.js";
 import * as schema from "../schema.js";
 
 export interface SeededOrg {
@@ -340,4 +340,21 @@ export const plantAnalysisLease = async (
   const row = rows[0];
   if (row === undefined) throw new Error("plantAnalysisLease: the row is not queued");
   return { analysisId, leaseId: row.lease_id };
+};
+
+/**
+ * Test-only: marks a member removed in Rocky (durable `removed_at`, stored token deleted) without
+ * an actor, the role checks, the audit or the session cut that `removeMember` (the production
+ * path) performs. For tests that need a removed member as a precondition. Idempotent; `false`
+ * when there is no such member in the transaction's org.
+ */
+export const markMemberRemoved = async (tx: TenantTx, memberId: string): Promise<boolean> => {
+  const { rowCount } = await tx.query(
+    `update members
+        set removed_at = coalesce(removed_at, now()), forge_token_ciphertext = null,
+            forge_token_key_version = null, forge_access_expires_at = null, updated_at = now()
+      where org_id = $1 and id = $2`,
+    [tx.orgId, memberId],
+  );
+  return rowCount === 1;
 };

@@ -9,6 +9,7 @@ export {
 } from "./postgres.js";
 export {
   asWorker,
+  markMemberRemoved,
   newOrgId,
   plantAnalysisLease,
   plantAuditEvent,
