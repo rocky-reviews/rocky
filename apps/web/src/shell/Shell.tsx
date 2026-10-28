@@ -147,6 +147,7 @@ export const Shell = ({ data, now }: Props) => {
             selection={selection}
             analysis={data.analysis}
             run={data.analysisRun}
+            headSha={data.pull.headSha}
             onOpenFile={openFile}
           />
         </main>

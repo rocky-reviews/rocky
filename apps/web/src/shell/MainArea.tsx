@@ -10,13 +10,14 @@ type Props = {
   selection: Selection;
   analysis: AnalysisDocument | null;
   run: AnalysisRun;
+  headSha: string;
   /** Opens a file from the briefing: selects it in the shell, like the sidebar does. */
   onOpenFile: (path: string) => void;
 };
 
-export const MainContent = ({ selection, analysis, run, onOpenFile }: Props) =>
+export const MainContent = ({ selection, analysis, run, headSha, onOpenFile }: Props) =>
   selection.kind === "briefing" ? (
-    <BriefingView analysis={analysis} run={run} onOpenFile={onOpenFile} />
+    <BriefingView analysis={analysis} run={run} headSha={headSha} onOpenFile={onOpenFile} />
   ) : (
     <article className="card">
       <div className="section">

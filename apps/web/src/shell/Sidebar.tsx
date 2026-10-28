@@ -155,7 +155,7 @@ export const SidebarContent = ({
       {unanalysed.length > 0 && (
         <section aria-labelledby="group-unanalysed">
           <h2 className="group-label" id="group-unanalysed">
-            <span>Not analysed · read by hand</span>
+            <span>Not analysed</span>
             <Count n={unanalysed.length} />
           </h2>
           <ul className="file-list">
@@ -163,7 +163,7 @@ export const SidebarContent = ({
               <FileRow
                 key={path}
                 path={path}
-                level="important"
+                level="unanalysed"
                 viewed={viewed.has(path)}
                 selected={isSelected(selection, path)}
                 onSelect={() => onSelect({ kind: "file", path })}
@@ -230,7 +230,8 @@ export const SidebarContent = ({
 
 type RowProps = {
   path: string;
-  level: SidebarFile["level"];
+  /** `unanalysed`: a file the AI could not analyse, which has no risk level. */
+  level: SidebarFile["level"] | "unanalysed";
   viewed: boolean;
   selected: boolean;
   onSelect: () => void;

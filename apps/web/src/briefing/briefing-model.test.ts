@@ -2,6 +2,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { type AnalysisDocument, parseAnalysisDocument } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
 import {
+  briefingBanner,
   failureText,
   graphState,
   readByHand,
@@ -158,5 +159,66 @@ describe("failureText", () => {
     ["something_new", "on Rocky's side"],
   ])("explains %s in plain words", (code, words) => {
     expect(failureText(code)).toContain(words);
+  });
+});
+
+describe("briefingBanner", () => {
+  const old = "9b4e1d7a3c5f2e8b6d0a4c7e1f3b5d9a2c6e8f4b";
+  const now = "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d";
+
+  it("is absent for a done run on the current head", () => {
+    expect(briefingBanner({ status: "done" }, old, old)).toBeUndefined();
+  });
+
+  it("marks a done document of another commit out of date, naming both short SHAs", () => {
+    expect(briefingBanner({ status: "done" }, old, now)).toEqual({
+      tone: "neutral",
+      title: "This briefing is out of date",
+      detail:
+        "Showing the briefing for an earlier commit, 9b4e1d7; the pull request's head is now 1c2d3e4.",
+      live: false,
+    });
+  });
+
+  it("says a newer run is in progress, as a live status", () => {
+    const banner = briefingBanner({ status: "running" }, old, now);
+    expect(banner).toMatchObject({
+      tone: "ai",
+      title: "Re-analysing the latest push…",
+      live: true,
+    });
+    expect(briefingBanner({ status: "queued" }, old, old)?.detail).toBe(
+      "Showing the briefing for commit 9b4e1d7.",
+    );
+  });
+
+  it("says a newer run waits for approval, with the estimate", () => {
+    const run = {
+      status: "awaiting_approval",
+      estimatedTokens: 212_000,
+      limitTokens: 150_000,
+    } as const;
+    expect(briefingBanner(run, old, now)).toMatchObject({
+      tone: "warn",
+      title: "Waiting for approval to analyse the latest push",
+    });
+    expect(briefingBanner(run, old, now)?.detail).toContain(
+      "about 212,000 tokens, over the per-PR limit of 150,000",
+    );
+  });
+
+  it("says a newer run failed, with its fixed code", () => {
+    expect(briefingBanner({ status: "failed", code: "llm_refused" }, old, now)).toMatchObject({
+      tone: "crit",
+      title: "The latest push could not be analysed",
+      code: "llm_refused",
+    });
+  });
+});
+
+describe("riskRows grammar", () => {
+  it("says 1 file doesn't matter", () => {
+    const one = { ...doc, triage: { ...doc.triage, noise: [] } };
+    expect(riskRows(one)[3]?.text).toBe("1 file doesn't matter");
   });
 });

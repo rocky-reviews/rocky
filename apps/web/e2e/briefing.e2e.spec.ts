@@ -86,6 +86,17 @@ test.describe("clickable files", () => {
     ).toBeVisible();
   });
 
+  test("the Briefing & change map entry returns to the briefing", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openBriefing(page, STATE_PULLS.main);
+    await page.getByRole("button", { name: "Open src/auth/invitations.ts" }).click();
+    await expect(mainHeading(page)).toHaveText("src/auth/invitations.ts");
+    const entry = page.getByRole("button", { name: "Briefing & change map" });
+    await entry.click();
+    await expect(entry).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("#briefing-title")).toBeVisible();
+  });
+
   test("a noise file in the ignore row opens too", async ({ page }) => {
     await openBriefing(page, STATE_PULLS.main);
     await page.getByRole("button", { name: "Open pnpm-lock.yaml" }).click();

@@ -22,6 +22,7 @@ export const PR_847_PULL = {
   state: "open",
   headRef: "feat/team-invites",
   baseRef: "main",
+  headSha: "9b4e1d7a3c5f2e8b6d0a4c7e1f3b5d9a2c6e8f4b",
   additions: 215,
   deletions: 3,
   changedFiles: 9,

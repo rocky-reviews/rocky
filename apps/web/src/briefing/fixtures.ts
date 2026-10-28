@@ -15,7 +15,12 @@ export const BRIEFING_FIXTURE_PULLS = {
   awaitingApproval: 852,
   failed: 853,
   superseded: 854,
+  reanalysing: 855,
+  outOfDate: 856,
 } as const;
+
+/** A push after the analysed commit: the PR's head in the re-analysing and out-of-date states. */
+const NEWER_HEAD = "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d";
 export type BriefingFixture = keyof typeof BRIEFING_FIXTURE_PULLS;
 
 type Doc = typeof pr847 & Record<string, unknown>;
@@ -62,7 +67,11 @@ const graphUnavailable = variant(BRIEFING_FIXTURE_PULLS.graphUnavailable, (doc) 
 const n = BRIEFING_FIXTURE_PULLS;
 /** The state fixtures, as `base` (GitHub's view of pr-847) under each state's number. */
 export const briefingFixtures = (base: object): RawShellData[] => {
-  const pull = (number: number) => ({ ...base, number });
+  const pull = (number: number, headSha?: string) => ({
+    ...base,
+    number,
+    ...(headSha === undefined ? {} : { headSha }),
+  });
   return [
     { pull: pull(n.briefingUnavailable), myReview: null, analysis: briefingUnavailable },
     { pull: pull(n.graphUnavailable), myReview: null, analysis: graphUnavailable },
@@ -79,6 +88,18 @@ export const briefingFixtures = (base: object): RawShellData[] => {
       myReview: null,
       analysis: null,
       analysisRun: { status: "failed", code: "repository_inaccessible" },
+    },
+    {
+      pull: pull(n.reanalysing, NEWER_HEAD),
+      myReview: null,
+      analysis: variant(n.reanalysing, () => {}),
+      analysisRun: { status: "running" },
+    },
+    {
+      pull: pull(n.outOfDate, NEWER_HEAD),
+      myReview: null,
+      analysis: variant(n.outOfDate, () => {}),
+      analysisRun: { status: "done" },
     },
     {
       pull: pull(n.superseded),

@@ -23,6 +23,8 @@ const STATES: { id: string; pr: number; full: boolean }[] = [
   { id: "brief-awaiting-approval", pr: STATE_PULLS.awaitingApproval, full: false },
   { id: "brief-failed", pr: STATE_PULLS.failed, full: false },
   { id: "brief-superseded", pr: STATE_PULLS.superseded, full: false },
+  { id: "brief-reanalysing", pr: STATE_PULLS.reanalysing, full: false },
+  { id: "brief-out-of-date", pr: STATE_PULLS.outOfDate, full: false },
 ];
 
 for (const state of STATES) {

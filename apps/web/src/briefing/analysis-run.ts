@@ -1,8 +1,11 @@
 /**
- * Where the PR's analysis stands (P6-2), so the briefing can say why there is no document yet:
- * the `analyses` row's state (P4-6) as the server will report it. `done` goes with a document;
- * every other state comes without one. A failure carries only the pipeline's fixed code (the
- * shape `analyses.error_code` stores), never a message: the page maps it to its own text.
+ * Where the PR's latest analysis stands (P6-2, ADR 0019 §3 amendment): the `analyses` row's
+ * state (P4-6) as the server reports it. Without a document every state but `done` is allowed.
+ * With one, `done` or a newer run (`queued`, `running`, `awaiting_approval`, `failed`) whose
+ * document is not ready: the page then shows the previous briefing under a banner. `none` and a
+ * `superseded` failure contradict a document and are refused. A failure carries only the
+ * pipeline's fixed code (the shape `analyses.error_code` stores), never a message: the page maps
+ * it to its own text.
  */
 import { z } from "zod";
 
@@ -35,5 +38,9 @@ export const parseAnalysisRun = (raw: unknown, hasDocument: boolean): AnalysisRu
   if (raw === undefined || raw === null) return { status: hasDocument ? "done" : "none" };
   const parsed = AnalysisRun.safeParse(raw);
   if (!parsed.success) return undefined;
-  return (parsed.data.status === "done") === hasDocument ? parsed.data : undefined;
+  const run = parsed.data;
+  if (!hasDocument) return run.status === "done" ? undefined : run;
+  if (run.status === "none") return undefined;
+  if (run.status === "failed" && run.code === "superseded") return undefined;
+  return run;
 };

@@ -15,6 +15,16 @@ describe("parseAnalysisRun", () => {
     expect(parseAnalysisRun(run, false)).toEqual(run);
   });
 
+  it.each([
+    [{ status: "queued" }],
+    [{ status: "running" }],
+    [{ status: "awaiting_approval", estimatedTokens: 212_000, limitTokens: 150_000 }],
+    [{ status: "failed", code: "llm_refused" }],
+    [{ status: "done" }],
+  ])("accepts %j next to a previous document", (run) => {
+    expect(parseAnalysisRun(run, true)).toEqual(run);
+  });
+
   it("defaults to done with a document and none without one", () => {
     expect(parseAnalysisRun(undefined, true)).toEqual({ status: "done" });
     expect(parseAnalysisRun(undefined, false)).toEqual({ status: "none" });
@@ -22,7 +32,8 @@ describe("parseAnalysisRun", () => {
   });
 
   it.each([
-    ["a document with a run that is not done", { status: "running" }, true],
+    ["a document with no run", { status: "none" }, true],
+    ["a document with a superseded run", { status: "failed", code: "superseded" }, true],
     ["done without a document", { status: "done" }, false],
     ["a code that is not a fixed code", { status: "failed", code: "Bad Code <x>" }, false],
     ["a code that is too long", { status: "failed", code: `a${"b".repeat(64)}` }, false],

@@ -13,7 +13,12 @@ const fixture = (name: BriefingFixture) => load(BRIEFING_FIXTURE_PULLS[name]);
 
 const render = (data: ShellData): string =>
   renderToStaticMarkup(
-    <BriefingView analysis={data.analysis} run={data.analysisRun} onOpenFile={() => {}} />,
+    <BriefingView
+      analysis={data.analysis}
+      run={data.analysisRun}
+      headSha={data.pull.headSha}
+      onOpenFile={() => {}}
+    />,
   );
 
 /** Text content without tags, whitespace collapsed. */
@@ -168,6 +173,28 @@ describe("change map unavailable (provenance.graphUnavailable)", async () => {
   });
 });
 
+describe("a document that is not the latest word", () => {
+  it("has no banner when the document is of the PR's head and the run is done", () => {
+    expect(render(main)).not.toContain("brief-banner");
+  });
+
+  it("re-analysing: the previous briefing under a live banner", async () => {
+    const html = render(await fixture("reanalysing"));
+    expect(html).toMatch(/<div class="brief-banner tone-ai" role="status">/);
+    expect(text(html)).toContain(
+      "Re-analysing the latest push… Showing the briefing for an earlier commit, 9b4e1d7; the pull request's head is now 1c2d3e4.",
+    );
+    expect(text(html)).toContain("Critical 3 files need your attention");
+  });
+
+  it("out of date: a done document of another commit says so", async () => {
+    const t = text(render(await fixture("outOfDate")));
+    expect(t).toContain("This briefing is out of date");
+    expect(t).toContain("an earlier commit, 9b4e1d7; the pull request's head is now 1c2d3e4.");
+    expect(t).toContain("Suggested review path");
+  });
+});
+
 describe("states without an analysis document", () => {
   it("no analysis yet", async () => {
     const t = text(render(await fixture("none")));
@@ -204,7 +231,12 @@ describe("states without an analysis document", () => {
 
   it("treats done without a document as no analysis yet", () => {
     const html = renderToStaticMarkup(
-      <BriefingView analysis={null} run={{ status: "done" }} onOpenFile={() => {}} />,
+      <BriefingView
+        analysis={null}
+        run={{ status: "done" }}
+        headSha={main.pull.headSha}
+        onOpenFile={() => {}}
+      />,
     );
     expect(text(html)).toContain("No analysis yet");
   });
@@ -226,7 +258,12 @@ describe("untrusted model output", () => {
     },
   };
   const html = renderToStaticMarkup(
-    <BriefingView analysis={evil} run={{ status: "done" }} onOpenFile={() => {}} />,
+    <BriefingView
+      analysis={evil}
+      run={{ status: "done" }}
+      headSha={main.pull.headSha}
+      onOpenFile={() => {}}
+    />,
   );
 
   it("renders summary, reason, path, memory and checks as text", () => {
@@ -244,7 +281,8 @@ describe("in the shell", () => {
   it("lists files the AI could not analyse in the sidebar, so they can be opened", async () => {
     const html = renderToStaticMarkup(<Shell data={await fixture("graphUnavailable")} now={0} />);
     const side = html.slice(html.indexOf('<nav id="sidebar"'), html.indexOf("</nav>"));
-    expect(text(side)).toContain("Not analysed · read by hand 1");
+    expect(text(side)).toContain("Not analysed 1");
+    expect(side).toContain('<li class="nav-item r-unanalysed">');
     expect(side).toContain('aria-label="Viewed src/api/index.ts"');
   });
 

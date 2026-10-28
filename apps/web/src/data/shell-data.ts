@@ -8,6 +8,7 @@
  */
 import {
   type AnalysisDocument,
+  FullSha,
   GitRef,
   limits,
   parseAnalysisDocument,
@@ -39,6 +40,8 @@ export const PullSummary = z.strictObject({
   state: z.enum(["open", "closed", "merged"]),
   headRef: GitRef,
   baseRef: GitRef,
+  /** The PR's current head commit; an analysis of another commit is shown as out of date. */
+  headSha: FullSha,
   additions: z.number().int().min(0),
   deletions: z.number().int().min(0),
   changedFiles: z.number().int().min(0),

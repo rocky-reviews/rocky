@@ -10,6 +10,7 @@ import type {
   RiskLevel,
   TriagedFileLevel,
 } from "@rocky-reviews/schema";
+import type { AnalysisRun } from "./analysis-run.js";
 
 export type RiskRowKey = "critical" | "important" | "normal" | "ignore" | "unanalysed";
 
@@ -79,7 +80,7 @@ const rowText = (key: RiskRowKey, n: number): string => {
     case "normal":
       return `${files(n)} to skim`;
     case "ignore":
-      return `${files(n)} don't matter`;
+      return `${files(n)} ${n === 1 ? "doesn't" : "don't"} matter`;
     case "unanalysed":
       return `${files(n)} the AI couldn't analyse: read ${n === 1 ? "it" : "them"} yourself`;
   }
@@ -158,4 +159,61 @@ export const failureText = (code: string): string => {
   if (code === "metering_failed")
     return "Rocky could not record the AI usage for this run, so it stopped before spending more.";
   return "Something went wrong on Rocky's side.";
+};
+
+const fmt = (n: number): string => n.toLocaleString("en-US");
+export const tokensText = (estimated: number, limit: number): string =>
+  `about ${fmt(estimated)} tokens, over the per-PR limit of ${fmt(limit)}`;
+
+export type Banner = {
+  tone: "neutral" | "ai" | "warn" | "crit";
+  title: string;
+  detail: string;
+  /** Announced politely (a run in progress). */
+  live: boolean;
+  /** The newer run's fixed failure code. */
+  code?: string;
+};
+
+/**
+ * The banner over a document that is not the latest word (ADR 0019 §3 amendment): a newer run is
+ * queued, running, held or failed, or the document describes another commit than the PR's head.
+ * Fixed text only; the SHAs are validated hex.
+ */
+export const briefingBanner = (
+  run: AnalysisRun,
+  documentHead: string,
+  pullHead: string,
+): Banner | undefined => {
+  const doc = documentHead.slice(0, 7);
+  const stale = documentHead !== pullHead;
+  const which = stale
+    ? `Showing the briefing for an earlier commit, ${doc}; the pull request's head is now ${pullHead.slice(0, 7)}.`
+    : `Showing the briefing for commit ${doc}.`;
+  switch (run.status) {
+    case "done":
+      return stale
+        ? { tone: "neutral", title: "This briefing is out of date", detail: which, live: false }
+        : undefined;
+    case "queued":
+    case "running":
+      return { tone: "ai", title: "Re-analysing the latest push…", detail: which, live: true };
+    case "awaiting_approval":
+      return {
+        tone: "warn",
+        title: "Waiting for approval to analyse the latest push",
+        detail: `It needs ${tokensText(run.estimatedTokens, run.limitTokens)}. ${which}`,
+        live: false,
+      };
+    case "failed":
+      return {
+        tone: "crit",
+        title: "The latest push could not be analysed",
+        detail: `${failureText(run.code)} ${which}`,
+        live: false,
+        code: run.code,
+      };
+    case "none":
+      return undefined;
+  }
 };

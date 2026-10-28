@@ -9,13 +9,16 @@
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import type { AnalysisRun } from "./analysis-run.js";
 import {
+  type Banner,
   BRIEFING_REASON,
+  briefingBanner,
   failureText,
   nameOf,
   readByHand,
   reviewPathRows,
   riskRows,
   startFile,
+  tokensText,
   VERDICT_LABEL,
 } from "./briefing-model.js";
 import { ChangeMapSlot } from "./ChangeMap.js";
@@ -24,16 +27,35 @@ import { InlineText } from "./inline-text.js";
 type Props = {
   analysis: AnalysisDocument | null;
   run: AnalysisRun;
+  /** The PR's current head commit (GitHub's), to tell an out-of-date document. */
+  headSha: string;
   /** Selects the file in the shell (sidebar and main), as a sidebar click does. */
   onOpenFile: (path: string) => void;
 };
 
-export const BriefingView = ({ analysis, run, onOpenFile }: Props) =>
+export const BriefingView = ({ analysis, run, headSha, onOpenFile }: Props) =>
   analysis === null ? (
     <BriefingState run={run.status === "done" ? { status: "none" } : run} />
   ) : (
-    <Briefing doc={analysis} onOpenFile={onOpenFile} />
+    <Briefing
+      doc={analysis}
+      banner={briefingBanner(run, analysis.provenance.head.sha, headSha)}
+      onOpenFile={onOpenFile}
+    />
   );
+
+/** Over a document that is not the latest word: a newer run, or another commit than the head. */
+const BannerBox = ({ banner }: { banner: Banner }) => (
+  <div className={`brief-banner tone-${banner.tone}`} role={banner.live ? "status" : undefined}>
+    <p className="brief-banner-title">{banner.title}</p>
+    <p>{banner.detail}</p>
+    {banner.code !== undefined && (
+      <p className="brief-state-code">
+        Code: <code>{banner.code}</code>
+      </p>
+    )}
+  </div>
+);
 
 const Title = () => (
   <h2 className="main-title" id="briefing-title">
@@ -43,9 +65,11 @@ const Title = () => (
 
 const Briefing = ({
   doc,
+  banner,
   onOpenFile,
 }: {
   doc: AnalysisDocument;
+  banner: Banner | undefined;
   onOpenFile: (p: string) => void;
 }) => {
   const { briefing, provenance } = doc;
@@ -69,6 +93,7 @@ const Briefing = ({
             <span>· {minutes}</span>
           </div>
           <Title />
+          {banner !== undefined && <BannerBox banner={banner} />}
           {fallback !== undefined && (
             <p className="brief-notice">
               <b>AI briefing unavailable:</b> {BRIEFING_REASON[fallback.reason]}.
@@ -245,8 +270,6 @@ const FileButton = ({
   </button>
 );
 
-const fmt = (n: number): string => n.toLocaleString("en-US");
-
 /** What the briefing says while there is no document: fixed text only. */
 const BriefingState = ({ run }: { run: Exclude<AnalysisRun, { status: "done" }> }) => {
   const { tone, title, body, live } = stateText(run);
@@ -304,7 +327,7 @@ const stateText = (run: Exclude<AnalysisRun, { status: "done" }>): StateText => 
         tone: "warn",
         title: "Waiting for approval",
         body: [
-          `This pull request needs about ${fmt(run.estimatedTokens)} tokens, over the per-PR limit of ${fmt(run.limitTokens)}.`,
+          `This pull request needs ${tokensText(run.estimatedTokens, run.limitTokens)}.`,
           "Nothing has been sent to a model. Someone who manages Rocky for this organisation can approve the run.",
         ],
         live: false,

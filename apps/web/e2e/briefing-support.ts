@@ -11,6 +11,8 @@ export const STATE_PULLS = {
   awaitingApproval: 852,
   failed: 853,
   superseded: 854,
+  reanalysing: 855,
+  outOfDate: 856,
 } as const;
 
 /** Opens the shell on a fixture PR with a fixed clock and no saved theme choice. */
