@@ -7,7 +7,7 @@ import type {
   WebhookRequest,
 } from "@rocky-reviews/core";
 import { Transform } from "node:stream";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 /**
  * Webhook receiver (P3-2, ADR 0007). The request path does exactly three things: authenticate
@@ -42,13 +42,31 @@ export const INBOX_RECORD_TIMEOUT_MS = 6_000;
  * actually received (not as declared: a client that announces 25 MiB and trickles bytes holds
  * only what it sent). Beyond it → 503. Only a client that really sends that much data, fast,
  * can exhaust it; under such a flood genuine deliveries can be refused (GitHub does not retry a
- * 503) in exchange for not running out of memory, until rate limiting (P7-3).
+ * 503) in exchange for not running out of memory. Rate limits (P7-3) bound how often one
+ * address can try.
  */
 export const MAX_IN_FLIGHT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Rate limits (P7-3, ADR 0025). Each returns `false` after answering 429 (or 503); the route
+ * then stops.
+ */
+export interface WebhookRateLimit {
+  /** Per source address, before the precheck and before the body is read (cheap). */
+  bySource(request: FastifyRequest, reply: FastifyReply): Promise<boolean>;
+  /** Per installation (`<forge>:<id>`), only after the signature holds. */
+  byInstallation(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    installation: string,
+  ): Promise<boolean>;
+}
 
 export interface WebhookDeps {
   ingress: WebhookIngress;
   inbox: WebhookInbox;
+  /** Omitted only in tests of the HTTP layer; `startServer` always passes it. */
+  rateLimit?: WebhookRateLimit;
   /** Overrides INBOX_RECORD_TIMEOUT_MS (tests). */
   recordTimeoutMs?: number;
   /** Overrides MAX_IN_FLIGHT_BYTES (tests). */
@@ -157,6 +175,9 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
     // Runs before the body is read: no buffering for requests that cannot be valid deliveries,
     // and none beyond the in-flight budget.
     scope.addHook("onRequest", async (request, reply) => {
+      if (deps.rateLimit !== undefined && !(await deps.rateLimit.bySource(request, reply))) {
+        return reply;
+      }
       const rejection = deps.ingress.precheck(headerOf(request));
       if (rejection !== undefined) {
         request.log.warn(
@@ -264,6 +285,17 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
             return reply.code(200).send({ status: "ignored" });
           case "accepted": {
             const { deliveryId, event } = receipt.delivery;
+            // Authenticated: the installation id is GitHub's, not the attacker's choice.
+            if (
+              deps.rateLimit !== undefined &&
+              !(await deps.rateLimit.byInstallation(
+                request,
+                reply,
+                `${forge}:${event.installationId}`,
+              ))
+            ) {
+              return reply;
+            }
             let stored: "queued" | "duplicate";
             try {
               // A timed-out insert may still commit later; a redelivery then reads `duplicate`.

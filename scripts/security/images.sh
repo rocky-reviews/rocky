@@ -15,6 +15,11 @@ SEMGREP_IMAGE="semgrep/semgrep@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9
 OSV_SCANNER_IMAGE="ghcr.io/google/osv-scanner@sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0" # v2.7.0
 # shellcheck disable=SC2034
 ACTIONLINT_IMAGE="rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667" # 1.7.12
+# shellcheck disable=SC2034
+ZAP_IMAGE="zaproxy/zap-stable@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d12a129a8e58b1fd384238" # 2.17.0
+# The dev database image (same digest as docker-compose.dev.yml), for the ZAP run's own database.
+# shellcheck disable=SC2034
+POSTGRES_IMAGE="pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d" # 0.8.7-pg17
 
 # Lets git inside a root container read a checkout owned by another uid
 # (GitHub runners check out as uid 1001). Harmless where uids already match.

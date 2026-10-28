@@ -12,6 +12,7 @@ import {
 } from "@rocky-reviews/forge-github";
 import rateLimit from "@fastify/rate-limit";
 import { publicRoute } from "./auth/policy.js";
+import { pageCsp } from "./security/headers.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   checkCredentialsTarget,
@@ -88,19 +89,15 @@ const escapeHtml = (value: string): string =>
 /** No colours: browser defaults with `color-scheme`, so both themes work and lint stays clean. */
 export const STYLE =
   ":root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}code{word-break:break-all}button{font:inherit;padding:.5rem 1rem}";
-const STYLE_HASH = createHash("sha256").update(STYLE).digest("base64");
-
+/**
+ * Stricter than the app-wide headers (P7-3, ADR 0025, which add nosniff, framing, COOP and the
+ * rest): only this page's style, forms only to GitHub, no referrer (the URL carries the token).
+ */
 const securityHeaders = (reply: FastifyReply, formOrigin: string): void => {
   void reply
-    .header(
-      "content-security-policy",
-      `default-src 'none'; style-src 'sha256-${STYLE_HASH}'; form-action ${formOrigin}; frame-ancestors 'none'; base-uri 'none'`,
-    )
-    .header("x-frame-options", "DENY")
+    .header("content-security-policy", pageCsp({ style: STYLE, formAction: formOrigin }))
     .header("referrer-policy", "no-referrer")
-    .header("cache-control", "no-store")
-    .header("x-content-type-options", "nosniff")
-    .header("cross-origin-opener-policy", "same-origin");
+    .header("cache-control", "no-store");
 };
 
 /** `body` is trusted markup built here; every dynamic value in it is passed through escapeHtml. */

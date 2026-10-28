@@ -7,6 +7,9 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerRoleRoutes } from "./roles/routes.js";
+import { registerSecurityHeaders } from "./security/headers.js";
+import type { RateLimits } from "./security/rate-limit.js";
+import { registerWebApp, type WebApp } from "./web-app.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
@@ -24,6 +27,12 @@ export interface AppDeps {
    * state-changing route except the signed webhook receiver is refused by the CSRF guard.
    */
   auth?: AuthDeps;
+  /** Security headers (P7-3, ADR 0025) are always on; HSTS only in production (https). */
+  hsts?: boolean;
+  /** The built web app, served with the same headers (P7-3); absent in development (Vite). */
+  web?: WebApp;
+  /** Rate limits for routes (P7-3); the auth and webhook deps carry their own hooks. */
+  rateLimits?: RateLimits;
   /**
    * The repository access check (P3-6) for routes that touch a repository's data; such routes
    * refuse (503) without it (P7-2).
@@ -66,6 +75,8 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       ? Fastify({ logger: false, ...timeouts })
       : Fastify({ ...fastifyLoggerOptions(deps.log), ...timeouts });
   if (deps.log !== undefined) addRequestIdHeader(app);
+  registerSecurityHeaders(app, { hsts: deps.hsts ?? false });
+  if (deps.rateLimits !== undefined) app.decorate("rateLimits", deps.rateLimits);
   // Before any route: every route must declare its access policy, or it fails to register (P7-2).
   const policies = registerAccessPolicy(app, () => app.sessionAuth);
   app.decorate("routePolicies", policies.routes);
@@ -103,6 +114,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
   }
+  registerWebApp(app, deps.web);
 
   return app;
 };
@@ -113,5 +125,7 @@ declare module "fastify" {
     sessionAuth?: SessionAuth;
     /** Every registered route and its declared access policy (P7-2; the matrix test reads it). */
     routePolicies: () => readonly PolicyEntry[];
+    /** Rate limits for routes (P7-3); Ask (P9) calls `consume(request, reply, "ask", memberId)`. */
+    rateLimits?: RateLimits;
   }
 }

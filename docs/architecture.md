@@ -49,7 +49,7 @@ packages/schema (analysis document; shared contract)
 
 | Path                         | Role                                                                                                                                                                                                                                           |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), the access policy and org administration routes (P7-2), serves the web build                                                                                             |
+| `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), the access policy and org administration routes (P7-2), security headers and rate limits (P7-3), serves the web build (`ROCKY_WEB_DIR`)                                  |
 | `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror, members who left the GitHub org), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later posting, indexing |
 | `apps/web`                   | React SPA on Vite (ADR 0019): PR review page shell (P6-1), later briefing, diff, inbox, settings, project memory                                                                                                                               |
 | `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)                      |
@@ -232,6 +232,21 @@ packages/schema (analysis document; shared contract)
   delete the person's stored token and cut the org from their sessions. Roles never widen GitHub
   access: repository routes still run the P3-6 check. The route-permission matrix
   (`policy.db.test.ts`) enumerates Fastify's routes × personas.
+- Headers and rate limits (ADR 0025, P7-3): one root `onSend` hook
+  (`apps/server/src/security/headers.ts`) gives every answer the CSP (`script-src 'self'`,
+  `style-src 'self'`, no inline content; non-documents `default-src 'none'`), `frame-ancestors
+'none'` + `X-Frame-Options`, `nosniff`, `Referrer-Policy: same-origin`, `Permissions-Policy`,
+  COOP/CORP/COEP, `Cache-Control: no-store` (only hashed assets are cached) and HSTS in
+  production; the fixed auth and setup pages set a stricter `pageCsp` once. The server serves
+  the Vite build from `ROCKY_WEB_DIR` out of a route table built at boot (no filesystem access
+  per request; an `index.html` with inline content refuses to boot; `apps/web/src/build.test.ts`
+  checks the build). Rate limits are fixed windows per scope (`auth.login`, `auth.callback`,
+  `auth.logout`, `auth.session`, `webhook.ip` before the body, `webhook.installation` after the
+  signature, `ask` for P9), keyed by client address (`ROCKY_TRUST_PROXY`: none, fly or
+  xff:<hops>; IPv6 per /64) or id, HMAC'd before the store or a log line; 429 with
+  `Retry-After` and a fixed body; in memory per instance (follow-up: a shared store).
+  `pnpm security:zap` (and CI) runs the pinned OWASP ZAP baseline against the real server and
+  fails on any High or Medium alert.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,

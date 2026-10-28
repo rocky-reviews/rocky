@@ -9,7 +9,9 @@
   live lease per installation, transient vs. strike failures; review round 2: no superseding, a
   shape CHECK on installation rows; review round 3: a bounded claim, collapse on completion);
   [ADR 0010](0010-pull-request-mirror.md) (P3-4: the outbound `Forge` port's repository sessions,
-  the pull request lane's consumer, claims cover whole lanes)
+  the pull request lane's consumer, claims cover whole lanes);
+  [ADR 0025](0025-security-headers-and-rate-limits.md) (P7-3: rate limits per address and per
+  installation)
 
 ## Context
 
@@ -227,8 +229,10 @@ application's database credential.
   uploads data fast can fill the 64 MiB budget of received bytes (for at most the 30 s request
   timeout per request) and make the server compute one HMAC per body. Slow or lying clients
   cannot: only bytes actually received count. During such a flood genuine deliveries get 503 and
-  are lost unless redelivered (see the reconcile follow-up). Rate limits come with P7-3;
-  Cloudflare sits in front in Cloud.
+  are lost unless redelivered (see the reconcile follow-up). Since P7-3 (ADR 0025 §3) one
+  address can try at most `webhook.ip` times a minute (before the body is read) and one
+  authenticated installation `webhook.installation` times; a distributed flood is for the edge
+  (Cloudflare in front in Cloud).
 - **Installer may be unknown:** `sender` is `null` when GitHub sends no usable actor. P3-3 handles
   it (ADR 0009 §2): the org gets no installer candidate, and P7-1 falls back to the first user who
   signs in and is verified as an admin.
