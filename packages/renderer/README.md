@@ -14,7 +14,8 @@ const map = renderChangeMap(doc, { idPrefix: "brief" });
 // pipeline's reason (undefined when the document gives none)
 ```
 
-`renderChangeMap` takes anything with `graph`, `findings` and `provenance.graphUnavailable`; an
+`map.tree` is the same SVG as a frozen, checked tree (`SafeSvg`) for the web app; see "Safety
+seam". `renderChangeMap` takes anything with `graph`, `findings` and `provenance.graphUnavailable`; an
 `AnalysisDocument` is one. Pass only the open findings (`{ ...doc, findings: open }`) to leave
 dismissed drafts off the badges.
 
@@ -52,10 +53,33 @@ sizes in the stylesheet must match `src/design.ts`. The raw-colour lint covers t
 
 ## Safety seam (P5-2)
 
-Every element and attribute is written by `src/svg/markup.ts`: values are XML-escaped (characters
-XML cannot spell are dropped), and only allowlisted elements and attributes can be written (no
-`script`, `foreignObject`, `a`, `use`, `image`, `style`, `on*`, `href`, `src`, `style=`).
-`inert.test.ts` is the start of the hostile-label suite P5-2 extends.
+Labels are model output and treated as hostile (ADR 0022, threat table in `THREATS.md`).
+Every element and attribute is built by `src/svg/markup.ts`, which:
+
+- allows only `svg`, `defs`, `marker`, `path`, `g`, `rect`, `text`, `title`, and only the
+  attributes the map writes, each with a value shape (numbers, fixed values, `cm-*` class tokens
+  from a list, prefixed ids, `url(#id)` markers, schema ids in `data-*`);
+- normalises every text: line breaks become spaces; control, bidi, zero-width, tag and other
+  invisible characters, lone surrogates and non-characters are dropped (ZWNJ, ZWJ, VS15, VS16 are
+  kept only where they join something); combining-mark runs keep six; `<title>` is capped at 400
+  code points and `<text>` at 200;
+- checks the finished document (ids unique and prefixed, every reference resolves) and brands it
+  `SafeSvg`.
+
+Refusals throw (the map fails closed) and never echo the refused value.
+
+```tsx
+import { SafeSvgView } from "../change-map/SafeSvg.js"; // apps/web
+<SafeSvgView svg={renderChangeMap(doc).tree} />;
+```
+
+The web app renders `map.tree` as React elements (`apps/web/src/change-map/SafeSvg.ts`); there is
+no `innerHTML`. `map.svg` is the same document as a string, for goldens, files and the CLI.
+
+Tests: `inert.test.ts` (157-label hostile corpus incl. the P4-4 injection payloads, parsed with
+saxes and walked by `src/inspect.ts`), `fuzz.test.ts` (fast-check), `markup.test.ts` (the seam),
+`csp.test.ts`, and in the web app `SafeSvg.test.ts` and `e2e/change-map-csp.e2e.spec.ts`. The
+corpus, the inspector and the fixtures are exported for tests as `@rocky-reviews/renderer/testing`.
 
 ## Goldens and screenshots
 
@@ -71,7 +95,7 @@ pnpm design:change-map-screenshots                      # docs/design/change-map
 | ------------------ | --------------------------------------------- | ------------------------------------------------ |
 | `text.ts`          | `text.ts`                                     | No mono face; tracking folded in; emoji are wide |
 | `geometry.ts`      | `geometry.ts`, `bounds.ts`                    | Subset                                           |
-| `svg/markup.ts`    | `svg/primitives.ts`                           | Escapes `'`; element and attribute allowlists    |
+| `svg/markup.ts`    | `svg/primitives.ts`                           | Tree; normalisation; name, value, class checks   |
 | `layout/rank.ts`   | `layout/rank.ts`                              | No layout hints; iterative (no recursion)        |
 | `layout/place.ts`  | `layout/architecture.ts`, `layout/seating.ts` | POC grid; one card per row; no dead band         |
 | `layout/routes.ts` | `layout/edges.ts` (approach)                  | POC curve; simple gap routing; rewritten         |

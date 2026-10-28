@@ -1,7 +1,9 @@
 import { defineConfig } from "vitest/config";
 
 /** Packages whose logic guards security, tenancy or money keep a coverage floor. */
-const COVERED = ["core", "schema", "db", "llm", "crypto"].map((p) => `packages/${p}/src/**`);
+const COVERED = ["core", "schema", "db", "llm", "crypto", "renderer"].map(
+  (p) => `packages/${p}/src/**`,
+);
 
 export default defineConfig({
   test: {

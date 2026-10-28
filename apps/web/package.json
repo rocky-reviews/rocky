@@ -11,9 +11,11 @@
   "devDependencies": {
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "saxes": "6.0.0",
     "vite": "8.3.4"
   },
   "dependencies": {
+    "@rocky-reviews/renderer": "workspace:*",
     "@rocky-reviews/schema": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",

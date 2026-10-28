@@ -1,87 +1,270 @@
 /**
- * The escaping seam P5-2 builds on: every text and attribute value is escaped where it is
- * written (svg/markup.ts), and the markup layer refuses elements and attributes that could run
- * code or load anything. P5-2 (sanitisation, 🔴) extends this suite with its hostile-label corpus.
+ * P5-2 (🔴): a hostile-label suite produces inert SVG. Every corpus entry is put in every text
+ * field the map draws (lane label and subtitle, card label, subtitle and badge, edge label),
+ * rendered, parsed by a strict XML parser and walked: only allowlisted elements and attributes,
+ * no URL except the map's own `url(#<prefix>-…)` markers, and text equal to the input after the
+ * documented normalisation (cut with an ellipsis where the layout or the tooltip cap says so).
  */
 import { describe, expect, it } from "vitest";
 import { renderChangeMap, type ChangeMapSource } from "./index.js";
-import { escapeXml, tag, wrap } from "./svg/markup.js";
-import { pr847 } from "./test-support.js";
+import { HOSTILE_CORPUS, HOSTILE_IDS, HOSTILE_PREFIXES } from "./hostile-corpus.js";
+import { inspectSvg, parseXml, type InertReport } from "./inspect.js";
+import { normalised } from "./reference-normalise.js";
+import { MAX_TEXT_LENGTH, MAX_TITLE_LENGTH } from "./svg/markup.js";
+import { pr847, withLabels } from "./test-support.js";
 
-const HOSTILE = [
-  "<script>alert(1)</script>",
-  '"><foreignObject><div>x</div></foreignObject>',
-  "' onmouseover='alert(1)",
-  '" onload="alert(1)',
-  '</text><a href="javascript:alert(1)">x</a>',
-  "]]><!--",
-  "&amp; &lt;already&gt; escaped",
-];
+const ELLIPSIS = "…";
 
-/** pr-847 with every label, subtitle and badge replaced by `text`. */
-const withLabels = (text: string): ChangeMapSource => {
-  const doc = pr847();
-  const graph = doc.graph!;
-  return {
-    ...doc,
-    graph: {
-      ...graph,
-      lanes: graph.lanes.map((lane) => ({ ...lane, label: text, subtitle: text })),
-      nodes: graph.nodes.map((node) => ({ ...node, label: text, subtitle: text, badges: [text] })),
-      edges: graph.edges.map((edge) => ({ ...edge, label: text })),
-    },
-  };
+/** `drawn` is `full`, or a prefix of it followed by an ellipsis. */
+const isCutOf = (drawn: string, full: string): boolean =>
+  drawn === full || (drawn.endsWith(ELLIPSIS) && full.startsWith(drawn.slice(0, -1)));
+
+const codePoints = (text: string): number => [...text].length;
+
+/** Checks every text the walk found against what the label should have become. */
+const checkTexts = (report: InertReport, label: string): void => {
+  const clean = normalised(label);
+  const lane = normalised(`${clean} · ${clean}`.toUpperCase());
+  const edge = `${clean} → ${clean} · ${clean}`;
+  const card = `${clean} · ${clean} · ${clean}`;
+  for (const { element, className, parentClass, text } of report.texts) {
+    const where = `${element}.${className ?? parentClass}: ${JSON.stringify(text)}`;
+    expect(codePoints(text), where).toBeLessThanOrEqual(
+      (element === "title" ? MAX_TITLE_LENGTH : MAX_TEXT_LENGTH) + 1,
+    );
+    if (element === "text") {
+      switch (className) {
+        case "cm-node-title":
+        case "cm-node-sub":
+        case "cm-pill-text":
+          expect(isCutOf(text, clean), where).toBe(true);
+          break;
+        case "cm-lane-label":
+          expect(isCutOf(text, lane), where).toBe(true);
+          break;
+        case "cm-badge-count":
+          expect(text, where).toMatch(/^\d\+?$/);
+          break;
+        default:
+          throw new Error(`unexpected text ${where}`);
+      }
+    } else if (parentClass === "cm-lane") {
+      expect(isCutOf(text, lane), where).toBe(true);
+    } else if (parentClass.startsWith("cm-edge")) {
+      expect(isCutOf(text, edge), where).toBe(true);
+    } else if (parentClass.startsWith("cm-node")) {
+      // The label parts must match exactly; what follows them is the renderer's own count
+      // ("2 findings, worst high"), possibly cut, so it may hold only that alphabet.
+      const rest = text.startsWith(`${card} · `) ? text.slice(card.length + 3) : undefined;
+      expect(isCutOf(text, card) || /^[\d a-z,]*…?$/.test(rest ?? "\0"), where).toBe(true);
+    } else {
+      throw new Error(`unexpected title ${where}`);
+    }
+  }
 };
 
-describe("escaping", () => {
-  it("escapes the five XML specials and drops characters XML cannot spell", () => {
-    expect(escapeXml(`<a href="x">&'</a>`)).toBe(
-      "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;",
-    );
-    expect(escapeXml("a\u0000b\u0008c￾d")).toBe("abcd");
-    expect(escapeXml("emoji 😀 stays")).toBe("emoji 😀 stays");
+describe("hostile labels render inert", () => {
+  it("covers every technique the task names", () => {
+    const techniques = new Set(HOSTILE_CORPUS.map(({ technique }) => technique));
+    for (const technique of [
+      "markup",
+      "entities",
+      "attribute break-out",
+      "CDATA, comments and processing instructions",
+      "URLs",
+      "handlers and links",
+      "styles",
+      "CSS injection through class or data attributes",
+      "bidi controls",
+      "zero-width and invisible",
+      "surrogates and non-characters",
+      "case mapping",
+      "length",
+      "prompt injection (P4-4 corpus)",
+    ])
+      expect(techniques).toContain(technique);
+    expect(HOSTILE_CORPUS.length).toBeGreaterThanOrEqual(150);
   });
 
-  for (const text of HOSTILE)
-    it(`a hostile label stays text: ${JSON.stringify(text)}`, () => {
-      const { svg } = renderChangeMap(withLabels(text));
-      // Escaped text cannot hold a raw `<` or `>`, so every `<…>` is markup the renderer wrote.
-      const tags = [...svg.matchAll(/<\/?([a-zA-Z][\w:-]*)([^<>]*)>/g)];
-      expect(svg.split("<").length - 1).toBe(tags.length);
-      expect(svg.split(">").length - 1).toBe(tags.length);
-      for (const [, name = "", attributes = ""] of tags) {
-        expect(ALLOWED.has(name), `element <${name}>`).toBe(true);
-        for (const [, attribute = ""] of attributes.matchAll(/\s([^\s=/]+)="[^"]*"/g))
-          expect(ALLOWED_ATTRIBUTE.test(attribute), `attribute ${attribute}`).toBe(true);
-        // Nothing outside name="value" pairs: no stray, unquoted or broken-out attribute.
-        expect(attributes.replace(/\s[^\s=/]+="[^"]*"/g, "").replace(/\/$/, "")).toBe("");
-      }
-      expect(svg).not.toMatch(/<!--|<!\[CDATA\[|<\?/);
+  for (const { technique, label } of HOSTILE_CORPUS)
+    it(`${technique}: ${JSON.stringify(label.length > 60 ? `${label.slice(0, 60)}…` : label)}`, () => {
+      const map = renderChangeMap(withLabels(label));
+      expect(map.status).toBe("rendered");
+      const report = inspectSvg(map.svg);
+      checkTexts(report, label);
+      // Arrowheads only: five markers, every one referenced by its own prefix.
+      expect(report.ids).toEqual([
+        "cm-arrow-added",
+        "cm-arrow-modified",
+        "cm-arrow-removed",
+        "cm-arrow-unchanged",
+        "cm-arrow-hero",
+      ]);
     });
+
+  it("draws what an escaped label says, not what it spells", () => {
+    const report = inspectSvg(renderChangeMap(withLabels("&lt;b&gt; <i>")).svg);
+    const titles = report.texts.filter(({ className }) => className === "cm-node-title");
+    expect(titles[0]?.text).toBe("&lt;b&gt; <i>");
+  });
+
+  it("keeps a lane header's case mapping, even when it changes the length", () => {
+    const report = inspectSvg(renderChangeMap(withLabels("straße")).svg);
+    const lanes = report.texts.filter(({ className }) => className === "cm-lane-label");
+    expect(lanes[0]?.text).toBe("STRASSE · STRASSE");
+  });
+
+  it("keeps the joiners real text needs and drops the ones that hide", () => {
+    const family = "👨\u200D👩\u200D👧";
+    const report = inspectSvg(renderChangeMap(withLabels(`${family}\u200D\u200D x\u200D`)).svg);
+    const title = report.texts.find(({ className }) => className === "cm-node-title");
+    expect(title?.text).toBe(`${family} x`);
+  });
+
+  it("strips every bidi control and zero-width character from the output", () => {
+    const controls = /[\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/u;
+    for (const { label } of HOSTILE_CORPUS.filter(({ technique }) =>
+      ["bidi controls", "zero-width and invisible"].includes(technique),
+    ))
+      expect(renderChangeMap(withLabels(label)).svg).not.toMatch(controls);
+  });
+
+  it("caps the output however long the labels are", () => {
+    const { svg } = renderChangeMap(withLabels("<&>".repeat(20_000)));
+    // Every label is cut to its box and every tooltip to the cap: pr-847's map stays small.
+    expect(svg.length).toBeLessThan(200_000);
+  });
 });
 
-const ALLOWED = new Set(["svg", "defs", "marker", "path", "g", "rect", "text", "title"]);
-/** Geometry, classes, marker ids, ARIA and data-* hooks: never on*, href, src or style. */
-const ALLOWED_ATTRIBUTE =
-  /^(?:xmlns|viewBox|width|height|x|y|rx|d|class|id|role|aria-label|aria-hidden|text-anchor|marker-end|markerWidth|markerHeight|refX|refY|orient|data-[a-z][a-z0-9-]*)$/;
+describe("ids, prefixes and references", () => {
+  it("refuses an idPrefix that could break out of url(#…) or an id", () => {
+    for (const idPrefix of HOSTILE_PREFIXES)
+      expect(() => renderChangeMap(pr847(), { idPrefix }), idPrefix).toThrow(/idPrefix/);
+  });
 
-describe("the markup layer refuses what could run or load", () => {
-  it.each(["script", "foreignObject", "a", "image", "use", "style", "iframe"])(
-    "element <%s>",
-    (name) => {
-      expect(() => tag(name, {})).toThrow(/element/);
-      expect(() => wrap(name, {}, "")).toThrow(/element/);
-    },
-  );
+  it("namespaces every id and every reference by the prefix", () => {
+    const map = renderChangeMap(pr847(), { idPrefix: "brief-2" });
+    const report = inspectSvg(map.svg, "brief-2");
+    expect(report.ids.every((id) => id.startsWith("brief-2-arrow-"))).toBe(true);
+  });
 
-  it.each(["onload", "onclick", "href", "xlink:href", "style", "src", "Onload", "x y"])(
-    "attribute %s",
-    (name) => {
-      expect(() => tag("rect", { [name]: "1" })).toThrow(/attribute/);
-    },
-  );
+  const withIds = (id: string, where: "node" | "edge" | "finding"): ChangeMapSource => {
+    const doc = pr847();
+    const graph = doc.graph!;
+    const node = graph.nodes[0]!;
+    return {
+      ...doc,
+      graph: {
+        ...graph,
+        nodes:
+          where === "node" ? graph.nodes.map((n) => (n === node ? { ...n, id } : n)) : graph.nodes,
+        edges: graph.edges.map((edge, index) =>
+          where === "edge" && index === 0
+            ? { ...edge, id }
+            : where === "node"
+              ? {
+                  ...edge,
+                  from: edge.from === node.id ? id : edge.from,
+                  to: edge.to === node.id ? id : edge.to,
+                }
+              : edge,
+        ),
+      },
+      findings:
+        where === "finding"
+          ? doc.findings.map((finding, index) => (index === 0 ? { ...finding, id } : finding))
+          : doc.findings,
+    };
+  };
 
-  it("escapes attribute values", () => {
-    expect(tag("rect", { class: '"><script>' })).toBe('<rect class="&quot;&gt;&lt;script&gt;"/>');
+  for (const where of ["node", "edge", "finding"] as const)
+    it(`fails closed on a ${where} id the schema would refuse`, () => {
+      for (const id of HOSTILE_IDS)
+        expect(() => renderChangeMap(withIds(id, where)), JSON.stringify(id)).toThrow(
+          /data-|not allowed/,
+        );
+    });
+
+  it("fails closed on an enum value the schema would refuse (class injection)", () => {
+    const doc = pr847();
+    const graph = doc.graph!;
+    const forged = (patch: object, target: "node" | "edge"): ChangeMapSource => ({
+      ...doc,
+      graph: {
+        ...graph,
+        nodes:
+          target === "node"
+            ? graph.nodes.map((n, i) => (i === 0 ? ({ ...n, ...patch } as typeof n) : n))
+            : graph.nodes,
+        edges:
+          target === "edge"
+            ? graph.edges.map((e, i) => (i === 0 ? ({ ...e, ...patch } as typeof e) : e))
+            : graph.edges,
+      },
+    });
+    expect(() => renderChangeMap(forged({ delta: "added cm-hero" }, "node"))).toThrow(/class/);
+    expect(() => renderChangeMap(forged({ delta: 'x" onload="y' }, "node"))).toThrow(/class/);
+    expect(() => renderChangeMap(forged({ delta: "evil" }, "edge"))).toThrow(/class/);
+    expect(() => renderChangeMap(forged({ emphasis: "hero cm-critical" }, "edge"))).toThrow(
+      /class/,
+    );
+    const severity = {
+      ...doc,
+      findings: doc.findings.map((f, i) => (i === 0 ? { ...f, severity: "x cm-low" } : f)),
+    } as unknown as ChangeMapSource;
+    expect(() => renderChangeMap(severity)).toThrow(/class|severity/);
+  });
+});
+
+describe("the unavailable panel", () => {
+  it("draws fixed text only, whatever the pipeline's detail says", () => {
+    const map = renderChangeMap({
+      findings: [],
+      provenance: {
+        graphUnavailable: { reason: "timeout", detail: "<script>alert(1)</script>" },
+      },
+    } as ChangeMapSource);
+    const report = inspectSvg(map.svg);
+    expect(report.texts.map(({ text }) => text)).toEqual([
+      "Change map unavailable",
+      "The change map took too long to build.",
+    ]);
+  });
+});
+
+describe("the inspector itself", () => {
+  // The walk is the proof, so it must catch each thing it claims to.
+  const svg = (inner: string, attributes = "") =>
+    `<svg xmlns="http://www.w3.org/2000/svg"${attributes}>${inner}</svg>`;
+  it.each([
+    ["a script", svg("<script>alert(1)</script>")],
+    ["a foreignObject", svg("<foreignObject/>")],
+    ["a handler", svg('<rect onload="x"/>')],
+    ["an href", svg('<g href="#x"/>')],
+    ["an xlink:href", svg('<g xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="#x"/>')],
+    ["a style attribute", svg('<rect style="display:none"/>')],
+    ["an external marker", svg('<path marker-end="url(https://e.example/x#a)"/>')],
+    ["a dangling marker", svg('<path marker-end="url(#cm-nowhere)"/>')],
+    ["a foreign id", svg('<marker id="evil"/>')],
+    ["a duplicate id", svg('<marker id="cm-a"/><marker id="cm-a"/>')],
+    ["a stray class", svg('<g class="cm hero"/>')],
+    ["a bad number", svg('<rect x="1;2"/>')],
+    ["text in a group", svg("<g>hello</g>")],
+    ["a bidi control", svg("<text>a\u202Eb</text>")],
+    ["a zero-width space", svg('<g aria-label="a\u200Bb"/>')],
+    ["a comment", svg("<!-- x -->")],
+    ["CDATA", svg("<text><![CDATA[x]]></text>")],
+    ["a processing instruction", svg("<?x y?>")],
+    ["a doctype", `<!DOCTYPE svg>${svg("")}`],
+    ["an entity", svg("<text>&xxe;</text>")],
+    ["an XHTML element", svg('<div xmlns="http://www.w3.org/1999/xhtml"/>')],
+    ["a second namespace", svg("", ' xmlns:x="urn:x"')],
+    ["malformed markup", svg("<text>a<b</text>")],
+  ])("refuses %s", (_, markup) => {
+    expect(() => inspectSvg(markup)).toThrow();
+  });
+
+  it("accepts what the renderer writes", () => {
+    expect(() => parseXml(renderChangeMap(pr847()).svg)).not.toThrow();
   });
 });
