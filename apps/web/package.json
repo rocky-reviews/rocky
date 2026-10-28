@@ -14,6 +14,9 @@
     "vite": "8.3.4"
   },
   "dependencies": {
+    "@rocky-reviews/core": "workspace:*",
+    "@rocky-reviews/evals": "workspace:*",
+    "@rocky-reviews/renderer": "workspace:*",
     "@rocky-reviews/schema": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",

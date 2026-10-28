@@ -7,9 +7,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./change-map.css": "./src/change-map.css"
+    "./change-map.css": "./src/change-map.css",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@rocky-reviews/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2",
+    "saxes": "6.0.0"
   }
 }

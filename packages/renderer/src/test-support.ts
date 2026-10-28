@@ -1,5 +1,4 @@
 /** Shared by the test files; not part of the package's exports. */
-import { readFileSync } from "node:fs";
 import {
   Finding,
   Graph,
@@ -8,14 +7,13 @@ import {
   type FindingInput,
   type GraphInput,
 } from "@rocky-reviews/schema";
+import pr847Json from "../../schema/fixtures/pr-847.json" with { type: "json" };
 import type { ChangeMapSource } from "./index.js";
 
 /** The pr-847 fixture, through the real parser, so defaults are filled in as in production. */
 export const pr847 = (): AnalysisDocument => {
-  const raw: unknown = JSON.parse(
-    readFileSync(new URL("../../schema/fixtures/pr-847.json", import.meta.url), "utf8"),
-  );
-  const parsed = parseAnalysisDocument(raw);
+  // A deep copy, so a test that edits the document cannot leak into the next one.
+  const parsed = parseAnalysisDocument(structuredClone(pr847Json));
   if (!parsed.ok) throw new Error(parsed.error.message);
   return parsed.value;
 };
@@ -163,3 +161,19 @@ export const longLabels = (): ChangeMapSource =>
       finding({ id: `F${index + 1}`, path: "src/long.ts", severity: index === 0 ? "high" : "low" }),
     ),
   );
+
+/** pr-847 with every label, subtitle and badge replaced by `text`. */
+export const withLabels = (text: string): ChangeMapSource => {
+  const doc = pr847();
+  const graph = doc.graph;
+  if (graph === undefined) throw new Error("pr-847 has a graph");
+  return {
+    ...doc,
+    graph: {
+      ...graph,
+      lanes: graph.lanes.map((lane) => ({ ...lane, label: text, subtitle: text })),
+      nodes: graph.nodes.map((node) => ({ ...node, label: text, subtitle: text, badges: [text] })),
+      edges: graph.edges.map((edge) => ({ ...edge, label: text })),
+    },
+  };
+};

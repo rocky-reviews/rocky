@@ -9,12 +9,21 @@
  * renders to the same bytes on any machine. Colours are never written into the SVG; every
  * element carries a `cm-*` class that `change-map.css` maps to the Slate tokens, so the page's
  * light/dark mode applies without re-rendering, and no inline style is needed (CSP).
+ *
+ * Every label is model output: it is normalised before layout (so what is measured is what is
+ * drawn) and escaped where it is written (svg/markup.ts). The result carries the SVG twice: as a
+ * string for goldens, files and tests, and as `tree`, a frozen, checked `SafeSvg` the web app
+ * renders as React elements without any HTML parsing (ADR 0022).
  */
-import type {
-  Finding,
-  Graph,
-  GraphUnavailable,
-  GraphUnavailableReason,
+import {
+  Delta,
+  EdgeEmphasis,
+  ID_PATTERN,
+  Severity,
+  type Finding,
+  type Graph,
+  type GraphUnavailable,
+  type GraphUnavailableReason,
 } from "@rocky-reviews/schema";
 import {
   BADGE_INSET,
@@ -43,8 +52,28 @@ import { coord, type Box } from "./geometry.js";
 import { pillText, pillWidth, placePills, type Pill } from "./layout/labels.js";
 import { placeGrid, seatGraph, type PlacedLane, type PlacedNode } from "./layout/place.js";
 import { corridorShortfall, planRoutes, routeEdges, type Route } from "./layout/routes.js";
-import { lines, tag, textElement, wrap } from "./svg/markup.js";
+import {
+  cleanText,
+  lines,
+  serialise,
+  svgDocument,
+  tag,
+  textElement,
+  wrap,
+  type SafeSvg,
+  type SvgElement,
+} from "./svg/markup.js";
 import { measure, truncate } from "./text.js";
+
+export {
+  isSafeSvg,
+  MAX_TEXT_LENGTH,
+  MAX_TITLE_LENGTH,
+  type ElementName,
+  type SafeSvg,
+  type SvgElement,
+  type SvgNode,
+} from "./svg/markup.js";
 
 /** What the renderer reads from an analysis document; an `AnalysisDocument` is one. */
 export type ChangeMapSource = {
@@ -63,10 +92,11 @@ export type ChangeMapOptions = {
 };
 
 export type ChangeMap =
-  | { status: "rendered"; svg: string; width: number; height: number }
+  | { status: "rendered"; svg: string; tree: SafeSvg; width: number; height: number }
   | {
       status: "unavailable";
       svg: string;
+      tree: SafeSvg;
       width: number;
       height: number;
       /** From `provenance.graphUnavailable`; absent when the document gives none. */
@@ -88,26 +118,84 @@ export const UNAVAILABLE_REASON_TEXT: Readonly<Record<GraphUnavailableReason, st
 
 const ID_PREFIX = /^[a-z][a-z0-9-]{0,31}$/;
 
+const isOneOf = (values: readonly string[], value: unknown): boolean =>
+  typeof value === "string" && values.includes(value);
+
+/**
+ * The fields that pick classes or end up in data-* hooks. The schema guarantees them; a source
+ * that skipped the parser fails closed here, before `added cm-hero` could pick two classes that
+ * are each allowed, or an id with a space could split a data-findings list.
+ */
+const checkSource = (source: ChangeMapSource): void => {
+  for (const finding of source.findings) {
+    if (!isOneOf(Severity.options, finding.severity))
+      throw new Error("renderChangeMap: a finding has an unknown severity (class)");
+    if (!ID_PATTERN.test(finding.id))
+      throw new Error("renderChangeMap: a finding id is not allowed (data-findings)");
+  }
+  for (const node of source.graph?.nodes ?? [])
+    if (!isOneOf(Delta.options, node.delta))
+      throw new Error("renderChangeMap: a node has an unknown delta (class)");
+  for (const edge of source.graph?.edges ?? []) {
+    if (!isOneOf(Delta.options, edge.delta))
+      throw new Error("renderChangeMap: an edge has an unknown delta (class)");
+    if (!isOneOf(EdgeEmphasis.options, edge.emphasis))
+      throw new Error("renderChangeMap: an edge has an unknown emphasis (class)");
+  }
+};
+
+/** Every text field the map draws, normalised once, before anything is measured. */
+const cleanLabels = (graph: Graph): Graph => ({
+  ...graph,
+  lanes: graph.lanes.map((lane) => ({
+    ...lane,
+    label: cleanText(lane.label),
+    ...(lane.subtitle === undefined ? {} : { subtitle: cleanText(lane.subtitle) }),
+  })),
+  nodes: graph.nodes.map((node) => ({
+    ...node,
+    label: cleanText(node.label),
+    ...(node.subtitle === undefined ? {} : { subtitle: cleanText(node.subtitle) }),
+    badges: node.badges.map(cleanText),
+  })),
+  edges: graph.edges.map((edge) => ({
+    ...edge,
+    ...(edge.label === undefined ? {} : { label: cleanText(edge.label) }),
+  })),
+});
+
 const ARROWS = ["added", "modified", "removed", "unchanged", "hero"] as const;
 
-const svgRoot = (width: number, height: number, className: string, label: string, body: string) =>
-  wrap(
-    "svg",
-    {
-      xmlns: "http://www.w3.org/2000/svg",
-      class: className,
-      viewBox: `0 0 ${coord(width)} ${coord(height)}`,
-      width: coord(width),
-      height: coord(height),
-      role: "img",
-      "aria-label": label,
-    },
-    `\n${body}\n`,
+const svgRoot = (
+  width: number,
+  height: number,
+  className: string,
+  label: string,
+  body: readonly (SvgElement | string)[],
+  prefix: string,
+): { svg: string; tree: SafeSvg } => {
+  const tree = svgDocument(
+    wrap(
+      "svg",
+      {
+        xmlns: "http://www.w3.org/2000/svg",
+        class: className,
+        viewBox: `0 0 ${coord(width)} ${coord(height)}`,
+        width: coord(width),
+        height: coord(height),
+        role: "img",
+        "aria-label": label,
+      },
+      ["\n", ...body, "\n"],
+    ),
+    prefix,
   );
+  return { svg: serialise(tree), tree };
+};
 
 const UNAVAILABLE_WIDTH = 400;
 
-const unavailable = (reason: GraphUnavailableReason | undefined): ChangeMap => {
+const unavailable = (reason: GraphUnavailableReason | undefined, prefix: string): ChangeMap => {
   const height = reason === undefined ? 48 : 68;
   const body = lines([
     tag("rect", {
@@ -120,7 +208,7 @@ const unavailable = (reason: GraphUnavailableReason | undefined): ChangeMap => {
     }),
     textElement("text", { class: "cm-unavailable-title", x: 16, y: 29 }, CHANGE_MAP_UNAVAILABLE),
     reason === undefined
-      ? ""
+      ? undefined
       : textElement(
           "text",
           { class: "cm-unavailable-reason", x: 16, y: 50 },
@@ -129,7 +217,14 @@ const unavailable = (reason: GraphUnavailableReason | undefined): ChangeMap => {
   ]);
   return {
     status: "unavailable",
-    svg: svgRoot(UNAVAILABLE_WIDTH, height, "cm cm-unavailable", CHANGE_MAP_UNAVAILABLE, body),
+    ...svgRoot(
+      UNAVAILABLE_WIDTH,
+      height,
+      "cm cm-unavailable",
+      CHANGE_MAP_UNAVAILABLE,
+      body,
+      prefix,
+    ),
     width: UNAVAILABLE_WIDTH,
     height,
     reason,
@@ -138,9 +233,11 @@ const unavailable = (reason: GraphUnavailableReason | undefined): ChangeMap => {
 
 const laneHeader = (placed: PlacedLane): { text: string; full: string; box: Box } => {
   const { lane, box } = placed;
-  const full = (
-    lane.subtitle === undefined ? lane.label : `${lane.label} · ${lane.subtitle}`
-  ).toUpperCase();
+  // Upper-casing can lengthen the text (ß → SS, ﬃ → FFI) or add combining marks (ǰ → J and a
+  // combining caron), so it is normalised again afterwards and measured as drawn.
+  const full = cleanText(
+    (lane.subtitle === undefined ? lane.label : `${lane.label} · ${lane.subtitle}`).toUpperCase(),
+  );
   const room = LANE_WIDTH - LANE_LABEL_X * 2;
   const text = truncate(full, "sans-bold", LANE_LABEL_SIZE, room, LANE_LABEL_TRACKING);
   const width = measure(text, "sans-bold", LANE_LABEL_SIZE, LANE_LABEL_TRACKING);
@@ -176,13 +273,13 @@ const nodeTooltip = (placed: PlacedNode, badge: NodeFindings | undefined): strin
   return parts.join(" · ");
 };
 
-const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): string => {
+const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): SvgElement => {
   const { node, box } = placed;
   const textX = box.x + CARD_PADDING_X;
   const room = box.width - CARD_PADDING_X * 2 - (badge === undefined ? 0 : BADGE_ROOM);
   const badgeMarkup =
     badge === undefined
-      ? ""
+      ? undefined
       : (() => {
           const b = badgeBox(box, badge.findings.length);
           return wrap(
@@ -191,14 +288,15 @@ const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): string 
               class: `cm-badge cm-${badge.worst}`,
               "data-findings": badge.findings.map((finding) => finding.id).join(" "),
             },
-            tag("rect", {
-              class: "cm-badge-bg",
-              x: coord(b.x),
-              y: coord(b.y),
-              width: coord(b.width),
-              height: coord(b.height),
-              rx: BADGE_SIZE / 2,
-            }) +
+            [
+              tag("rect", {
+                class: "cm-badge-bg",
+                x: coord(b.x),
+                y: coord(b.y),
+                width: coord(b.width),
+                height: coord(b.height),
+                rx: BADGE_SIZE / 2,
+              }),
               textElement(
                 "text",
                 {
@@ -209,6 +307,7 @@ const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): string 
                 },
                 badgeLabel(badge.findings.length),
               ),
+            ],
           );
         })();
 
@@ -231,7 +330,7 @@ const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): string 
         truncate(node.label, "sans-bold", TITLE_SIZE, room),
       ),
       node.subtitle === undefined
-        ? ""
+        ? undefined
         : textElement(
             "text",
             { class: "cm-node-sub", x: coord(textX), y: coord(box.y + SUBTITLE_BASELINE) },
@@ -251,7 +350,7 @@ const edgeClass = (route: Route): string => {
   return classes.join(" ");
 };
 
-const paintEdge = (route: Route, prefix: string): string => {
+const paintEdge = (route: Route, prefix: string): SvgElement => {
   const { edge, from, to } = route.plan;
   const arrow = edge.emphasis === "hero" ? "hero" : edge.delta;
   const tooltip = [`${from.node.label} → ${to.node.label}`, edge.label]
@@ -265,14 +364,12 @@ const paintEdge = (route: Route, prefix: string): string => {
       d: route.d,
       "marker-end": `url(#${prefix}-arrow-${arrow})`,
     },
-    textElement("title", {}, tooltip),
+    [textElement("title", {}, tooltip)],
   );
 };
 
-const paintPill = (id: string, pill: Pill): string =>
-  wrap(
-    "g",
-    { class: "cm-label", "data-edge": id, "aria-hidden": "true" },
+const paintPill = (id: string, pill: Pill): SvgElement =>
+  wrap("g", { class: "cm-label", "data-edge": id, "aria-hidden": "true" }, [
     tag("rect", {
       class: "cm-pill",
       x: coord(pill.box.x),
@@ -280,20 +377,20 @@ const paintPill = (id: string, pill: Pill): string =>
       width: coord(pill.box.width),
       height: coord(pill.box.height),
       rx: PILL_HEIGHT / 2,
-    }) +
-      textElement(
-        "text",
-        {
-          class: "cm-pill-text",
-          x: coord(pill.box.x + pill.box.width / 2),
-          y: coord(pill.box.y + PILL_HEIGHT / 2 + 3.3),
-          "text-anchor": "middle",
-        },
-        pill.text,
-      ),
-  );
+    }),
+    textElement(
+      "text",
+      {
+        class: "cm-pill-text",
+        x: coord(pill.box.x + pill.box.width / 2),
+        y: coord(pill.box.y + PILL_HEIGHT / 2 + 3.3),
+        "text-anchor": "middle",
+      },
+      pill.text,
+    ),
+  ]);
 
-const markers = (prefix: string): string =>
+const markers = (prefix: string): SvgElement =>
   wrap(
     "defs",
     {},
@@ -311,9 +408,9 @@ const markers = (prefix: string): string =>
           markerHeight: tone === "hero" ? 4.5 : 7,
           orient: "auto-start-reverse",
         },
-        tag("path", { class: `cm-arrow cm-arrow-${tone}`, d: "M0,0 L10,5 L0,10 z" }),
+        [tag("path", { class: `cm-arrow cm-arrow-${tone}`, d: "M0,0 L10,5 L0,10 z" })],
       ),
-    ).join(""),
+    ),
   );
 
 /**
@@ -328,11 +425,14 @@ export const renderChangeMap = (
   if (!ID_PREFIX.test(prefix))
     throw new Error("renderChangeMap: idPrefix must be lowercase letters, digits and hyphens");
 
-  const { graph } = source;
-  if (graph === undefined) return unavailable(source.provenance.graphUnavailable?.reason);
+  checkSource(source);
+
+  if (source.graph === undefined)
+    return unavailable(source.provenance.graphUnavailable?.reason, prefix);
+  const graph = cleanLabels(source.graph);
 
   const grid = seatGraph(graph);
-  if (grid.seats.length === 0) return unavailable(undefined);
+  if (grid.seats.length === 0) return unavailable(undefined, prefix);
 
   const plans = planRoutes(grid, graph.edges);
   const widen = new Map<number, number>();
@@ -399,7 +499,7 @@ export const renderChangeMap = (
             "g",
             { class: "cm-lane" },
             lines([
-              header.text === header.full ? "" : textElement("title", {}, header.full),
+              header.text === header.full ? undefined : textElement("title", {}, header.full),
               tag("rect", {
                 class: "cm-lane-bg",
                 x: coord(placed.box.x),
@@ -442,7 +542,7 @@ export const renderChangeMap = (
 
   return {
     status: "rendered",
-    svg: svgRoot(width, height, "cm", "Change map", body),
+    ...svgRoot(width, height, "cm", "Change map", body, prefix),
     width,
     height,
   };

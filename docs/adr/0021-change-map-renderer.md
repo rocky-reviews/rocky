@@ -36,7 +36,8 @@ to allow inline styles. Labels come from a model, so the output also has to be i
    `detail` is never drawn.
 5. **One markup seam.** Every element and attribute goes through `src/svg/markup.ts`, which
    escapes every value and refuses any element or attribute outside an allowlist (no script,
-   foreignObject, `on*`, `href`, `style`). P5-2 hardens and tests this seam.
+   foreignObject, `on*`, `href`, `style`). P5-2 hardens and tests this seam
+   ([ADR 0022](0022-change-map-sanitisation-and-page-sink.md)).
 6. **Ids are namespaced.** Marker ids take a caller-chosen prefix so two maps can share a page.
 
 ## Consequences
