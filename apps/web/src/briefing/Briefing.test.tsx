@@ -25,9 +25,9 @@ const render = (data: ShellData): string =>
 const text = (html: string): string =>
   html
     .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/&#x27;/g, "'")
     .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&") // last, so "&amp;quot;" stays "&quot;"
     .replace(/\s+/g, " ")
     .trim();
 

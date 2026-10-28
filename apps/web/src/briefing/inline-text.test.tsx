@@ -13,7 +13,7 @@ describe("InlineText", () => {
 
   it("never turns model output into markup", () => {
     const html = render("<img src=x onerror=alert(1)> **<b>x</b>** `<script>` [a](javascript:1)");
-    expect(html).not.toMatch(/<img|<script|<b>|<a\b|href=/);
+    expect(html).not.toMatch(/<img|<script|<b>|<a\b|href=/i);
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).toContain("<strong>&lt;b&gt;x&lt;/b&gt;</strong>");
     expect(html).toContain("<code>&lt;script&gt;</code>");
