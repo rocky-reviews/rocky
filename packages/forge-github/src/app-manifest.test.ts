@@ -41,18 +41,20 @@ describe("GitHub App manifest (P3-1)", () => {
         pull_requests: "write",
         checks: "read",
         metadata: "read",
+        members: "read",
       },
       request_oauth_on_install: false,
       setup_on_update: false,
     });
   });
 
-  it("requests exactly the four permissions of the plan and one event", () => {
+  it("requests exactly the four permissions of the plan, org Members: read (P7-1), and one event", () => {
     expect(GITHUB_APP_PERMISSIONS).toStrictEqual({
       contents: "read",
       pull_requests: "write",
       checks: "read",
       metadata: "read",
+      members: "read",
     });
     expect(GITHUB_APP_EVENTS).toStrictEqual(["pull_request"]);
     expect(Object.isFrozen(GITHUB_APP_PERMISSIONS)).toBe(true);

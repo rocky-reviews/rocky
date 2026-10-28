@@ -29,15 +29,26 @@ export const sha256 = (value: string): Buffer =>
 export const cookieName = (base: string, secure: boolean): string =>
   secure ? `__Host-${base}` : base;
 
-/** The value of exactly `name` in a Cookie header; a repeated name is ambiguous, so `undefined`. */
+/** RFC 6265 §4.1.1 cookie-name: an RFC 7230 token. */
+const COOKIE_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+/** Only the optional whitespace RFC 6265 allows around names and values (not `String#trim`'s). */
+const trimOws = (value: string): string => value.replace(/^[ \t]+|[ \t]+$/g, "");
+
+/**
+ * The value of exactly `name` in a Cookie header; a repeated name is ambiguous, so `undefined`.
+ * A pair whose name is not a token is ignored: `\u00a0__Host-x` is not `__Host-x` (review
+ * round 1), so a cookie without the prefix's guarantees cannot pose as one.
+ */
 export const readCookie = (header: unknown, name: string): string | undefined => {
   if (typeof header !== "string" || header.length > 8192) return undefined;
   let found: string | undefined;
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
-    if (eq === -1 || part.slice(0, eq).trim() !== name) continue;
+    if (eq === -1) continue;
+    const key = trimOws(part.slice(0, eq));
+    if (!COOKIE_NAME.test(key) || key !== name) continue;
     if (found !== undefined) return undefined;
-    found = part.slice(eq + 1).trim();
+    found = trimOws(part.slice(eq + 1));
   }
   return found;
 };

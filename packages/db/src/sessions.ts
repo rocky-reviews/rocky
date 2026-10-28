@@ -1,5 +1,5 @@
 import type { ForgeKind, OrgId } from "@rocky-reviews/core";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type pg from "pg";
 import type { TenantTx } from "./client.js";
 import { members, orgs } from "./schema.js";
@@ -35,6 +35,8 @@ export const SESSION_IDLE_MAX_SECONDS = 86_400;
 export const SESSION_TOUCH_INTERVAL_MS = 60_000;
 /** Dead sessions and attempts are kept this long after they ended, then purged. */
 export const SESSION_PURGE_AFTER_MS = 24 * 60 * 60 * 1000;
+/** Expired login attempts deleted per new attempt (review round 1). */
+export const LOGIN_ATTEMPT_PRUNE_BATCH = 100;
 /** Most orgs one login can bind (and the database function's own bound). */
 export const MAX_LOGIN_ORGS = 1000;
 export const RETURN_TO_MAX_BYTES = 2048;
@@ -112,8 +114,12 @@ export interface SessionStore {
   createSession(session: NewSession): Promise<{ sessionId: string }>;
   /** The live session with this token hash, or `null` (unknown, revoked, idle or expired). */
   findSession(tokenSha256: Buffer, now: Date): Promise<LiveSession | null>;
-  /** Moves `last_seen_at` to `now` (at most once per SESSION_TOUCH_INTERVAL_MS). */
-  touchSession(sessionId: string, now: Date): Promise<void>;
+  /**
+   * Moves `last_seen_at` to `now` (at most once per SESSION_TOUCH_INTERVAL_MS) while the session
+   * is live, idle window included, and returns the `last_seen_at` it now has (`null` when the
+   * session is no longer live).
+   */
+  touchSession(sessionId: string, now: Date): Promise<Date | null>;
   /** Sets the active org; false unless the session is live and linked to that org. */
   setActiveOrg(sessionId: string, orgId: OrgId | null): Promise<boolean>;
   /** Revokes a live session; `null` when it was not live (already revoked, or unknown). */
@@ -214,6 +220,16 @@ export const createSessionStore = (pool: pg.Pool): SessionStore => {
     ) {
       fail("returnTo must be a relative path");
     }
+    // Review round 1: expired attempts go first, a bounded batch through the expiry index, so the
+    // table cannot grow without bound before rate limits exist (P7-3).
+    await guarded(() =>
+      pool.query(
+        `delete from app.login_attempts where state_sha256 in (
+           select state_sha256 from app.login_attempts where expires_at <= $1
+            order by expires_at limit $2)`,
+        [now, LOGIN_ATTEMPT_PRUNE_BATCH],
+      ),
+    );
     await guarded(() =>
       pool.query(
         `insert into app.login_attempts (state_sha256, return_to, created_at, expires_at)
@@ -386,14 +402,26 @@ export const createSessionStore = (pool: pg.Pool): SessionStore => {
   const touchSession: SessionStore["touchSession"] = async (sessionId, now) => {
     const id = assertUuid(sessionId, "session id");
     const at = assertDate(now, "now");
-    await guarded(() =>
-      pool.query(
-        `update app.sessions set last_seen_at = $2
-          where id = $1 and revoked_at is null and expires_at > $2
-            and last_seen_at <= $2 - make_interval(secs => $3::double precision / 1000)`,
+    // Live means the idle window too: an idle-expired session is never touched back to life
+    // (the sessions_guard_touch trigger refuses that for any writer as well).
+    const { rows } = await guarded(() =>
+      pool.query<{ last_seen_at: Date; touched: boolean }>(
+        `with touched as (
+           update app.sessions set last_seen_at = $2
+            where id = $1 and revoked_at is null and expires_at > $2
+              and last_seen_at + make_interval(secs => idle_timeout_seconds) > $2
+              and last_seen_at <= $2 - make_interval(secs => $3::double precision / 1000)
+            returning last_seen_at)
+         select last_seen_at, true as touched from touched
+         union all
+         select s.last_seen_at, false from app.sessions s
+          where s.id = $1 and not exists (select 1 from touched)
+            and s.revoked_at is null and s.expires_at > $2 and s.last_seen_at <= $2
+            and s.last_seen_at + make_interval(secs => s.idle_timeout_seconds) > $2`,
         [id, at, SESSION_TOUCH_INTERVAL_MS],
       ),
     );
+    return rows[0]?.last_seen_at ?? null;
   };
 
   const setActiveOrg: SessionStore["setActiveOrg"] = async (sessionId, orgId) => {
@@ -483,14 +511,16 @@ export const createSessionStore = (pool: pg.Pool): SessionStore => {
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 /**
- * The member row of this org for a forge user verified at login, created on first login with
- * the default role (`member`; roles are P7-2's). An existing row keeps its role; only the
- * display login is refreshed. RLS keeps this inside the transaction's org.
+ * The member row of this org for a forge user whose membership GitHub just confirmed, created
+ * on first login with the default role (`member`; roles are P7-2's). An existing row keeps its
+ * role; only the display login is refreshed. A member removed in Rocky stays removed: the
+ * answer is `null` and nothing changes (re-adding is an explicit admin action, P7-2). RLS keeps
+ * this inside the transaction's org.
  */
 export const upsertLoginMember = async (
   tx: TenantTx,
   input: { readonly forgeUserId: number; readonly login: string },
-): Promise<{ memberId: string }> => {
+): Promise<{ memberId: string } | null> => {
   const forgeUserId = assertForgeId(input.forgeUserId, "forge user id");
   if (typeof input.login !== "string" || !LOGIN.test(input.login)) fail("invalid login");
   const [row] = await guarded(() =>
@@ -500,11 +530,36 @@ export const upsertLoginMember = async (
       .onConflictDoUpdate({
         target: [members.orgId, members.forgeUserId],
         set: { login: input.login, updatedAt: new Date() },
+        setWhere: isNull(members.removedAt),
       })
       .returning({ id: members.id }),
   );
-  if (row === undefined) return fail("member upsert returned no row");
-  return { memberId: row.id };
+  // No row: the conflict hit a removed member (the WHERE kept it untouched).
+  return row === undefined ? null : { memberId: row.id };
+};
+
+/**
+ * Removes a member in Rocky (review round 1): durable (`removed_at`), with the stored token
+ * deleted. Their sessions lose this org at once (`loadSessionMember` is `null`), and the next
+ * sign-in does not bring them back. Idempotent; `false` when there is no such member here.
+ * Call the access check's `invalidateMember` after the commit (ADR 0011 §6).
+ */
+export const markMemberRemoved = async (tx: TenantTx, memberId: string): Promise<boolean> => {
+  const id = assertUuid(memberId, "member id");
+  const rows = await guarded(() =>
+    tx.db
+      .update(members)
+      .set({
+        removedAt: sql`coalesce(${members.removedAt}, now())`,
+        forgeTokenCiphertext: null,
+        forgeTokenKeyVersion: null,
+        forgeAccessExpiresAt: null,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(members.orgId, tx.orgId), eq(members.id, id)))
+      .returning({ id: members.id }),
+  );
+  return rows.length === 1;
 };
 
 export interface SessionMember {
@@ -542,6 +597,7 @@ export const loadSessionMember = async (
           eq(members.orgId, tx.orgId),
           eq(members.id, memberId),
           eq(members.forgeUserId, forgeUserId),
+          isNull(members.removedAt),
         ),
       ),
   );

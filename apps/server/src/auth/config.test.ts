@@ -9,6 +9,7 @@ const CLIENT = {
 };
 /** Test-only, deliberately low-entropy. */
 const SECRET = { ROCKY_SESSION_SECRET: "x".repeat(32) };
+const APP = { GITHUB_APP_ID: "123456" };
 const PROD = { NODE_ENV: "production", ROCKY_PUBLIC_URL: "https://rocky.example.com" };
 
 describe("authFromEnv", () => {
@@ -19,12 +20,22 @@ describe("authFromEnv", () => {
     expect(setup.config.cookieSecure).toBe(true);
     expect(setup.config.publicUrl.origin).toBe("https://rocky.example.com");
     expect(setup.config.appId).toBe(123456);
+    expect(setup.config.production).toBe(true);
+    expect(() => authFromEnv({ ...PROD, ...CLIENT, ...SECRET })).toThrow(/GITHUB_APP_ID/);
     for (const env of [
       { ...PROD, ...SECRET },
       { ...PROD, ...CLIENT },
-      { ...PROD, ...CLIENT, ...SECRET, ROCKY_PUBLIC_URL: "http://127.0.0.1:4310" },
-      { NODE_ENV: "production", ...CLIENT, ...SECRET },
-      { FLY_APP_NAME: "rocky", ...CLIENT, ...SECRET, ROCKY_PUBLIC_URL: "http://localhost:4310" },
+      // GITHUB_APP_ID is required in production (review round 1).
+      { ...PROD, ...CLIENT, ...SECRET },
+      { ...PROD, ...CLIENT, ...SECRET, ...APP, ROCKY_PUBLIC_URL: "http://127.0.0.1:4310" },
+      { NODE_ENV: "production", ...CLIENT, ...SECRET, ...APP },
+      {
+        FLY_APP_NAME: "rocky",
+        ...CLIENT,
+        ...SECRET,
+        ...APP,
+        ROCKY_PUBLIC_URL: "http://localhost:4310",
+      },
     ]) {
       expect(() => authFromEnv(env), JSON.stringify(Object.keys(env))).toThrow(ConfigError);
     }

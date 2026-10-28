@@ -195,6 +195,7 @@ export const startServer = async (
       }),
       db: createDb({ pool }),
       keys,
+      requireTokenExpiry: config.production,
     };
   } else {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");

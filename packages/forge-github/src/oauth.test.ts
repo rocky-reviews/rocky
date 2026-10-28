@@ -325,8 +325,17 @@ describe("readUser and listInstallations", () => {
     expect(await login.readUser(accessToken)).toEqual(ALICE);
     // 4343 is not granted to this user; 4444 is suspended.
     expect(await login.listInstallations(accessToken)).toEqual([
-      { installationId: 4242, accountId: 9001 },
+      { installationId: 4242, accountId: 9001, accountLogin: "acme", accountType: "Organization" },
     ]);
+    // A User account's installation is reported as such (only its owner is a member).
+    api.install(4545, { id: 9101, login: "octo-dev", type: "User" });
+    api.grantInstallation(ALICE.id, 4545);
+    expect(await login.listInstallations(accessToken)).toContainEqual({
+      installationId: 4545,
+      accountId: 9101,
+      accountLogin: "octo-dev",
+      accountType: "User",
+    });
   });
 
   it("leaves out installations of another app id, and pages through many", async () => {
@@ -386,6 +395,28 @@ describe("readUser and listInstallations", () => {
     await failsWith(shaped.listInstallations("x".repeat(40)), "invalid_response");
   });
 
+  it("leaves out installations on accounts that are neither an organization nor a user", async () => {
+    const fixture = githubFixture("list-user-installations")["installations"] as {
+      account: object;
+    }[];
+    const odd = createGitHubLogin({
+      endpoints,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      fetch: (async () =>
+        new Response(
+          JSON.stringify({
+            total_count: 1,
+            installations: [
+              { ...fixture[0], account: { ...fixture[0]?.account, type: "Enterprise" } },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as unknown as typeof fetch,
+    });
+    expect(await odd.listInstallations("x".repeat(40))).toEqual([]);
+  });
+
   it("refuses an endless installation list", async () => {
     const full = {
       total_count: 5000,
@@ -405,5 +436,76 @@ describe("readUser and listInstallations", () => {
         })) as unknown as typeof fetch,
     });
     await failsWith(endless.listInstallations("x".repeat(40)), "too_many_installations");
+  });
+});
+
+describe("isActiveOrgMember (review round 1: only real members count)", () => {
+  const ACME = { id: 9001, login: "acme" };
+  const signedIn = async () => {
+    const env = setup();
+    env.api.install(4242, { ...ACME, type: "Organization" });
+    env.api.grantInstallation(ALICE.id, 4242);
+    const { code, verifier } = env.authorize();
+    const { accessToken } = await env.login.exchangeCode({
+      code,
+      codeVerifier: verifier,
+      redirectUri: REDIRECT,
+    });
+    return { ...env, accessToken };
+  };
+
+  it("true only for an active membership of that organization, for that user", async () => {
+    const { api, login, accessToken } = await signedIn();
+    // An outside collaborator: the installation is visible, but there is no membership (404).
+    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(false);
+    api.setOrgMembership(ACME.id, ALICE.id, "pending");
+    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(false);
+    api.setOrgMembership(ACME.id, ALICE.id, "active");
+    expect(await login.isActiveOrgMember(accessToken, ACME, ALICE.id)).toBe(true);
+    // The answer must be about the asked org and user (ids, not logins).
+    expect(await login.isActiveOrgMember(accessToken, { ...ACME, id: 9002 }, ALICE.id)).toBe(false);
+    expect(await login.isActiveOrgMember(accessToken, ACME, 9999)).toBe(false);
+  });
+
+  it("fails closed: 401, 403, other statuses, a non-JSON 404 and bad shapes are errors", async () => {
+    const { api, login, accessToken } = await signedIn();
+    api.setOrgMembership(ACME.id, ALICE.id, "active");
+    api.failRoute("org_membership", 401);
+    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "token_rejected", 401);
+    api.failRoute("org_membership", 403);
+    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "forbidden", 403);
+    api.failRoute("org_membership", 500);
+    await failsWith(login.isActiveOrgMember(accessToken, ACME, ALICE.id), "http_status", 500);
+    await failsWith(login.isActiveOrgMember("bad token", ACME, ALICE.id), "token_rejected");
+    await expect(
+      login.isActiveOrgMember(accessToken, { id: 9001, login: "../evil" }, ALICE.id),
+    ).rejects.toThrow("invalid organization login");
+    await expect(
+      login.isActiveOrgMember(accessToken, { id: 0, login: "acme" }, ALICE.id),
+    ).rejects.toThrow("invalid id");
+    const answer = (status: number, body: string, type = "application/json") =>
+      createGitHubLogin({
+        endpoints,
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+        fetch: (async () =>
+          new Response(body, {
+            status,
+            headers: { "content-type": type },
+          })) as unknown as typeof fetch,
+      });
+    await failsWith(
+      answer(404, "<html>", "text/html").isActiveOrgMember("x".repeat(40), ACME, ALICE.id),
+      "invalid_response",
+    );
+    const fixture = githubFixture("get-user-org-membership");
+    await failsWith(
+      answer(200, JSON.stringify({ ...fixture, state: 1 })).isActiveOrgMember(
+        "x".repeat(40),
+        ACME,
+        ALICE.id,
+      ),
+      "invalid_response",
+    );
   });
 });

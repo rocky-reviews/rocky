@@ -8,6 +8,8 @@ import { scheduleOrgDeletion } from "./installations.js";
 import { clearForgeToken, loadForgeToken, storeForgeToken } from "./secrets.js";
 import {
   loadSessionMember,
+  LOGIN_ATTEMPT_PRUNE_BATCH,
+  markMemberRemoved,
   SESSION_PURGE_AFTER_MS,
   SessionStoreError,
   upsertLoginMember,
@@ -38,6 +40,10 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const sha = (value: string) => createHash("sha256").update(value).digest();
 const token = () => randomBytes(32).toString("base64url");
+const must = <T>(value: T | null): T => {
+  if (value === null) throw new Error("expected a value");
+  return value;
+};
 
 let pgs: TestPostgres;
 let db: Db;
@@ -149,6 +155,37 @@ describe("login attempts (state)", () => {
     expect(await store.consumeLoginAttempt(sha(early), at(-1))).toBeNull();
   });
 
+  it("creating an attempt prunes a bounded batch of expired attempts, never a live one", async () => {
+    const expired = token();
+    const live = token();
+    await store.createLoginAttempt({
+      stateSha256: sha(expired),
+      returnTo: "/",
+      now: T0,
+      ttlMs: MINUTE,
+    });
+    await store.createLoginAttempt({
+      stateSha256: sha(live),
+      returnTo: "/",
+      now: at(MINUTE),
+      ttlMs: 10 * MINUTE,
+    });
+    // Creating another at T0 + 2 minutes: the first expired at T0 + 1 minute and is gone.
+    await store.createLoginAttempt({
+      stateSha256: sha(token()),
+      returnTo: "/",
+      now: at(2 * MINUTE),
+      ttlMs: MINUTE,
+    });
+    const { rows } = await pgs.migrator.query<{ n: string }>(
+      "select count(*) as n from app.login_attempts where state_sha256 = $1",
+      [sha(expired)],
+    );
+    expect(rows[0]?.n).toBe("0");
+    expect(await store.consumeLoginAttempt(sha(live), at(3 * MINUTE))).toEqual({ returnTo: "/" });
+    expect(LOGIN_ATTEMPT_PRUNE_BATCH).toBeGreaterThan(0);
+  });
+
   it("refuses bad input before SQL, and the database refuses what the store would never write", async () => {
     const base = { stateSha256: sha(token()), now: T0, ttlMs: MINUTE };
     for (const returnTo of [
@@ -235,8 +272,8 @@ describe("sessions", () => {
 
   it("absolute expiry: activity never extends a session past expires_at", async () => {
     const { raw, sessionId } = await newSession({ idle: 3600, lifetimeMs: 2 * HOUR });
-    await store.touchSession(sessionId, at(HOUR));
-    await store.touchSession(sessionId, at(2 * HOUR - MINUTE));
+    await store.touchSession(sessionId, at(HOUR - MINUTE));
+    await store.touchSession(sessionId, at(2 * HOUR - 2 * MINUTE));
     expect(await store.findSession(sha(raw), at(2 * HOUR - 1))).not.toBeNull();
     expect(await store.findSession(sha(raw), at(2 * HOUR))).toBeNull();
     // A clock before the session's creation does not find it either.
@@ -282,6 +319,58 @@ describe("sessions", () => {
     expect(deleted.rowCount).toBe(0);
   });
 
+  it("touch reports the real last_seen_at and never revives an idle-expired session", async () => {
+    const { raw, sessionId } = await newSession({ idle: 3600 });
+    expect((await store.touchSession(sessionId, at(10 * MINUTE)))?.toISOString()).toBe(
+      at(10 * MINUTE).toISOString(),
+    );
+    // Throttled: the stored value, not the clock, is reported.
+    expect((await store.touchSession(sessionId, at(10 * MINUTE + 1000)))?.toISOString()).toBe(
+      at(10 * MINUTE).toISOString(),
+    );
+    const live = await store.findSession(sha(raw), at(11 * MINUTE));
+    expect(live?.idleExpiresAt.toISOString()).toBe(at(70 * MINUTE).toISOString());
+    // Past the idle window: the touch refuses, and the session stays dead.
+    expect(await store.touchSession(sessionId, at(70 * MINUTE))).toBeNull();
+    expect(await store.findSession(sha(raw), at(70 * MINUTE))).toBeNull();
+    expect(await store.findSession(sha(raw), at(71 * MINUTE))).toBeNull();
+    // A revoked session is not touched either.
+    const revoked = await newSession();
+    await store.revokeSession(revoked.sessionId, "logout", at(MINUTE));
+    expect(await store.touchSession(revoked.sessionId, at(5 * MINUTE))).toBeNull();
+  });
+
+  it("the database refuses moving last_seen_at backwards, past the idle window or past expires_at", async () => {
+    const { sessionId } = await newSession({ idle: 3600, lifetimeMs: 30 * MINUTE });
+    for (const sql of [
+      // Reviving an idle-expired row: a jump of the idle timeout or more.
+      "update app.sessions set last_seen_at = last_seen_at + interval '1 hour' where id = $1",
+      "update app.sessions set last_seen_at = last_seen_at + interval '2 hours' where id = $1",
+      // Backwards.
+      "update app.sessions set last_seen_at = last_seen_at - interval '1 second' where id = $1",
+      // Within the idle window but past the absolute expiry (CHECK last_seen_at <= expires_at).
+      "update app.sessions set last_seen_at = expires_at + interval '1 minute' where id = $1",
+    ]) {
+      expect(await pgCode(appPool.query(sql, [sessionId])), sql).toBe("23514");
+    }
+    const { userId } = await store.upsertUser("github", 1001, T0);
+    expect(
+      await pgCode(
+        appPool.query(
+          `insert into app.sessions (token_sha256, user_id, created_at, last_seen_at, idle_timeout_seconds, expires_at)
+           values ($1, $2, now(), now() + interval '2 hours', 3600, now() + interval '1 hour')`,
+          [sha(token()), userId],
+        ),
+      ),
+    ).toBe("23514");
+    // A forward move within the window is what the touch does, and is allowed.
+    const ok = await appPool.query(
+      "update app.sessions set last_seen_at = last_seen_at + interval '5 minutes' where id = $1",
+      [sessionId],
+    );
+    expect(ok.rowCount).toBe(1);
+  });
+
   it("the active org must be one of the session's orgs; switching is refused otherwise", async () => {
     await expect(
       newSession({ orgs: [{ orgId: A.orgId, memberId: A.memberId }], active: B.orgId }),
@@ -313,8 +402,10 @@ describe("sessions", () => {
   });
 
   it("removing the member in Rocky removes the org from every session at once (cascade)", async () => {
-    const extra = await db.withOrg(C.orgId, (tx) =>
-      upsertLoginMember(tx, { forgeUserId: 5005, login: "erin" }),
+    const extra = must(
+      await db.withOrg(C.orgId, (tx) =>
+        upsertLoginMember(tx, { forgeUserId: 5005, login: "erin" }),
+      ),
     );
     const { raw } = await newSession({
       forgeUserId: 5005,
@@ -419,15 +510,21 @@ describe("auth.login_orgs (the one cross-tenant read)", () => {
 
 describe("members at login (inside withOrg)", () => {
   it("creates a member with the default role and keeps an existing role; display login refreshed", async () => {
-    const created = await db.withOrg(B.orgId, (tx) =>
-      upsertLoginMember(tx, { forgeUserId: 7007, login: "frank" }),
+    const created = must(
+      await db.withOrg(B.orgId, (tx) =>
+        upsertLoginMember(tx, { forgeUserId: 7007, login: "frank" }),
+      ),
     );
-    const again = await db.withOrg(B.orgId, (tx) =>
-      upsertLoginMember(tx, { forgeUserId: 7007, login: "frank-renamed" }),
+    const again = must(
+      await db.withOrg(B.orgId, (tx) =>
+        upsertLoginMember(tx, { forgeUserId: 7007, login: "frank-renamed" }),
+      ),
     );
     expect(again.memberId).toBe(created.memberId);
-    const seeded = await db.withOrg(A.orgId, (tx) =>
-      upsertLoginMember(tx, { forgeUserId: 1001, login: "alice" }),
+    const seeded = must(
+      await db.withOrg(A.orgId, (tx) =>
+        upsertLoginMember(tx, { forgeUserId: 1001, login: "alice" }),
+      ),
     );
     expect(seeded.memberId).toBe(A.memberId);
     const member = await db.withOrg(B.orgId, (tx) =>
@@ -441,6 +538,33 @@ describe("members at login (inside withOrg)", () => {
     await expect(
       db.withOrg(B.orgId, (tx) => upsertLoginMember(tx, { forgeUserId: 7007, login: "bad login" })),
     ).rejects.toThrow(SessionStoreError);
+  });
+
+  it("a member removed in Rocky stays removed: sign-in does not revive it, and its token is gone", async () => {
+    const member = must(
+      await db.withOrg(C.orgId, (tx) => upsertLoginMember(tx, { forgeUserId: 8008, login: "gus" })),
+    );
+    const ciphertext = `rk1:${Buffer.concat([Buffer.from([0, 0, 0, 1]), randomBytes(40)]).toString("base64url")}`;
+    await db.withOrg(C.orgId, (tx) => storeForgeToken(tx, member.memberId, ciphertext, 1));
+    expect(await db.withOrg(C.orgId, (tx) => markMemberRemoved(tx, member.memberId))).toBe(true);
+    // Idempotent; and not visible from another org.
+    expect(await db.withOrg(C.orgId, (tx) => markMemberRemoved(tx, member.memberId))).toBe(true);
+    expect(await db.withOrg(A.orgId, (tx) => markMemberRemoved(tx, member.memberId))).toBe(false);
+    expect(await db.withOrg(C.orgId, (tx) => loadForgeToken(tx, member.memberId))).toBeNull();
+    expect(
+      await db.withOrg(C.orgId, (tx) => upsertLoginMember(tx, { forgeUserId: 8008, login: "gus" })),
+    ).toBeNull();
+    expect(
+      await db.withOrg(C.orgId, (tx) =>
+        loadSessionMember(tx, { memberId: member.memberId, forgeUserId: 8008 }),
+      ),
+    ).toBeNull();
+    // A removed member cannot hold a token, whoever writes it.
+    expect(
+      await pgCode(
+        db.withOrg(C.orgId, (tx) => storeForgeToken(tx, member.memberId, ciphertext, 1)),
+      ),
+    ).toBe("23514");
   });
 
   it("a member is found only in its own org and only with its own forge user id", async () => {

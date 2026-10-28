@@ -84,7 +84,11 @@ const ErrorJson = z.object({ error: z.string().max(64) });
 const Installation = z.object({
   id: ForgeId,
   app_id: ForgeId.optional(),
-  account: z.object({ id: ForgeId }).nullable(),
+  // `type` and `login` are read for the membership rule (review round 1); an enterprise account
+  // has a `slug` and no login, so both are optional here and checked below.
+  account: z
+    .object({ id: ForgeId, type: z.string().max(32).optional(), login: Login.optional() })
+    .nullable(),
   suspended_at: z.string().nullable().optional(),
 });
 const InstallationsJson = z.object({
@@ -107,7 +111,18 @@ export interface GitHubUserToken {
 export interface GitHubUserInstallation {
   readonly installationId: number;
   readonly accountId: number;
+  /** GitHub's account login, for the membership URL (display data otherwise). */
+  readonly accountLogin: string;
+  readonly accountType: "Organization" | "User";
 }
+
+/** `GET /user/memberships/orgs/{org}`: the user's own membership of an organization. */
+const MembershipJson = z.object({
+  state: z.string().max(32),
+  organization: z.object({ id: ForgeId }),
+  user: z.object({ id: ForgeId }),
+});
+const NotFound = z.object({ message: z.literal("Not Found") });
 
 export interface GitHubLogin {
   /** `https://github.com/login/oauth/authorize?…` for this state and challenge. */
@@ -119,8 +134,22 @@ export interface GitHubLogin {
     redirectUri: URL;
   }): Promise<GitHubUserToken>;
   readUser(accessToken: string): Promise<GitHubIdentity>;
-  /** Installations of this app the user can access; suspended ones and other apps' are left out. */
+  /**
+   * Installations of this app the user can access, on an Organization or User account;
+   * suspended ones, other apps' and enterprise accounts are left out.
+   */
   listInstallations(accessToken: string): Promise<GitHubUserInstallation[]>;
+  /**
+   * Whether the token's user is an **active** member of the organization (review round 1):
+   * `GET /user/memberships/orgs/{org}` as the user (needs the app's organization permission
+   * Members: read). `true` only for `state: "active"` with the same organization and user ids;
+   * GitHub's JSON 404 is `false`; any other answer throws `GitHubLoginError`.
+   */
+  isActiveOrgMember(
+    accessToken: string,
+    org: { readonly id: number; readonly login: string },
+    userId: number,
+  ): Promise<boolean>;
 }
 
 export interface GitHubLoginOptions {
@@ -172,6 +201,7 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
   const call = async (
     url: URL,
     init: { method: string; headers: Record<string, string>; body?: string },
+    read: { readonly readNotFound?: boolean } = {},
   ): Promise<{ status: number; body: unknown }> => {
     const signal = AbortSignal.timeout(timeoutMs);
     let response: Response;
@@ -181,7 +211,9 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
       if (signal.aborted || isAbort(error)) throw new GitHubLoginError("timeout");
       throw new GitHubLoginError("network");
     }
-    if (response.status !== 200) {
+    const readable =
+      response.status === 200 || (read.readNotFound === true && response.status === 404);
+    if (!readable) {
       await response.body?.cancel().catch(() => undefined);
       return { status: response.status, body: undefined };
     }
@@ -192,7 +224,10 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
       if (signal.aborted || isAbort(error)) throw new GitHubLoginError("timeout");
       throw new GitHubLoginError("network");
     }
-    return { status: 200, body: decodeJson(response.headers.get("content-type") ?? "", bytes) };
+    return {
+      status: response.status,
+      body: decodeJson(response.headers.get("content-type") ?? "", bytes),
+    };
   };
 
   const asUser = async (path: string, accessToken: string): Promise<unknown> => {
@@ -264,6 +299,51 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
       };
     },
 
+    isActiveOrgMember: async (accessToken, org, userId) => {
+      if (
+        !Number.isSafeInteger(org.id) ||
+        org.id < 1 ||
+        !Number.isSafeInteger(userId) ||
+        userId < 1
+      ) {
+        throw new Error("isActiveOrgMember: invalid id");
+      }
+      if (typeof org.login !== "string" || !Login.safeParse(org.login).success) {
+        throw new Error("isActiveOrgMember: invalid organization login");
+      }
+      if (typeof accessToken !== "string" || !TOKEN.test(accessToken)) {
+        throw new GitHubLoginError("token_rejected");
+      }
+      const answer = await call(
+        new URL(`user/memberships/orgs/${encodeURIComponent(org.login)}`, api),
+        {
+          method: "GET",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${accessToken}`,
+            "x-github-api-version": "2022-11-28",
+            "user-agent": "rocky-reviews",
+          },
+        },
+        { readNotFound: true },
+      );
+      if (answer.status === 404) {
+        if (!NotFound.safeParse(answer.body).success)
+          throw new GitHubLoginError("invalid_response");
+        return false;
+      }
+      if (answer.status === 401) throw new GitHubLoginError("token_rejected", 401);
+      if (answer.status === 403) throw new GitHubLoginError("forbidden", 403);
+      if (answer.status !== 200) throw new GitHubLoginError("http_status", answer.status);
+      const parsed = MembershipJson.safeParse(answer.body);
+      if (!parsed.success) throw new GitHubLoginError("invalid_response");
+      return (
+        parsed.data.state === "active" &&
+        parsed.data.organization.id === org.id &&
+        parsed.data.user.id === userId
+      );
+    },
+
     readUser: async (accessToken) => {
       const parsed = UserJson.safeParse(await asUser("user", accessToken));
       if (!parsed.success) throw new GitHubLoginError("invalid_response");
@@ -283,7 +363,14 @@ export const createGitHubLogin = (options: GitHubLoginOptions): GitHubLogin => {
           const { id, app_id: appId, account, suspended_at: suspendedAt } = item.data;
           if (options.appId !== undefined && appId !== options.appId) continue;
           if (account === null || (suspendedAt !== undefined && suspendedAt !== null)) continue;
-          found.set(id, { installationId: id, accountId: account.id });
+          const type = account.type;
+          if ((type !== "Organization" && type !== "User") || account.login === undefined) continue;
+          found.set(id, {
+            installationId: id,
+            accountId: account.id,
+            accountLogin: account.login,
+            accountType: type,
+          });
         }
         if (parsed.data.installations.length < 100) break;
       }

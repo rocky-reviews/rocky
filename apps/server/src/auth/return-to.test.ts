@@ -26,6 +26,23 @@ describe("safeReturnTo", () => {
     expect(safeReturnTo("/a/./b/../c")).toBe("/a/c");
     expect(safeReturnTo("/@evil.com")).toBe("/@evil.com");
     expect(safeReturnTo("/authx")).toBe("/authx");
+    expect(safeReturnTo("/inbox?next=/auth/github/login")).toBe("/inbox?next=/auth/github/login");
+  });
+
+  it("refuses a loop into the auth routes however it is spelled", () => {
+    for (const loop of [
+      "/auth",
+      "/auth/github/login",
+      "/auth?x=1",
+      "/auth#x",
+      "/%61uth/github/login",
+      "/%61%75%74%68",
+      "/AUTH/github/login",
+      "/Auth/logout",
+      "/a/../auth/github/callback",
+    ]) {
+      expect(safeReturnTo(loop), loop).toBeNull();
+    }
   });
 
   it("property: anything accepted resolves to Rocky's own origin, on any public origin", () => {

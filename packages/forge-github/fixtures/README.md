@@ -27,6 +27,7 @@ placeholder; the fake issues random test values), keys, emails or real account d
 | `post-oauth-access-token.json`                       | 200    | `POST https://github.com/login/oauth/access_token` (web host, `Accept: application/json`): an expiring GitHub App user token (P7-1). Token values are placeholders; the fake issues random test values                                                 |
 | `post-oauth-access-token.bad-verification-code.json` | 200    | The same endpoint refusing a wrong, expired, reused or PKCE-mismatched code: GitHub answers 200 with an `error` field (P7-1)                                                                                                                           |
 | `list-user-installations.json`                       | 200    | `GET /user/installations` with a user token: the app's installations the user can access, one page (P7-1)                                                                                                                                              |
+| `get-user-org-membership.json`                       | 200    | `GET /user/memberships/orgs/{org}` with a user token: the user's own membership (`state` `active` or `pending`) (P7-1 review round 1); a non-member gets GitHub's JSON 404                                                                             |
 
 Tests serve them through `fakeGitHubApi` (`src/testing.ts`), which may substitute ids so one
 fixture covers several installations. Webhook payloads are not fixtures: they are built by
@@ -52,6 +53,6 @@ the permissions GitHub requires for `compare` diffs of private repositories (ADR
 risks).
 Login (P7-1, ADR 0020) reads, from the token exchange, `access_token`, `token_type` and
 `expires_in` (the refresh token is dropped unread) or `error`; from `GET /user`, `id` and `login`;
-from `GET /user/installations`, `total_count` and `installations[].{id,app_id,account.id,suspended_at}`.
+from `GET /user/installations`, `total_count` and `installations[].{id,app_id,account.{id,login,type},suspended_at}`; from `GET /user/memberships/orgs/{org}`, `state`, `organization.id` and `user.id` (a 404's `message`).
 Not yet verified against a live app: the exchange's answer when PKCE was used (documented as the
 same shape), and `GET /user/installations` for a user whose access comes only through a team.

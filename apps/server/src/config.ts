@@ -196,6 +196,8 @@ export interface AuthConfig {
   readonly endpoints: GitHubEndpoints;
   /** `ROCKY_SESSION_SECRET`, or undefined in development (the server generates one per boot). */
   readonly sessionSecret: string | undefined;
+  /** Production refuses user tokens without an expiry (ADR 0020 §4). */
+  readonly production: boolean;
 }
 
 export type AuthSetup = { enabled: false } | { enabled: true; config: AuthConfig };
@@ -262,6 +264,10 @@ export const authFromEnv = (env: Env): AuthSetup => {
 
   const appIdRaw = nonEmpty(env, "GITHUB_APP_ID");
   let appId: number | undefined;
+  // Production: installations of any other app must be ignorable (review round 1).
+  if (appIdRaw === undefined && production) {
+    throw new ConfigError("GITHUB_APP_ID is required in production (GitHub login)");
+  }
   if (appIdRaw !== undefined) {
     if (!/^[1-9][0-9]{0,15}$/.test(appIdRaw) || !Number.isSafeInteger(Number(appIdRaw))) {
       throw new ConfigError("GITHUB_APP_ID must be a positive integer");
@@ -291,6 +297,7 @@ export const authFromEnv = (env: Env): AuthSetup => {
       appId,
       endpoints,
       sessionSecret,
+      production,
     },
   };
 };

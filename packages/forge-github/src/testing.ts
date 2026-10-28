@@ -185,7 +185,8 @@ export type FakeRoute =
   | "user"
   | "collaborator"
   | "membership"
-  | "installations";
+  | "installations"
+  | "org_membership";
 
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
@@ -263,6 +264,11 @@ export interface FakeGitHubApi {
    * user has explicit access to it). Default: not granted.
    */
   grantInstallation(userId: number, installationId: number, granted?: boolean): void;
+  /**
+   * P7-1 review round 1: the user's membership of an organization account (by account id), as
+   * `GET /user/memberships/orgs/{org}` reports it; `null` removes it (GitHub's 404).
+   */
+  setOrgMembership(accountId: number, userId: number, state: "active" | "pending" | null): void;
 }
 
 const json = (status: number, body: unknown): Response =>
@@ -340,6 +346,7 @@ export const fakeGitHubApi = (options: {
   const permissions = new Map<string, FakePermission>();
   const visibilities = new Map<number, "public" | "internal">();
   const installationGrants = new Set<string>();
+  const orgMemberships = new Map<string, "active" | "pending">();
 
   const flags = (role: FakePermission | undefined, readable: boolean) => {
     const rank = role === undefined ? -1 : ROLES.indexOf(role);
@@ -730,6 +737,31 @@ export const fakeGitHubApi = (options: {
       });
     }
     if (method === "GET" && path === "user" && user !== undefined) return authenticatedUser(user);
+    const membershipMatch = /^user\/memberships\/orgs\/([^/]+)$/.exec(path);
+    if (method === "GET" && membershipMatch !== null && user !== undefined) {
+      const failure = takeRouteFailure("org_membership");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const login = decodeURIComponent(group(membershipMatch, 1)).toLowerCase();
+      const account = [...installed.values()]
+        .map((e) => e.account)
+        .find((a) => a.type === "Organization" && a.login.toLowerCase() === login);
+      const state =
+        account === undefined ? undefined : orgMemberships.get(`${account.id}:${user.id}`);
+      if (account === undefined || state === undefined) {
+        return json(404, githubFixture("get-installation.not-found"));
+      }
+      const fixture = githubFixture("get-user-org-membership");
+      return json(200, {
+        ...fixture,
+        state,
+        organization: {
+          ...(fixture["organization"] as Record<string, unknown>),
+          id: account.id,
+          login: account.login,
+        },
+        user: { ...(fixture["user"] as Record<string, unknown>), id: user.id, login: user.login },
+      });
+    }
     if (method === "GET" && path === "user/installations" && user !== undefined) {
       const failure = takeRouteFailure("installations");
       if (failure !== undefined) return json(failure, { message: "Injected failure" });
@@ -866,6 +898,10 @@ export const fakeGitHubApi = (options: {
     revokeUserToken: (value) => {
       const user = users.get(value);
       if (user !== undefined) user.revoked = true;
+    },
+    setOrgMembership: (accountId, userId, state) => {
+      if (state === null) orgMemberships.delete(`${accountId}:${userId}`);
+      else orgMemberships.set(`${accountId}:${userId}`, state);
     },
     grantInstallation: (userId, installationId, granted = true) => {
       if (granted) installationGrants.add(`${userId}:${installationId}`);

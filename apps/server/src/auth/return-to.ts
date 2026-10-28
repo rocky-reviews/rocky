@@ -39,7 +39,15 @@ export const safeReturnTo = (raw: unknown): string | null => {
   const path = `${url.pathname}${url.search}${url.hash}`;
   // Dot segments can collapse into `//…` (`/.//evil.com`): check what the parser produced.
   if (!path.startsWith("/") || path.startsWith("//")) return null;
-  if (path === "/auth" || path.startsWith("/auth/") || path.startsWith("/auth?")) return null;
+  // No loops back into the auth routes, however the path spells them (`/%61uth/…`, `/AUTH/…`):
+  // compare the percent-decoded, lower-cased pathname (review round 1).
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname).toLowerCase();
+  } catch {
+    return null;
+  }
+  if (pathname === "/auth" || pathname.startsWith("/auth/")) return null;
   return path;
 };
 

@@ -12,6 +12,8 @@ export const RETENTION_ROLE = "rocky_retention";
 export const WORKER_ROLE = "rocky_worker";
 /** Owner of the SECURITY DEFINER functions in schema `worker` (migration 0007). NOLOGIN. */
 export const LIFECYCLE_ROLE = "rocky_lifecycle";
+/** Owner of `auth.login_orgs`, the login's one cross-tenant read (migration 0013). NOLOGIN. */
+export const AUTH_ROLE = "rocky_auth";
 
 const ROLE_NAME = /^[a-z][a-z0-9_]{2,62}$/;
 const MIN_PASSWORD_LENGTH = 12;
@@ -71,7 +73,12 @@ const acceptable = (state: RoleState, allowed: readonly string[]): boolean =>
  * 6 the reached set must be exactly `rocky_app`, which already excludes these; they are still
  * probed so a refusal names them.
  */
-export const SERVER_FORBIDDEN_ROLES = [WORKER_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE] as const;
+export const SERVER_FORBIDDEN_ROLES = [
+  WORKER_ROLE,
+  LIFECYCLE_ROLE,
+  RETENTION_ROLE,
+  AUTH_ROLE,
+] as const;
 
 /** Which check refused a server login. Names the check, never the login. */
 export type ServerLoginRefusal =

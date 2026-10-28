@@ -17,6 +17,8 @@ export const GITHUB_APP_PERMISSIONS: Readonly<Record<string, "read" | "write">> 
   pull_requests: "write",
   checks: "read",
   metadata: "read",
+  // Organization permission (P7-1 review round 1): only real org members sign in.
+  members: "read",
 });
 
 /**

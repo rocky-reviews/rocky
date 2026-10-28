@@ -18,6 +18,7 @@ import {
   upsertLoginMember,
   type Db,
   type LiveSession,
+  type RevokedSession,
   type SessionMember,
   type SessionOrg,
   type StoredSecret,
@@ -30,6 +31,7 @@ import {
   pkceChallenge,
   type GitHubIdentity,
   type GitHubLogin,
+  type GitHubUserInstallation,
   type GitHubUserToken,
 } from "@rocky-reviews/forge-github";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -98,6 +100,11 @@ export interface AuthDeps {
   readonly onMemberTokenChanged?: (orgId: OrgId, memberId: string) => void;
   /** P7-3 seam: registers rate limiting on the auth routes' scope. */
   readonly rateLimit?: (scope: FastifyInstance) => Promise<void>;
+  /**
+   * Refuse a GitHub token without an expiry (production; review round 1): the app's "Expire user
+   * authorization tokens" setting must be on, since sessions are capped at the token's lifetime.
+   */
+  readonly requireTokenExpiry?: boolean;
 }
 
 export interface SessionContext {
@@ -163,6 +170,7 @@ const param = (request: FastifyRequest, name: string): string | undefined | null
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATE = /^[A-Za-z0-9_-]{43}$/;
+const SQLSTATE = /^[0-9A-Z]{5}$/;
 
 export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth => {
   const now = deps.now ?? Date.now;
@@ -192,9 +200,17 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
     const token = readCookie(request.headers.cookie, sessionCookie);
     if (!isRandomToken(token)) return null;
     const at = new Date(now());
-    const session = await db.sessions.findSession(sha256(token), at);
-    if (session === null) return null;
-    await db.sessions.touchSession(session.sessionId, at);
+    const found = await db.sessions.findSession(sha256(token), at);
+    if (found === null) return null;
+    // The touch re-checks liveness (idle window included) and reports the real last_seen_at.
+    const lastSeenAt = await db.sessions.touchSession(found.sessionId, at);
+    if (lastSeenAt === null) return null;
+    const idleMs = found.idleExpiresAt.getTime() - found.lastSeenAt.getTime();
+    const session: LiveSession = {
+      ...found,
+      lastSeenAt,
+      idleExpiresAt: new Date(lastSeenAt.getTime() + idleMs),
+    };
     return { token, session };
   };
 
@@ -249,22 +265,27 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
       activeOrgId: active,
       csrfToken: csrfTokenFor(deps.secret, context.token),
       expiresAt: session.expiresAt.toISOString(),
+      // The real idle expiry, last_seen_at + idle timeout (review round 1), never past the absolute.
       idleExpiresAt: new Date(
-        Math.min(session.expiresAt.getTime(), now() + idle * 1000),
+        Math.min(session.expiresAt.getTime(), session.idleExpiresAt.getTime()),
       ).toISOString(),
     };
   };
 
-  /** Stores the user's token for one org's member, encrypted under that org's data key. */
+  /**
+   * Stores the user's token for one org's member, encrypted under that org's data key. `null`
+   * when the member was removed in Rocky: sign-in does not revive them (review round 1).
+   */
   const bindOrg = async (
     orgId: OrgId,
     identity: GitHubIdentity,
     token: GitHubUserToken,
-  ): Promise<SessionOrg> => {
+  ): Promise<SessionOrg | null> => {
     const first = await db.withOrg(orgId, async (tx) => ({
       member: await upsertLoginMember(tx, { forgeUserId: identity.id, login: identity.login }),
       dataKey: await loadOrgDataKey(tx),
     }));
+    if (first.member === null) return null;
     const { memberId } = first.member;
     let dataKey: StoredSecret | null = first.dataKey;
     if (dataKey === null) {
@@ -321,10 +342,71 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
     }
   };
 
+  /**
+   * The stored token goes with the user's last live session (ADR 0011 §6): logout, and a
+   * superseded session of another user (review round 1).
+   */
+  const dropTokensIfLast = async (revoked: RevokedSession, at: Date): Promise<void> => {
+    if ((await db.sessions.otherLiveSessions(revoked.userId, revoked.sessionId, at)) > 0) return;
+    for (const link of revoked.orgs) {
+      await db.withOrg(link.orgId, (tx) => clearForgeToken(tx, link.memberId));
+      changed(link.orgId, link.memberId);
+    }
+  };
+
+  /**
+   * Only real members count (review round 1, the user's decision): on an Organization account,
+   * an active member of that organization as GitHub reports it; on a User account, its owner.
+   * Outside collaborators and everyone else get no member row. Fail closed: an error is "no".
+   */
+  const isMember = async (
+    request: FastifyRequest,
+    installation: GitHubUserInstallation,
+    identity: GitHubIdentity,
+    accessToken: string,
+  ): Promise<boolean> => {
+    if (installation.accountType === "User") return installation.accountId === identity.id;
+    try {
+      return await deps.login.isActiveOrgMember(
+        accessToken,
+        { id: installation.accountId, login: installation.accountLogin },
+        identity.id,
+      );
+    } catch (error) {
+      const e = error instanceof GitHubLoginError ? error : undefined;
+      log(request, "warn", "membership_check_failed", {
+        installationId: installation.installationId,
+        reason: e?.reason ?? "unknown",
+        ...(e?.status === undefined ? {} : { status: e.status }),
+      });
+      return false;
+    }
+  };
+
   const clearLogin = clearCookie(LOGIN_COOKIE, deps.cookieSecure);
 
   void app.register(async (scope) => {
     if (deps.rateLimit !== undefined) await deps.rateLimit(scope);
+
+    // Review round 1: no error text reaches a client or the log. A fixed outcome and at most the
+    // SQLSTATE are logged; the client gets a fixed page (JSON under /api/).
+    scope.setErrorHandler(async (error, request, reply) => {
+      const raw = (error as { statusCode?: unknown }).statusCode;
+      const status = typeof raw === "number" && raw >= 400 && raw < 500 ? raw : 500;
+      const code = (error as { code?: unknown }).code;
+      log(request, status >= 500 ? "error" : "warn", "request_failed", {
+        status,
+        ...(typeof code === "string" && SQLSTATE.test(code) ? { errorCode: code } : {}),
+      });
+      if (request.url.startsWith("/api/")) {
+        return noStore(reply)
+          .code(status)
+          .send({ error: status >= 500 ? "internal" : "bad_request" });
+      }
+      return status >= 500
+        ? page(reply, 500, "Something went wrong", "<p>Try again in a moment.</p>")
+        : page(reply, status, "Invalid request", "<p>Start again from Rocky.</p>");
+    });
 
     scope.get(LOGIN_PATH, async (request, reply) => {
       const raw = param(request, "returnTo");
@@ -419,6 +501,15 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
 
       const after = now();
       let expiresAt = after + maxLifetime;
+      if (token.expiresAt === null && deps.requireTokenExpiry === true) {
+        log(request, "error", "token_without_expiry");
+        return page(
+          reply,
+          502,
+          "Token expiry must be enabled in the GitHub App",
+          "<p>GitHub issued a sign-in token that never expires. An operator must turn on \u201cExpire user authorization tokens\u201d in the GitHub App\u2019s settings.</p>",
+        );
+      }
       if (token.expiresAt !== null) {
         if (token.expiresAt.getTime() - after < MIN_TOKEN_REMAINING_MS) {
           log(request, "warn", "token_expiring");
@@ -428,12 +519,25 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
         expiresAt = Math.min(expiresAt, token.expiresAt.getTime());
       }
 
+      const byInstallation = new Map(installations.map((i) => [i.installationId, i]));
       const candidates = await db.sessions.loginOrgs("github", installations);
-      const { userId } = await db.sessions.upsertUser("github", identity.id, new Date(after));
       const bound: SessionOrg[] = [];
       for (const candidate of candidates) {
+        const installation = byInstallation.get(candidate.installationId);
+        if (
+          installation === undefined ||
+          !(await isMember(request, installation, identity, token.accessToken))
+        ) {
+          log(request, "info", "not_a_member", { installationId: candidate.installationId });
+          continue;
+        }
         try {
-          bound.push(await bindOrg(candidate.orgId, identity, token));
+          const link = await bindOrg(candidate.orgId, identity, token);
+          if (link === null) {
+            log(request, "info", "member_removed", { orgId: candidate.orgId });
+            continue;
+          }
+          bound.push(link);
         } catch (error) {
           // That org is left out of the session (fail closed for it, not for the others).
           const code = (error as { code?: unknown }).code;
@@ -443,6 +547,18 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
           });
         }
       }
+
+      // Members only: someone who is a member of no Rocky org gets no session.
+      if (bound.length === 0) {
+        log(request, "info", "no_org");
+        return page(
+          reply,
+          403,
+          "No Rocky organization",
+          "<p>You are not a member of any organization or account where Rocky is installed. Ask an owner to install Rocky, or to add you to their organization on GitHub.</p>",
+        );
+      }
+      const { userId } = await db.sessions.upsertUser("github", identity.id, new Date(after));
 
       // Session fixation: whatever session this browser presented ends here.
       const presented = readCookie(request.headers.cookie, sessionCookie);
@@ -458,6 +574,8 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
             await auditIn(revoked.orgs, "auth.session_revoked", revoked.sessionId, {
               reason: "superseded",
             });
+            // Another person's session: their token goes with their last session, as at logout.
+            if (revoked.userId !== userId) await dropTokensIfLast(revoked, new Date(after));
           }
         }
       }
@@ -502,13 +620,7 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
       const revoked = await db.sessions.revokeSession(context.session.sessionId, "logout", at);
       if (revoked !== null) {
         await auditIn(revoked.orgs, "auth.logout", revoked.sessionId);
-        // ADR 0011 §6: the stored token goes with the last live session of this user.
-        if ((await db.sessions.otherLiveSessions(revoked.userId, revoked.sessionId, at)) === 0) {
-          for (const link of revoked.orgs) {
-            await db.withOrg(link.orgId, (tx) => clearForgeToken(tx, link.memberId));
-            changed(link.orgId, link.memberId);
-          }
-        }
+        await dropTokensIfLast(revoked, at);
         log(request, "info", "logout", { sessionRecord: revoked.sessionId });
       }
       return noStore(reply).code(204).header("set-cookie", clear).send();

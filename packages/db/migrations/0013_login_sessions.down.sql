@@ -6,9 +6,13 @@ REVOKE SELECT (id, forge, installation_id, account_id, delete_after, erasing_at)
 REVOKE USAGE ON SCHEMA public FROM rocky_auth;
 
 DROP TABLE IF EXISTS app.session_orgs;
+DROP TRIGGER IF EXISTS sessions_guard_touch ON app.sessions;
+DROP FUNCTION IF EXISTS app.sessions_guard_touch();
 DROP TABLE IF EXISTS app.sessions;
 DROP TABLE IF EXISTS app.login_attempts;
 DROP TABLE IF EXISTS app.users;
 
+ALTER TABLE members DROP CONSTRAINT IF EXISTS members_removed_has_no_token;
+ALTER TABLE members DROP COLUMN IF EXISTS removed_at;
 ALTER TABLE members DROP CONSTRAINT IF EXISTS members_forge_access_expiry_needs_token;
 ALTER TABLE members DROP COLUMN IF EXISTS forge_access_expires_at;

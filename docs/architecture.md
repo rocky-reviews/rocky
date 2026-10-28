@@ -218,8 +218,9 @@ packages/schema (analysis document; shared contract)
   `returnTo` must be a same-origin relative path. Routes reach org data through
   `sessionAuth.activeMember`, which re-reads the member inside `withOrg`.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
-  only, one-time token printed to the terminal); four permissions (`contents:read`,
-  `pull_requests:write`, `checks:read`, `metadata:read`) and one subscribed event
+  only, one-time token printed to the terminal); five permissions (`contents:read`,
+  `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
+  ADR 0020) and one subscribed event
   (`pull_request`), pinned by a test. The conversion's credentials are written once to a
   `0600` file for the operator's secret manager; they are never logged or stored in the database.
 - `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and

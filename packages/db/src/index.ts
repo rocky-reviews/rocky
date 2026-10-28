@@ -105,6 +105,7 @@ export {
 } from "./retention.js";
 export {
   APP_ROLE,
+  AUTH_ROLE,
   checkServerLogin,
   ensureLoginRole,
   LIFECYCLE_ROLE,
@@ -133,6 +134,8 @@ export {
   createSessionStore,
   loadSessionMember,
   LOGIN_ATTEMPT_MAX_TTL_MS,
+  LOGIN_ATTEMPT_PRUNE_BATCH,
+  markMemberRemoved,
   MAX_LOGIN_ORGS,
   RETURN_TO_MAX_BYTES,
   SESSION_IDLE_MAX_SECONDS,

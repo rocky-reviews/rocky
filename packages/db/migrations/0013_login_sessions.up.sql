@@ -55,6 +55,11 @@ $$;
 ALTER TABLE members ADD COLUMN forge_access_expires_at timestamptz;
 ALTER TABLE members ADD CONSTRAINT members_forge_access_expiry_needs_token
   CHECK (forge_access_expires_at IS NULL OR forge_token_ciphertext IS NOT NULL);
+-- Removed in Rocky (review round 1): durable, so the next sign-in does not revive the member.
+-- Re-adding someone is an explicit admin action (P7-2). A removed member holds no token.
+ALTER TABLE members ADD COLUMN removed_at timestamptz;
+ALTER TABLE members ADD CONSTRAINT members_removed_has_no_token
+  CHECK (removed_at IS NULL OR forge_token_ciphertext IS NULL);
 
 -- --- Users --------------------------------------------------------------------------------------
 
@@ -104,11 +109,34 @@ CREATE TABLE app.sessions (
   CONSTRAINT sessions_lifetime
     CHECK (expires_at > created_at AND expires_at <= created_at + interval '7 days'),
   CONSTRAINT sessions_seen_after_created CHECK (last_seen_at >= created_at),
+  CONSTRAINT sessions_seen_before_expiry CHECK (last_seen_at <= expires_at),
   CONSTRAINT sessions_revoked_pair CHECK ((revoked_at IS NULL) = (revoked_reason IS NULL))
 );
 CREATE INDEX sessions_user_idx ON app.sessions (user_id);
 CREATE INDEX sessions_expires_idx ON app.sessions (expires_at);
 CREATE INDEX sessions_active_org_idx ON app.sessions (active_org_id) WHERE active_org_id IS NOT NULL;
+
+-- Review round 1: `last_seen_at` only moves forward, and by less than the idle timeout, so an
+-- idle-expired session cannot be touched back to life by any writer (the server's touch already
+-- refuses it in SQL; this holds for any UPDATE). Clock-free: it compares the row with itself.
+CREATE FUNCTION app.sessions_guard_touch() RETURNS trigger
+  LANGUAGE plpgsql
+  SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF NEW.last_seen_at IS DISTINCT FROM OLD.last_seen_at
+     AND (NEW.last_seen_at < OLD.last_seen_at
+          OR NEW.last_seen_at >= OLD.last_seen_at + make_interval(secs => OLD.idle_timeout_seconds)) THEN
+    RAISE EXCEPTION 'sessions: last_seen_at moves forward within the idle window only'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER sessions_guard_touch
+  BEFORE UPDATE OF last_seen_at ON app.sessions
+  FOR EACH ROW EXECUTE FUNCTION app.sessions_guard_touch();
 
 CREATE TABLE app.session_orgs (
   session_id  uuid NOT NULL REFERENCES app.sessions (id) ON DELETE CASCADE,

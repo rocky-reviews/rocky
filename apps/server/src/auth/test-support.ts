@@ -42,6 +42,8 @@ export const OPEN_REDIRECT_VECTORS = [
   "/./\\evil.com",
   "/a/..//evil.com",
   "/%2e//evil.com",
+  // A loop into the login itself, encoded (review round 1).
+  "/%61uth/github/login",
   "/auth/github/login",
   "/auth/github/callback?code=x",
   "/auth",

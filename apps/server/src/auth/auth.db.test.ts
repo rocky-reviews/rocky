@@ -10,6 +10,7 @@ import {
   createDb,
   loadForgeToken,
   loadOrgDataKey,
+  markMemberRemoved,
   scheduleOrgDeletion,
   type Db,
 } from "@rocky-reviews/db";
@@ -63,6 +64,7 @@ let db: Db;
 let A: SeededOrg;
 let B: SeededOrg;
 let C: SeededOrg; // scheduled for deletion
+let D: SeededOrg; // installed on a User account (installation 84)
 const keys = new LocalKeyWrapper([["v1", Buffer.from(generateLocalKek(), "base64")]]);
 const appKeys = testAppKeys();
 
@@ -73,7 +75,14 @@ let app: FastifyInstance;
 let lines: string[];
 let changed: string[];
 
-const build = (extra: { cookieSecure?: boolean; publicUrl?: URL } = {}) => {
+const build = (
+  extra: {
+    cookieSecure?: boolean;
+    publicUrl?: URL;
+    requireTokenExpiry?: boolean;
+    db?: Db;
+  } = {},
+) => {
   lines = [];
   changed = [];
   const log = createLogger("auth-test", {
@@ -95,9 +104,12 @@ const build = (extra: { cookieSecure?: boolean; publicUrl?: URL } = {}) => {
         fetch: oauth.fetch,
         now: () => clock,
       }),
-      db,
+      db: extra.db ?? db,
       keys,
       now: () => clock,
+      ...(extra.requireTokenExpiry === undefined
+        ? {}
+        : { requireTokenExpiry: extra.requireTokenExpiry }),
       onMemberTokenChanged: (orgId, memberId) => changed.push(`${orgId}:${memberId}`),
     },
   });
@@ -107,12 +119,13 @@ const build = (extra: { cookieSecure?: boolean; publicUrl?: URL } = {}) => {
 beforeAll(async () => {
   pgs = await startPostgres();
   db = createDb({ connectionString: pgs.appUrl, max: 4 });
-  [A, B, C] = await asWorker(pgs.workerUrl, async (w) => {
+  [A, B, C, D] = await asWorker(pgs.workerUrl, async (w) => {
     const a = await seedOrg(w, newOrgId(), { installationId: 81 });
     const b = await seedOrg(w, newOrgId(), { installationId: 82 });
     const c = await seedOrg(w, newOrgId(), { installationId: 83 });
     await w.withOrg(c.orgId, (tx) => scheduleOrgDeletion(tx, 83));
-    return [a, b, c];
+    const d = await seedOrg(w, newOrgId(), { installationId: 84 });
+    return [a, b, c, d];
   });
 }, CONTAINER_TIMEOUT_MS);
 
@@ -134,14 +147,19 @@ beforeEach(async () => {
   for (const id of [81, 82, 83]) {
     github.install(id, { id: 1_000_000 + id, login: `org-${id}`, type: "Organization" });
   }
-  github.grantInstallation(ALICE.id, 81);
-  github.grantInstallation(ALICE.id, 82);
-  github.grantInstallation(ALICE.id, 83);
+  github.install(84, { id: 1_000_084, login: "owner-84", type: "User" });
+  for (const id of [81, 82, 83]) member(ALICE, id);
   await app?.close();
   app = build();
 });
 
 // --- helpers -----------------------------------------------------------------------------------
+
+/** An active member of the organization behind installation `id` (and it is visible to them). */
+const member = (user: { id: number }, id: number) => {
+  github.grantInstallation(user.id, id);
+  github.setOrgMembership(1_000_000 + id, user.id, "active");
+};
 
 const setCookies = (res: LightMyRequestResponse): string[] => {
   const header = res.headers["set-cookie"];
@@ -343,11 +361,11 @@ describe("login with GitHub (PKCE, state, sessions in the database)", () => {
     };
     expect(body.orgs.map((o) => o.id)).toEqual([A.orgId]);
     expect(body.activeOrgId).toBe(A.orgId);
-    // Mallory has access to nothing: a session without orgs, no member row created, no token stored.
+    // Mallory has access to nothing: the fixed "no org" page, no session, no member row.
     const m = await login({ user: MALLORY });
-    expect(m.res.statusCode).toBe(303);
-    const mine = (await sessionOf(m.session)).json() as { orgs: unknown[]; activeOrgId: unknown };
-    expect(mine).toMatchObject({ orgs: [], activeOrgId: null });
+    expect(m.res.statusCode).toBe(403);
+    expect(m.res.body).toContain("No Rocky organization");
+    expect(m.session).toBeUndefined();
     const rows = await db.withOrg(
       A.orgId,
       async (tx) =>
@@ -365,7 +383,7 @@ describe("login with GitHub (PKCE, state, sessions in the database)", () => {
     );
     expect(renamed).toEqual([{ id: A.memberId, login: "alice-renamed" }]);
     // Someone else now called "alice" (another id) gets their own member row, never Alice's.
-    github.grantInstallation(4242, 81);
+    member({ id: 4242 }, 81);
     const other = await login({ user: { id: 4242, login: "alice" } });
     const view = (await sessionOf(other.session)).json() as { orgs: { memberId: string }[] };
     expect(view.orgs[0]?.memberId).not.toBe(A.memberId);
@@ -391,8 +409,8 @@ describe("login with GitHub (PKCE, state, sessions in the database)", () => {
 
   it("removing the member in Rocky ends that org for the session at once (no mixing up orgs)", async () => {
     const extra = { id: 7070, login: "grace" };
-    github.grantInstallation(extra.id, 81);
-    github.grantInstallation(extra.id, 82);
+    member(extra, 81);
+    member(extra, 82);
     const { session } = await login({ user: extra });
     const before = (await sessionOf(session)).json() as {
       orgs: { id: string; memberId: string }[];
@@ -424,10 +442,14 @@ describe("login with GitHub (PKCE, state, sessions in the database)", () => {
 
 describe("session fixation (acceptance criterion)", () => {
   it("a session id planted in the browser before login is never the session after login", async () => {
-    // Mallory logs in, then plants her session cookie in Alice's browser.
+    // Mallory (a member of org B) logs in, then plants her session cookie in Alice's browser.
+    member(MALLORY, 82);
     const mallory = await login({ user: MALLORY });
     const planted = mallory.session ?? "";
-    expect((await sessionOf(planted)).statusCode).toBe(200);
+    const malloryMember =
+      ((await sessionOf(planted)).json() as { orgs: { memberId: string }[] }).orgs[0]?.memberId ??
+      "";
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, malloryMember))).not.toBeNull();
     const alice = await login({ jar: `${SESSION}=${planted}` });
     expect(alice.res.statusCode).toBe(303);
     expect(alice.session).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -436,6 +458,23 @@ describe("session fixation (acceptance criterion)", () => {
     expect((await sessionOf(planted)).statusCode).toBe(401);
     const view = (await sessionOf(alice.session)).json() as { user: { forgeUserId: number } };
     expect(view.user.forgeUserId).toBe(ALICE.id);
+    // That was Mallory's last session: her stored token went with it, as at logout.
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, malloryMember))).toBeNull();
+    expect(changed).toContain(`${B.orgId}:${malloryMember}`);
+  });
+
+  it("superseding another user's session keeps their token while they have another live session", async () => {
+    const judy = { id: 9090, login: "judy" };
+    member(judy, 82);
+    const kept = await login({ user: judy });
+    const planted = await login({ user: judy });
+    const judyMember =
+      ((await sessionOf(kept.session)).json() as { orgs: { memberId: string }[] }).orgs[0]
+        ?.memberId ?? "";
+    await login({ jar: `${SESSION}=${planted.session}` });
+    expect((await sessionOf(planted.session)).statusCode).toBe(401);
+    expect((await sessionOf(kept.session)).statusCode).toBe(200);
+    expect(await db.withOrg(B.orgId, (tx) => loadForgeToken(tx, judyMember))).not.toBeNull();
   });
 
   it("an attacker-chosen value that is not a session is ignored, and the new id is fresh every login", async () => {
@@ -492,7 +531,9 @@ describe("CSRF (acceptance criterion)", () => {
       {
         cookie,
         origin: ORIGIN,
-        [CSRF_HEADER]: await csrfOf((await login({ user: MALLORY })).session ?? ""),
+        [CSRF_HEADER]: await csrfOf(
+          (member(MALLORY, 82), await login({ user: MALLORY })).session ?? "",
+        ),
       },
     ];
     for (const headers of attempts) {
@@ -721,6 +762,36 @@ describe("idle and absolute expiry (server-side)", () => {
     expect((await sessionOf(busy.session)).statusCode).toBe(401);
   });
 
+  it("reports the real idle expiry: last_seen_at + idle timeout, capped by the absolute expiry", async () => {
+    oauth = fakeGitHubOAuth({
+      api: github,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      now: () => clock,
+      expiresInSeconds: null,
+    });
+    await app.close();
+    app = build();
+    const { session } = await login();
+    const idleOf = async () =>
+      ((await sessionOf(session)).json() as { idleExpiresAt: string }).idleExpiresAt;
+    clock = T0 + 2 * HOUR;
+    expect(await idleOf()).toBe(
+      new Date(T0 + 2 * HOUR + SESSION_IDLE_SECONDS * 1000).toISOString(),
+    );
+    // Within the touch throttle the stored last_seen_at is unchanged, and so is the answer.
+    clock = T0 + 2 * HOUR + 30_000;
+    expect(await idleOf()).toBe(
+      new Date(T0 + 2 * HOUR + SESSION_IDLE_SECONDS * 1000).toISOString(),
+    );
+    // Near the 24 h cap the absolute expiry wins.
+    for (let h = 9; h <= 23; h += 7) {
+      clock = T0 + h * HOUR;
+      await sessionOf(session);
+    }
+    expect(await idleOf()).toBe(new Date(T0 + 24 * HOUR).toISOString());
+  });
+
   it("absolute: a session never outlives the GitHub token it was created with (8 h)", async () => {
     const { session } = await login();
     clock = T0 + 4 * HOUR;
@@ -746,7 +817,7 @@ describe("logout", () => {
 
   it("revokes the session server-side, clears the cookie, audits, and drops the token with the last session", async () => {
     const heidi = { id: 8080, login: "heidi" };
-    github.grantInstallation(heidi.id, 81);
+    member(heidi, 81);
     const one = await login({ user: heidi });
     const two = await login({ user: heidi });
     const memberId =
@@ -809,5 +880,174 @@ describe("logs (no codes, tokens, cookies, state values, emails or logins)", () 
     ]) {
       expect(text).not.toContain(secret);
     }
+  });
+});
+
+describe("only real members count (review round 1)", () => {
+  it("an outside collaborator who can see the installation gets no member row and no session", async () => {
+    const outsider = { id: 5150, login: "outsider" };
+    github.grantInstallation(outsider.id, 81); // visible to them, but not an org member
+    const res = await login({ user: outsider });
+    expect(res.res.statusCode).toBe(403);
+    expect(res.res.body).toContain("No Rocky organization");
+    expect(res.session).toBeUndefined();
+    github.setOrgMembership(1_000_081, outsider.id, "pending"); // an invitation is not membership
+    expect((await login({ user: outsider })).res.statusCode).toBe(403);
+    const rows = await db.withOrg(
+      A.orgId,
+      async (tx) =>
+        (await tx.query("select id from members where forge_user_id = $1", [outsider.id])).rows,
+    );
+    expect(rows).toEqual([]);
+    expect(lines.join("\n")).toContain('"outcome":"not_a_member"');
+  });
+
+  it("an active org member is accepted", async () => {
+    const newcomer = { id: 5151, login: "newcomer" };
+    member(newcomer, 81);
+    const { res, session } = await login({ user: newcomer });
+    expect(res.statusCode).toBe(303);
+    const view = (await sessionOf(session)).json() as {
+      orgs: { id: string; role: string }[];
+      activeOrgId: string;
+    };
+    expect(view.orgs).toEqual([expect.objectContaining({ id: A.orgId, role: "member" })]);
+    expect(view.activeOrgId).toBe(A.orgId);
+  });
+
+  it("a failing membership check leaves that org out (fail closed); none left is the no-org page", async () => {
+    github.failRoute("org_membership", 500);
+    const one = await login();
+    expect(one.res.statusCode).toBe(303);
+    const view = (await sessionOf(one.session)).json() as { orgs: unknown[] };
+    expect(view.orgs).toHaveLength(1);
+    expect(lines.join("\n")).toContain('"outcome":"membership_check_failed"');
+    github.failRoute("org_membership", 403, 2);
+    const none = await login();
+    expect(none.res.statusCode).toBe(403);
+    expect(none.session).toBeUndefined();
+  });
+
+  it("a member removed in Rocky stays removed after signing in again", async () => {
+    const ivan = { id: 5152, login: "ivan" };
+    member(ivan, 81);
+    const first = await login({ user: ivan });
+    const memberId =
+      ((await sessionOf(first.session)).json() as { orgs: { memberId: string }[] }).orgs[0]
+        ?.memberId ?? "";
+    expect(await db.withOrg(A.orgId, (tx) => markMemberRemoved(tx, memberId))).toBe(true);
+    // The session loses the org at once, and signing in again does not bring the member back.
+    expect(((await sessionOf(first.session)).json() as { orgs: unknown[] }).orgs).toEqual([]);
+    const again = await login({ user: ivan });
+    expect(again.res.statusCode).toBe(403);
+    expect(again.session).toBeUndefined();
+    const [row] = await db.withOrg(
+      A.orgId,
+      async (tx) =>
+        (
+          await tx.query<{ removed: Date | null; token: Buffer | null }>(
+            "select removed_at as removed, forge_token_ciphertext as token from members where id = $1",
+            [memberId],
+          )
+        ).rows,
+    );
+    expect(row?.removed).not.toBeNull();
+    expect(row?.token).toBeNull();
+    expect(lines.join("\n")).toContain('"outcome":"member_removed"');
+  });
+
+  it("on a User-account installation only the account owner counts", async () => {
+    const owner = { id: 1_000_084, login: "owner-84" };
+    const collaborator = { id: 5153, login: "collab" };
+    github.grantInstallation(owner.id, 84);
+    github.grantInstallation(collaborator.id, 84);
+    const refused = await login({ user: collaborator });
+    expect(refused.res.statusCode).toBe(403);
+    const ok = await login({ user: owner });
+    expect(ok.res.statusCode).toBe(303);
+    const view = (await sessionOf(ok.session)).json() as { orgs: { id: string }[] };
+    expect(view.orgs.map((o) => o.id)).toEqual([D.orgId]);
+    // No org-membership call is made for a User account.
+    expect(lines.join("\n")).not.toContain('"outcome":"membership_check_failed"');
+  });
+});
+
+describe("token expiry required in production (review round 1)", () => {
+  it("a GitHub token without an expiry is refused with a fixed page, and no session", async () => {
+    oauth = fakeGitHubOAuth({
+      api: github,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      now: () => clock,
+      expiresInSeconds: null,
+    });
+    await app.close();
+    app = build({ requireTokenExpiry: true });
+    const { res, session } = await login();
+    expect(res.statusCode).toBe(502);
+    expect(res.body).toContain("Token expiry must be enabled in the GitHub App");
+    expect(session).toBeUndefined();
+    expect(lines.join("\n")).toContain('"outcome":"token_without_expiry"');
+    // An expiring token is fine in production.
+    oauth = fakeGitHubOAuth({
+      api: github,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      now: () => clock,
+    });
+    await app.close();
+    app = build({ requireTokenExpiry: true });
+    expect((await login()).res.statusCode).toBe(303);
+  });
+});
+
+describe("errors in the auth routes (review round 1)", () => {
+  const failing = (message: string) =>
+    Promise.reject(Object.assign(new Error(message), { code: "57P01" }));
+
+  it("a database failure is a fixed 500: JSON under /api/, HTML otherwise; no message anywhere", async () => {
+    const detail = "relation secret_detail_xyz does not exist";
+    const broken: Db = {
+      ...db,
+      sessions: {
+        ...db.sessions,
+        findSession: () => failing(detail),
+        upsertUser: () => failing(detail),
+      },
+    };
+    await app.close();
+    app = build({ db: broken });
+    const api = await app.inject({
+      method: "GET",
+      url: "/api/session",
+      headers: { cookie: `${SESSION}=${"A".repeat(43)}` },
+    });
+    expect(api.statusCode).toBe(500);
+    expect(api.json()).toEqual({ error: "internal" });
+    expect(api.headers["cache-control"]).toBe("no-store");
+    const { res } = await login();
+    expect(res.statusCode).toBe(500);
+    expect(res.headers["content-type"]).toMatch(/^text\/html/);
+    expect(res.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(cookieValue(res, SESSION)).toBeUndefined();
+    for (const body of [api.body, res.body]) {
+      expect(body).not.toContain("secret_detail_xyz");
+      expect(body).not.toContain("57P01");
+    }
+    const text = lines.join("\n");
+    expect(text).not.toContain("secret_detail_xyz");
+    expect(text).toContain('"outcome":"request_failed"');
+    expect(text).toContain('"errorCode":"57P01"');
+  });
+
+  it("a failing withOrg in the callback (token storage) leaves that org out, never half a session", async () => {
+    const broken: Db = { ...db, withOrg: () => failing("org secret_detail_xyz") };
+    await app.close();
+    app = build({ db: broken });
+    const { res, session } = await login();
+    expect([403, 500]).toContain(res.statusCode);
+    expect(session).toBeUndefined();
+    expect(res.body).not.toContain("secret_detail_xyz");
+    expect(lines.join("\n")).not.toContain("secret_detail_xyz");
   });
 });

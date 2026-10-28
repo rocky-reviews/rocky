@@ -68,6 +68,21 @@ describe("cookies", () => {
     expect(readCookie("xrocky_session=x", "rocky_session")).toBeUndefined();
     expect(readCookie(`rocky_session=${"x".repeat(9000)}`, "rocky_session")).toBeUndefined();
     expect(readCookie(undefined, "rocky_session")).toBeUndefined();
+    expect(readCookie(" \t rocky_session=x \t", "rocky_session")).toBe("x");
+  });
+
+  it("only space and tab are trimmed: a look-alike name with other whitespace is not the cookie", () => {
+    for (const name of ["__Host-rocky_login", "__Host-rocky_session"]) {
+      for (const pad of ["\u00a0", "\u2028", "\ufeff", "\u000b", "\f", "\u3000"]) {
+        expect(readCookie(`${pad}${name}=forged`, name), JSON.stringify(pad)).toBeUndefined();
+        expect(readCookie(`${name}${pad}=forged`, name), JSON.stringify(pad)).toBeUndefined();
+        // And it does not count as a duplicate of the real one either.
+        expect(readCookie(`${pad}${name}=forged; ${name}=real`, name)).toBe("real");
+      }
+    }
+    // Names that are not RFC 6265 tokens are ignored.
+    expect(readCookie("rocky session=x", "rocky session")).toBeUndefined();
+    expect(readCookie("=x", "")).toBeUndefined();
   });
 
   it("serializes host-only, HttpOnly, SameSite=Lax cookies; Secure and __Host- unless the dev exception", () => {

@@ -71,6 +71,8 @@ export const members = pgTable("members", {
   forgeTokenKeyVersion: integer("forge_token_key_version"),
   /** When the stored user token expires (P7-1); null for a non-expiring token or none stored. */
   forgeAccessExpiresAt: timestamp("forge_access_expires_at", { withTimezone: true }),
+  /** Removed in Rocky (P7-1 review round 1); sign-in does not revive it (re-adding is P7-2's). */
+  removedAt: timestamp("removed_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
