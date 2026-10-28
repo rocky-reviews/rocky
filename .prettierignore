@@ -4,6 +4,7 @@ coverage/
 LICENSE
 ee/LICENSE
 docs/design/poc/
+docs/design/change-map/
 NOTICE
 # Generated and golden files: byte-identical to their emitters, not to Prettier.
 packages/schema/json-schema/

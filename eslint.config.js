@@ -53,6 +53,25 @@ const CORE_SYNTAX = [
   },
 ];
 
+/**
+ * HTML sinks the web app must not use (P6-1): PR content is rendered as React text only. Covers
+ * dotted and computed member access, the `Object.assign(el, { innerHTML })` form, JSX props that
+ * take HTML, and `document.write` on any member chain.
+ */
+const HTML_SINK_MESSAGE = "Render PR content as text, never as HTML (P6-1).";
+const SINK_NAMES =
+  "/^(innerHTML|outerHTML|insertAdjacentHTML|createContextualFragment|setHTMLUnsafe|parseHTMLUnsafe|parseFromString)$/";
+const HTML_SINKS = [
+  "JSXAttribute[name.name=/^(dangerouslySetInnerHTML|srcDoc|srcdoc)$/]",
+  `MemberExpression[property.name=${SINK_NAMES}]`,
+  `MemberExpression[computed=true][property.value=${SINK_NAMES}]`,
+  "Property[key.name=/^(innerHTML|outerHTML)$/]",
+  "Property[key.value=/^(innerHTML|outerHTML)$/]",
+  "CallExpression[callee.property.name=/^(write|writeln)$/][callee.object.name='document']",
+  "CallExpression[callee.property.name=/^(write|writeln)$/][callee.object.property.name='document']",
+  "CallExpression[callee.property.value=/^(write|writeln)$/][callee.object.name='document']",
+].map((selector) => ({ selector, message: HTML_SINK_MESSAGE }));
+
 export default tseslint.config(
   {
     ignores: [
@@ -129,6 +148,22 @@ export default tseslint.config(
     },
   },
   {
+    // The web app runs in the browser. PR content (titles, paths, branch names) is untrusted
+    // and is rendered only as React text: no HTML sinks, so markup in PR content stays text
+    // (P6-1). A test that needs one says why with an eslint-disable comment. Web tests keep
+    // the ban too (the block after the general test override re-enables it).
+    files: ["apps/web/src/**/*.{ts,tsx}", "apps/web/public/**/*.js"],
+    languageOptions: { globals: { ...globals.browser } },
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...rockyInstructionsRules(),
+        TESTING_DYNAMIC,
+        ...HTML_SINKS,
+      ],
+    },
+  },
+  {
     // The tag's own definition.
     files: ["packages/core/src/llm.ts"],
     rules: {
@@ -150,6 +185,11 @@ export default tseslint.config(
     // Tests also forge instructions on purpose, to check the runtime refusal.
     files: ["**/*.test.ts"],
     rules: { "@typescript-eslint/no-non-null-assertion": "off", "no-restricted-syntax": "off" },
+  },
+  {
+    // Web tests keep the HTML-sink ban that the general test override above turns off.
+    files: ["apps/web/**/*.test.{ts,tsx}"],
+    rules: { "no-restricted-syntax": ["error", ...HTML_SINKS] },
   },
   prettier,
 );

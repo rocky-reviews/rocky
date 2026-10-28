@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="cm" viewBox="0 0 915 182" width="915" height="182" role="img" aria-label="Change map">
+<defs><marker id="cm-arrow-added" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-added" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-modified" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-modified" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-removed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-removed" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-unchanged" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-unchanged" d="M0,0 L10,5 L0,10 z"/></marker><marker id="cm-arrow-hero" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse"><path class="cm-arrow cm-arrow-hero" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+<g class="cm-lanes"><g class="cm-lane"><rect class="cm-lane-bg" x="8" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="20" y="20">WEB</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="246.14" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="258.14" y="20">API</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="484.28" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="496.28" y="20">DATA</text></g>
+<g class="cm-lane"><rect class="cm-lane-bg" x="722.42" y="0" width="184" height="182" rx="10"/>
+<text class="cm-lane-label" x="734.42" y="20">WORKERS</text></g></g>
+<g class="cm-edges"><path class="cm-edge cm-added" data-edge="page-route" d="M178,68.5 C219.07,68.5 219.07,62 260.14,62" marker-end="url(#cm-arrow-added)"><title>InvitePage → Invitation routes · POST /accept</title></path>
+<path class="cm-edge cm-added cm-hero cm-animated" data-edge="route-auth" d="M338.14,84 L338.14,112" marker-end="url(#cm-arrow-hero)"><title>Invitation routes → acceptInvitation()</title></path>
+<path class="cm-edge cm-added" data-edge="auth-inv" d="M416.14,148 C457.21,148 457.21,134 498.28,134" marker-end="url(#cm-arrow-added)"><title>acceptInvitation() → invitations · read token</title></path>
+<path class="cm-edge cm-added cm-hero cm-animated" data-edge="auth-mem" d="M416.14,133 C457.21,133 457.21,62 498.28,62" marker-end="url(#cm-arrow-hero)"><title>acceptInvitation() → memberships · grant role</title></path>
+<path class="cm-edge cm-added" data-edge="auth-job" d="M416.14,140.5 L451.21,140.5 Q457.21,140.5 457.21,134.5 L457.21,104 Q457.21,98 463.21,98 L689.35,98 Q695.35,98 695.35,92 L695.35,63.5 Q695.35,57.5 701.35,57.5 L736.42,57.5" marker-end="url(#cm-arrow-added)"><title>acceptInvitation() → send-invite-email · enqueue</title></path>
+<path class="cm-edge cm-added" data-edge="job-inv" d="M736.42,66.5 C695.35,66.5 695.35,140.5 654.28,140.5" marker-end="url(#cm-arrow-added)"><title>send-invite-email → invitations</title></path>
+<path class="cm-edge cm-added" data-edge="job-mail" d="M814.42,84 L814.42,112" marker-end="url(#cm-arrow-added)"><title>send-invite-email → Mailer</title></path></g>
+<g class="cm-nodes"><g class="cm-node cm-added" data-node="page"><title>InvitePage · web/src/pages · 1 finding, worst low</title>
+<rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="32" y="59">InvitePage</text>
+<text class="cm-node-sub" x="32" y="74">web/src/pages</text>
+<g class="cm-badge cm-low" data-findings="F9"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">1</text></g></g>
+<g class="cm-node cm-added" data-node="route"><title>Invitation routes · POST create · accept · 2 findings, worst high</title>
+<rect class="cm-card" x="260.14" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="270.14" y="59">Invitation routes</text>
+<text class="cm-node-sub" x="270.14" y="74">POST create · accept</text>
+<g class="cm-badge cm-high" data-findings="F2 F7"><rect class="cm-badge-bg" x="405.14" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="45.5" text-anchor="middle">2</text></g></g>
+<g class="cm-node cm-added" data-node="auth"><title>acceptInvitation() · src/auth · 3 findings, worst critical</title>
+<rect class="cm-card" x="260.14" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="270.14" y="131">acceptInvitation()</text>
+<text class="cm-node-sub" x="270.14" y="146">src/auth</text>
+<g class="cm-badge cm-critical" data-findings="F1 F3 F8"><rect class="cm-badge-bg" x="405.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="117.5" text-anchor="middle">3</text></g></g>
+<g class="cm-node cm-unchanged" data-node="mem"><title>memberships · existing table</title>
+<rect class="cm-card" x="498.28" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="508.28" y="59">memberships</text>
+<text class="cm-node-sub" x="508.28" y="74">existing table</text></g>
+<g class="cm-node cm-added" data-node="inv"><title>invitations · new table · RLS · 2 findings, worst high</title>
+<rect class="cm-card" x="498.28" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="508.28" y="131">invitations</text>
+<text class="cm-node-sub" x="508.28" y="146">new table · RLS</text>
+<g class="cm-badge cm-high" data-findings="F4 F5"><rect class="cm-badge-bg" x="643.28" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="652.28" y="117.5" text-anchor="middle">2</text></g></g>
+<g class="cm-node cm-added" data-node="job"><title>send-invite-email · src/jobs · 1 finding, worst medium</title>
+<rect class="cm-card" x="736.42" y="40" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="746.42" y="59">send-invite-email</text>
+<text class="cm-node-sub" x="746.42" y="74">src/jobs</text>
+<g class="cm-badge cm-medium" data-findings="F6"><rect class="cm-badge-bg" x="881.42" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="890.42" y="45.5" text-anchor="middle">1</text></g></g>
+<g class="cm-node cm-unchanged" data-node="mail"><title>Mailer · Postmark · external</title>
+<rect class="cm-card" x="736.42" y="112" width="156" height="44" rx="8"/>
+<text class="cm-node-title" x="746.42" y="131">Mailer</text>
+<text class="cm-node-sub" x="746.42" y="146">Postmark · external</text></g></g>
+<g class="cm-labels"><g class="cm-label" data-edge="page-route" aria-hidden="true"><rect class="cm-pill" x="184.5" y="58.25" width="69.14" height="14" rx="7"/><text class="cm-pill-text" x="219.07" y="68.55" text-anchor="middle">POST /accept</text></g>
+<g class="cm-label" data-edge="auth-inv" aria-hidden="true"><rect class="cm-pill" x="421.8" y="140.6" width="54.89" height="14" rx="7"/><text class="cm-pill-text" x="449.24" y="150.9" text-anchor="middle">read token</text></g>
+<g class="cm-label" data-edge="auth-mem" aria-hidden="true"><rect class="cm-pill" x="426.29" y="104.32" width="50.13" height="14" rx="7"/><text class="cm-pill-text" x="451.35" y="114.62" text-anchor="middle">grant role</text></g>
+<g class="cm-label" data-edge="auth-job" aria-hidden="true"><rect class="cm-pill" x="552.79" y="91" width="46.97" height="14" rx="7"/><text class="cm-pill-text" x="576.28" y="101.3" text-anchor="middle">enqueue</text></g></g>
+</svg>

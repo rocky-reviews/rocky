@@ -8,27 +8,27 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Top bar
 
-- [ ] P6-1 · Brand mark + "Rocky Reviews"
-- [ ] P6-1 · PR title + `#number`
-- [ ] P6-1 · Status pill: Open / Approved / Changes requested / Commented (changes after submit)
-- [ ] P6-1 · Repo name, "@author wants to merge `head` → `base`"
-- [ ] P6-1 · +additions / −deletions · file count · "updated N ago"
-- [ ] P6-1 · Existing approvals count with approvers on hover (from GitHub)
-- [ ] P6-1 · Existing comments count (from GitHub)
-- [ ] P6-1 · "View on GitHub ↗" link (opens the PR)
-- [ ] P6-1 · Light/dark toggle (☾/☀), remembered per browser, defaults to system
+- [x] P6-1 · Brand mark + "Rocky Reviews" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · PR title + `#number` — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · Status pill: Open / Approved / Changes requested / Commented (changes after submit) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the submitted states render from `myReview` (`Shell.test.tsx`), set by Finish review in P6-6
+- [x] P6-1 · Repo name, "@author wants to merge `head` → `base`" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · +additions / −deletions · file count · "updated N ago" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · Existing approvals count with approvers on hover (from GitHub) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); tooltip also on keyboard focus, Escape closes it (`shell.e2e.spec.ts`)
+- [x] P6-1 · Existing comments count (from GitHub) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · "View on GitHub ↗" link (opens the PR) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); built from validated owner/repo/number only
+- [x] P6-1 · Light/dark toggle (☾/☀), remembered per browser, defaults to system — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); no flash on load, storage failures tolerated (`shell.e2e.spec.ts` theme tests)
 - [ ] P6-5 · "? Shortcuts" button
 - [ ] P6-6 · "Finish review" primary button with pending-comment count
 
 ## Sidebar (triage)
 
-- [ ] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, minutes of high-risk code left, "all reviewed ✓" state
+- [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, minutes of high-risk code left, "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); minutes from `triage.files[].reviewMinutes` (defect 6)
 - [ ] P6-2 · "Briefing & change map" entry
-- [ ] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts
-- [ ] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge
-- [ ] P6-1 · Viewed files struck through
-- [ ] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show"
-- [ ] P6-1 · Noise files listed once shown or trusted
+- [x] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the faded state needs draft decisions (P6-4)
+- [x] P6-1 · Viewed files struck through — `shell.e2e.spec.ts` "viewed checkboxes update coverage and strike the file through"
+- [x] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · Noise files listed once shown or trusted — `shell.e2e.spec.ts` "noise: Show lists the files, Trust marks them viewed"
 
 ## Briefing (P6-2)
 
@@ -107,8 +107,8 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Responsive
 
-- [ ] P6-1 · < 1180 px: right panel hidden (the real app must offer it another way, see defects)
-- [ ] P6-1 · < 760 px: sidebar hidden, secondary top-bar items hidden
+- [x] P6-1 · < 1180 px: right panel hidden (the real app must offer it another way, see defects) — [pr-shell-1024-light](../../apps/web/e2e/__screenshots__/pr-shell-1024-light.png), drawer: [pr-panel-drawer-1024-light](../../apps/web/e2e/__screenshots__/pr-panel-drawer-1024-light.png)
+- [x] P6-1 · < 760 px: sidebar hidden, secondary top-bar items hidden — [pr-shell-375-light](../../apps/web/e2e/__screenshots__/pr-shell-375-light.png), drawer: [pr-files-drawer-375-dark](../../apps/web/e2e/__screenshots__/pr-files-drawer-375-dark.png)
 
 ## Known POC defects (do NOT copy)
 
@@ -116,11 +116,32 @@ Found while capturing the P0-8 screenshots.
 
 1. **375 px overflows horizontally**: briefing text, risk table and the Finish button are cut off. The real app must have no horizontal page scroll at 375 px (risk table stacks, change map scrolls inside its own box).
 2. **Right-panel "draft" badge is clipped** ("dra", "draf") when titles wrap. Reserve space or wrap the badge.
-3. **Change-map edge labels overlap cards** ("POST /accept", "read token", "grant role"). P5-1 must place labels in free space.
+3. **Change-map edge labels overlap cards** ("POST /accept", "read token", "grant role"). P5-1 must place labels in free space. Done in the renderer (P5-1): labels are pills placed clear of cards, badges and lane headers, tested in `packages/renderer/src/render.test.ts`; see [`change-map/compare-light.png`](change-map/compare-light.png).
 4. **Ambiguous file names** in the risk table: two files show as `invitations.ts`. Show the parent folder when names collide.
 5. **No way to reach Ask or the drafts list below 1180 px**. Add a drawer or tab.
 6. **Coverage minutes** are computed from additions only; the real estimate comes from the analysis (`triage.files[].reviewMinutes`, H2 #9).
 
+Status (P6-1): defect 5 is fixed for the shell, the right panel and the sidebar open as drawers
+below their breakpoints ([pr-panel-drawer-375-light](../../apps/web/e2e/__screenshots__/pr-panel-drawer-375-light.png)). Defect 1 is fixed for the shell (no
+horizontal scroll at 375 px, `shell.e2e.spec.ts`); the risk table and change map are P6-2.
+Defect 6 is fixed in the coverage card.
+
 ## Intentional differences
 
-_None yet._
+- **Contrast (P6-1).** Where the POC's colours fall below WCAG AA (4.5:1) for small text, the app
+  keeps the palette and uses a different token: the PR number and the sidebar group labels use
+  `--muted` (POC `--faint`); risk score badges keep the level's tint but the number uses `--text`
+  (POC level colour on tint, 3.2–4.1:1 in light mode); the "Commented"/"Closed" status pill
+  uses `--text` on `--low-bg`; "✦ AI briefing" keeps the cyan mark and sets the label in
+  `--text` (POC `--ai` at 3.7:1). axe reports 0 serious issues at all widths and modes.
+- **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
+  unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
+  summarised as noise".
+- **Top bar at ≤ 760 px (P6-1).** The brand mark is hidden (its name already was in the POC), the
+  title stays on one line with `#number` outside the clipped text (full title on hover), and the
+  link reads "GitHub ↗" beside the counts ("View on" is kept for screen readers). The bar is
+  about 96 px tall, close to the POC's 92 px.
+- **Drawer toggles (P6-1).** The top bar gains a Files toggle (≤ 760 px) and a Review panel
+  toggle (≤ 1180 px), and a skip link; the POC has neither (defect 5).
+- **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
+  bar until those tasks; the main column and right panel hold placeholders until P6-2/P6-4.
