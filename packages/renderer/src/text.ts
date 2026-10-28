@@ -1,0 +1,101 @@
+/**
+ * Text measurement from a fixed table.
+ *
+ * Adapted from PR Lens (https://github.com/coldteadotai/pr-lens, packages/renderer/src/text.ts
+ * at 918ffe82cb1dd71d20ce70b27917aeb80a7a4b49), MIT License, Copyright (c) 2026 Coldtea AI.
+ * See NOTICE. Changes: no mono face, tracked width and truncation folded in here.
+ *
+ * The renderer never asks a font engine how wide a string is: it must produce the same geometry
+ * on a CI runner with no fonts installed as on a laptop with all of them. Widths come from a
+ * table instead, and every box is sized with enough slack that the small error against a real
+ * face stays invisible.
+ */
+export type Face = "sans" | "sans-bold";
+
+/** Advance widths per 1000 units of em, for the regular sans face. */
+// prettier-ignore
+const SANS_ADVANCE: Readonly<Record<string, number>> = {
+  " ": 278, "!": 278, '"': 355, "#": 556, $: 556, "%": 889, "&": 667, "'": 191,
+  "(": 333, ")": 333, "*": 389, "+": 584, ",": 278, "-": 333, ".": 278, "/": 278,
+  "0": 556, "1": 556, "2": 556, "3": 556, "4": 556, "5": 556, "6": 556, "7": 556,
+  "8": 556, "9": 556, ":": 278, ";": 278, "<": 584, "=": 584, ">": 584, "?": 556,
+  "@": 1015, A: 667, B: 667, C: 722, D: 722, E: 667, F: 611, G: 778, H: 722,
+  I: 278, J: 500, K: 667, L: 556, M: 833, N: 722, O: 778, P: 667, Q: 778, R: 722,
+  S: 667, T: 611, U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611, "[": 278,
+  "\\": 278, "]": 278, "^": 469, _: 556, "`": 333, a: 556, b: 556, c: 500, d: 556,
+  e: 556, f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833, n: 556,
+  o: 556, p: 556, q: 556, r: 333, s: 500, t: 278, u: 556, v: 500, w: 722, x: 500,
+  y: 500, z: 500, "{": 334, "|": 260, "}": 334, "~": 584,
+};
+
+/** What a narrow character outside the table is assumed to cost, in the same units. */
+const FALLBACK_ADVANCE = 600;
+/** East Asian Wide and Fullwidth glyphs occupy a full em. */
+const FULL_WIDTH_ADVANCE = 1000;
+/** The bold face runs a little wider; one factor over the regular table is close enough. */
+const BOLD_WIDENING = 1.06;
+
+const isWide = (character: string): boolean => {
+  const point = character.codePointAt(0) ?? 0;
+  return (
+    (point >= 0x1100 && point <= 0x115f) ||
+    (point >= 0x2e80 && point <= 0xa4cf) ||
+    (point >= 0xac00 && point <= 0xd7a3) ||
+    (point >= 0xf900 && point <= 0xfaff) ||
+    (point >= 0xfe30 && point <= 0xfe6f) ||
+    (point >= 0xff00 && point <= 0xff60) ||
+    (point >= 0xffe0 && point <= 0xffe6) ||
+    (point >= 0x1f300 && point <= 0x1faff) ||
+    (point >= 0x20000 && point <= 0x3fffd)
+  );
+};
+
+const advanceFor = (face: Face, character: string): number => {
+  const regular =
+    SANS_ADVANCE[character] ?? (isWide(character) ? FULL_WIDTH_ADVANCE : FALLBACK_ADVANCE);
+  return face === "sans-bold" ? regular * BOLD_WIDENING : regular;
+};
+
+/**
+ * Width of `text` in user units at `fontSize`, to a hundredth of a unit. `tracking` is
+ * letter-spacing in em, which adds a fixed step after every glyph.
+ */
+export const measure = (text: string, face: Face, fontSize: number, tracking = 0): number => {
+  let thousandths = 0;
+  let glyphs = 0;
+  for (const character of text) {
+    thousandths += advanceFor(face, character);
+    glyphs += 1;
+  }
+  return Math.round(((thousandths / 1000) * fontSize + glyphs * tracking * fontSize) * 100) / 100;
+};
+
+const ELLIPSIS = "…";
+
+/**
+ * Shortens `text` until it fits `maxWidth`, ellipsis included. Cutting by code point rather
+ * than by UTF-16 unit keeps a surrogate pair from being split into a replacement character.
+ */
+export const truncate = (
+  text: string,
+  face: Face,
+  fontSize: number,
+  maxWidth: number,
+  tracking = 0,
+): string => {
+  if (measure(text, face, fontSize, tracking) <= maxWidth) return text;
+
+  const characters = [...text];
+  const ellipsisWidth = measure(ELLIPSIS, face, fontSize, tracking);
+  let width = 0;
+  let kept = 0;
+  for (const character of characters) {
+    const next = width + measure(character, face, fontSize, tracking);
+    if (next + ellipsisWidth > maxWidth) break;
+    width = next;
+    kept += 1;
+  }
+
+  if (kept === 0) return ELLIPSIS;
+  return `${characters.slice(0, kept).join("").trimEnd()}${ELLIPSIS}`;
+};

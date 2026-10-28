@@ -1,9 +1,10 @@
 // P0-10: colours live only in apps/web/src/styles/tokens.css. Everything else in apps/web must
 // use var(--token). Fails on hex literals, colour functions (any case) and CSS named colours.
+// P5-1: the change-map renderer (its stylesheet, code and golden SVGs) is held to the same rule.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const ROOT = "apps/web";
+const ROOTS = ["apps/web", "packages/renderer"];
 const SKIP_DIRS = new Set([
   "node_modules",
   "dist",
@@ -28,7 +29,7 @@ const walk = (dir) =>
   });
 
 const problems = [];
-for (const file of walk(ROOT)) {
+for (const file of ROOTS.flatMap(walk)) {
   const rel = relative(".", file);
   if (!EXTENSIONS.test(file) || ALLOWED.has(rel)) continue;
   readFileSync(file, "utf8")
