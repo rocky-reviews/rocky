@@ -6,6 +6,7 @@
  * focus to its toggle. If the width grows until the panel shows in place, focus moves to it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { focusMain } from "../briefing/focus.js";
 import type { ShellData } from "../data/shell-data.js";
 import { MainContent } from "./MainArea.js";
 import { RightPanelContent } from "./RightPanel.js";
@@ -78,6 +79,13 @@ export const Shell = ({ data, now }: Props) => {
     if (overlay === "files") closeDrawer();
   };
 
+  // A file opened from the briefing (P6-2): the content under focus is replaced, so focus moves
+  // to the main column, scrolled to the top.
+  const openFile = (path: string) => {
+    select({ kind: "file", path });
+    focusMain();
+  };
+
   const toggleViewed = (path: string) =>
     setViewed((current) => {
       const next = new Set(current);
@@ -124,6 +132,7 @@ export const Shell = ({ data, now }: Props) => {
             <SidebarContent
               groups={groups}
               noise={noise}
+              unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
               coverage={cover}
               selection={selection}
               viewed={viewed}
@@ -134,7 +143,12 @@ export const Shell = ({ data, now }: Props) => {
           )}
         </nav>
         <main id="main" className="col main" tabIndex={-1} inert={overlay !== null}>
-          <MainContent selection={selection} analysis={data.analysis} />
+          <MainContent
+            selection={selection}
+            analysis={data.analysis}
+            run={data.analysisRun}
+            onOpenFile={openFile}
+          />
         </main>
         <aside
           id="review-panel"

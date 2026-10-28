@@ -270,7 +270,10 @@ test.describe("keyboard", () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await openShell(page);
     await page.getByRole("button", { name: "Files", exact: true }).click();
-    await page.getByRole("button", { name: /^src\/jobs\/sendInviteEmail\.ts/ }).click();
+    await page
+      .locator("#sidebar")
+      .getByRole("button", { name: /^src\/jobs\/sendInviteEmail\.ts/ })
+      .click();
     await expect(page.locator("#sidebar")).toBeHidden();
     await expect(page.locator("main h2")).toHaveText("src/jobs/sendInviteEmail.ts");
   });
