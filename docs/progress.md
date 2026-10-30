@@ -107,6 +107,29 @@ Task log for the project plan. Agents append a row when a task is merged.
 - `scripts/screenshot-change-map.ts` still inlines the stylesheets with `<style>`; fine for
   screenshots, but it is not how the app loads them.
 
+### P6-5 follow-ups
+
+- P6-6: replace the shell's `onFinish` toast (`NOT_YET.finish` in `apps/web/src/shell/Shell.tsx`)
+  with opening the Finish review modal, and add its "Finish review" top-bar button. Then extend
+  `keyboard.e2e.spec.ts` "a full review with the keyboard only" past the ⌘/Ctrl+Enter step:
+  the modal opens with focus inside, Tab reaches the verdict and Submit, Enter submits once,
+  the toast and status pill update, Escape ("Keep reviewing") returns focus. Single-key
+  shortcuts must stay off while the modal is open (pass it into `ShortcutKeys`' `active`).
+- P9-2: replace `onAsk` (`NOT_YET.ask`) with opening the Ask tab and focusing its input,
+  pre-filled with the selected code as in the POC; add "/ ask" back to the shortcut strip and
+  drop "(not available yet)" from the dialog row (`HELP_ROWS`).
+- The single-key preference is per browser (`localStorage`); move it to user settings when
+  those exist, so it follows the reviewer across devices.
+- Remapping keys (the other WCAG 2.1.4 option) is not offered; consider it if users ask.
+- a/e/d act on the highlighted (focused) draft, which after scrolling may not be the one in
+  view (review round 1 nit 4, kept as in the POC). Revisit if reviewers find it surprising.
+- UI-verifier nits (not done): the `--overlay` scrim barely dims the page in dark mode (also the
+  drawers'); the top-bar "?" chip stays while single-key shortcuts are off; the strip's "Turn them
+  on in Keyboard shortcuts" could be a button that opens the dialog; at 375 px the "?" button is a
+  ghost button beside bordered icon buttons and shortens the PR title; key hints show on touch
+  layouts (could hide under `(pointer: coarse)`); off rows in the dialog are struck through, a
+  muted "(off)" may read better.
+
 ### P6-4 follow-ups
 
 - Wire the repository access check in `startServer` (ADR 0024 residual risk): until then the drafts routes answer 503 in a running server.

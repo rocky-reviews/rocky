@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DiffDataError, MAX_DIFF_CHARS, parseDiffData } from "./diff-data.js";
-import { createFixtureDiffSource } from "./diff-fixture-source.js";
+import {
+  createFixtureDiffSource,
+  NEWER_PUSH_SHA,
+  newerPushFromSearch,
+} from "./diff-fixture-source.js";
 import { DEFAULT_PULL } from "./fixture-source.js";
 import { LARGE_DIFF_LINES, LARGE_PULL } from "./large-fixture.js";
 
@@ -61,6 +65,16 @@ describe("fixture diff source", () => {
     expect(data.headSha).toBe(SHA);
     expect(data.files.size).toBe(9);
     expect(data.files.get("src/auth/invitations.ts")?.additions).toBe(33);
+  });
+
+  it("serves pr-847 as a later push with ?diff=newer-push (P6-5)", async () => {
+    expect(newerPushFromSearch("?diff=newer-push")).toBe(true);
+    expect(newerPushFromSearch("?pr=847")).toBe(false);
+    const data = parseDiffData(
+      await createFixtureDiffSource({ newerPush: true }).load(DEFAULT_PULL),
+    );
+    expect(data.headSha).toBe(NEWER_PUSH_SHA);
+    expect(data.files.size).toBe(9);
   });
 
   it("serves the generated large diff: one file with 5,000 diff lines", async () => {

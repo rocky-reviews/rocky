@@ -179,3 +179,31 @@ describe("sidebar", () => {
     expect(t).toContain("No analysis yet");
   });
 });
+
+describe("keyboard shortcuts (P6-5)", () => {
+  const html = render();
+
+  it("has a Keyboard shortcuts button in the top bar that opens a dialog", () => {
+    expect(html).toMatch(
+      /<button[^>]*class="btn btn-ghost btn-sm shortcuts-btn"[^>]*aria-label="Keyboard shortcuts"[^>]*aria-haspopup="dialog"[^>]*aria-keyshortcuts="Shift\+\/"/,
+    );
+    // The dialog itself is rendered only when opened.
+    expect(html).not.toContain('role="dialog"');
+  });
+
+  it("names the m key on the light/dark toggle", () => {
+    expect(html).toMatch(/aria-label="Switch to dark mode" aria-keyshortcuts="m"/);
+    expect(html).toContain('title="Switch to dark mode (m)"');
+  });
+
+  it("shows the shortcut strip under the Review panel", () => {
+    const panel = html.split('id="review-panel"')[1] ?? "";
+    expect(text(panel.split('class="shortcut-strip"')[1] ?? "")).toContain(
+      "k / j next/prev file n / p drafts a accept e edit d dismiss v viewed ? all shortcuts",
+    );
+  });
+
+  it("puts the k hint on Start with the riskiest file", () => {
+    expect(html).toMatch(/aria-keyshortcuts="k">Start with the riskiest file <kbd class="kbd-on"/);
+  });
+});

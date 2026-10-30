@@ -19,6 +19,8 @@ import { type KeyboardEvent, useEffect, useRef } from "react";
 import { Code } from "../diff/Code.js";
 import { Prose } from "../diff/Prose.js";
 import type { Language } from "../diff/tokenize.js";
+import { Kbd, useKeyboard } from "../keyboard/KeyboardContext.js";
+import { isMac } from "../keyboard/keymap.js";
 import { useReview } from "./ReviewProvider.js";
 
 export const REASON_LABEL: Record<DismissReason, string> = {
@@ -37,7 +39,7 @@ export const SEVERITY_LABEL: Record<Severity, string> = {
   low: "Low",
 };
 
-const MAC = typeof navigator !== "undefined" && /Mac OS X|iPhone|iPad/.test(navigator.userAgent);
+const MAC = typeof navigator !== "undefined" && isMac(navigator.userAgent);
 
 type Props = {
   finding: Finding;
@@ -66,6 +68,8 @@ export const DraftCard = ({ finding, original, language }: Props) => {
   const dismissing = mode?.kind === "dismiss" && mode.findingId === finding.id;
   const root = useRef<HTMLElement>(null);
   const titleId = `draft-${finding.id}-title`;
+  // P6-5: a/e/d press these buttons on the focused draft; the hints go when shortcuts are off.
+  const keys = useKeyboard().singleKeys;
 
   // Focus follows the decision made here: to Undo after a decision, to Accept after an undo, to
   // the first reason or the textarea when those open.
@@ -261,35 +265,38 @@ export const DraftCard = ({ finding, original, language }: Props) => {
               type="button"
               className="btn btn-sm btn-primary"
               data-role="accept"
+              aria-keyshortcuts={keys ? "a" : undefined}
               onClick={() =>
                 then('[data-role="undo"]', () => void act(finding, { kind: "accept" }))
               }
             >
-              Accept
+              Accept <Kbd k="a" on />
             </button>
             <button
               type="button"
               className="btn btn-sm"
               data-role="edit"
+              aria-keyshortcuts={keys ? "e" : undefined}
               onClick={() =>
                 then("textarea", () =>
                   setMode({ kind: "edit", findingId: finding.id, text: finding.body }),
                 )
               }
             >
-              Edit
+              Edit <Kbd k="e" />
             </button>
             <button
               type="button"
               className="btn btn-sm"
               data-role="dismiss"
+              aria-keyshortcuts={keys ? "d" : undefined}
               onClick={() =>
                 then('[data-role="first-reason"]', () =>
                   setMode({ kind: "dismiss", findingId: finding.id }),
                 )
               }
             >
-              Dismiss
+              Dismiss <Kbd k="d" />
             </button>
             <span className="spacer" />
             {copiedAt !== null && <span className="copied-note">✓ Fix prompt copied</span>}

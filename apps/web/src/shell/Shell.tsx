@@ -4,6 +4,7 @@
  * bar (POC defect 5: the POC just hid them). An open drawer is a modal dialog: the rest of the
  * page is inert, Tab cycles inside it, and Escape or a click outside closes it and returns
  * focus to its toggle. If the width grows until the panel shows in place, focus moves to it.
+ * P6-5: the keyboard shortcuts (ADR 0030) and their dialog, a modal in the same way.
  */
 import type { Finding } from "@rocky-reviews/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -13,12 +14,18 @@ import type { ShellData } from "../data/shell-data.js";
 import { ReviewProvider } from "../drafts/ReviewProvider.js";
 import { MainContent } from "./MainArea.js";
 import { RightPanelContent } from "./RightPanel.js";
-import { ToastProvider } from "./Toast.js";
+import { ToastProvider, useToast } from "./Toast.js";
 import { type Selection, SidebarContent } from "./Sidebar.js";
 import { type Drawer, TopBar } from "./TopBar.js";
 import { coverage, noiseGroup, sidebarGroups } from "./triage-model.js";
 import { PANEL_HIDDEN, SIDEBAR_HIDDEN, useMediaQuery } from "./use-media-query.js";
 import { useTheme } from "./use-theme.js";
+import { trapTab } from "./focus-trap.js";
+import { reviewOrder } from "../diff/annotations.js";
+import { KeyboardContext, type KeyboardContextValue } from "../keyboard/KeyboardContext.js";
+import { readSingleKeys, saveSingleKeys } from "../keyboard/keymap.js";
+import { ShortcutKeys } from "../keyboard/ShortcutKeys.js";
+import { ShortcutsDialog } from "../keyboard/ShortcutsDialog.js";
 
 type Props = {
   data: ShellData;
@@ -35,8 +42,17 @@ export const Shell = (props: Props) => (
 
 const NO_FINDINGS: readonly Finding[] = [];
 
+/** P6-5: the entry points that later tasks fill (Ask: P9-2; Finish review: P6-6). */
+export const NOT_YET = {
+  ask: "Ask is not available yet.",
+  finish: "Finish review is not available yet. Your decisions and comments are saved.",
+} as const;
+
+const storage = (): Storage => window.localStorage;
+
 const ShellLayout = ({ data, now, review }: Props) => {
   const { mode, toggle } = useTheme();
+  const toast = useToast();
   const [selection, setSelection] = useState<Selection>({ kind: "briefing" });
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() => new Set());
   const [drawer, setDrawer] = useState<Drawer | null>(null);
@@ -54,6 +70,43 @@ const ShellLayout = ({ data, now, review }: Props) => {
     [data.analysis],
   );
   const cover = coverage(groups, viewed);
+  const order = useMemo(
+    () => (data.analysis === null ? [] : reviewOrder(data.analysis)),
+    [data.analysis],
+  );
+
+  // P6-5: single-key shortcuts on or off (WCAG 2.1.4), whether this browser kept the choice,
+  // and the shortcuts dialog, which returns focus to wherever it was opened from (the main
+  // column when that was nothing).
+  const [singleKeys, setSingleKeysState] = useState(() =>
+    typeof window === "undefined" ? true : readSingleKeys(storage),
+  );
+  const [remembered, setRemembered] = useState(true);
+  const [help, setHelp] = useState(false);
+  const helpReturn = useRef<Element | null>(null);
+  const keyboard = useMemo<KeyboardContextValue>(
+    () => ({
+      singleKeys,
+      setSingleKeys: (on) => {
+        setRemembered(saveSingleKeys(storage, on));
+        setSingleKeysState(on);
+      },
+      openHelp: () => {
+        helpReturn.current = document.activeElement;
+        setHelp(true);
+      },
+    }),
+    [singleKeys],
+  );
+  const closeHelp = useCallback(() => setHelp(false), []);
+  useEffect(() => {
+    if (help || helpReturn.current === null) return;
+    const back = helpReturn.current;
+    helpReturn.current = null;
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+    else document.getElementById("main")?.focus({ preventScroll: true });
+  }, [help]);
+  const modal = overlay !== null || help;
 
   // Focus moves into an opened drawer, and on close back to its toggle, or to the region
   // itself when a wider window now shows it in place (the toggle is hidden then).
@@ -129,114 +182,115 @@ const ShellLayout = ({ data, now, review }: Props) => {
   );
 
   return (
-    <ReviewProvider
-      source={review}
-      analysisId={data.analysis === null ? null : data.analysisId}
-      analysisHead={data.analysis?.provenance.head.sha ?? null}
-      findings={data.analysis?.findings ?? NO_FINDINGS}
-      onOpenFile={jumpToFile}
-    >
-      <div className="app">
-        <div className="topbar-wrap" inert={overlay !== null}>
-          <a className="skip-link" href="#main">
-            Skip to main content
-          </a>
-          <TopBar
-            pull={data.pull}
-            myReview={data.myReview}
-            now={now}
-            mode={mode}
-            onToggleMode={toggle}
-            drawer={drawer}
-            onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
-          />
-        </div>
-        <div className="body">
-          <nav
-            id="sidebar"
-            className="col sidebar"
-            tabIndex={-1}
-            {...(overlay === "files"
-              ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
-              : { "aria-label": "Files" })}
-            data-open={drawer === "files"}
-            inert={overlay !== null && overlay !== "files"}
-          >
-            {drawer === "files" && (
-              <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
-            )}
-            {data.analysis === null ? (
-              <p className="placeholder">Files appear here once the analysis is ready.</p>
-            ) : (
-              <SidebarContent
-                groups={groups}
-                noise={noise}
-                unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
-                coverage={cover}
-                selection={selection}
-                viewed={viewed}
-                onSelect={select}
-                onToggleViewed={toggleViewed}
-                onMarkViewed={markViewed}
-              />
-            )}
-          </nav>
-          <main id="main" className="col main" tabIndex={-1} inert={overlay !== null}>
-            <MainContent
-              selection={selection}
-              analysis={data.analysis}
-              run={data.analysisRun}
-              headSha={data.pull.headSha}
-              onOpenFile={openFile}
-              files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+    <KeyboardContext value={keyboard}>
+      <ReviewProvider
+        source={review}
+        analysisId={data.analysis === null ? null : data.analysisId}
+        analysisHead={data.analysis?.provenance.head.sha ?? null}
+        findings={data.analysis?.findings ?? NO_FINDINGS}
+        onOpenFile={jumpToFile}
+      >
+        <ShortcutKeys
+          active={!modal}
+          singleKeys={singleKeys}
+          current={selection.kind === "file" ? selection.path : null}
+          order={order}
+          onOpen={(path) => {
+            select(path === null ? { kind: "briefing" } : { kind: "file", path });
+            focusMain();
+          }}
+          onToggleViewed={toggleViewed}
+          onToggleMode={toggle}
+          onHelp={keyboard.openHelp}
+          onAsk={() => toast(NOT_YET.ask)}
+          onFinish={() => toast(NOT_YET.finish)}
+        />
+        <div className="app">
+          <div className="topbar-wrap" inert={modal}>
+            <a className="skip-link" href="#main">
+              Skip to main content
+            </a>
+            <TopBar
+              pull={data.pull}
+              myReview={data.myReview}
+              now={now}
+              mode={mode}
+              onToggleMode={toggle}
+              drawer={drawer}
+              onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
             />
-          </main>
-          <aside
-            id="review-panel"
-            className="panel"
-            tabIndex={-1}
-            {...(overlay === "panel"
-              ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
-              : { "aria-label": "Review panel" })}
-            data-open={drawer === "panel"}
-            inert={overlay !== null && overlay !== "panel"}
-          >
-            {drawer === "panel" && (
-              <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
-            )}
-            <RightPanelContent />
-          </aside>
+          </div>
+          <div className="body">
+            <nav
+              id="sidebar"
+              className="col sidebar"
+              tabIndex={-1}
+              {...(overlay === "files"
+                ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
+                : { "aria-label": "Files" })}
+              data-open={drawer === "files"}
+              inert={(overlay !== null && overlay !== "files") || help}
+            >
+              {drawer === "files" && (
+                <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
+              )}
+              {data.analysis === null ? (
+                <p className="placeholder">Files appear here once the analysis is ready.</p>
+              ) : (
+                <SidebarContent
+                  groups={groups}
+                  noise={noise}
+                  unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
+                  coverage={cover}
+                  selection={selection}
+                  viewed={viewed}
+                  onSelect={select}
+                  onToggleViewed={toggleViewed}
+                  onMarkViewed={markViewed}
+                />
+              )}
+            </nav>
+            <main id="main" className="col main" tabIndex={-1} inert={modal}>
+              <MainContent
+                selection={selection}
+                analysis={data.analysis}
+                run={data.analysisRun}
+                headSha={data.pull.headSha}
+                onOpenFile={openFile}
+                files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+              />
+            </main>
+            <aside
+              id="review-panel"
+              className="panel"
+              tabIndex={-1}
+              {...(overlay === "panel"
+                ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
+                : { "aria-label": "Review panel" })}
+              data-open={drawer === "panel"}
+              inert={(overlay !== null && overlay !== "panel") || help}
+            >
+              {drawer === "panel" && (
+                <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
+              )}
+              <RightPanelContent />
+            </aside>
+          </div>
+          {overlay !== null && (
+            <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
+          )}
+          {help && (
+            <ShortcutsDialog
+              singleKeys={singleKeys}
+              remembered={remembered}
+              onSingleKeys={keyboard.setSingleKeys}
+              onClose={closeHelp}
+            />
+          )}
         </div>
-        {overlay !== null && (
-          <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
-        )}
-      </div>
-    </ReviewProvider>
+      </ReviewProvider>
+    </KeyboardContext>
   );
-};
-
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/** Keeps Tab and Shift+Tab inside the open drawer, wrapping at either end. */
-const trapTab = (event: KeyboardEvent, container: string) => {
-  const root = document.querySelector<HTMLElement>(container);
-  if (!root) return;
-  const items = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => el.getClientRects().length > 0,
-  );
-  const first = items[0];
-  const last = items.at(-1);
-  if (!first || !last) return;
-  const active = document.activeElement;
-  const outside = !(active instanceof Node) || !root.contains(active);
-  if (event.shiftKey && (active === first || outside)) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && (active === last || outside)) {
-    event.preventDefault();
-    first.focus();
-  }
 };
 
 const DrawerHead = ({

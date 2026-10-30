@@ -80,6 +80,8 @@ export const SidebarContent = ({
     setFocusNoise(false);
   };
   const noiseViewed = noise.files.length > 0 && noise.files.every((f) => viewed.has(f.path));
+  // A noise file opened by k/j or "next" (P6-5) shows where it is in the list.
+  const noiseSelected = noise.files.some((f) => isSelected(selection, f.path));
   const percent =
     coverage.total === 0 ? 100 : Math.round((coverage.reviewed / coverage.total) * 100);
 
@@ -189,7 +191,7 @@ export const SidebarContent = ({
             <span>Noise · auto-summarized</span>
             <Count n={noise.files.length} />
           </h2>
-          {noiseOpen || noiseViewed ? (
+          {noiseOpen || noiseViewed || noiseSelected ? (
             <ul className="file-list" ref={focusFirst}>
               {noise.files.map((file) => (
                 <FileRow

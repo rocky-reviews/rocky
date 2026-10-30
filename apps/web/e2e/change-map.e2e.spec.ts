@@ -138,6 +138,23 @@ test.describe("keyboard", () => {
     await expect(page.locator('#main .diff button[data-line="9"]')).toBeFocused();
   });
 
+  test("the shortcuts (P6-5) work after a badge: n goes to a draft, b back to the map", async ({
+    page,
+  }) => {
+    await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+    await map(page).locator('[data-findings="F1 F3 F8"]').focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator('#main .diff button[data-line="28"]')).toBeFocused();
+    // Nothing decided yet: n goes to the most severe draft, F1, on the line the badge opened.
+    await page.keyboard.press("n");
+    await expect(page.locator('[data-finding="F1"]')).toBeFocused();
+    await page.keyboard.press("b");
+    await expect(page.locator("#briefing-title")).toBeVisible();
+    await map(page).locator('[data-findings="F4 F5"]').focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator('#main .diff button[data-line="6"]')).toBeFocused();
+  });
+
   test("cards and badges have names that say where they go", async ({ page }) => {
     await expect(
       map(page).getByRole("button", {

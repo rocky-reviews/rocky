@@ -19,13 +19,21 @@ const FIXTURES: readonly { ref: PullRef; load: () => RawDiffData }[] = [
   { ref: LARGE_PULL, load: () => ({ headSha: LARGE_HEAD_SHA, diff: largeDiff() }) },
 ];
 
-export const createFixtureDiffSource = (): DiffDataSource => ({
+/** P6-5: a push after the analysed commit (`?diff=newer-push`), for the hidden-drafts state. */
+export const NEWER_PUSH_SHA = "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d";
+
+export const createFixtureDiffSource = (options: { newerPush?: boolean } = {}): DiffDataSource => ({
   load: async (ref: PullRef): Promise<RawDiffData> => {
     const fixture = FIXTURES.find((f) => same(f.ref, ref));
     if (fixture === undefined) throw new DiffDataError("no such pull request");
-    return fixture.load();
+    const data = fixture.load();
+    return options.newerPush === true ? { ...data, headSha: NEWER_PUSH_SHA } : data;
   },
 });
+
+/** `?diff=newer-push`: the diff's head is a later push than the analysis. */
+export const newerPushFromSearch = (search: string): boolean =>
+  new URLSearchParams(search).get("diff") === "newer-push";
 
 /**
  * Which fixture PR the page shows: the large diff with `?fixture=large-diff`, a briefing fixture

@@ -174,6 +174,8 @@ test.describe("every transition, and a refresh keeps it", () => {
     await expect.poll(() => reviewApi.comments().length).toBe(1);
 
     await reload(page);
+    // reload() scrolls to F1 (line 28); line 10 may be outside the virtualised window there.
+    await page.locator("#main").evaluate((main) => main.scrollTo({ top: 0 }));
     await expect(page.locator(".diff .mine-body", { hasText: "TTL from config?" })).toBeVisible();
     await expect(page.locator("#review-panel #own-comments")).toBeAttached();
     await page.getByRole("button", { name: "Delete your comment on line 10" }).click();

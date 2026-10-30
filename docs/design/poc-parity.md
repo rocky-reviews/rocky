@@ -17,7 +17,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] P6-1 · Existing comments count (from GitHub) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · "View on GitHub ↗" link (opens the PR) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); built from validated owner/repo/number only
 - [x] P6-1 · Light/dark toggle (☾/☀), remembered per browser, defaults to system — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); no flash on load, storage failures tolerated (`shell.e2e.spec.ts` theme tests)
-- [ ] P6-5 · "? Shortcuts" button
+- [x] P6-5 · "? Shortcuts" button — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-375-dark](../../apps/web/e2e/__screenshots__/pr-shell-375-dark.png) (just "?" below 760 px, kept there so the dialog and its off switch are reachable at every width); opens the shortcuts dialog (`keyboard.e2e.spec.ts` "the shortcuts dialog")
 - [ ] P6-6 · "Finish review" primary button with pending-comment count
 
 ## Sidebar (triage)
@@ -41,12 +41,12 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] Suggested review path: numbered, file + why + score, clickable — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png)
 - [x] "Project memory applied" list with source PR — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); "Not available without the AI briefing." when Rocky wrote the briefing ([brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png))
 - [x] "AI checked, looks fine" list — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); the same "Not available" line when Rocky wrote the briefing
-- [x] "Start with the riskiest file (k)" button — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); the `k` hint comes with the shortcuts (P6-5)
+- [x] "Start with the riskiest file (k)" button — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); the `k` hint since P6-5 (shown when k opens that same file)
 - [x] Analysis states (P6-2, not in the POC), with the sidebar's "Files appear here once the analysis is ready": no analysis yet [brief-none-1440-light](../../apps/web/e2e/__screenshots__/brief-none-1440-light.png), analysing (a live status) [brief-running-1440-light](../../apps/web/e2e/__screenshots__/brief-running-1440-light.png), waiting for approval with the token estimate and limit [brief-awaiting-approval-1440-dark](../../apps/web/e2e/__screenshots__/brief-awaiting-approval-1440-dark.png), failed with plain words and the fixed code [brief-failed-1440-light](../../apps/web/e2e/__screenshots__/brief-failed-1440-light.png), out of date (`superseded`) [brief-superseded-375-light](../../apps/web/e2e/__screenshots__/brief-superseded-375-light.png); a previous briefing under a banner while the latest push is re-analysed [brief-reanalysing-1440-light](../../apps/web/e2e/__screenshots__/brief-reanalysing-1440-light.png) or when the document is of an earlier commit than the head [brief-out-of-date-375-dark](../../apps/web/e2e/__screenshots__/brief-out-of-date-375-dark.png); every state at 375/1024/1440 × light/dark in the same folder
 
 ## File view (P6-3)
 
-- [x] P6-3 · Sticky header: risk label + score, path, +/−, "Mark viewed (v)" / "✓ Viewed" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `v` itself is P6-5, so the button shows no key hint yet
+- [x] P6-3 · Sticky header: risk label + score, path, +/−, "Mark viewed (v)" / "✓ Viewed" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); the `v` hint and key since P6-5
 - [x] P6-3 · AI strip: "What changed", "Why <level>", "Drafts: n findings" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); "Accept, edit or dismiss each one inline" added with the inline drafts (P6-4)
 - [x] P6-3 · Hunk headers — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); modified files: `diff.e2e.spec.ts` "a modified file shows old and new numbers, signs and hunk headers"
 - [x] P6-3 · Old/new line numbers, +/− signs, add/del backgrounds — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-noise-raw-1024-light](../../apps/web/e2e/__screenshots__/file-noise-raw-1024-light.png) (removed lines); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png), `diff.e2e.spec.ts`
@@ -64,11 +64,11 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] Draft card: "✦ AI draft", severity pill, confidence %, "Only you can see this until you accept it" — [drafts-card-1440-light](../../apps/web/e2e/__screenshots__/drafts-card-1440-light.png), [drafts-card-375-dark](../../apps/web/e2e/__screenshots__/drafts-card-375-dark.png); `DraftCard.test.tsx`
 - [x] Title, body (inline code), suggested-change mini diff (with optional context line) — [drafts-card-1440-dark](../../apps/web/e2e/__screenshots__/drafts-card-1440-dark.png); the "−" lines are the range's lines from the diff
 - [x] Project-memory evidence line with source — `DraftCard.test.tsx` "shows the project-memory evidence"; on screen for F2 ([drafts-card-1024-light](../../apps/web/e2e/__screenshots__/drafts-card-1024-light.png) shows F1, which cites none)
-- [x] Accept (a) → becomes "@you · Pending · from AI draft" with Undo — [drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png), [drafts-accepted-375-light](../../apps/web/e2e/__screenshots__/drafts-accepted-375-light.png); kept on the server (`drafts.e2e.spec.ts` "accept → refresh…"); the `a` key is P6-5
-- [x] Edit (e) → textarea → "Save as my comment" → "edited from AI draft" — [drafts-edit-1440-light](../../apps/web/e2e/__screenshots__/drafts-edit-1440-light.png), [drafts-edit-375-dark](../../apps/web/e2e/__screenshots__/drafts-edit-375-dark.png); ⌘/Ctrl+Enter saves, Escape cancels; `e` is P6-5
-- [x] Dismiss (d) → reason chips (Not a real issue / Intentional / Not worth it here / Already handled elsewhere / Cancel) → collapsed "dismissed (reason)" with Undo — [drafts-dismiss-1440-dark](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-dark.png), [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png); the reason is stored as a fixed code for P8; `d` is P6-5
+- [x] Accept (a) → becomes "@you · Pending · from AI draft" with Undo — [drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png), [drafts-accepted-375-light](../../apps/web/e2e/__screenshots__/drafts-accepted-375-light.png); kept on the server (`drafts.e2e.spec.ts` "accept → refresh…"); `a` key and hint since P6-5 [keys-accept-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-light.png)
+- [x] Edit (e) → textarea → "Save as my comment" → "edited from AI draft" — [drafts-edit-1440-light](../../apps/web/e2e/__screenshots__/drafts-edit-1440-light.png), [drafts-edit-375-dark](../../apps/web/e2e/__screenshots__/drafts-edit-375-dark.png); ⌘/Ctrl+Enter saves, Escape cancels; `e` since P6-5
+- [x] Dismiss (d) → reason chips (Not a real issue / Intentional / Not worth it here / Already handled elsewhere / Cancel) → collapsed "dismissed (reason)" with Undo — [drafts-dismiss-1440-dark](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-dark.png), [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png); the reason is stored as a fixed code for P8; `d` since P6-5
 - [x] "Send to agent ↗" copies a fix prompt (toast) — `drafts.e2e.spec.ts` "send to agent copies the fix prompt…" (clipboard checked); the copy is recorded and shown as "✓ Fix prompt copied" after a reload
-- [x] Focus ring on the focused draft (n/p) — [drafts-dismiss-1440-light](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-light.png); set by acting on a draft or jumping to it from the panel (`drafts.e2e.spec.ts` "an item jumps to its draft…"); `n`/`p` are P6-5
+- [x] Focus ring on the focused draft (n/p) — [drafts-dismiss-1440-light](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-light.png); set by acting on a draft or jumping to it from the panel (`drafts.e2e.spec.ts` "an item jumps to its draft…"); and by `n`/`p` since P6-5 ([keys-draft-focus-1440-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-dark.png), [keys-draft-focus-375-light](../../apps/web/e2e/__screenshots__/keys-draft-focus-375-light.png))
 
 ## Right panel
 
@@ -78,7 +78,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] P6-4 · "Rocky will remember n dismissals" note (P8-2) — [drafts-panel-end-1440-dark](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-dark.png), drawer [drafts-panel-end-375-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-375-light.png); worded "Rocky keeps the reason for n dismissals…" until P8 learns from them (Intentional differences)
 - [x] P6-4 · "Your own comments" list → jumps to the line — [drafts-panel-end-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-light.png); own comments are now kept on the server too
 - [ ] P9-2 · Ask tab: empty-state hint, suggested questions, chat bubbles, "Reading the code…" typing state, answers with clickable `file:line` citations, Enter to send
-- [ ] P6-5 · Shortcut strip at the bottom of the Review tab
+- [x] P6-5 · Shortcut strip at the bottom of the Review tab — [drafts-panel-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-1440-light.png), [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png); "/ ask" joins it with Ask (P9-2), "? all shortcuts" added; says when single-key shortcuts are off
 
 ## Finish review modal (P6-6)
 
@@ -92,16 +92,20 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Keyboard (P6-5)
 
-- [ ] k next file, j previous file (risk order, noise included)
-- [ ] n / p next / previous draft (undecided first)
-- [ ] a accept, e edit, d dismiss (focused draft in the current file)
-- [ ] v toggle viewed
-- [ ] / open Ask, pre-filled with selected code
-- [ ] b back to briefing
-- [ ] m toggle light/dark
-- [ ] ? shortcuts dialog
-- [ ] ⌘↵ open Finish review; Esc closes dialogs / cancels edit, dismiss, compose
-- [ ] Shortcuts ignored while typing in a text field
+All in `keyboard.e2e.spec.ts` "a full review with the keyboard only" unless noted; rules in
+[ADR 0030](../adr/0030-keyboard-shortcuts.md).
+
+- [x] k next file, j previous file (risk order, noise included) — j from the first file returns to the briefing; a noise file opens the noise group ("j on the first file…")
+- [x] n / p next / previous draft (undecided first); like the panel's items, nothing while the review state loads or on a diff from a newer push ("on a diff from a newer push…") — [keys-draft-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-light.png), [keys-draft-focus-1024-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-1024-dark.png), [keys-draft-focus-375-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-375-dark.png)
+- [x] a accept, e edit, d dismiss (focused draft in the current file) — [keys-accept-focus-1440-dark](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-dark.png), [keys-accept-focus-375-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-375-light.png); they press the card's own buttons, so its guards apply, and do nothing while the drafts are hidden or the card is being edited or dismissed ("a, e and d act only on the focused draft…", "while a draft is being dismissed or edited…")
+- [x] v toggle viewed
+- [ ] / open Ask, pre-filled with selected code — the key is bound and shows "Ask is not available yet." until Ask (P9-2) exists
+- [x] b back to briefing
+- [x] m toggle light/dark
+- [x] ? shortcuts dialog — [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png), [keys-help-1440-dark](../../apps/web/e2e/__screenshots__/keys-help-1440-dark.png), [keys-help-1024-light](../../apps/web/e2e/__screenshots__/keys-help-1024-light.png), [keys-help-1024-dark](../../apps/web/e2e/__screenshots__/keys-help-1024-dark.png), [keys-help-375-light](../../apps/web/e2e/__screenshots__/keys-help-375-light.png), [keys-help-375-dark](../../apps/web/e2e/__screenshots__/keys-help-375-dark.png); focus trap, Escape, click outside, axe 0 serious ("the shortcuts dialog")
+- [ ] ⌘↵ open Finish review; Esc closes dialogs / cancels edit, dismiss, compose — Esc done (dialog, drawers, edit, dismiss, compose); ⌘/Ctrl+Enter is bound and shows "Finish review is not available yet…" until the modal (P6-6)
+- [x] Shortcuts ignored while typing in a text field — composer, draft editor and contenteditable ("shortcuts never fire while typing"); also with Ctrl/⌘/Alt ("shortcuts respect modifiers")
+- [x] (not in the POC) Single-key shortcuts can be turned off (WCAG 2.1.4), remembered per browser — [keys-help-off-1440-light](../../apps/web/e2e/__screenshots__/keys-help-off-1440-light.png), [keys-help-off-375-dark](../../apps/web/e2e/__screenshots__/keys-help-off-375-dark.png)
 
 ## Feedback
 
@@ -192,9 +196,15 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   "✦ draft" badge, the dismissal note (on `--ai-bg`), and the tally numbers (a coloured top border
   per box instead of coloured numbers). The draft's outer border is `--border` (the POC mixed in
   `--ai`; colour functions are not allowed outside the tokens) with the cyan left bar kept, and
-  "Send to agent" has a cyan border. The buttons show no `a`/`e`/`d` hints until the keys exist
-  (P6-5). The dismissal note says Rocky keeps the reason rather than "will remember", since
+  "Send to agent" has a cyan border. The dismissal note says Rocky keeps the reason rather than "will remember", since
   project memory (P8) does not learn yet. Drafts are hidden on a diff newer than the analysis,
   like the AI flags. The POC's Ask tab is not drawn until P9-2.
-- **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
-  bar until those tasks; the right panel's Ask tab comes with P9-2.
+- **Not yet in the shell:** "Finish review" (P6-6) is absent from the top bar until that task;
+  the right panel's Ask tab comes with P9-2.
+- **Shortcuts (P6-5).** "? Shortcuts" stays in the top bar below 760 px as "?" (the POC hid it),
+  so the dialog and its switch can be reached at every width. The dialog adds a "Single-key
+  shortcuts" switch (WCAG 2.1.4) and a "?" row; "Ask" reads "(not available yet)" until P9-2. The
+  `.kbd-on` hint border is `currentColor` (the POC used a 40% `color-mix`, not allowed outside the
+  tokens). The strip leaves out "/ ask" until Ask exists and ends with "? all shortcuts". j from
+  the first file goes back to the briefing (the POC stayed on the file). Shortcuts are off while
+  a drawer or dialog is open.

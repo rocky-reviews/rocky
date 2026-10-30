@@ -10,6 +10,7 @@ import { Fragment, useEffect, useId, useState } from "react";
 import type { MyReview, PullSummary } from "../data/shell-data.js";
 import { pullRequestUrl } from "../lib/github-url.js";
 import { timeAgo } from "../lib/time.js";
+import { useKeyboard, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import type { Mode } from "../theme.js";
 import { PanelIcon, SidebarIcon } from "./icons.js";
 import { statusOf } from "./status.js";
@@ -40,6 +41,10 @@ export const TopBar = ({
   const status = statusOf(pull.state, myReview);
   const url = pullRequestUrl(pull);
   const nextMode = mode === "dark" ? "light" : "dark";
+  const { openHelp } = useKeyboard();
+  const modeKey = useKeyShortcut("m");
+  // ARIA names the physical keys: "?" is Shift+/ on a US keyboard (not "?" or "Shift+?").
+  const helpKey = useKeyShortcut("Shift+/");
 
   return (
     <header className="topbar">
@@ -102,10 +107,24 @@ export const TopBar = ({
         type="button"
         className="mode-btn"
         aria-label={`Switch to ${nextMode} mode`}
-        title={`Switch to ${nextMode} mode`}
+        aria-keyshortcuts={modeKey}
+        title={`Switch to ${nextMode} mode${modeKey === undefined ? "" : " (m)"}`}
         onClick={onToggleMode}
       >
         <span aria-hidden="true">{mode === "dark" ? "☀" : "☾"}</span>
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm shortcuts-btn"
+        aria-label="Keyboard shortcuts"
+        aria-haspopup="dialog"
+        aria-keyshortcuts={helpKey}
+        onClick={openHelp}
+      >
+        <kbd aria-hidden="true">?</kbd>
+        <span className="hide-sm" aria-hidden="true">
+          Shortcuts
+        </span>
       </button>
       <button
         type="button"
