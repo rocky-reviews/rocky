@@ -567,6 +567,45 @@ describe("posted content equals what the user saw (acceptance criterion)", () =>
     expect((await submissions(A)).rows[0]).toMatchObject({ draft_count: 2, comment_count: 1 });
   });
 
+  it("after posting, the drafts routes refuse to change what was posted: 409 already_posted (ADR 0026 S2)", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const commentId = plan.items.find((i) => i.kind === "comment")!.id;
+    expect((await post(alice, A.pullRequestId, click(plan))).statusCode).toBe(200);
+    const raw = (method: "POST" | "DELETE", url: string, body?: unknown) =>
+      app.inject({
+        method,
+        url,
+        headers: {
+          ...headersFor(alice),
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(body === undefined ? {} : { payload: JSON.stringify(body) }),
+      });
+    for (const body of [
+      { action: "undo" },
+      { action: "edit", body: "too late" },
+      { action: "dismiss", reason: "intentional" },
+    ]) {
+      const res = await raw("POST", `/api/analyses/${A.analysisId}/drafts/F1`, body);
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ error: "already_posted", draft: { state: "accepted" } });
+    }
+    const del = await raw("DELETE", `/api/analyses/${A.analysisId}/comments/${commentId}`);
+    expect(del.statusCode).toBe(409);
+    expect(del.json()).toEqual({ error: "already_posted" });
+    // A draft that was not posted still changes; an edit that would not fit one comment is 400.
+    await draftAction(alice, A, "F2", { action: "accept" });
+    await draftAction(alice, A, "F2", { action: "undo" });
+    const long = await raw("POST", `/api/analyses/${A.analysisId}/drafts/F2`, {
+      action: "edit",
+      body: "x".repeat(65_536),
+    });
+    expect(long.statusCode).toBe(400);
+    expect(long.json()).toEqual({ error: "comment_too_long" });
+    expect(github.reviews).toHaveLength(1);
+  });
+
   it("the preview is the member's own: bob sees his comment, not alice's drafts, and posts under his own name", async () => {
     const bobSession = await sessionFor(A, bob, BOB_GH);
     const plan = (await preview(bobSession, A.pullRequestId)).json() as Preview;
@@ -629,7 +668,7 @@ describe("never posts without an explicit user action (acceptance criterion)", (
       });
     const root = new URL("../../../../", import.meta.url).pathname;
     const forbidden =
-      /createGitHubReviewPoster|ReviewPoster\b|postReview\b|review-posting|listOwnReviews|\/reviews\b/;
+      /createGitHubReviewPoster|ReviewPoster\b|postReview\b|review-posting|listOwnReviews|\/reviews\b|server\/src|@rocky-reviews\/server\b|post-review|post-routes/;
     for (const dir of ["apps/worker/src", "packages/core/src/analysis", "packages/llm/src"]) {
       for (const file of files(join(root, dir))) {
         expect(readFileSync(file, "utf8"), file).not.toMatch(forbidden);

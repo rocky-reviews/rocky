@@ -42,6 +42,32 @@ const rockyInstructionsRules = (allowDefinition = false) => [
 const TESTING_MESSAGE = "Test fakes (@rocky-reviews/*/testing) are for tests only (P4-3).";
 const POSTER_MESSAGE =
   "Only the server posts reviews, as the user (P3-5, ADR 0026): never the worker or the LLM package.";
+/**
+ * Dynamic `import()` of the server's code or the GitHub review poster from the worker or the LLM
+ * package (P3-5 security-boundary review, nit 5): the static patterns below do not see these.
+ */
+const POSTER_DYNAMIC = {
+  selector:
+    "ImportExpression[source.value=/(?:^@rocky-reviews\\/server(?:\\/|$))|(?:server\\/src\\/)|(?:reviews\\/post-(?:review|routes))|(?:forge-github\\/src\\/reviews)/]",
+  message: POSTER_MESSAGE,
+};
+/**
+ * Ways around the static rules above (#39 N3): an `import()` whose source is not a plain string
+ * (a variable, a template, a concatenation) cannot be checked, and `createRequire` loads any
+ * module at run time. Neither is used by the worker or the LLM package.
+ */
+const OPAQUE_LOADERS = [
+  {
+    selector: "ImportExpression[source.type!='Literal']",
+    message: `Dynamic import() with a computed source. ${POSTER_MESSAGE}`,
+  },
+  { selector: "Identifier[name='createRequire']", message: `No createRequire. ${POSTER_MESSAGE}` },
+];
+/** The poster's factory by name, however it was reached (e.g. from a dynamic import's module). */
+const POSTER_NAME = {
+  selector: "Identifier[name='createGitHubReviewPoster']",
+  message: POSTER_MESSAGE,
+};
 /** `import("@rocky-reviews/<pkg>/testing")` outside tests (test files turn the rule off). */
 const TESTING_DYNAMIC = {
   selector: "ImportExpression[source.value=/^@rocky-reviews\\/[^/]+\\/testing$/]",
@@ -180,12 +206,23 @@ export default tseslint.config(
                 "**/reviews/post-review*",
                 "**/reviews/post-routes*",
                 "**/forge-github/src/reviews*",
+                "@rocky-reviews/server",
                 "@rocky-reviews/server/**",
+                "**/server/src",
+                "**/server/src/**",
               ],
               message: POSTER_MESSAGE,
             },
           ],
         },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        ...rockyInstructionsRules(),
+        TESTING_DYNAMIC,
+        POSTER_DYNAMIC,
+        POSTER_NAME,
+        ...OPAQUE_LOADERS,
       ],
     },
   },

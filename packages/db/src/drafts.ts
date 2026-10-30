@@ -1,7 +1,9 @@
 import {
   applyDraftAction,
+  composePostedComment,
   DRAFT,
   isDismissReason,
+  MAX_COMMENT_BODY,
   normaliseCommentBody,
   type DismissReason,
   type DraftAction,
@@ -10,6 +12,7 @@ import {
 } from "@rocky-reviews/core";
 import { parseAnalysisDocument, type AnalysisDocument } from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
+import { carriedDraftContent, isCarried, lockReviewPlan, postedDraftContent } from "./reviews.js";
 
 /**
  * Draft decisions and pending comments (P6-4, migration 0015, ADR 0027). Every function runs in
@@ -191,6 +194,13 @@ export const listReviewDrafts = async (
 export type DecideDraftResult =
   | { readonly outcome: "ok"; readonly draft: DraftView }
   | { readonly outcome: "invalid_transition"; readonly draft: DraftView }
+  /**
+   * The draft was carried by a review being posted or already posted as the member (P3-5): it
+   * cannot change any more (ADR 0026 S2). Carries the current state, like a conflict.
+   */
+  | { readonly outcome: "already_posted"; readonly draft: DraftView }
+  /** Accepting would post a comment longer than GitHub's per-comment limit (title + body + suggestion). */
+  | { readonly outcome: "comment_too_long" }
   | { readonly outcome: "invalid_body" }
   | { readonly outcome: "unknown_finding" }
   | { readonly outcome: "not_found" };
@@ -217,6 +227,9 @@ export const decideDraft = async (
   const finding = target.document.findings.find((f) => f.id === input.findingId);
   if (finding === undefined) return { outcome: "unknown_finding" };
 
+  // The posting lock first (ADR 0026 S2): a submission starting now either carries the state
+  // this action leaves, or sees it changed and answers `stale`.
+  await lockReviewPlan(tx, target.pullRequestId, memberId);
   await tx.query(
     `insert into findings_state (analysis_id, member_id, finding_id)
      values ($1, $2, $3)
@@ -226,12 +239,14 @@ export const decideDraft = async (
   // Lock first, then read in a new statement: a statement that waited for the lock re-reads
   // the locked row at its newest version but the joined pending comment from its own (older)
   // snapshot, so the loser of a race would be told "accepted" without the winner's body.
-  await tx.query(
-    `select 1 from findings_state
+  const locked = await tx.query<{ id: string }>(
+    `select id from findings_state
       where org_id = $1 and analysis_id = $2 and member_id = $3 and finding_id = $4
         for update`,
     [tx.orgId, analysisId, memberId, finding.id],
   );
+  const findingStateId = locked.rows[0]?.id;
+  if (findingStateId === undefined) throw new DraftStoreError("drafts: decision row missing");
   const { rows } = await tx.query<DraftRow>(
     `select ${DRAFT_COLUMNS}
        from ${DRAFT_JOIN}
@@ -240,6 +255,11 @@ export const decideDraft = async (
   );
   const row = rows[0];
   if (row === undefined) throw new DraftStoreError("drafts: decision row missing");
+  // This very decision was posted (or is being posted): it cannot change (S2). Copying the
+  // agent prompt changes nothing that was posted, so it is never refused here (#39 SF2).
+  if (input.action.kind !== "send_to_agent" && (await isCarried(tx, "draft", findingStateId))) {
+    return { outcome: "already_posted", draft: viewOf(row) };
+  }
 
   const transition = applyDraftAction(decisionOf(row, finding.body), input.action, finding);
   if (!transition.ok) {
@@ -248,6 +268,22 @@ export const decideDraft = async (
       : { outcome: "invalid_transition", draft: viewOf(row) };
   }
   const next = transition.next;
+  // What the accepted card shows is what is posted (composePostedComment): it must fit one
+  // review comment, or the post would be refused after the reviewer accepted it.
+  if (
+    next.state === "accepted" &&
+    composePostedComment(finding, { body: next.body }).length > MAX_COMMENT_BODY
+  ) {
+    return { outcome: "comment_too_long" };
+  }
+  // Accepting what this member already posted on this revision, from another analysis (a re-run
+  // renumbers findings), would post it twice: refused by content, not by id (S1, #39 SF1).
+  if (next.state === "accepted") {
+    const carried = await carriedDraftContent(tx, memberId, target.revisionId);
+    if (carried(postedDraftContent(finding, next.body))) {
+      return { outcome: "already_posted", draft: viewOf(row) };
+    }
+  }
   const key = [tx.orgId, analysisId, memberId, finding.id];
 
   if (transition.agentPromptCopied) {
@@ -363,10 +399,20 @@ export const addOwnComment = async (
 export const deleteOwnComment = async (
   tx: TenantTx,
   input: { readonly analysisId: string; readonly memberId: string; readonly commentId: string },
-): Promise<"deleted" | "not_found"> => {
+): Promise<"deleted" | "not_found" | "already_posted"> => {
   const analysisId = uuid(input.analysisId, "analysis id");
   const memberId = uuid(input.memberId, "member id");
   const commentId = uuid(input.commentId, "comment id");
+  const { rows } = await tx.query<{ pull_request_id: string }>(
+    `select pull_request_id from comments_pending
+      where org_id = $1 and analysis_id = $2 and author_id = $3 and id = $4 and source = 'own'`,
+    [tx.orgId, analysisId, memberId, commentId],
+  );
+  const pullRequestId = rows[0]?.pull_request_id;
+  if (pullRequestId === undefined) return "not_found";
+  // Ordered with a submission (ADR 0026 S2): a comment being posted or posted stays.
+  await lockReviewPlan(tx, pullRequestId, memberId);
+  if (await isCarried(tx, "comment", commentId)) return "already_posted";
   const result = await tx.query(
     `delete from comments_pending
       where org_id = $1 and analysis_id = $2 and author_id = $3 and id = $4 and source = 'own'`,

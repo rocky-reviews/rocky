@@ -10,7 +10,7 @@ import {
   type ReviewSubmission,
   type ReviewVerdict,
 } from "@rocky-reviews/core";
-import { parseAnalysisDocument } from "@rocky-reviews/schema";
+import { parseAnalysisDocument, type Finding } from "@rocky-reviews/schema";
 import { audit } from "./audit.js";
 import type { TenantTx } from "./client.js";
 
@@ -111,7 +111,7 @@ export const loadReviewPlan = async (
   const items: ReviewPlanItem[] = [];
   const analysis = revisionId === null ? null : await latestDoneAnalysis(tx, revisionId);
   if (revisionId !== null && analysis !== null) {
-    items.push(...(await acceptedDrafts(tx, analysis, memberId)));
+    items.push(...(await acceptedDrafts(tx, revisionId, analysis, memberId)));
     items.push(...(await ownComments(tx, pr.id, revisionId, analysis.id, memberId)));
   }
   const { rows: latest } = await tx.query<SubmissionRow>(
@@ -140,10 +140,96 @@ export const loadReviewPlan = async (
 };
 
 /** Items carried by a submission that is posting or posted: never offered again. */
-const NOT_CARRIED = `not exists (
+const CARRIED_SQL = `exists (
   select 1 from review_submission_items i
     join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
    where i.org_id = $1 and i.kind = $2 and i.item_id = ITEM and s.status in ('posting', 'posted'))`;
+const NOT_CARRIED = `not ${CARRIED_SQL}`;
+
+/**
+ * Whether one item (a `findings_state` id for a draft, a `comments_pending` id for a comment) is
+ * carried by a submission that is posting or posted. P6-4's draft routes refuse to change such an
+ * item (`already_posted`, review fix S2); call it after `lockReviewPlan`, so a submission that
+ * starts concurrently is either seen here or sees the change (and answers `stale`).
+ */
+export const isCarried = async (
+  tx: TenantTx,
+  kind: "draft" | "comment",
+  itemId: string,
+): Promise<boolean> => {
+  const { rows } = await tx.query(`select 1 where ${CARRIED_SQL.replace("ITEM", "$3")}`, [
+    tx.orgId,
+    kind,
+    itemId,
+  ]);
+  return rows.length > 0;
+};
+
+/** Where and what a draft posts: the location and the posted markdown (S1, matched by content). */
+export interface PostedDraftContent {
+  readonly path: string;
+  readonly line: number;
+  readonly startLine: number | null;
+  /** `composePostedComment(finding, pending)`, exactly as posted. */
+  readonly body: string;
+}
+
+/** What an accepted draft posts: the finding's location and `composePostedComment`. */
+export const postedDraftContent = (finding: Finding, pendingBody: string): PostedDraftContent => ({
+  path: finding.path,
+  line: finding.range.end,
+  startLine: finding.range.start === finding.range.end ? null : finding.range.start,
+  body: composePostedComment(finding, { body: pendingBody }),
+});
+
+/**
+ * What the member's posting or posted submissions on one revision carried as drafts, by content
+ * (review fix S1, #39 SF1). Finding ids are positional (`F1`, `F2`, ... per analysis), so a re-run
+ * of the same head renumbers them: matching by id would both refuse unrelated findings and miss a
+ * posted one that came back under another id. A carried draft is identified instead by what was
+ * posted: its location (from its pending row, written from the validated finding) and the sha256
+ * of the posted body (`review_submission_items.body_sha256`). A carried draft whose pending row is
+ * gone matches on the body digest alone (fails closed). Scoped to the member's own submissions
+ * and to the revision (a new push is a new revision: its findings may be posted again).
+ */
+export const carriedDraftContent = async (
+  tx: TenantTx,
+  memberId: string,
+  revisionId: string,
+): Promise<(draft: PostedDraftContent) => boolean> => {
+  const { rows } = await tx.query<{
+    body_sha256: Buffer;
+    path: string | null;
+    line: number | null;
+    start_line: number | null;
+  }>(
+    `select i.body_sha256, c.path, c.line, c.start_line
+       from review_submission_items i
+       join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
+       left join findings_state g on g.org_id = i.org_id and g.id = i.item_id
+       left join comments_pending c
+         on c.org_id = g.org_id and c.analysis_id = g.analysis_id and c.author_id = g.member_id
+        and c.finding_id = g.finding_id and c.source in ('ai', 'ai_edited')
+      where i.org_id = $1 and i.kind = 'draft' and s.status in ('posting', 'posted')
+        and s.submitted_by = $2 and s.revision_id = $3`,
+    [tx.orgId, memberId, revisionId],
+  );
+  const key = (path: string, line: number, startLine: number | null, digest: string) =>
+    JSON.stringify([path, line, startLine, digest]);
+  const located = new Set<string>();
+  const anywhere = new Set<string>();
+  for (const row of rows) {
+    const digest = row.body_sha256.toString("hex");
+    if (row.path === null || row.line === null) anywhere.add(digest);
+    else located.add(key(row.path, row.line, row.start_line, digest));
+  }
+  return (draft) => {
+    const digest = sha256(draft.body).toString("hex");
+    return (
+      anywhere.has(digest) || located.has(key(draft.path, draft.line, draft.startLine, digest))
+    );
+  };
+};
 
 interface DoneAnalysis {
   readonly id: string;
@@ -173,6 +259,7 @@ const latestDoneAnalysis = async (
  */
 const acceptedDrafts = async (
   tx: TenantTx,
+  revisionId: string,
   analysis: DoneAnalysis,
   memberId: string,
 ): Promise<ReviewPlanItem[]> => {
@@ -192,19 +279,16 @@ const acceptedDrafts = async (
     [tx.orgId, "draft", analysis.id, memberId],
   );
   const byFinding = new Map(accepted.map((row) => [row.finding_id, row]));
+  const carried = await carriedDraftContent(tx, memberId, revisionId);
   const items: ReviewPlanItem[] = [];
   // Document order: the order the person saw the drafts in.
   for (const finding of parsed.value.findings) {
     const row = byFinding.get(finding.id);
     if (row === undefined) continue;
-    items.push({
-      kind: "draft",
-      id: row.id,
-      path: finding.path,
-      line: finding.range.end,
-      startLine: finding.range.start === finding.range.end ? null : finding.range.start,
-      body: composePostedComment(finding, { body: row.body }),
-    });
+    const content = postedDraftContent(finding, row.body);
+    // Already posted from another analysis of this revision (a re-run), whatever its id there.
+    if (carried(content)) continue;
+    items.push({ kind: "draft", id: row.id, ...content });
   }
   return items;
 };
@@ -392,7 +476,12 @@ export type BeginReviewSubmissionResult =
   /** The actor is no longer an active member whose role may review. */
   | { readonly outcome: "not_permitted" };
 
-const lockPlan = (tx: TenantTx, pullRequestId: string, memberId: string) =>
+/**
+ * The per (pull request, member) lock `beginReviewSubmission` holds while it rebuilds and records
+ * the plan. P6-4's draft writes take it too (review fix S2), so a change and a submission are
+ * ordered: whichever comes second sees the other.
+ */
+export const lockReviewPlan = (tx: TenantTx, pullRequestId: string, memberId: string) =>
   tx.query("select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
     `rocky.review:${tx.orgId}:${pullRequestId}:${memberId}`,
   ]);
@@ -429,7 +518,7 @@ export const beginReviewSubmission = async (
   if (typeof input.body !== "string") return { outcome: "invalid", reason: "invalid_body" };
   const expected = Buffer.from(input.contentSha256, "hex");
 
-  await lockPlan(tx, pullRequestId, memberId);
+  await lockReviewPlan(tx, pullRequestId, memberId);
   if (!(await actorMayReview(tx, memberId))) return { outcome: "not_permitted" };
 
   const { rows: earlier } = await tx.query<SubmissionRow>(

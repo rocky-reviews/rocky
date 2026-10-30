@@ -2,6 +2,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "jso
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
+import { lockReviewPlan } from "./reviews.js";
 import {
   addOwnComment,
   decideDraft,
@@ -226,8 +227,10 @@ describe("every transition is persisted (refresh keeps state)", () => {
     const locked = new Promise<void>((resolve) => (lockTaken = resolve));
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    // The first request holds the row lock before it writes anything (as decideDraft does).
+    // The first request holds its locks before it writes anything, in decideDraft's order: the
+    // posting lock (ADR 0026 S2), then the row.
     const first = db.withOrg(A.orgId, async (tx) => {
+      await lockReviewPlan(tx, A.pullRequestId, A.memberId);
       await tx.query(
         `select 1 from findings_state
           where analysis_id = $1 and member_id = $2 and finding_id = 'F1' for update`,
