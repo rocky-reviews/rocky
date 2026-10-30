@@ -176,7 +176,7 @@ Task log for the project plan. Agents append a row when a task is merged.
   - A route can set its own, weaker CSP and the hook keeps it; add a test (or a Semgrep rule) that allow-lists the routes allowed to set `content-security-policy` themselves (today: auth pages, setup pages via `pageCsp`).
   - `ROCKY_RATE_LIMIT_*` accepts maxima up to 9,999,999; cap them at a sane bound per scope.
 - The Vite dev server does not send these headers (ADR 0025 R5); a `preview` configuration with the same CSP would let `pnpm test:e2e` run under it.
-- `apps/web/src/build.test.ts` repeats the parse5 walk of `findInlineContent` (`apps/server`); move it to a small shared package if a third user appears.
+- `apps/web/src/build.test.ts` repeats the parse5 walk of `findInlineContent` (`apps/server`); move it to a small shared package if a third user appears. Markup the check does not refuse but the CSP blocks at runtime: `<form action>` to another origin (`form-action 'self'`), `<link rel=icon>` or `<a href>` to other origins (allowed by design), `<meta name=referrer>`; `<svg><use href>`, `<image>` and `<foreignObject>` inside SVG files served as images run nothing (CSP applies to them too).
 
 ### P7-1 follow-ups
 

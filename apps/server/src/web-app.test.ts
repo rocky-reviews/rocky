@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -156,6 +156,34 @@ describe("findInlineContent", () => {
     expect(web.files.has("/assets/index-abc123.js")).toBe(true);
   });
 
+  it("files that are not candidates (unknown types, source maps, dotfiles) are never opened (review N4)", () => {
+    const root = webDir({ "assets/index-abc123.js.map": "{}", "notes.md": "# x", ".env": "S=1" });
+    // Unreadable: opening any of them would fail the load.
+    for (const name of ["assets/index-abc123.js.map", "notes.md", ".env"]) {
+      chmodSync(join(root, name), 0);
+    }
+    const web = loadWebApp(root);
+    expect([...web.files.keys()].toSorted()).toEqual([
+      "/assets/index-abc123.css",
+      "/assets/index-abc123.js",
+      "/index.html",
+      "/theme-init.js",
+    ]);
+    // Whereas a candidate that cannot be read refuses the load (fail closed).
+    const unreadable = webDir({ "assets/other-abc123.js": "x" });
+    chmodSync(join(unreadable, "assets", "other-abc123.js"), 0);
+    expect(() => loadWebApp(unreadable)).toThrow("cannot be read");
+  });
+
+  it("every served HTML file is checked, not only index.html (review N2)", () => {
+    const root = webDir({
+      "extra.html": "<!doctype html><title>x</title><script>alert(1)</script>",
+    });
+    expect(() => loadWebApp(root)).toThrow("ROCKY_WEB_DIR/extra.html has content the CSP blocks");
+    const clean = webDir({ "extra.html": "<!doctype html><title>x</title><p>ok</p>" });
+    expect(loadWebApp(clean).files.has("/extra.html")).toBe(true);
+  });
+
   it("finds what a tag regexp misses: odd end tags, cases, svg, template, noscript, entities", () => {
     for (const [html, name] of [
       ["<script>x</script\t\n bar>", "inline <script>"],
@@ -179,6 +207,59 @@ describe("findInlineContent", () => {
     ] as const) {
       expect(findInlineContent(html), JSON.stringify(html)).toContain(name);
     }
+  });
+
+  it("refuses <noscript> and what hides in it, whichever way a browser parses it (review S1)", () => {
+    for (const [html, names] of [
+      [
+        '<body><noscript><p title="</noscript><script>alert(1)</script>"></p></noscript>',
+        ["<noscript> element", "inline <script>"],
+      ],
+      [
+        '<head><noscript><p title="</noscript><img src=x onerror=alert(1)>"></p></noscript></head>',
+        ["<noscript> element", "on*= event handler"],
+      ],
+      [
+        '<noscript><p title="</noscript><style>a{}</style>"></p></noscript>',
+        ["<noscript> element", "<style> element"],
+      ],
+      ["<noscript><img src=/x.png></noscript>", ["<noscript> element"]],
+    ] as const) {
+      for (const name of names) expect(findInlineContent(html), html).toContain(name);
+    }
+  });
+
+  it("refuses markup that changes what the page loads, runs or navigates to (review N1)", () => {
+    for (const [html, name] of [
+      ['<iframe srcdoc="<script>x</script>"></iframe>', "srcdoc= attribute"],
+      ['<iframe src="/x"></iframe>', "<iframe> element"],
+      ['<meta http-equiv="refresh" content="0;url=/x">', "meta http-equiv"],
+      ['<META HTTP-EQUIV="Content-Security-Policy" content="default-src *">', "meta http-equiv"],
+      ['<base href="https://evil.example/">', "<base> element"],
+      ['<object data="/x.swf"></object>', "<object> element"],
+      ['<embed src="/x.svg">', "<embed> element"],
+      [
+        '<svg><a><animate attributeName="href" values="javascript:x"/></a></svg>',
+        "<animate> element",
+      ],
+      ['<svg><set attributeName="href" to="/x"/></svg>', "<set> element"],
+      ['<script src="https://cdn.example/x.js"></script>', "cross-origin or relative script src"],
+      ['<script src="//cdn.example/x.js"></script>', "cross-origin or relative script src"],
+      ['<script src="x.js"></script>', "cross-origin or relative script src"],
+      [
+        '<link rel="stylesheet" href="https://cdn.example/x.css">',
+        "cross-origin or relative link href",
+      ],
+      ['<link rel="modulepreload" href="chunk.js">', "cross-origin or relative link href"],
+    ] as const) {
+      expect(findInlineContent(html), html).toContain(name);
+    }
+    // Links that load nothing executable may point anywhere the CSP allows at runtime.
+    expect(
+      findInlineContent(
+        '<link rel="icon" href="/favicon.svg"><link rel="canonical" href="https://rocky.example/">',
+      ),
+    ).toEqual([]);
   });
 
   it("does not flag external scripts with whitespace bodies, data attributes or paths that contain the word", () => {
