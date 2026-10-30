@@ -67,9 +67,15 @@ type Props = {
   target?: number | undefined;
   /** This file's AI drafts (none when the analysis is for another push). */
   findings?: readonly Finding[];
+  /**
+   * Whether own comments are shown and taken: not on a diff newer than the analysis (they are
+   * stored against the analysed lines), nor before the reviewer's review has loaded.
+   */
+  commentable?: boolean;
 };
 
 const NO_FINDINGS: readonly Finding[] = [];
+const NO_COMMENTS: readonly OwnComment[] = [];
 
 /** The new-side line nearest `target` (the earlier one on a tie). */
 const nearestLine = (lines: readonly { n: number }[], target: number): number | undefined =>
@@ -79,13 +85,23 @@ const nearestLine = (lines: readonly { n: number }[], target: number): number | 
     undefined,
   );
 
-export const DiffBody = ({ path, file, annotations, target, findings = NO_FINDINGS }: Props) => {
+export const DiffBody = ({
+  path,
+  file,
+  annotations,
+  target,
+  findings = NO_FINDINGS,
+  commentable = true,
+}: Props) => {
   const { state, addComment, deleteComment, mode, jump, doneJump } = useReview();
   const comments = state.comments;
   const [composing, setComposing] = useState<number | null>(null);
   const rows = useMemo(() => fileRows(file.patch), [file.patch]);
   const language = languageFor(path);
-  const mine = useMemo(() => comments.filter((c) => c.path === path), [comments, path]);
+  const mine = useMemo(
+    () => (commentable ? comments.filter((c) => c.path === path) : NO_COMMENTS),
+    [commentable, comments, path],
+  );
   const items = useMemo(
     () => diffItems(rows, annotations, mine, composing, findings),
     [rows, annotations, mine, composing, findings],
@@ -276,11 +292,19 @@ export const DiffBody = ({ path, file, annotations, target, findings = NO_FINDIN
     if (first) focusLine(first.n);
   };
 
-  const compose = useCallback((n: number) => {
-    setActive(n);
-    composerFocus.current = true;
-    setComposing(n);
-  }, []);
+  const compose = useCallback(
+    (n: number) => {
+      setActive(n);
+      if (!commentable) return;
+      composerFocus.current = true;
+      setComposing(n);
+    },
+    [commentable],
+  );
+  // A composer left open when comments stop being taken (a newer push) closes.
+  useEffect(() => {
+    if (!commentable) setComposing(null);
+  }, [commentable]);
   const closeComposer = useCallback(
     (n: number) => {
       setDraft(n, null);
@@ -360,6 +384,7 @@ export const DiffBody = ({ path, file, annotations, target, findings = NO_FINDIN
                     hot={item.hot}
                     language={language}
                     focusable={item.row.newNo !== null && item.row.newNo === active}
+                    commentable={commentable}
                     onCompose={compose}
                   />
                 );
@@ -410,6 +435,7 @@ type LineProps = {
   hot: HotKind | null;
   language: Language;
   focusable: boolean;
+  commentable: boolean;
   onCompose: (line: number) => void;
 };
 
@@ -420,6 +446,7 @@ const LineRow = memo(function LineRow({
   hot,
   language,
   focusable,
+  commentable,
   onCompose,
 }: LineProps) {
   const newNo = row.newNo;
@@ -440,8 +467,9 @@ const LineRow = memo(function LineRow({
           className="no new"
           data-line={newNo}
           tabIndex={focusable ? 0 : -1}
-          aria-label={`Comment on line ${newNo}`}
-          title="Add a comment"
+          {...(commentable
+            ? { "aria-label": `Comment on line ${newNo}`, title: "Add a comment" }
+            : { "aria-label": `Line ${newNo}`, "aria-disabled": true })}
           onClick={() => onCompose(newNo)}
         >
           {newNo}

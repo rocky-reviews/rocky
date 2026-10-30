@@ -4,8 +4,8 @@
  * drafts on the file), the diff, and a footer that moves to the next file in review order.
  * A noise file shows the AI's summary and its raw diff on request.
  *
- * AI notes (flags, hot lines) are shown only when the analysis is for the diff's head commit;
- * after a new push they would point at the wrong lines.
+ * AI notes (flags, hot lines), drafts and own comments are shown only when the analysis is for
+ * the diff's head commit; after a new push they would point at the wrong lines.
  */
 import type { AnalysisDocument, Finding, TriagedFileLevel } from "@rocky-reviews/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -73,7 +73,10 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
   };
 
   const current = load.kind === "ready" && load.data.headSha === analysis.provenance.head.sha;
-  const { state } = useReview();
+  const { state, status } = useReview();
+  // Own comments are stored against the analysed lines, so they are taken only on that diff,
+  // once the reviewer's review has loaded.
+  const commentable = current && status === "ready";
   const dismissed = useMemo(
     () =>
       new Set(
@@ -178,12 +181,13 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
           stale={load.kind === "ready" && !current}
           annotations={annotations}
           findings={findings}
+          commentable={commentable}
         />
       )}
 
       <footer className="file-foot">
         <span className="hint">
-          {showDiff && "Select a new-side line number to add your own comment"}
+          {showDiff && commentable && "Select a new-side line number to add your own comment"}
         </span>
         {next !== undefined && (
           <button type="button" className="btn btn-sm" onClick={goNext}>
@@ -201,12 +205,14 @@ const DiffArea = ({
   stale,
   annotations,
   findings,
+  commentable,
 }: {
   path: string;
   line: number | undefined;
   stale: boolean;
   annotations: ReturnType<typeof fileAnnotations>;
   findings: readonly Finding[];
+  commentable: boolean;
 }) => {
   const { load } = useDiff();
   if (load.kind === "failed")
@@ -230,7 +236,8 @@ const DiffArea = ({
     <>
       {stale && (
         <p className="diff-status" role="note">
-          The AI notes and drafts are for an earlier push, so they are hidden on this diff.
+          The AI notes, drafts and your comments are for an earlier push, so they are hidden on this
+          diff. New comments open once this push is analysed.
         </p>
       )}
       {/* A finding's line is the analysis's: on a newer push it may be another line. */}
@@ -241,6 +248,7 @@ const DiffArea = ({
         annotations={annotations}
         target={stale ? undefined : line}
         findings={findings}
+        commentable={commentable}
       />
     </>
   );

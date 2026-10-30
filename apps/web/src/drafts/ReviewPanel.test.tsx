@@ -4,7 +4,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { OwnComment } from "../diff/diff-model.js";
-import { bySeverity, ReviewPanelContent } from "./ReviewPanel.js";
+import { bySeverity, ReviewPanelContent, shorten } from "./ReviewPanel.js";
 import { NO_REVIEW, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
 
@@ -105,5 +105,36 @@ describe("review panel", () => {
   it("marks the focused draft", () => {
     const html = render(reviewWith(findings, {}, [], { focused: "F2" }));
     expect(html).toMatch(/class="f-item st-draft focus"/);
+  });
+});
+
+describe("when the diff is from a newer push than the analysis", () => {
+  it("says so, and its items do not jump (the drafts and comments are hidden there)", () => {
+    const html = render(
+      reviewWith(
+        findings,
+        { F2: { state: "dismissed", reason: "intentional" } },
+        [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why?" }],
+        { stale: true },
+      ),
+    );
+    expect(text(html)).toContain(
+      "These drafts and your comments are for an earlier push, so they are hidden on the new diff.",
+    );
+    const items = [...html.matchAll(/<button[^>]*class="f-item[^"]*"[^>]*>/g)].map((m) => m[0]);
+    expect(items.length).toBe(11);
+    for (const item of items) expect(item).toContain("disabled");
+  });
+});
+
+describe("shorten", () => {
+  it("keeps short text, and cuts long text by characters a person sees, never inside one", () => {
+    expect(shorten("short", 70)).toBe("short");
+    expect(shorten("a".repeat(71), 70)).toBe(`${"a".repeat(70)}…`);
+    // 70 family emoji (each several code units): cut after whole ones, never a lone surrogate.
+    const family = "👨‍👩‍👧";
+    const cut = shorten(family.repeat(71), 70);
+    expect(cut).toBe(`${family.repeat(70)}…`);
+    expect(shorten(`${"a".repeat(69)}😀😀`, 70)).toBe(`${"a".repeat(69)}😀…`);
   });
 });

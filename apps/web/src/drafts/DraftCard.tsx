@@ -47,8 +47,18 @@ type Props = {
 };
 
 export const DraftCard = ({ finding, original, language }: Props) => {
-  const { decisionOf, state, saving, act, sendToAgent, mode, setMode, focused, setFocused } =
-    useReview();
+  const {
+    status,
+    decisionOf,
+    state,
+    saving,
+    act,
+    sendToAgent,
+    mode,
+    setMode,
+    focused,
+    setFocused,
+  } = useReview();
   const decision = decisionOf(finding.id);
   const copiedAt = state.drafts.get(finding.id)?.agentPromptCopiedAt ?? null;
   const busy = saving.has(finding.id);
@@ -235,6 +245,15 @@ export const DraftCard = ({ finding, original, language }: Props) => {
             Cancel
           </button>
         </div>
+      ) : status !== "ready" ? (
+        // Before the reviewer's decisions are loaded a decision here would be overwritten by
+        // them (or, after a failed load, would act on a state the page does not know).
+        // The panel announces loading and failure once; each card only says it here.
+        <p className="draft-actions locked-note">
+          {status === "failed"
+            ? "Your decisions could not be loaded, so this draft cannot be decided. Reload the page to try again."
+            : "Loading your decisions…"}
+        </p>
       ) : (
         !editing && (
           <div className="draft-actions">

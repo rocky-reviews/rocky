@@ -132,6 +132,7 @@ const ShellLayout = ({ data, now, review }: Props) => {
     <ReviewProvider
       source={review}
       analysisId={data.analysis === null ? null : data.analysisId}
+      analysisHead={data.analysis?.provenance.head.sha ?? null}
       findings={data.analysis?.findings ?? NO_FINDINGS}
       onOpenFile={jumpToFile}
     >

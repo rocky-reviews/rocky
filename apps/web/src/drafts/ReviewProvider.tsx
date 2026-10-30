@@ -36,7 +36,20 @@ import {
   type ReviewState,
 } from "../data/review-data.js";
 import type { OwnComment } from "../diff/diff-model.js";
+import { useDiff } from "../diff/DiffProvider.js";
 import { useToast } from "../shell/Toast.js";
+
+/**
+ * `promise`, unless `signal` aborts first: then it never settles, so an answer about a pull
+ * request that is no longer on screen changes nothing (no state, no toast).
+ */
+export const untilAborted = <T,>(promise: Promise<T>, signal: AbortSignal): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    promise.then(
+      (value) => !signal.aborted && resolve(value),
+      (error: unknown) => !signal.aborted && reject(error),
+    );
+  });
 
 export const TOAST = {
   accepted: "Added to your pending review. Not posted yet.",
@@ -63,7 +76,10 @@ export type Jump =
     };
 
 export type ReviewContextValue = {
+  /** Decisions and comments are taken only when `ready`: before, they would be lost on load. */
   readonly status: "none" | "loading" | "ready" | "failed";
+  /** The diff on screen is from a newer push than the analysis: drafts and comments are hidden. */
+  readonly stale: boolean;
   readonly findings: readonly Finding[];
   readonly state: ReviewState;
   readonly decisionOf: (findingId: string) => DraftDecision;
@@ -86,6 +102,7 @@ export type ReviewContextValue = {
 /** Without a provider: no analysis, nothing to decide. Tests spread it and override fields. */
 export const NO_REVIEW: ReviewContextValue = {
   status: "none",
+  stale: false,
   findings: [],
   state: EMPTY_REVIEW,
   decisionOf: () => DRAFT,
@@ -112,14 +129,26 @@ type Props = {
   source: ReviewSource;
   /** The analysis on screen; `null` when there is none (no drafts, no comments). */
   analysisId: string | null;
+  /** The head commit that analysis is for (to tell when the diff is from a newer push). */
+  analysisHead: string | null;
   findings: readonly Finding[];
   /** Opens a file in the main column (a jump from the panel). */
   onOpenFile: (path: string) => void;
   children: ReactNode;
 };
 
-export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, children }: Props) => {
+export const ReviewProvider = ({
+  source,
+  analysisId,
+  analysisHead,
+  findings,
+  onOpenFile,
+  children,
+}: Props) => {
   const toast = useToast();
+  const { load: diff } = useDiff();
+  const stale =
+    diff.kind === "ready" && analysisHead !== null && diff.data.headSha !== analysisHead;
   const [status, setStatus] = useState<ReviewContextValue["status"]>(
     analysisId === null ? "none" : "loading",
   );
@@ -136,18 +165,27 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
   // The latest state, for reconciling answers that arrive after other changes.
   const current = useRef(state);
   current.current = state;
+  const ready = useRef(false);
+  ready.current = status === "ready";
+  // One session per analysis on screen: an answer that arrives after it changed is dropped
+  // (it is about another pull request's drafts), see `untilAborted`.
+  const session = useRef<AbortSignal>(AbortSignal.abort());
 
   useEffect(() => {
+    const abort = new AbortController();
+    session.current = abort.signal;
     drafts.current = EMPTY_REVIEW.drafts;
+    queues.current = new Map();
+    ready.current = false;
     setState(EMPTY_REVIEW);
+    setSaving(new Set());
     setMode(null);
     setFocused(null);
     if (analysisId === null) {
       setStatus("none");
-      return;
+      return () => abort.abort();
     }
     setStatus("loading");
-    const abort = new AbortController();
     source
       .load(analysisId, { signal: abort.signal })
       .then(parseReviewState)
@@ -155,6 +193,7 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
         (loaded) => {
           if (abort.signal.aborted) return;
           drafts.current = loaded.drafts;
+          ready.current = true;
           setState(loaded);
           setStatus("ready");
         },
@@ -186,8 +225,10 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
   }, []);
 
   const step = useCallback(
-    async (finding: Finding, action: DraftAction) => {
-      if (analysisId === null) return;
+    async (finding: Finding, action: DraftAction, scope: AbortSignal) => {
+      // Not before the review has loaded (the load would overwrite the decision), and only for
+      // the analysis this action was made on.
+      if (analysisId === null || !ready.current || scope.aborted) return;
       const before = drafts.current.get(finding.id);
       const transition = applyDraftAction(before?.decision ?? DRAFT, action, finding);
       if (!transition.ok) return;
@@ -203,14 +244,15 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
       if (action.kind === "accept") toast(TOAST.accepted);
       busy(finding.id, true);
       try {
-        const answer = await source.decide(analysisId, finding.id, action);
+        const answer = await untilAborted(source.decide(analysisId, finding.id, action), scope);
         putDraft(finding.id, parseDraftRecord(answer.draft));
         if (answer.kind === "conflict") toast(TOAST.conflict);
       } catch {
+        if (scope.aborted) return;
         putDraft(finding.id, before);
         if (action.kind !== "send_to_agent") toast(TOAST.saveFailed);
       } finally {
-        busy(finding.id, false);
+        if (!scope.aborted) busy(finding.id, false);
       }
     },
     [analysisId, source, toast, busy, putDraft],
@@ -218,8 +260,9 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
 
   const act = useCallback(
     (finding: Finding, action: DraftAction): Promise<void> => {
+      const scope = session.current;
       const run = (queues.current.get(finding.id) ?? Promise.resolve()).then(() =>
-        step(finding, action),
+        step(finding, action, scope),
       );
       queues.current.set(finding.id, run);
       return run;
@@ -243,17 +286,21 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
 
   const addComment = useCallback(
     async (path: string, line: number, body: string): Promise<boolean> => {
-      if (analysisId === null) return false;
+      const scope = session.current;
+      if (analysisId === null || !ready.current || scope.aborted) return false;
       const temp: OwnComment = { id: `pending-${++seq.current}`, path, line, body: body.trim() };
       setState((s) => ({ ...s, comments: [...s.comments, temp] }));
       try {
-        const saved = parseOwnComment(await source.addComment(analysisId, { path, line, body }));
+        const saved = parseOwnComment(
+          await untilAborted(source.addComment(analysisId, { path, line, body }), scope),
+        );
         setState((s) => ({
           ...s,
           comments: s.comments.map((c) => (c.id === temp.id ? saved : c)),
         }));
         return true;
       } catch {
+        if (scope.aborted) return false;
         setState((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== temp.id) }));
         toast(TOAST.commentFailed);
         return false;
@@ -264,13 +311,15 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
 
   const deleteComment = useCallback(
     async (id: string) => {
-      if (analysisId === null) return;
+      const scope = session.current;
+      if (analysisId === null || !ready.current || scope.aborted) return;
       const removed = current.current.comments.find((c) => c.id === id);
       if (removed === undefined || id.startsWith("pending-")) return;
       setState((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== id) }));
       try {
-        await source.deleteComment(analysisId, id);
+        await untilAborted(source.deleteComment(analysisId, id), scope);
       } catch {
+        if (scope.aborted) return;
         setState((s) => ({ ...s, comments: [...s.comments, removed] }));
         toast(TOAST.deleteFailed);
       }
@@ -302,6 +351,7 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
   const value = useMemo<ReviewContextValue>(
     () => ({
       status,
+      stale,
       findings,
       state,
       decisionOf,
@@ -321,6 +371,7 @@ export const ReviewProvider = ({ source, analysisId, findings, onOpenFile, child
     }),
     [
       status,
+      stale,
       findings,
       state,
       decisionOf,

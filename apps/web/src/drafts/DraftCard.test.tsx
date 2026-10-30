@@ -4,7 +4,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DraftCard } from "./DraftCard.js";
-import { type DraftMode, ReviewContext } from "./ReviewProvider.js";
+import { type DraftMode, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
 
 /** P6-4: every state of a draft card, as the POC draws it (`renderFinding`). */
@@ -28,6 +28,7 @@ const render = (
     focused?: string;
     copied?: boolean;
     saving?: boolean;
+    status?: ReviewContextValue["status"];
   } = {},
 ) => {
   const value = reviewWith(
@@ -38,6 +39,7 @@ const render = (
       mode: options.mode ?? null,
       focused: options.focused ?? null,
       saving: new Set(options.saving === true ? [finding.id] : []),
+      status: options.status ?? "ready",
     },
   );
   if (options.copied === true) {
@@ -143,6 +145,23 @@ describe("editing and dismissing", () => {
   it("another draft's mode does not open this one", () => {
     expect(render(F1, { mode: { kind: "dismiss", findingId: "F2" } })).toContain(
       'data-role="accept"',
+    );
+  });
+});
+
+describe("before the reviewer's decisions are loaded", () => {
+  it("is read-only while they load: no actions, says why", () => {
+    const html = render(F1, { status: "loading" });
+    expect(html).not.toContain('data-role="accept"');
+    expect(html).not.toContain('data-role="agent"');
+    expect(text(html)).toContain("Loading your decisions…");
+  });
+
+  it("is read-only when they could not be loaded, and says so", () => {
+    const html = render(F1, { status: "failed" });
+    expect(html).not.toContain('data-role="accept"');
+    expect(text(html)).toContain(
+      "Your decisions could not be loaded, so this draft cannot be decided. Reload the page to try again.",
     );
   });
 });

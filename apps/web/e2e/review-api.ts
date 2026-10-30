@@ -36,6 +36,10 @@ export type ReviewApi = {
   set(findingId: string, decision: DraftDecision): void;
   /** Makes the next `n` state-changing requests fail with 503. */
   failNext(n: number): void;
+  /** Holds every load of the review until the returned function is called. */
+  holdLoads(): () => void;
+  /** Makes every load of the review fail with 503. */
+  failLoads(): void;
 };
 
 const findings = new Map(pr847.findings.map((f) => [f.id, f]));
@@ -63,6 +67,8 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
   const comments = new Map<string, Comment[]>();
   const requests: string[] = [];
   let failures = 0;
+  let loadsFail = false;
+  let loadsHeld: Promise<void> | null = null;
   let nextComment = 1;
   const draftsOf = (id: string) => {
     const found = drafts.get(id) ?? new Map<string, Stored>();
@@ -97,6 +103,8 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
     if (match === null) return json(route, 404, { error: "not_found" });
     const [, analysisId, kind, item] = match as unknown as [string, string, string, string?];
     if (method === "GET" && kind === "review") {
+      if (loadsHeld !== null) await loadsHeld;
+      if (loadsFail) return json(route, 503, { error: "internal" });
       return json(route, 200, {
         analysisId,
         drafts: [...draftsOf(analysisId)]
@@ -163,6 +171,17 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
     },
     failNext: (n) => {
       failures = n;
+    },
+    holdLoads: () => {
+      let release!: () => void;
+      loadsHeld = new Promise((resolve) => (release = resolve));
+      return () => {
+        loadsHeld = null;
+        release();
+      };
+    },
+    failLoads: () => {
+      loadsFail = true;
     },
   };
 };

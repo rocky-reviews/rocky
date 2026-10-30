@@ -156,6 +156,11 @@
 .btn-ai .mark {
   color: var(--ai);
 }
+.locked-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
 .copied-note {
   color: var(--muted);
   font-size: var(--text-xs);
@@ -286,8 +291,11 @@
   font: inherit;
   cursor: pointer;
 }
-.f-item:hover {
+.f-item:hover:not(:disabled) {
   border-color: var(--you);
+}
+.f-item:disabled {
+  cursor: default;
 }
 .f-item.focus {
   border-color: var(--you);

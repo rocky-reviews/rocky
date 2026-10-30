@@ -183,6 +183,53 @@ test.describe("every transition, and a refresh keeps it", () => {
   });
 });
 
+test.describe("before the reviewer's decisions are loaded", () => {
+  test("drafts and lines are read-only until they load, then work", async ({ page, reviewApi }) => {
+    reviewApi.set("F1", { state: "accepted", edited: false, body: F1.body });
+    const release = reviewApi.holdLoads();
+    await openShell(page);
+    await openFile(page, FILE);
+    await showCard(page, "F3");
+    // An Accept here would be overwritten by the stored decisions once they arrive.
+    await expect(card(page, "F3")).toContainText("Loading your decisions…");
+    await expect(card(page, "F3").getByRole("button", { name: "Accept", exact: true })).toHaveCount(
+      0,
+    );
+    await expect(page.getByRole("button", { name: "Line 10", exact: true })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await page.getByRole("button", { name: "Line 10", exact: true }).click({ force: true });
+    await expect(page.getByRole("textbox", { name: "Your comment on line 10" })).toHaveCount(0);
+
+    release();
+    await reviewReady(page);
+    await showCard(page);
+    await expect(card(page)).toContainText(/Pending\s*· from AI draft/);
+    await showCard(page, "F3");
+    await card(page, "F3").getByRole("button", { name: "Accept", exact: true }).click();
+    await expect.poll(() => reviewApi.decision("F3").state).toBe("accepted");
+    expect(reviewApi.decision("F1").state).toBe("accepted");
+  });
+
+  test("when they cannot be loaded, drafts stay read-only and say so", async ({
+    page,
+    reviewApi,
+  }) => {
+    reviewApi.failLoads();
+    await openShell(page);
+    await expect(page.locator("#review-panel")).toContainText(
+      "Your drafts and comments could not be loaded.",
+    );
+    await openFile(page, FILE);
+    await showCard(page);
+    await expect(card(page)).toContainText("Your decisions could not be loaded");
+    await expect(card(page).getByRole("button", { name: "Accept", exact: true })).toHaveCount(0);
+    expect(reviewApi.requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+    expect(await seriousViolations(page)).toEqual([]);
+  });
+});
+
 test.describe("when things go wrong", () => {
   test("a failed save puts the draft back and says so", async ({ page, reviewApi }) => {
     await open(page);

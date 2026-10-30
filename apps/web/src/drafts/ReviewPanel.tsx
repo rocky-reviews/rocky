@@ -13,6 +13,14 @@ const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium:
 
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/** At most `max` characters a person sees (graphemes), then "…"; never cuts inside one. */
+export const shorten = (text: string, max: number): string => {
+  const parts = Array.from(graphemes.segment(text), (s) => s.segment);
+  return parts.length > max ? `${parts.slice(0, max).join("")}…` : text;
+};
+
 /** Undecided first is the caller's job; this orders by severity, then document order. */
 export const bySeverity = (findings: readonly Finding[]): Finding[] =>
   findings
@@ -24,7 +32,7 @@ export const bySeverity = (findings: readonly Finding[]): Finding[] =>
     .map((x) => x.finding);
 
 export const ReviewPanelContent = () => {
-  const { status, findings, state, decisionOf, focused, jumpToFinding, jumpToComment } =
+  const { status, stale, findings, state, decisionOf, focused, jumpToFinding, jumpToComment } =
     useReview();
   const sorted = bySeverity(findings);
   const undecided = sorted.filter((f) => decisionOf(f.id).state === "draft");
@@ -46,6 +54,7 @@ export const ReviewPanelContent = () => {
         <button
           type="button"
           className={`f-item st-${decision.state}${focused === finding.id ? " focus" : ""}`}
+          disabled={stale}
           onClick={() => jumpToFinding(finding.id)}
         >
           <span className={`dot ${finding.severity}`} aria-hidden="true" />
@@ -66,10 +75,15 @@ export const ReviewPanelContent = () => {
 
   const comment = (c: OwnComment) => (
     <li key={c.id}>
-      <button type="button" className="f-item st-accepted" onClick={() => jumpToComment(c)}>
+      <button
+        type="button"
+        className="f-item st-accepted"
+        disabled={stale}
+        onClick={() => jumpToComment(c)}
+      >
         <span className="f-text">
           <span className="t">
-            <bdi>{c.body.length > 70 ? `${c.body.slice(0, 70)}…` : c.body}</bdi>
+            <bdi>{shorten(c.body, 70)}</bdi>
           </span>
           <span className="loc">
             <bdi>{baseName(c.path)}</bdi>:{c.line}
@@ -111,6 +125,12 @@ export const ReviewPanelContent = () => {
         )}
         {status === "ready" && (
           <>
+            {stale && (
+              <p className="placeholder" role="note">
+                These drafts and your comments are for an earlier push, so they are hidden on the
+                new diff.
+              </p>
+            )}
             <dl className="tally">
               <div className="tally-ai">
                 <dt>AI drafts to decide</dt>

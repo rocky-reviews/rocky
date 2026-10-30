@@ -6,7 +6,7 @@ import { parseDiffData } from "../data/diff-data.js";
 import { createFixtureDiffSource } from "../data/diff-fixture-source.js";
 import { DEFAULT_PULL } from "../data/fixture-source.js";
 import type { OwnComment } from "./diff-model.js";
-import { ReviewContext } from "../drafts/ReviewProvider.js";
+import { ReviewContext, type ReviewContextValue } from "../drafts/ReviewProvider.js";
 import { reviewWith } from "../drafts/testing.js";
 import type { DraftDecision } from "@rocky-reviews/core/drafts";
 import { DiffContext, type DiffContextValue, type DiffLoad } from "./DiffProvider.js";
@@ -27,6 +27,7 @@ const render = (
     comments?: readonly OwnComment[];
     decisions?: Record<string, DraftDecision>;
     line?: number;
+    status?: ReviewContextValue["status"];
   } = {},
 ) =>
   renderToStaticMarkup(
@@ -35,6 +36,7 @@ const render = (
         (options.analysis ?? doc).findings,
         options.decisions ?? {},
         options.comments ?? [],
+        { status: options.status ?? "ready" },
       )}
     >
       <DiffContext value={context(load)}>
@@ -138,10 +140,34 @@ describe("file view", () => {
       kind: "ready",
       data: { ...diff, headSha: "0".repeat(40) },
     });
-    expect(text(stale)).toContain("The AI notes and drafts are for an earlier push");
+    expect(text(stale)).toContain("The AI notes, drafts and your comments are for an earlier push");
     expect(stale).not.toContain("hot-");
     expect(stale).not.toContain('class="flag');
     expect(stale).not.toContain("data-finding=");
+  });
+
+  it("on a newer push, hides your comments and takes no new ones (they would land on the old diff)", () => {
+    const stale = render(
+      "src/auth/invitations.ts",
+      { kind: "ready", data: { ...diff, headSha: "0".repeat(40) } },
+      { comments: [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Mine" }] },
+    );
+    expect(text(stale)).toContain(
+      "The AI notes, drafts and your comments are for an earlier push, so they are hidden on this diff. New comments open once this push is analysed.",
+    );
+    expect(text(stale)).not.toContain("Mine");
+    expect(stale).toMatch(/<button[^>]*data-line="3"[^>]*aria-disabled="true"/);
+    expect(stale).not.toContain('aria-label="Comment on line 3"');
+    expect(text(stale)).not.toContain("Select a new-side line number to add your own comment");
+  });
+
+  it("takes no comments until the reviewer's review has loaded", () => {
+    for (const status of ["loading", "failed"] as const) {
+      const html = render("src/auth/invitations.ts", undefined, { status });
+      expect(html).toMatch(/<button[^>]*data-line="3"[^>]*aria-disabled="true"/);
+      expect(html).not.toContain('aria-label="Comment on line 3"');
+    }
+    expect(render("src/auth/invitations.ts")).toContain('aria-label="Comment on line 3"');
   });
 
   it("says when the diff is loading or failed", () => {

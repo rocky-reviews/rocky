@@ -80,7 +80,11 @@ carry the action, a fixed outcome and ids, never a body.
 `ReviewSource` port with an HTTP client (`data/review-http-source.ts`, CSRF token from
 `/api/session`), answers validated in `data/review-data.ts`. `drafts/ReviewProvider.tsx` applies
 decisions at once with the core function and reconciles with the server: a 409 shows the
-server's state, a failure restores the previous one; actions on one draft run in order. The
+server's state, a failure restores the previous one; actions on one draft run in order.
+Nothing can be decided or commented before the reviewer's state has loaded (or after it failed
+to): the cards are read-only and say why. Answers that arrive after the analysis on screen
+changed are dropped. On a diff newer than the analysis, drafts, own comments and the comment
+composer are hidden (they are anchored to the analysed lines) and the panel's items do not jump. The
 shell data carries `analysisId` (the fixture source gives fixture PRs a stable one). Own
 comments moved from the P6-3 in-memory store to the same provider.
 
