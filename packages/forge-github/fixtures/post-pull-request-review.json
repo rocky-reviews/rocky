@@ -1,0 +1,25 @@
+{
+  "id": 880011,
+  "node_id": "PRR_kwDOAAABTc4ADW6b",
+  "user": {
+    "login": "octo-dev",
+    "id": 9101,
+    "node_id": "U_kgDOAAAjjQ",
+    "avatar_url": "https://avatars.githubusercontent.com/u/9101?v=4",
+    "url": "https://api.github.com/users/octo-dev",
+    "html_url": "https://github.com/octo-dev",
+    "type": "User",
+    "site_admin": false
+  },
+  "body": "Looks fine overall.",
+  "state": "COMMENTED",
+  "html_url": "https://github.com/acme/api/pull/847#pullrequestreview-880011",
+  "pull_request_url": "https://api.github.com/repos/acme/api/pulls/847",
+  "_links": {
+    "html": { "href": "https://github.com/acme/api/pull/847#pullrequestreview-880011" },
+    "pull_request": { "href": "https://api.github.com/repos/acme/api/pulls/847" }
+  },
+  "submitted_at": "2026-10-30T10:00:00Z",
+  "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "author_association": "MEMBER"
+}

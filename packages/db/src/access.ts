@@ -81,6 +81,43 @@ export const loadRepositoryAccessContext = async (
   }
 };
 
+/**
+ * What decrypting a member's own forge token needs (P3-5 posts as the user): the member's forge
+ * user id, when the stored token expires, and the ciphertexts. `null` when there is no active
+ * member with this id in the transaction's org (RLS hides other orgs'). Never a plaintext.
+ */
+export interface MemberTokenContext {
+  readonly forgeUserId: number;
+  readonly expiresAt: Date | null;
+  readonly token: StoredSecret | null;
+  readonly dataKey: StoredSecret | null;
+}
+
+export const loadMemberTokenContext = async (
+  tx: TenantTx,
+  memberId: string,
+): Promise<MemberTokenContext | null> => {
+  if (typeof memberId !== "string" || !UUID.test(memberId)) {
+    throw new SecretStoreError("access: member id must be a uuid");
+  }
+  try {
+    const [member] = await tx.db
+      .select({ forgeUserId: members.forgeUserId, expiresAt: members.forgeAccessExpiresAt })
+      .from(members)
+      .where(and(eq(members.orgId, tx.orgId), eq(members.id, memberId), isNull(members.removedAt)));
+    if (member === undefined) return null;
+    return {
+      forgeUserId: member.forgeUserId,
+      expiresAt: member.expiresAt,
+      token: await loadForgeToken(tx, memberId),
+      dataKey: await loadOrgDataKey(tx),
+    };
+  } catch (error) {
+    if (error instanceof SecretStoreError) throw error;
+    throw new SecretStoreError("access: database error");
+  }
+};
+
 /** What a route names: one of its own repositories, or a pull request of one. */
 export type RepositoryAccessTarget =
   | { readonly repoId: string; readonly pullRequestId?: never }

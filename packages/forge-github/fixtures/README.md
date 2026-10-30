@@ -1,6 +1,6 @@
 # GitHub API fixtures
 
-Responses of the GitHub REST API used by tests (P3-3, ADR 0009; P3-4, ADR 0010; P3-6, ADR 0011; P7-1, ADR 0020). They are **not
+Responses of the GitHub REST API used by tests (P3-3, ADR 0009; P3-4, ADR 0010; P3-5, ADR 0026; P3-6, ADR 0011; P7-1, ADR 0020). They are **not
 recorded** from GitHub: they follow the shape GitHub documents for each endpoint below (API
 version `2022-11-28`), with every identifier replaced by a synthetic value: account `acme`
 (9001), user `octo-dev` (9101), enterprise `acme-corp` (9201), installations 4242, 4343 and 4444,
@@ -28,6 +28,7 @@ placeholder; the fake issues random test values), keys, emails or real account d
 | `post-oauth-access-token.bad-verification-code.json` | 200    | The same endpoint refusing a wrong, expired, reused or PKCE-mismatched code: GitHub answers 200 with an `error` field (P7-1)                                                                                                                           |
 | `list-user-installations.json`                       | 200    | `GET /user/installations` with a user token: the app's installations the user can access, one page (P7-1)                                                                                                                                              |
 | `get-user-org-membership.json`                       | 200    | `GET /user/memberships/orgs/{org}` with a user token: the user's own membership (`state` `active` or `pending`) (P7-1 review round 1); a non-member gets GitHub's JSON 404                                                                             |
+| `post-pull-request-review.json`                      | 200    | `POST /repos/{owner}/{repo}/pulls/{number}/reviews` with a user token: the submitted review (P3-5). The fake serves the same shape for `GET …/reviews` (a list)                                                                                        |
 
 Tests serve them through `fakeGitHubApi` (`src/testing.ts`), which may substitute ids so one
 fixture covers several installations. Webhook payloads are not fixtures: they are built by

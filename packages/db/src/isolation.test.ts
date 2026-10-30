@@ -107,6 +107,9 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.pr_revisions": DML,
   "public.pull_requests": DML,
   "public.repos": DML,
+  // P3-5 (migration 0016): attempts to post a review and what they carried (digests only).
+  "public.review_submission_items": DML,
+  "public.review_submissions": DML,
 };
 
 /**
@@ -313,6 +316,8 @@ describe("every table in the database", () => {
       "analyses",
       "findings_state",
       "comments_pending",
+      "review_submissions",
+      "review_submission_items",
       "memory_entries",
       "embeddings",
       "audit_events",

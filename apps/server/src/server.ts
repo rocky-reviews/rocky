@@ -1,12 +1,16 @@
 import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
 import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
-import { createGitHubLogin, createGitHubWebhookIngress } from "@rocky-reviews/forge-github";
+import {
+  createGitHubLogin,
+  createGitHubReviewPoster,
+  createGitHubWebhookIngress,
+} from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
-import { buildApp } from "./app.js";
+import { buildApp, type ReviewPostingDeps } from "./app.js";
 import type { AuthDeps } from "./auth/routes.js";
 import {
   authFromEnv,
@@ -194,6 +198,7 @@ export const startServer = async (
   }
 
   let auth: AuthDeps | undefined;
+  let reviewPosting: ReviewPostingDeps | undefined;
   if (authSetup.enabled && keys !== undefined) {
     const { config } = authSetup;
     if (config.sessionSecret === undefined) {
@@ -223,6 +228,9 @@ export const startServer = async (
       requireTokenExpiry: config.production,
       rateLimit: authRateLimit(rateLimits, { secret, cookieSecure: config.cookieSecure }),
     };
+    // Posting as the user (P3-5): the one poster in the process, held by the review routes only.
+    // They answer 503 until the repository access check is built here (P7-2 follow-up).
+    reviewPosting = { poster: createGitHubReviewPoster({ api: config.endpoints.api }), keys };
   } else {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
   }
@@ -236,6 +244,7 @@ export const startServer = async (
     ...(webhooks === undefined ? {} : { webhooks }),
     ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
     ...(auth === undefined ? {} : { auth }),
+    ...(reviewPosting === undefined ? {} : { reviewPosting }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.

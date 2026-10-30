@@ -1,7 +1,9 @@
 export {
   AccessInputError,
+  loadMemberTokenContext,
   loadRepositoryAccessContext,
   resolveRepositoryForAccess,
+  type MemberTokenContext,
   type RepositoryAccessContext,
   type RepositoryAccessTarget,
 } from "./access.js";
@@ -191,3 +193,18 @@ export {
   WebhookInboxError,
 } from "./webhooks.js";
 export * as schema from "./schema.js";
+export {
+  beginReviewSubmission,
+  finishReviewSubmission,
+  loadReviewPlan,
+  loadReviewSubmission,
+  recordedReviewIds,
+  ReviewStoreError,
+  sha256 as reviewSha256,
+  type BeginReviewSubmissionInput,
+  type BeginReviewSubmissionResult,
+  type FinishReviewSubmissionInput,
+  type ReviewPlan,
+  type ReviewSubmissionRecord,
+  type ReviewSubmissionStatus,
+} from "./reviews.js";
