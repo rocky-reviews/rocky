@@ -79,3 +79,10 @@ export {
   type GitHubUserInstallation,
   type GitHubUserToken,
 } from "./oauth.js";
+export {
+  createGitHubReviewPoster,
+  MAX_REVIEW_LIST_PAGES,
+  MAX_REVIEW_RESPONSE_BYTES,
+  REVIEW_POST_TIMEOUT_MS,
+  type GitHubReviewPosterOptions,
+} from "./reviews.js";

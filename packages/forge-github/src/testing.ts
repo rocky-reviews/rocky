@@ -235,7 +235,20 @@ export type FakeRoute =
   | "collaborator"
   | "membership"
   | "installations"
-  | "org_membership";
+  | "org_membership"
+  | "review"
+  | "reviews";
+
+/** A review as the fake holds it (P3-5): the posted payload, verbatim. */
+export interface FakeReview {
+  readonly id: number;
+  readonly repositoryId: number;
+  readonly number: number;
+  readonly userId: number;
+  readonly userLogin: string;
+  readonly payload: Record<string, unknown>;
+  readonly submittedAt: string;
+}
 
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
@@ -297,6 +310,13 @@ export interface FakeGitHubApi {
   addUser(user: { readonly id: number; readonly login: string }): string;
   /** Every user token issued, so a test can prove none of them leaked. */
   readonly userTokens: string[];
+  /**
+   * Every review created through `POST /repos/{owner}/{repo}/pulls/{number}/reviews` (P3-5),
+   * in order: who posted it, on which pull request, and the request body exactly as sent.
+   */
+  readonly reviews: FakeReview[];
+  /** Plants a review as if posted earlier (reconciliation tests). Returns its id. */
+  putReview(review: Omit<FakeReview, "id">): number;
   /** The user's role on a repository; `null` removes the user from it (collaborator removed). */
   setPermission(userId: number, repositoryId: number, permission: FakePermission | null): void;
   /** The token is revoked or expired: GitHub answers 401 from now on. */
@@ -339,6 +359,8 @@ const TOKEN_ROUTE = /^app\/installations\/(\d+)\/access_tokens$/;
 const INSTALLATION_ROUTE = /^app\/installations\/(\d+)$/;
 const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
 const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
+const REVIEWS_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews$/;
+const REVIEW_COMMENTS_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews\/(\d+)\/comments$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
 const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
 const COLLABORATOR_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/;
@@ -398,6 +420,8 @@ export const fakeGitHubApi = (options: {
   const tokens: FakeGitHubApi["tokens"] = { mints: [], issued: [], revoked: 0 };
   const userTokens: string[] = [];
   const users = new Map<string, { id: number; login: string; revoked: boolean }>();
+  const reviews: FakeReview[] = [];
+  let nextReviewId = 880011;
   const permissions = new Map<string, FakePermission>();
   const visibilities = new Map<number, "public" | "internal">();
   const installationGrants = new Set<string>();
@@ -458,6 +482,117 @@ export const fakeGitHubApi = (options: {
       id: user.id,
       login: user.login,
     });
+  };
+
+  const reviewJson = (review: FakeReview): Record<string, unknown> => {
+    const fixture = githubFixture("post-pull-request-review");
+    const event = String(review.payload["event"] ?? "");
+    return {
+      ...fixture,
+      id: review.id,
+      user: {
+        ...(fixture["user"] as Record<string, unknown>),
+        id: review.userId,
+        login: review.userLogin,
+      },
+      body: review.payload["body"] ?? "",
+      state:
+        event === "APPROVE"
+          ? "APPROVED"
+          : event === "REQUEST_CHANGES"
+            ? "CHANGES_REQUESTED"
+            : "COMMENTED",
+      commit_id: review.payload["commit_id"] ?? null,
+      submitted_at: review.submittedAt,
+    };
+  };
+
+  /**
+   * `POST` / `GET /repos/{owner}/{repo}/pulls/{number}/reviews` as a user (P3-5). GitHub's
+   * documented refusals: 404 when the user cannot see the repository or the pull request, 422
+   * for an unknown event, a comment without path or line, an approval of the user's own pull
+   * request, or a COMMENT / REQUEST_CHANGES review that says nothing.
+   */
+  const reviewsAsUser = (
+    method: string,
+    owner: string,
+    name: string,
+    number: number,
+    user: { id: number; login: string },
+    url: URL,
+    rawBody: RequestInit["body"],
+    reviewId?: number,
+  ): Response => {
+    const failure = takeRouteFailure(method === "POST" ? "review" : "reviews");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const seen = visibleTo(owner, name, user.id);
+    const pr = seen === undefined ? undefined : pulls.get(seen.entry.repo.id)?.get(number);
+    if (seen === undefined || pr === undefined) {
+      return json(404, githubFixture("get-installation.not-found"));
+    }
+    const ofPr = reviews.filter(
+      (r) => r.repositoryId === seen.entry.repo.id && r.number === number,
+    );
+    const perPage = Math.min(Number(url.searchParams.get("per_page") ?? "30"), 100);
+    const page = Number(url.searchParams.get("page") ?? "1");
+    if (method === "GET" && reviewId !== undefined) {
+      // `GET …/reviews/{id}/comments`: the inline comments the review carried.
+      const review = ofPr.find((r) => r.id === reviewId);
+      if (review === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const comments = Array.isArray(review.payload["comments"])
+        ? (review.payload["comments"] as Record<string, unknown>[])
+        : [];
+      return json(
+        200,
+        comments
+          .slice((page - 1) * perPage, page * perPage)
+          .map((c, i) => ({ id: review.id * 1000 + (page - 1) * perPage + i + 1, ...c })),
+      );
+    }
+    if (method === "GET") {
+      // GitHub lists reviews oldest first.
+      return json(200, ofPr.slice((page - 1) * perPage, page * perPage).map(reviewJson));
+    }
+    if (method !== "POST") return json(404, githubFixture("get-installation.not-found"));
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(String(rawBody ?? "")) as Record<string, unknown>;
+    } catch {
+      return json(400, { message: "Problems parsing JSON" });
+    }
+    const unprocessable = (message: string) =>
+      json(422, { message, documentation_url: "https://docs.github.com/rest", errors: [] });
+    const event = payload["event"];
+    if (!["APPROVE", "REQUEST_CHANGES", "COMMENT"].includes(String(event))) {
+      return unprocessable(
+        "Invalid request.\n\nFor 'properties/event', 'x' is not one of the allowed values.",
+      );
+    }
+    const comments = Array.isArray(payload["comments"]) ? (payload["comments"] as unknown[]) : [];
+    for (const c of comments) {
+      const comment = c as Record<string, unknown>;
+      if (typeof comment["path"] !== "string" || typeof comment["line"] !== "number") {
+        return unprocessable("Pull request review thread path and line are required.");
+      }
+    }
+    const body = typeof payload["body"] === "string" ? payload["body"] : "";
+    if (event === "APPROVE" && pr.authorLogin === user.login) {
+      return unprocessable("Can not approve your own pull request");
+    }
+    if (event !== "APPROVE" && body.trim() === "" && comments.length === 0) {
+      return unprocessable("Review body is required for this event.");
+    }
+    const review: FakeReview = {
+      id: nextReviewId++,
+      repositoryId: seen.entry.repo.id,
+      number,
+      userId: user.id,
+      userLogin: user.login,
+      payload,
+      submittedAt: new Date(now()).toISOString(),
+    };
+    reviews.push(review);
+    return json(200, reviewJson(review));
   };
 
   const userByLogin = (username: string) => {
@@ -853,6 +988,31 @@ export const fakeGitHubApi = (options: {
         installations: all.slice((page - 1) * perPage, page * perPage),
       });
     }
+    const reviewCommentsMatch = REVIEW_COMMENTS_ROUTE.exec(path);
+    if (reviewCommentsMatch !== null && user !== undefined) {
+      return reviewsAsUser(
+        method,
+        group(reviewCommentsMatch, 1),
+        group(reviewCommentsMatch, 2),
+        Number(reviewCommentsMatch[3]),
+        user,
+        url,
+        init?.body,
+        Number(reviewCommentsMatch[4]),
+      );
+    }
+    const reviewsMatch = REVIEWS_ROUTE.exec(path);
+    if (reviewsMatch !== null && user !== undefined) {
+      return reviewsAsUser(
+        method,
+        group(reviewsMatch, 1),
+        group(reviewsMatch, 2),
+        Number(reviewsMatch[3]),
+        user,
+        url,
+        init?.body,
+      );
+    }
     const repositoryMatch = REPOSITORY_ROUTE.exec(path);
     if (method === "GET" && repositoryMatch !== null && user !== undefined) {
       return repositoryAsUser(group(repositoryMatch, 1), group(repositoryMatch, 2), user.id);
@@ -944,6 +1104,12 @@ export const fakeGitHubApi = (options: {
       diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);
     },
     userTokens,
+    reviews,
+    putReview: (review) => {
+      const id = nextReviewId++;
+      reviews.push({ ...review, id });
+      return id;
+    },
     addUser: (user) => {
       const value = `test-user-token-${randomUUID()}`;
       userTokens.push(value);

@@ -1,4 +1,5 @@
-import type { PullRequestApprover, RepositoryAccessCheck } from "@rocky-reviews/core";
+import type { PullRequestApprover, RepositoryAccessCheck, ReviewPoster } from "@rocky-reviews/core";
+import type { KeyWrapper } from "@rocky-reviews/crypto";
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -7,6 +8,8 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
+import { createReviewPostingService } from "./reviews/post-review.js";
+import { registerReviewPostingRoutes } from "./reviews/post-routes.js";
 import { registerReviewRoutes } from "./reviews/routes.js";
 import { registerRoleRoutes } from "./roles/routes.js";
 import { frameworkErrors, registerErrorHandler } from "./security/errors.js";
@@ -16,6 +19,14 @@ import { registerWebApp, type WebApp } from "./web-app.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
+
+export interface ReviewPostingDeps {
+  readonly poster: ReviewPoster;
+  /** Unwraps the org data keys the members' tokens are encrypted under (the login's `keys`). */
+  readonly keys: KeyWrapper;
+  readonly now?: () => number;
+  readonly postingTimeoutMs?: number;
+}
 
 export interface AppDeps {
   checkDatabase: HealthCheck;
@@ -46,6 +57,12 @@ export interface AppDeps {
    * (P6-7) refuses (503) without it.
    */
   pullRequestApprover?: PullRequestApprover;
+  /**
+   * Posting reviews as the user (P3-5, ADR 0026). Needs login (the session's member and their
+   * stored token) and `repositoryAccess` (without it the routes answer 503). The poster is the
+   * only object in the process that can post, and only these routes hold it.
+   */
+  reviewPosting?: ReviewPostingDeps;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -62,6 +79,9 @@ export interface AppDeps {
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 export const TIMEOUT_CHECK_INTERVAL_MS = 1_000;
+
+/** For a silent app (tests): the posting service logs nothing. */
+const SILENT: Pick<Logger, "info" | "warn"> = { info: () => undefined, warn: () => undefined };
 
 /** Builds the HTTP app. Dependencies are passed in so tests can run it without a database. */
 export const buildApp = (deps: AppDeps): FastifyInstance => {
@@ -135,6 +155,23 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
+    if (deps.reviewPosting !== undefined) {
+      const { poster, keys, now, postingTimeoutMs } = deps.reviewPosting;
+      registerReviewPostingRoutes(
+        app,
+        createReviewPostingService({
+          db: deps.auth.db,
+          keys,
+          poster,
+          log: deps.log ?? SILENT,
+          ...(deps.repositoryAccess === undefined
+            ? {}
+            : { repositoryAccess: deps.repositoryAccess }),
+          ...(now === undefined ? {} : { now }),
+          ...(postingTimeoutMs === undefined ? {} : { postingTimeoutMs }),
+        }),
+      );
+    }
   }
   registerWebApp(app, deps.web);
 

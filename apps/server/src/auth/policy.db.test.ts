@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AccessDecision, RepositoryAccessRequest } from "@rocky-reviews/core";
+import type { AccessDecision, RepositoryAccessRequest, ReviewPoster } from "@rocky-reviews/core";
 import { generateLocalKek, LocalKeyWrapper } from "@rocky-reviews/crypto";
 import { claimFirstOwner, createDb, upsertLoginMember, type Db } from "@rocky-reviews/db";
 import {
@@ -173,6 +173,11 @@ const EXPECTED: Readonly<Record<string, Row>> = {
     owner: "not_found",
     crossOrg: "not_found",
   },
+  // P3-5 (ADR 0026): the exact list to post, and the click that posts it (the P3-6 check runs
+  // inside). Another org's pull request id is not found (RLS).
+  "GET /api/pull-requests/:pullRequestId/review": review("GET", true),
+  "HEAD /api/pull-requests/:pullRequestId/review": review("GET", true),
+  "POST /api/pull-requests/:pullRequestId/review": review("other", true),
 };
 
 const NOBODYS_COMMENT = "00000000-0000-4000-8000-000000000000";
@@ -214,6 +219,15 @@ const FORGE = {
   target: 3010,
 } as const;
 
+const KEYS = new LocalKeyWrapper([["v1", Buffer.from(generateLocalKek(), "base64")]]);
+/** Never reached by the matrix: a bogus digest makes every permitted click `stale` (409). */
+const UNREACHABLE_POSTER: ReviewPoster = {
+  kind: "github",
+  postReview: () => Promise.reject(new Error("the matrix must not post")),
+  listOwnReviews: () => Promise.resolve([]),
+  countReviewComments: () => Promise.resolve(0),
+};
+
 const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   lines = [];
   changedMembers = [];
@@ -249,11 +263,12 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
         fetch: (() => Promise.reject(new Error("no network"))) as unknown as typeof fetch,
       }),
       db,
-      keys: new LocalKeyWrapper([["v1", Buffer.from(generateLocalKek(), "base64")]]),
+      keys: KEYS,
       onMemberTokenChanged: (_orgId, memberId) => changedMembers.push(memberId),
     },
-    // P6-7: the bulk approval port (P3-5 fills it); the matrix only needs it present.
+    // P6-7: the bulk approval port (P3-5's poster will fill it); the matrix only needs it present.
     pullRequestApprover: { approve: async () => "approved" },
+    reviewPosting: { poster: UNREACHABLE_POSTER, keys: KEYS },
     ...(options.withoutAccessCheck === true
       ? {}
       : {
@@ -376,7 +391,8 @@ const requestFor = (key: string) => {
     .replace(":memberId", idOf(A, FORGE.target))
     .replace(":analysisId", A.analysisId)
     .replace(":findingId", "F1")
-    .replace(":commentId", NOBODYS_COMMENT);
+    .replace(":commentId", NOBODYS_COMMENT)
+    .replace(":pullRequestId", A.pullRequestId);
   const body =
     path === "/api/org/members/:memberId" && method === "PATCH"
       ? { role: "admin" }
@@ -392,7 +408,15 @@ const requestFor = (key: string) => {
                 ? { action: "send_to_agent" }
                 : path === "/api/analyses/:analysisId/comments"
                   ? { path: "src/api/index.ts", line: 21, body: "x" }
-                  : undefined;
+                  : path === "/api/pull-requests/:pullRequestId/review"
+                    ? {
+                        idempotencyKey: "5d1e9f00-aaaa-4bcd-9e00-000000000099",
+                        contentSha256: "0".repeat(64),
+                        headSha: "a".repeat(40),
+                        verdict: "approve",
+                        body: "",
+                      }
+                    : undefined;
   return { method, url, body };
 };
 
@@ -469,6 +493,8 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "POST /api/org/members/:memberId/restore": "members.manage",
       "POST /api/org/ownership": "ownership.transfer",
       "POST /api/analyses/:analysisId/approve-over-limit": "analysis.approve_over_limit",
+      "GET /api/pull-requests/:pullRequestId/review": "pull_requests.review",
+      "POST /api/pull-requests/:pullRequestId/review": "pull_requests.review",
       "POST /webhooks/github": "public",
       "GET /api/inbox": "pull_requests.review",
       "POST /api/inbox/approvals": "pull_requests.review",

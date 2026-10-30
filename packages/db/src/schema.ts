@@ -191,6 +191,44 @@ export const commentsPending = pgTable("comments_pending", {
   updatedAt: updatedAt(),
 });
 
+/**
+ * One attempt to post a review as the user (P3-5, migration 0016, ADR 0026): written before the
+ * forge is called, finished after. Digests and counts only; the content lives on the forge.
+ */
+export const reviewSubmissions = pgTable("review_submissions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: orgIdColumn(),
+  pullRequestId: uuid("pull_request_id").notNull(),
+  revisionId: uuid("revision_id").notNull(),
+  /** The member who clicked: never a system actor. */
+  submittedBy: uuid("submitted_by").notNull(),
+  idempotencyKey: uuid("idempotency_key").notNull(),
+  headSha: text("head_sha").notNull(),
+  verdict: text("verdict", { enum: ["approve", "request_changes", "comment"] }).notNull(),
+  contentSha256: bytea("content_sha256").notNull(),
+  bodySha256: bytea("body_sha256").notNull(),
+  draftCount: integer("draft_count").notNull(),
+  commentCount: integer("comment_count").notNull(),
+  status: text("status", { enum: ["posting", "posted", "failed"] })
+    .notNull()
+    .default("posting"),
+  forgeReviewId: bigint("forge_review_id", { mode: "number" }),
+  errorCode: text("error_code"),
+  createdAt: createdAt(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+/** What a submission carried, in order: the item's id and the sha256 of its body as posted. */
+export const reviewSubmissionItems = pgTable("review_submission_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: orgIdColumn(),
+  submissionId: uuid("submission_id").notNull(),
+  seq: integer("seq").notNull(),
+  kind: text("kind", { enum: ["draft", "comment"] }).notNull(),
+  itemId: uuid("item_id").notNull(),
+  bodySha256: bytea("body_sha256").notNull(),
+});
+
 export const memoryEntries = pgTable("memory_entries", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: orgIdColumn(),

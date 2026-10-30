@@ -13,6 +13,8 @@ export interface SeededOrg {
   analysisId: string;
   findingStateId: string;
   commentId: string;
+  reviewSubmissionId: string;
+  reviewSubmissionItemId: string;
   memoryEntryId: string;
   embeddingId: string;
   jobId: string;
@@ -128,6 +130,38 @@ export const seedOrg = async (
         })
         .returning({ id: schema.commentsPending.id }),
     );
+    const submission = first(
+      await tx
+        .insert(schema.reviewSubmissions)
+        .values({
+          pullRequestId: pr.id,
+          revisionId: revision.id,
+          submittedBy: member.id,
+          idempotencyKey: randomUUID(),
+          headSha: "a".repeat(40),
+          verdict: "comment",
+          contentSha256: Buffer.alloc(32, 1),
+          bodySha256: Buffer.alloc(32, 2),
+          draftCount: 0,
+          commentCount: 1,
+          status: "posted",
+          forgeReviewId: 880011,
+          finishedAt: createdAt,
+        })
+        .returning({ id: schema.reviewSubmissions.id }),
+    );
+    const submissionItem = first(
+      await tx
+        .insert(schema.reviewSubmissionItems)
+        .values({
+          submissionId: submission.id,
+          seq: 0,
+          kind: "comment",
+          itemId: comment.id,
+          bodySha256: Buffer.alloc(32, 3),
+        })
+        .returning({ id: schema.reviewSubmissionItems.id }),
+    );
     const memory = first(
       await tx
         .insert(schema.memoryEntries)
@@ -210,6 +244,8 @@ export const seedOrg = async (
       analysisId: analysis.id,
       findingStateId: finding.id,
       commentId: comment.id,
+      reviewSubmissionId: submission.id,
+      reviewSubmissionItemId: submissionItem.id,
       memoryEntryId: memory.id,
       embeddingId: embedding.id,
       jobId: job.id,
