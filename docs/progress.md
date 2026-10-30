@@ -63,6 +63,20 @@ Task log for the project plan. Agents append a row when a task is merged.
   or badge adds no history entry (same as the sidebar).
 - Opening a finding focuses its line number button ("Comment on line 28"); a screen reader hears
   the line, not the finding. Announce the finding's title when the right panel can show it.
+- Review nits:
+  - Badges are 18 px in the renderer and about 13-14 CSS px once the map is scaled, on their
+    card's corner: under WCAG 2.2 target size (2.5.8). Add a larger transparent hit area in the
+    badge group, or another way to open a finding at its line (P6-8).
+  - When the analysis is out of date, a badge's name still says "line N" but the line is ignored;
+    the out-of-date banner explains it, but the name could drop the line.
+  - A badge on a "noise" file opens the file with the diff hidden; "Show raw diff" then focuses
+    the stored line. Neither behaviour is tested.
+  - `MapBoundary` (`apps/web/src/briefing/ChangeMap.tsx`) never resets; key it on the run id or
+    head sha before the analysis can update in place. Its comment says nothing is logged, but
+    React 19 still writes caught errors to `console.error` (fixed strings only).
+  - `ChangeMap.test.tsx` sets the boundary's state by hand; render a throwing child instead.
+  - The tampered-id e2e checks a title is still visible right after the click; assert the main
+    heading and selection are unchanged instead.
 
 ### P5-2 follow-ups
 
