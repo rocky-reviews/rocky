@@ -51,6 +51,18 @@ const POSTER_DYNAMIC = {
     "ImportExpression[source.value=/(?:^@rocky-reviews\\/server(?:\\/|$))|(?:server\\/src\\/)|(?:reviews\\/post-(?:review|routes))|(?:forge-github\\/src\\/reviews)/]",
   message: POSTER_MESSAGE,
 };
+/**
+ * Ways around the static rules above (#39 N3): an `import()` whose source is not a plain string
+ * (a variable, a template, a concatenation) cannot be checked, and `createRequire` loads any
+ * module at run time. Neither is used by the worker or the LLM package.
+ */
+const OPAQUE_LOADERS = [
+  {
+    selector: "ImportExpression[source.type!='Literal']",
+    message: `Dynamic import() with a computed source. ${POSTER_MESSAGE}`,
+  },
+  { selector: "Identifier[name='createRequire']", message: `No createRequire. ${POSTER_MESSAGE}` },
+];
 /** The poster's factory by name, however it was reached (e.g. from a dynamic import's module). */
 const POSTER_NAME = {
   selector: "Identifier[name='createGitHubReviewPoster']",
@@ -210,6 +222,7 @@ export default tseslint.config(
         TESTING_DYNAMIC,
         POSTER_DYNAMIC,
         POSTER_NAME,
+        ...OPAQUE_LOADERS,
       ],
     },
   },

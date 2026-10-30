@@ -12,7 +12,7 @@ import {
 } from "@rocky-reviews/core";
 import { parseAnalysisDocument, type AnalysisDocument } from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
-import { isCarried, isDraftCarried, lockReviewPlan } from "./reviews.js";
+import { carriedDraftContent, isCarried, lockReviewPlan, postedDraftContent } from "./reviews.js";
 
 /**
  * Draft decisions and pending comments (P6-4, migration 0015, ADR 0027). Every function runs in
@@ -255,7 +255,9 @@ export const decideDraft = async (
   );
   const row = rows[0];
   if (row === undefined) throw new DraftStoreError("drafts: decision row missing");
-  if (await isDraftCarried(tx, { findingStateId, memberId, revisionId: target.revisionId })) {
+  // This very decision was posted (or is being posted): it cannot change (S2). Copying the
+  // agent prompt changes nothing that was posted, so it is never refused here (#39 SF2).
+  if (input.action.kind !== "send_to_agent" && (await isCarried(tx, "draft", findingStateId))) {
     return { outcome: "already_posted", draft: viewOf(row) };
   }
 
@@ -273,6 +275,14 @@ export const decideDraft = async (
     composePostedComment(finding, { body: next.body }).length > MAX_COMMENT_BODY
   ) {
     return { outcome: "comment_too_long" };
+  }
+  // Accepting what this member already posted on this revision, from another analysis (a re-run
+  // renumbers findings), would post it twice: refused by content, not by id (S1, #39 SF1).
+  if (next.state === "accepted") {
+    const carried = await carriedDraftContent(tx, memberId, target.revisionId);
+    if (carried(postedDraftContent(finding, next.body))) {
+      return { outcome: "already_posted", draft: viewOf(row) };
+    }
   }
   const key = [tx.orgId, analysisId, memberId, finding.id];
 

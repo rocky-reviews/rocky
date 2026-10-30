@@ -80,7 +80,15 @@ const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]
       org.analysisId,
       JSON.stringify(DOCUMENT),
     ]);
-    // Analyses a test added on the seeded revision (a re-run on the same head) go first.
+    // Revisions and analyses a test added (a new push, a re-run on the same head) go first.
+    await tx.query("update pull_requests set head_sha = $2 where id = $1", [
+      org.pullRequestId,
+      HEAD,
+    ]);
+    await tx.query("delete from pr_revisions where pull_request_id = $1 and id <> $2", [
+      org.pullRequestId,
+      org.revisionId,
+    ]);
     await tx.query("delete from analyses where revision_id = $1 and id <> $2", [
       org.revisionId,
       org.analysisId,
@@ -908,5 +916,154 @@ describe("security-boundary review fixes (S1, S2, nit 3)", () => {
       "ok",
     );
     expect((await planOf(A, A.memberId))!.items[0]!.body.length).toBe(65_536);
+  });
+});
+
+describe("review fixes for #39: carried drafts match by content, scoped to the member and revision", () => {
+  /** A finished analysis of `revisionId` with `document`, finished an hour from now (the latest). */
+  const analysisOf = (revisionId: string, document: AnalysisDocument) =>
+    db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
+        [revisionId, JSON.stringify(document)],
+      );
+      return rows[0]!.id;
+    });
+  /** The same findings, renumbered as a re-run would: old F1 → F2, old F2 → F4, old F4 → F1. */
+  const RENUMBERED: AnalysisDocument = {
+    ...DOCUMENT,
+    findings: DOCUMENT.findings.map((f) => ({
+      ...f,
+      id: ({ F1: "F2", F2: "F4", F4: "F1" } as Record<string, string>)[f.id] ?? f.id,
+    })),
+  };
+  const decideAs = (memberId: string, analysisId: string, findingId: string, action: DraftAction) =>
+    db.withOrg(A.orgId, (tx) => decideDraft(tx, { analysisId, memberId, findingId, action }));
+  const postAll = async (memberId: string) => {
+    const plan = (await planOf(A, memberId))!;
+    const started = await begin(A, inputFor(A, memberId, plan));
+    if (started.outcome !== "started") throw new Error(started.outcome);
+    await db.withOrg(A.orgId, (tx) =>
+      finishReviewSubmission(
+        tx,
+        started.submission.submissionId,
+        { posted: true, forgeReviewId: 880200 },
+        { type: "user", id: memberId },
+      ),
+    );
+    return plan;
+  };
+
+  it("SF1: a re-run that renumbers findings: what was posted is not offered or accepted again under its new id; unrelated findings with reused ids are", async () => {
+    await prepare(A, A.memberId, ["F1", "F2"]);
+    await postAll(A.memberId);
+    const a2 = await analysisOf(A.revisionId, RENUMBERED);
+    // Posted F2 came back as F4, posted F1 as F2: refused by content.
+    for (const id of ["F4", "F2"]) {
+      expect(await decideAs(A.memberId, a2, id, { kind: "accept" })).toMatchObject({
+        outcome: "already_posted",
+        draft: { state: "draft" },
+      });
+    }
+    // F1 on the re-run is old F4: never posted, so decidable and offered.
+    expect((await decideAs(A.memberId, a2, "F1", { kind: "accept" })).outcome).toBe("ok");
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.items.map((i) => [i.kind, i.body])).toEqual([["draft", posted("F4")]]);
+    // An edit is new content: it may be posted (the person wrote something else).
+    expect(
+      (await decideAs(A.memberId, a2, "F4", { kind: "edit", body: "Different words." })).outcome,
+    ).toBe("ok");
+  });
+
+  it("SF1: drafts accepted on the re-run before the post are dropped from the plan by content", async () => {
+    await prepare(A, A.memberId, ["F2"]);
+    const a2 = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() - interval '1 hour') returning id`,
+        [A.revisionId, JSON.stringify(RENUMBERED)],
+      );
+      return rows[0]!.id;
+    });
+    expect((await decideAs(A.memberId, a2, "F4", { kind: "accept" })).outcome).toBe("ok");
+    expect((await decideAs(A.memberId, a2, "F2", { kind: "accept" })).outcome).toBe("ok");
+    await postAll(A.memberId);
+    await db.withOrg(A.orgId, (tx) =>
+      tx.query("update analyses set completed_at = now() + interval '2 hours' where id = $1", [a2]),
+    );
+    // On the re-run, F4 (posted F2's content) is dropped; F2 (old F1, never posted) stays.
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.items.map((i) => i.body)).toEqual([posted("F1")]);
+  });
+
+  it("SF2: send to agent is never refused for a posted draft; the state machine answers as usual", async () => {
+    await prepare(A, A.memberId, ["F2"]);
+    await postAll(A.memberId);
+    // The posted row is accepted: send_to_agent is an invalid transition, not already_posted.
+    expect(
+      (await decideAs(A.memberId, A.analysisId, "F2", { kind: "send_to_agent" })).outcome,
+    ).toBe("invalid_transition");
+    // The same content on a re-run, still a draft: copying its prompt is fine.
+    const a2 = await analysisOf(A.revisionId, RENUMBERED);
+    expect((await decideAs(A.memberId, a2, "F4", { kind: "send_to_agent" })).outcome).toBe("ok");
+  });
+
+  it("N4: another member's post does not carry my drafts", async () => {
+    await prepare(A, A.memberId, []);
+    await decideAs(bob, A.analysisId, "F1", { kind: "accept" });
+    await postAll(bob);
+    expect((await decideAs(A.memberId, A.analysisId, "F1", { kind: "accept" })).outcome).toBe("ok");
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.items.map((i) => i.body)).toEqual([posted("F1")]);
+  });
+
+  it("N4: what was posted on one head is offered again on a new push", async () => {
+    await prepare(A, A.memberId, ["F1"]);
+    await postAll(A.memberId);
+    const head2 = "c".repeat(40);
+    const revision2 = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into pr_revisions (pull_request_id, head_sha, base_sha)
+         values ($1, $2, repeat('b', 40)) returning id`,
+        [A.pullRequestId, head2],
+      );
+      await tx.query("update pull_requests set head_sha = $2 where id = $1", [
+        A.pullRequestId,
+        head2,
+      ]);
+      return rows[0]!.id;
+    });
+    const a2 = await analysisOf(revision2, DOCUMENT);
+    expect((await decideAs(A.memberId, a2, "F1", { kind: "accept" })).outcome).toBe("ok");
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.revisionId).toBe(revision2);
+    expect(plan.items.map((i) => i.body)).toEqual([posted("F1")]);
+  });
+
+  it("N4: a decision that holds the lock first makes the submission stale", async () => {
+    await prepare(A, A.memberId, ["F1"]);
+    const plan = (await planOf(A, A.memberId))!;
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let decided!: () => void;
+    const lockTaken = new Promise<void>((r) => (decided = r));
+    const decision = db.withOrg(A.orgId, async (tx) => {
+      const result = await decideDraft(tx, {
+        analysisId: A.analysisId,
+        memberId: A.memberId,
+        findingId: "F1",
+        action: { kind: "undo" },
+      });
+      decided();
+      await held;
+      return result;
+    });
+    await lockTaken;
+    const submission = begin(A, inputFor(A, A.memberId, plan));
+    await new Promise((r) => setTimeout(r, 100));
+    release();
+    expect((await decision).outcome).toBe("ok");
+    expect(await submission).toEqual({ outcome: "stale" });
   });
 });
