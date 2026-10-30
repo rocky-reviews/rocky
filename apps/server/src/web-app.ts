@@ -60,14 +60,19 @@ const isTemplate = (node: Tree.Element): node is Tree.Template => "content" in n
 const isText = (node: Tree.ChildNode): node is Tree.TextNode => node.nodeName === "#text";
 
 /**
- * A URL a browser would run as script: the URL parser drops every tab, LF and CR and leading
- * C0 controls and spaces before it reads the scheme, case-insensitively.
+ * The scheme of a URL a browser could run as script or markup (`javascript:`, `data:`,
+ * `vbscript:`), or `undefined`. The URL parser drops every tab, LF and CR and leading C0
+ * controls and spaces before it reads the scheme, case-insensitively, so this does the same.
  */
-const isJavascriptUrl = (value: string): boolean => {
+const scriptScheme = (value: string): string | undefined => {
   const stripped = value.replaceAll(/[\t\n\r]/g, "");
   let start = 0;
   while (start < stripped.length && stripped.charCodeAt(start) <= 0x20) start += 1;
-  return stripped.slice(start).toLowerCase().startsWith("javascript:");
+  const lower = stripped.slice(start).toLowerCase();
+  if (lower.startsWith("javascript:")) return "javascript";
+  if (lower.startsWith("data:")) return "data";
+  if (lower.startsWith("vbscript:")) return "vbscript";
+  return undefined;
 };
 
 /**
@@ -93,7 +98,8 @@ export const findInlineContent = (html: string): string[] => {
         const attrName = attr.name.toLowerCase();
         if (attrName === "style") found.add("style= attribute");
         else if (attrName.startsWith("on")) found.add("on*= event handler");
-        if (isJavascriptUrl(attr.value)) found.add("javascript: URL");
+        const scheme = scriptScheme(attr.value);
+        if (scheme !== undefined) found.add(`${scheme}: URL`);
       }
       if (isTemplate(node)) visit(node.content);
     }

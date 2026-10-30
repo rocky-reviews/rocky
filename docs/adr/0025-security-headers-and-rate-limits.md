@@ -82,7 +82,8 @@ The P10-1 image will copy `apps/web/dist` and set the variable.
   it (exactly the checked size): there is no path between the check and the read for a symlink
   or a FIFO to slip into, and a symlink at the last step is `ELOOP`, refused.
 - **`index.html` is checked at boot**: an inline `<script>`, a `<style>` element, a `style=` or
-  `on*=` attribute or a `javascript:` URL refuses to start (`findInlineContent`). The document
+  `on*=` attribute or a `javascript:`, `data:` or `vbscript:` URL refuses to start
+  (`findInlineContent`). The document
   is parsed as a browser parses it (parse5, pinned) and every element is visited in every
   namespace, inside `<template>` and `<noscript>`; a tag regexp cannot know where `</script\t\n
 bar>` ends or what the parser makes of entities or odd markup. The build test

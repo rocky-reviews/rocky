@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 /**
  * P7-3 (ADR 0025): the production build must work under `script-src 'self'; style-src 'self'`
  * with no hashes or nonces, so the built `index.html` may contain no inline script, style
- * element, style attribute, event handler or `javascript:` URL. Builds the app for real and
+ * element, style attribute, event handler or `javascript:`/`data:`/`vbscript:` URL. Builds it for real and
  * reads the result as a browser would (parse5), the same way the server checks `ROCKY_WEB_DIR`
  * at boot (`apps/server/src/web-app.ts`, `findInlineContent`).
  */
@@ -40,13 +40,19 @@ const attr = (el: Tree.Element, name: string): string | undefined =>
   el.attrs.find((a) => a.name.toLowerCase() === name)?.value;
 const text = (el: Tree.Element): string =>
   el.childNodes.map((c) => (isText(c) ? c.value : "")).join("");
-/** The URL parser drops tabs and newlines and leading controls before it reads the scheme. */
-const isJavascriptUrl = (value: string): boolean =>
-  value
+/**
+ * A scheme a browser could run as script or markup; the URL parser drops tabs and newlines and
+ * leading controls before it reads the scheme.
+ */
+const hasScriptScheme = (value: string): boolean => {
+  const lower = value
     .replaceAll(/[\t\n\r]/g, "")
     .trimStart()
-    .toLowerCase()
-    .startsWith("javascript:");
+    .toLowerCase();
+  return (
+    lower.startsWith("javascript:") || lower.startsWith("data:") || lower.startsWith("vbscript:")
+  );
+};
 
 beforeAll(async () => {
   outDir = mkdtempSync(join(tmpdir(), "rocky-web-build-"));
@@ -68,7 +74,7 @@ describe("the production index.html (CSP without inline content)", () => {
     }
   });
 
-  it("has no <style> element, style= attribute, on*= handler or javascript: URL", () => {
+  it("has no <style> element, style= attribute, on*= handler or javascript:/data:/vbscript: URL", () => {
     for (const el of elements) {
       const name = el.tagName.toLowerCase();
       expect(name).not.toBe("style");
@@ -76,7 +82,7 @@ describe("the production index.html (CSP without inline content)", () => {
         const attrName = a.name.toLowerCase();
         expect(attrName, `${name} ${attrName}`).not.toBe("style");
         expect(attrName.startsWith("on"), `${name} ${attrName}`).toBe(false);
-        expect(isJavascriptUrl(a.value), `${name} ${attrName}`).toBe(false);
+        expect(hasScriptScheme(a.value), `${name} ${attrName}`).toBe(false);
       }
     }
   });

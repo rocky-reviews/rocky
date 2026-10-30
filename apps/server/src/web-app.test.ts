@@ -173,6 +173,9 @@ describe("findInlineContent", () => {
       ['<a href="&#106;avascript:alert(1)">', "javascript: URL"],
       ['<form action="\tjavascript:x">', "javascript: URL"],
       ['<svg><a xlink:href="javascript:x"><text>t</text></a></svg>', "javascript: URL"],
+      ['<a href="data:text/html,<script>x</script>">', "data: URL"],
+      ['<iframe src=" DATA:text/html;base64,PHA+">', "data: URL"],
+      ['<a href="vbscript:MsgBox(1)">', "vbscript: URL"],
     ] as const) {
       expect(findInlineContent(html), JSON.stringify(html)).toContain(name);
     }
