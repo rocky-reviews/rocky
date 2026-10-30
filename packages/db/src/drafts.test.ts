@@ -86,6 +86,14 @@ const pending = async () =>
     )
   ).rows;
 
+/** Some backend is waiting for a lock (the second decision, queued behind the first). */
+const waitingOnLock = async () =>
+  (
+    await superuser.query(
+      "select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()",
+    )
+  ).rowCount! > 0;
+
 describe("every transition is persisted (refresh keeps state)", () => {
   it("accept: the draft becomes the reviewer's pending comment with the finding's body and location", async () => {
     const result = await decide("F1", { kind: "accept" });
@@ -190,9 +198,65 @@ describe("every transition is persisted (refresh keeps state)", () => {
       decide("F1", { kind: "dismiss", reason: "intentional" }),
       decide("F1", { kind: "edit", body: "x" }),
     ]);
-    expect(results.filter((r) => r.outcome === "ok")).toHaveLength(1);
+    const won = results.filter((r) => r.outcome === "ok");
+    expect(won).toHaveLength(1);
     expect(results.filter((r) => r.outcome === "invalid_transition")).toHaveLength(2);
-    expect((await pending()).length).toBeLessThanOrEqual(1);
+    const winner = won[0]!.draft;
+    if (winner.state === "dismissed") {
+      expect(await pending()).toEqual([]);
+    } else {
+      expect(winner.state).toBe("accepted");
+      expect(await pending()).toEqual([
+        expect.objectContaining({
+          finding_id: "F1",
+          source: winner.edited ? "ai_edited" : "ai",
+          body: winner.edited ? "x" : F1.body,
+        }),
+      ]);
+    }
+    // Every loser is told the winner's state, body included.
+    for (const r of results.filter((x) => x.outcome === "invalid_transition"))
+      expect(r).toMatchObject({ draft: winner });
+  });
+
+  it("a request that waited for the lock answers with the winner's committed body (409)", async () => {
+    // The row exists already, so the second request does not wait on the insert.
+    await decide("F1", { kind: "send_to_agent" });
+    let lockTaken!: () => void;
+    const locked = new Promise<void>((resolve) => (lockTaken = resolve));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    // The first request holds the row lock before it writes anything (as decideDraft does).
+    const first = db.withOrg(A.orgId, async (tx) => {
+      await tx.query(
+        `select 1 from findings_state
+          where analysis_id = $1 and member_id = $2 and finding_id = 'F1' for update`,
+        [A.analysisId, A.memberId],
+      );
+      lockTaken();
+      await held;
+      return decideDraft(tx, {
+        ...me(),
+        findingId: "F1",
+        action: { kind: "edit", body: "The winner's words." },
+      });
+    });
+    await locked;
+    const second = decide("F1", { kind: "accept" });
+    await expect.poll(waitingOnLock, { timeout: 5000 }).toBe(true);
+    release();
+    expect(await first).toMatchObject({
+      outcome: "ok",
+      draft: { state: "accepted", edited: true },
+    });
+    expect(await second).toEqual({
+      outcome: "invalid_transition",
+      draft: expect.objectContaining({
+        state: "accepted",
+        edited: true,
+        body: "The winner's words.",
+      }),
+    });
   });
 });
 

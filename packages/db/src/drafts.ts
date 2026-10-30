@@ -19,7 +19,8 @@ import type { TenantTx } from "./client.js";
  * A draft's location and body come from the stored, validated analysis document, never from the
  * client: the client names a finding id, and the server looks it up. An accepted draft is written
  * as the reviewer's pending comment (`comments_pending`) in the same transaction as its decision,
- * and its undo deletes it, so `comments_pending` is exactly what Finish review would post.
+ * and its undo deletes it, so `comments_pending` has one row per comment Finish review would
+ * post; a draft's posted text is `composePostedComment(finding, row)` (core), as the card shows.
  *
  * Results are fixed codes; errors carry no values (bodies are the reviewer's text and findings
  * are PR-derived: neither belongs in an error or a log).
@@ -222,11 +223,19 @@ export const decideDraft = async (
      on conflict (org_id, analysis_id, member_id, finding_id) do nothing`,
     [analysisId, memberId, finding.id],
   );
+  // Lock first, then read in a new statement: a statement that waited for the lock re-reads
+  // the locked row at its newest version but the joined pending comment from its own (older)
+  // snapshot, so the loser of a race would be told "accepted" without the winner's body.
+  await tx.query(
+    `select 1 from findings_state
+      where org_id = $1 and analysis_id = $2 and member_id = $3 and finding_id = $4
+        for update`,
+    [tx.orgId, analysisId, memberId, finding.id],
+  );
   const { rows } = await tx.query<DraftRow>(
     `select ${DRAFT_COLUMNS}
        from ${DRAFT_JOIN}
-      where f.org_id = $1 and f.analysis_id = $2 and f.member_id = $3 and f.finding_id = $4
-        for update of f`,
+      where f.org_id = $1 and f.analysis_id = $2 and f.member_id = $3 and f.finding_id = $4`,
     [tx.orgId, analysisId, memberId, finding.id],
   );
   const row = rows[0];
