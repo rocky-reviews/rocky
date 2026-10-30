@@ -69,7 +69,9 @@ describe("file view", () => {
   it("has the sticky header: risk label and score, path, size and Mark viewed", () => {
     expect(text(html)).toContain("Critical · 97 risk score src/auth/invitations.ts +33 −0");
     expect(html).toContain("<bdi>src/auth/invitations.ts</bdi>");
-    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Mark viewed<\/button>/);
+    expect(html).toMatch(
+      /<button[^>]*aria-pressed="false" aria-keyshortcuts="v">Mark viewed <kbd class="kbd-on" aria-hidden="true">v<\/kbd><\/button>/,
+    );
   });
 
   it("has the AI strip: what changed, why this level, drafts", () => {

@@ -5,6 +5,7 @@ import "./styles/diff.css";
 import "./briefing/briefing.css";
 import "./inbox/inbox.css";
 import "./drafts/drafts.css";
+import "./keyboard/keyboard.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";

@@ -13,6 +13,7 @@ import type { Selection } from "../shell/Sidebar.js";
 import { LEVEL_LABEL } from "../shell/triage-model.js";
 import { fileAnnotations, fileTriage, NO_ANNOTATIONS, reviewOrder } from "./annotations.js";
 import { useReview } from "../drafts/ReviewProvider.js";
+import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import { DiffBody } from "./DiffBody.js";
 import { useDiff } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
@@ -47,6 +48,8 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
   const changed = analysis.provenance.files.find((f) => f.path === path);
   const isViewed = viewed.has(path);
   const [showRaw, setShowRaw] = useState(false);
+  const viewedKey = useKeyShortcut("v");
+  const primary = !isViewed && triage?.kind !== "noise";
 
   // A new file starts at the top; after "next", focus moves to its title. A file opened at a
   // line was scrolled to the top by the briefing and the diff then reveals the line (P5-3):
@@ -124,11 +127,12 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
         )}
         <button
           type="button"
-          className={`btn btn-sm${isViewed || triage?.kind === "noise" ? "" : " btn-primary"}`}
+          className={`btn btn-sm${primary ? " btn-primary" : ""}`}
           aria-pressed={isViewed}
+          aria-keyshortcuts={viewedKey}
           onClick={() => onToggleViewed(path)}
         >
-          {isViewed ? "✓ Viewed" : "Mark viewed"}
+          {isViewed ? "✓ Viewed" : "Mark viewed"} <Kbd k="v" on={primary} />
         </button>
       </header>
 

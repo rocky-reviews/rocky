@@ -89,7 +89,8 @@ test.describe("keyboard", () => {
 
     // Shift+Tab goes back out of the diff in one step.
     await page.keyboard.press("Shift+Tab");
-    expect(await focusedLabel(page)).toBe("Mark viewed");
+    // "v": the P6-5 key hint, hidden from the accessible name.
+    expect(await focusedLabel(page)).toBe("Mark viewed v");
   });
 
   test("Add comment is disabled until there is text; comments survive switching files", async ({

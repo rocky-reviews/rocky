@@ -21,6 +21,8 @@ import {
   tokensText,
   VERDICT_LABEL,
 } from "./briefing-model.js";
+import { reviewOrder } from "../diff/annotations.js";
+import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import { ChangeMapSlot } from "./ChangeMap.js";
 import { InlineText } from "./inline-text.js";
 
@@ -81,6 +83,8 @@ const Briefing = ({
   const byHand = readByHand(doc);
   const path = reviewPathRows(doc);
   const start = startFile(doc);
+  // P6-5: k opens the first file in review order; the hint shows only when that is this file.
+  const startKey = useKeyShortcut(start !== undefined && reviewOrder(doc)[0] === start ? "k" : "");
   const minutes = `est. ~${briefing.estimatedReviewMinutes} min review`;
 
   return (
@@ -242,9 +246,10 @@ const Briefing = ({
             type="button"
             className="btn btn-primary"
             data-path={start}
+            aria-keyshortcuts={startKey || undefined}
             onClick={() => onOpenFile(start)}
           >
-            Start with the riskiest file
+            Start with the riskiest file {startKey && <Kbd k={startKey} on />}
           </button>
         </div>
       )}

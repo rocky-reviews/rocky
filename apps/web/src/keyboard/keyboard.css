@@ -1,0 +1,130 @@
+/*
+ * Keyboard shortcuts (P6-5): key hints, the shortcuts dialog and the panel's shortcut strip,
+ * after design-poc/index.html (kbd, .kbd-on, .modal, .shortcuts-grid, .shortcut-strip).
+ * Colours only through tokens.css.
+ */
+
+kbd {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  background: var(--panel);
+  color: var(--muted);
+}
+/* POC: a 40% on-you border (color-mix); colour functions live only in tokens.css. */
+.kbd-on {
+  background: transparent;
+  color: var(--on-you);
+  border-color: currentColor;
+}
+.btn kbd {
+  margin-left: 2px;
+}
+
+.shortcuts-btn {
+  gap: 6px;
+}
+
+/* ---------- the shortcuts dialog (POC .overlay / .modal) ---------- */
+.modal-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+.modal-layer .scrim {
+  z-index: 0;
+}
+.modal {
+  position: relative;
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 14px;
+  box-shadow: var(--shadow-modal);
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+}
+.shortcuts-modal {
+  width: min(440px, 100%);
+}
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-4) 18px 6px;
+}
+.modal-head h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+.modal-section {
+  padding: var(--space-3) 18px;
+  margin: 0;
+}
+
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+.shortcuts-grid > div {
+  display: contents;
+}
+.shortcuts-grid dt {
+  white-space: nowrap;
+}
+.shortcuts-grid dd {
+  margin: 0;
+}
+.shortcuts-grid .sep {
+  color: var(--muted);
+}
+/* Single-key rows while those shortcuts are off: struck through, still readable. */
+.shortcuts-grid .off dd {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.shortcuts-setting {
+  border-top: 1px solid var(--border);
+  padding-bottom: var(--space-4);
+}
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+.switch input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--you);
+}
+.shortcuts-setting .note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+/* ---------- the Review panel's strip (POC .shortcut-strip) ---------- */
+.shortcut-strip {
+  flex: none;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  display: flex;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+}

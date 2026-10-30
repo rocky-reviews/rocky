@@ -96,8 +96,18 @@ describe("an undecided draft", () => {
 
   it("offers Accept, Edit, Dismiss and Send to agent", () => {
     const actions = text(html.split('class="draft-actions"')[1] ?? "");
-    expect(actions).toBe("> Accept Edit Dismiss Send to agent ↗");
-    expect(html).toMatch(/data-role="accept"[^>]*>Accept</);
+    // P6-5: each with its key hint (hidden from the accessible name) and aria-keyshortcuts.
+    expect(actions).toBe("> Accept a Edit e Dismiss d Send to agent ↗");
+    for (const [role, key] of [
+      ["accept", "a"],
+      ["edit", "e"],
+      ["dismiss", "d"],
+    ])
+      expect(html).toMatch(
+        new RegExp(
+          `data-role="${role}" aria-keyshortcuts="${key}">[^<]+<kbd[^>]*aria-hidden="true">${key}</kbd>`,
+        ),
+      );
   });
 
   it("shows the project-memory evidence with its source", () => {
