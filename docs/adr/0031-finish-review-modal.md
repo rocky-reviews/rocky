@@ -3,6 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-10-30
 - **Task:** P6-6
+- **Revised:** review round 1 (B1, S1–S4, UI-verifier): an answer that cannot say what happened
+  is "may or may not have been posted" and the retry reuses the idempotency key; full paths;
+  a list over GitHub's limits is shown and blocks Submit; content-carried drafts from a re-run
+  (#39) are read-only; `refresh` keeps the page's state; invisible characters are shown as
+  markers; the phone-width button, disabled styles, sticky footer.
 - **Builds on:** [ADR 0026](0026-posting-as-the-user.md) (P3-5: the preview/submit API, the
   digest, idempotency, outcomes), [ADR 0027](0027-review-drafts.md) (P6-4: drafts and pending
   comments), [ADR 0030](0030-keyboard-shortcuts.md) (P6-5: ⌘/Ctrl+Enter, modals and shortcuts),
@@ -34,16 +39,26 @@ only side effect in the whole product that a human cannot take back.
   whenever the server says the list changed. Nothing in the page composes the list: the
   drafts provider's state gives the counts (the Finish button's count, the undecided warning,
   the suggestion), the server's answer gives the items.
-- Each item is shown with its location and kind, and its `body` **as Markdown source** in a
-  `<pre>`, as React text inside a `<bdi>`. No Markdown rendering: a rendering could hide a
-  link's target, an image, a mention or HTML, and GitHub's rendering is not ours to imitate.
-  The caption says so ("exactly as GitHub will receive it"). Long bodies scroll inside their
-  box; nothing is cut.
-- The click sends the preview's `contentSha256` and `headSha`, the verdict, the summary, and a
-  fresh `crypto.randomUUID()` idempotency key, through `POST …/review` with the session's CSRF
-  token (`data/posting-http-source.ts`). Answers are parsed in `data/posting-data.ts` (zod):
-  fixed codes only, bounded sizes; a 200 that does not say `posted` is an error, never a
-  success.
+- Each item is shown with its full location (`path:line`) and kind, and its `body` **as
+  Markdown source** in a focusable `<pre>`, as React text inside a `<bdi>`. No Markdown
+  rendering: a rendering could hide a link's target, an image, a mention or HTML, and GitHub's
+  rendering is not ours to imitate. Characters a reader cannot see (bidi controls, zero-width
+  and joiner characters, C0/C1 controls, tag characters) are shown as `U+…` markers with a
+  warning line, since `<bdi>` isolates the body from its surroundings but not the text inside
+  it from an override. The caption says so. Long bodies scroll inside their box; nothing is
+  cut. A list GitHub would refuse (over 100 comments, a comment over 65,536 characters) is
+  parsed with wide bounds and shown, and Submit is off with the reason.
+- The click sends the preview's `contentSha256` and `headSha`, the verdict, the summary, and
+  an idempotency key, through `POST …/review` with the session's CSRF token
+  (`data/posting-http-source.ts`). Answers are parsed in `data/posting-data.ts` (zod): fixed
+  codes only. An answer is **definite** only when it carries the server's code (`posted`, a
+  409 refusal, `invalid_request`, `post_failed`, `not_found`, `posting_unavailable`, 401); a
+  request that did not complete, a status without a code, or a 200 that does not say `posted`
+  is **unknown**: the review may exist. The key belongs to the list it was made for: after an
+  unknown answer the next click on the same list (same digest) reuses it, so the server answers
+  that attempt (`repeated`) and never posts twice; after a definite answer, or once the list
+  changed, the next click is a new one with a fresh key (review round 1, B1). When the session's
+  CSRF token cannot be read, nothing is sent (`not_sent`).
 - The shell's data carries `pullRequestId` (the fixture source gives a stable one, like the
   analysis id); without one the modal says posting is not available.
 
@@ -79,15 +94,16 @@ only side effect in the whole product that a human cannot take back.
 
 ### 4. Every answer, honestly
 
-| Answer (ADR 0026 §6)                                                              | The modal                                                                                                                                                         |
-| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `posted`                                                                          | closes; toast "Review submitted to GitHub as @login."; the status pill shows the verdict; the drafts are loaded again                                             |
-| `stale`, `head_moved`                                                             | "Nothing was posted. The list was loaded again": the list is fetched again, the person checks it and clicks again (fresh key)                                     |
-| `in_progress`                                                                     | says an earlier attempt is still being confirmed, nothing was posted, try again in a minute; the list shows the attempt                                           |
-| `post_failed` (+ reason)                                                          | "Nothing was posted." with GitHub's reason in words (`rejected`, `forbidden`, `token_rejected`, `not_found`); items stay listed                                   |
-| `post_unknown`                                                                    | "the review may or may not have been posted. Check the pull request on GitHub" with a link; the list shows the attempt in flight; the carried items are read-only |
-| `no_revision`, `token_unavailable`, `key_reused`, `invalid`, 404, 503, 401, other | a fixed sentence each; nothing posted; no toast                                                                                                                   |
-| the request did not complete                                                      | treated as unknown: "may or may not have been posted", reload the list and the drafts                                                                             |
+| Answer (ADR 0026 §6)                                                                    | The modal                                                                                                                                                         |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `posted`                                                                                | closes; toast "Review submitted to GitHub as @login."; the status pill shows the verdict; the drafts are loaded again                                             |
+| `stale`, `head_moved`                                                                   | "Nothing was posted. The list was loaded again": the list is fetched again, the person checks it and clicks again (fresh key)                                     |
+| `in_progress`                                                                           | says an earlier attempt is still being confirmed, nothing was posted, try again in a minute; the list shows the attempt                                           |
+| `post_failed` (+ reason)                                                                | "Nothing was posted." with GitHub's reason in words (`rejected`, `forbidden`, `token_rejected`, `not_found`); items stay listed                                   |
+| `post_unknown`                                                                          | "the review may or may not have been posted. Check the pull request on GitHub" with a link; the list shows the attempt in flight; the carried items are read-only |
+| `no_revision`, `token_unavailable`, `key_reused`, `invalid`, 404, 503, 401, a coded 4xx | a fixed sentence each; nothing posted; no toast                                                                                                                   |
+| unknown (the request did not complete, an uncoded status, an unparseable 200)           | "may or may not have been posted", link to GitHub, the list and the drafts are read again; the next click on the same list reuses the key                         |
+| `not_sent` (no CSRF token)                                                              | "nothing was sent"; nothing posted                                                                                                                                |
 
 The notice is a focused `role="alert"` inside the modal. The list is loaded again after every
 answer but `invalid`. A success is the only outcome that closes the modal.
@@ -96,19 +112,26 @@ answer but `invalid`. A success is the only outcome that closes the modal.
 
 - `GET /api/analyses/:id/review` (ADR 0027 §3) now says, per draft and comment, whether a
   review attempt carries it: `posted: "posting" | "posted" | null` (`packages/db`
-  `listReviewDrafts`, the same `review_submission_items` join P3-5's plan uses; a `failed`
-  attempt releases its items).
+  `listReviewDrafts`, from the one `carried` definition P3-5's plan and `isCarried` use,
+  `carriedStatusSql`; a `failed` attempt releases its items). A draft whose **content** this
+  member already posted on the revision from another analysis (a re-run renumbers findings;
+  #39 matches by content and refuses to accept it again) is reported `posted` too, even when
+  undecided: the page shows one read-only line, leaves it out of "still undecided", n/p and
+  the suggestion, instead of offering a decision the server would refuse.
 - The page: an accepted draft or own comment with `posted` shows "Posted" (or "Posting…"
   while the attempt is confirmed) instead of "Pending", has no Undo or Delete, and the review
   provider sends no action for it (keys included: they press the card's buttons, which are
   gone). The panel's badge reads "posted". The Finish count leaves them out.
-- The server's refusal `already_posted` (409, P3-5's boundary fix, in a separate PR) is handled
-  as the contract says: the page loads the review again and says "This was already posted to
-  GitHub, so it can no longer be changed." The e2e mock answers it.
-- After a successful click the provider loads the review again, so the posted items turn
-  read-only at once; the shell also reads the preview once on load, so the status pill shows the
-  latest posted attempt's verdict after a reload (GitHub is the truth; the mirror's own
-  `myReview` replaces this when the server serves the shell data).
+- The server's refusal `already_posted` (409, #39) updates that one draft from the refusal's
+  `draft` (a comment's DELETE refusal marks that comment) and says "This was already posted to
+  GitHub, so it can no longer be changed."; `comment_too_long` (400) puts the draft back and
+  says the comment was not saved. The e2e mock answers both.
+- After a successful click, and after an unknown answer, the provider **refreshes**: it reads
+  the review again and merges it in without resetting the page (an edit in progress, the
+  focused draft and decisions still being saved are kept), so the posted items turn read-only
+  at once. The shell also reads the preview once on load, so the status pill shows the latest
+  posted attempt's verdict after a reload (GitHub is the truth; the mirror's own `myReview`
+  replaces this when the server serves the shell data).
 
 ### 6. A modal like the others
 
@@ -127,20 +150,20 @@ links, images, HTML, suggestion fences, bidi controls), the LLM (steering the ve
 summary), another tab, a double click or key repeat, a lost answer, a stale page, the page's
 own bugs. Tenant and credential threats are the server's (ADR 0026 P1–P15) and unchanged.
 
-| #   | What can go wrong                                                          | Prevention                                                                                                                                                                     | Test                                                                                                                                                                                                                                                                                     |
-| --- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M1  | The modal shows something other than what the server posts                 | The list is `GET …/review`'s items, shown field by field; the click echoes the digest and head; the server rebuilds and refuses `stale`                                        | `finish.e2e.spec.ts` "the modal lists exactly the server's plan… and the click posts exactly it" (the shown list equals the mock's plan, the posted review equals the shown list); server: `post-review.db.test.ts` "posts exactly the previewed items…", "refuses a list that changed…" |
-| M2  | A rendering hides part of a comment (a link's target, an image, a mention) | Markdown source as text in `<pre><bdi>`; no Markdown renderer; caption says so                                                                                                 | e2e: the hostile body's mention, URL, `<img>`, link and fence are visible as text and the list has no `a`, `img` or `script`; `posting-data.test.ts` keeps bodies byte for byte                                                                                                          |
-| M3  | Two reviews from one intent (double click, Enter twice, retry)             | Arming, `disabled` while sending, ref guard, a fresh uuid per click, the modal cannot close while sending; server idempotency and lock                                         | e2e "clicks, Enter and a double-click while the request runs post exactly once", "Submit is inert right after the modal opens", "every click carries a fresh idempotency key…"; keyboard e2e presses Enter twice                                                                         |
-| M4  | Something posts without the person's click                                 | Only `submit()` calls the source, only from the Submit button; opening, warnings, suggestions and drafting do no request but `GET`                                             | e2e: opening, Escape, Keep reviewing, a click outside, drafting a summary and picking a verdict leave `POST` at zero                                                                                                                                                                     |
-| M5  | The suggestion or the drafted summary decides for the person               | Approve is never pre-selected; the suggested option is labelled with its reason; the summary is a suggestion the person edits or clears; nothing in it comes from a model call | `finish-model.test.ts` (rules), e2e "Approve is suggested but never pre-selected", "the drafted summary… can be edited or cleared"                                                                                                                                                       |
-| M6  | A list that changed (another tab, a push) is posted                        | The server refuses `stale` / `head_moved`; the modal says nothing was posted and reloads the list                                                                              | e2e "a list that changed after the preview is refused and loaded again; new commits too"                                                                                                                                                                                                 |
-| M7  | A lost answer is reported as success or as failure                         | `post_unknown` and a request that did not complete read "may or may not have been posted", link to GitHub, the attempt shows in flight                                         | e2e "no answer from GitHub (post_unknown)…"; `posting-data.test.ts` (a 200 without `posted` is never a success)                                                                                                                                                                          |
-| M8  | A posted comment is edited, undone or deleted as if pending                | `posted` from the server; no Undo/Delete; the provider refuses actions on posted items; `already_posted` reloads and explains                                                  | `drafts.test.ts` (db) "…carried by a posting or posted attempt say so…", `routes.db.test.ts`, `DraftCard.test.tsx`, `FileView.test.tsx`, e2e "a draft posted from another tab…" and the first test's read-only checks                                                                    |
-| M9  | Free text from an answer is shown or matched                               | Codes must match `^[a-z][a-z0-9_]{0,63}$`; unknown codes are generic errors; sizes bounded                                                                                     | `posting-data.test.ts` "refuses malformed answers…", "409 refusals by fixed code…"                                                                                                                                                                                                       |
-| M10 | Bidi controls or markup in a login, path or body reorder or inject         | React text; `<bdi>` around the login, locations and bodies; no `dangerouslySetInnerHTML`                                                                                       | `FinishReview.test.tsx` (login in `<bdi>`), e2e hostile body                                                                                                                                                                                                                             |
-| M11 | The modal is unreachable or traps the keyboard                             | Focus on Close, Tab trapped, Escape closes, focus returns; axe                                                                                                                 | keyboard e2e (the full review through Submit), e2e "the modal" and axe at three widths × two modes                                                                                                                                                                                       |
-| M12 | Secrets or content in logs                                                 | The page logs nothing; errors carry a status only; the server's logs are unchanged                                                                                             | `posting-data.test.ts` (error messages name no value)                                                                                                                                                                                                                                    |
+| #   | What can go wrong                                                               | Prevention                                                                                                                                                                                                                                                         | Test                                                                                                                                                                                                                                                                                     |
+| --- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1  | The modal shows something other than what the server posts                      | The list is `GET …/review`'s items, shown field by field; the click echoes the digest and head; the server rebuilds and refuses `stale`                                                                                                                            | `finish.e2e.spec.ts` "the modal lists exactly the server's plan… and the click posts exactly it" (the shown list equals the mock's plan, the posted review equals the shown list); server: `post-review.db.test.ts` "posts exactly the previewed items…", "refuses a list that changed…" |
+| M2  | A rendering hides part of a comment (a link's target, an image, a mention)      | Markdown source as text in `<pre><bdi>`; no Markdown renderer; caption says so                                                                                                                                                                                     | e2e: the hostile body's mention, URL, `<img>`, link and fence are visible as text and the list has no `a`, `img` or `script`; `posting-data.test.ts` keeps bodies byte for byte                                                                                                          |
+| M3  | Two reviews from one intent (double click, Enter twice, retry)                  | Arming, `disabled` while sending, ref guard, a fresh uuid per click, the modal cannot close while sending; server idempotency and lock                                                                                                                             | e2e "clicks, Enter and a double-click while the request runs post exactly once", "Submit is inert right after the modal opens", "every click carries a fresh idempotency key…"; keyboard e2e presses Enter twice                                                                         |
+| M4  | Something posts without the person's click                                      | Only `submit()` calls the source, only from the Submit button; opening, warnings, suggestions and drafting do no request but `GET`                                                                                                                                 | e2e: opening, Escape, Keep reviewing, a click outside, drafting a summary and picking a verdict leave `POST` at zero                                                                                                                                                                     |
+| M5  | The suggestion or the drafted summary decides for the person                    | Approve is never pre-selected; the suggested option is labelled with its reason; the summary is a suggestion the person edits or clears; nothing in it comes from a model call                                                                                     | `finish-model.test.ts` (rules), e2e "Approve is suggested but never pre-selected", "the drafted summary… can be edited or cleared"                                                                                                                                                       |
+| M6  | A list that changed (another tab, a push) is posted                             | The server refuses `stale` / `head_moved`; the modal says nothing was posted and reloads the list                                                                                                                                                                  | e2e "a list that changed after the preview is refused and loaded again; new commits too"                                                                                                                                                                                                 |
+| M7  | A lost answer is reported as success or as failure, or a retry posts twice      | Only coded answers are definite; unknown ones read "may or may not have been posted" with a GitHub link; the retry on the same list reuses the key, so the server answers the earlier attempt; the key is dropped once the list changed or the answer was definite | e2e "no usable answer… the retry reuses the key and never double-posts (B1)", "the same list after a dropped request… the same key posts once", "no answer from GitHub (post_unknown)…"; `posting-data.test.ts` (uncoded statuses and a 200 without `posted` are unknown)                |
+| M8  | A posted comment is edited, undone or deleted as if pending                     | `posted` from the server; no Undo/Delete; the provider refuses actions on posted items; `already_posted` reloads and explains                                                                                                                                      | `drafts.test.ts` (db) "…carried by a posting or posted attempt say so…", `routes.db.test.ts`, `DraftCard.test.tsx`, `FileView.test.tsx`, e2e "a draft posted from another tab…" and the first test's read-only checks                                                                    |
+| M9  | Free text from an answer is shown or matched                                    | Codes must match `^[a-z][a-z0-9_]{0,63}$`; unknown codes are generic errors; sizes bounded                                                                                                                                                                         | `posting-data.test.ts` "refuses malformed answers…", "409 refusals by fixed code…"                                                                                                                                                                                                       |
+| M10 | Bidi controls or invisible characters make a body read one way and post another | React text; `<bdi>` around the login, locations and bodies; every invisible character shown as a `U+…` marker with a warning line; no `dangerouslySetInnerHTML`                                                                                                    | `finish-model.test.ts` "reveals the invisible characters…", e2e "invisible characters… show as markers and are named", `FinishReview.test.tsx` (login in `<bdi>`)                                                                                                                        |
+| M11 | The modal is unreachable or traps the keyboard                                  | Focus on Close, Tab trapped, Escape closes, focus returns; axe                                                                                                                                                                                                     | keyboard e2e (the full review through Submit), e2e "the modal" and axe at three widths × two modes                                                                                                                                                                                       |
+| M12 | Secrets or content in logs                                                      | The page logs nothing; errors carry a status only; the server's logs are unchanged                                                                                                                                                                                 | `posting-data.test.ts` (error messages name no value)                                                                                                                                                                                                                                    |
 
 ## Consequences
 
@@ -164,6 +187,11 @@ own bugs. Tenant and credential threats are the server's (ADR 0026 P1–P15) and
   to the analysis the page shows (ADR 0027 §2 carry-over follow-up); P3-5's boundary fix keeps
   such a finding from being offered again on the server.
 - `ARM_MS` is a heuristic against a double-click on the opener; the server's idempotency is the
-  control.
+  control. While arming, the footer says "One moment…".
+- A content-carried draft is reported `posted` without the attempt's status (the match is by
+  content, across analyses); in the first minute after a lost answer it may still be in flight.
+- The key is reused only for the same digest. If an unknown answer did post, the reloaded list
+  differs (the items are carried), so the retry is a new click: it is answered about the new,
+  smaller list, never about the lost one; the modal shows the posted attempt above the list.
 - The POC's mobile breakpoints were not designed for this modal; at 375 px it scrolls inside
   the viewport (screenshots in the PR).

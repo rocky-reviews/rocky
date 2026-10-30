@@ -8,7 +8,9 @@
  * - dismissing: the four reasons or Cancel (Escape);
  * - accepted: the reviewer's pending comment, "from AI draft" or "edited from AI draft", Undo;
  *   once posted to GitHub (P6-6): "Posted" instead of "Pending" and no Undo (it stands);
- * - dismissed: one collapsed line with the reason, Undo.
+ * - dismissed: one collapsed line with the reason, Undo;
+ * - undecided but already posted (its content, from an earlier analysis of this commit): one
+ *   read-only line saying so (the server refuses to accept it again).
  *
  * After a decision focus moves to the control that undoes it (and back to Accept after an undo),
  * so the keyboard path never drops to the page. Every string is text: the finding is model
@@ -117,6 +119,21 @@ export const DraftCard = ({ finding, original, language }: Props) => {
         >
           Undo
         </button>
+      </article>
+    );
+  }
+
+  if (decision.state === "draft" && posted !== null) {
+    return (
+      <article {...common} className={`collapsed-draft${focusClass}`} aria-labelledby={titleId}>
+        <span className="ai-tag">AI draft</span>
+        <span className="collapsed-text">
+          <bdi id={titleId}>{finding.title}</bdi>{" "}
+          <span className="reason">
+            (already posted to GitHub from an earlier analysis of this commit)
+          </span>
+        </span>
+        <PostedPill posted={posted} />
       </article>
     );
   }

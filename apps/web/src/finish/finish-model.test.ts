@@ -7,9 +7,12 @@ import { sidebarGroups } from "../shell/triage-model.js";
 import {
   attemptText,
   draftSummary,
+  invisibleCodes,
+  isUndecided,
   itemLead,
   itemLocation,
   myReviewOf,
+  revealInvisible,
   noticeFor,
   pendingCount,
   seriousAccepted,
@@ -85,11 +88,15 @@ describe("counts", () => {
     ).toBe(2);
   });
 
-  it("undecided: every finding without a decision", () => {
+  it("undecided: every finding without a decision, except one already posted from a re-run", () => {
     expect(undecidedCount(doc.findings, stateOf([]))).toBe(doc.findings.length);
     expect(
       undecidedCount(doc.findings, stateOf([record("F1", "accepted"), record("F2", "dismissed")])),
     ).toBe(doc.findings.length - 2);
+    const posted = stateOf([record("F3", "draft", "posted")]);
+    expect(undecidedCount(doc.findings, posted)).toBe(doc.findings.length - 1);
+    expect(isUndecided(posted, "F3")).toBe(false);
+    expect(isUndecided(posted, "F4")).toBe(true);
   });
 
   it("serious: a critical or high finding accepted and still to post", () => {
@@ -151,8 +158,8 @@ describe("the summary draft", () => {
       [
         "Before merge, please look at:",
         "",
-        "1. Invitee can choose their own role (`invitations.ts:28`)",
-        "2. Mount order matters here. (`index.ts:21–23`)",
+        "1. Invitee can choose their own role (`src/auth/invitations.ts:28`)",
+        "2. Mount order matters here. (`src/api/index.ts:21–23`)",
         "",
         "Details are in the inline comments.",
       ].join("\n"),
@@ -168,7 +175,23 @@ describe("the summary draft", () => {
     expect(itemLead(item({ kind: "comment", body: "\n\n<img src=x> @admin\n" }))).toBe(
       "<img src=x> @admin",
     );
-    expect(itemLocation({ path: "a/b.ts", line: 5, startLine: 2 })).toBe("b.ts:2–5");
+    expect(itemLocation({ path: "a/b.ts", line: 5, startLine: 2 })).toBe("a/b.ts:2–5");
+  });
+
+  it("reveals the invisible characters a body carries (bidi, zero-width, controls), in order", () => {
+    expect(revealInvisible("plain text")).toEqual([{ kind: "text", text: "plain text" }]);
+    expect(revealInvisible("a\u202Eevil\u202Cb\u200B\u0007")).toEqual([
+      { kind: "text", text: "a" },
+      { kind: "invisible", code: "U+202E" },
+      { kind: "text", text: "evil" },
+      { kind: "invisible", code: "U+202C" },
+      { kind: "text", text: "b" },
+      { kind: "invisible", code: "U+200B" },
+      { kind: "invisible", code: "U+0007" },
+    ]);
+    // Tabs and newlines are visible structure, not hidden characters; tag characters are.
+    expect(revealInvisible("x\ty\n")).toEqual([{ kind: "text", text: "x\ty\n" }]);
+    expect(invisibleCodes("\u{E0041}\u202E\u202E")).toEqual(["U+E0041", "U+202E"]);
   });
 });
 
@@ -193,7 +216,14 @@ describe("the words for an answer", () => {
     expect(noticeFor({ kind: "post_failed", reason: "rejected" })).toContain("GitHub rejected");
     expect(noticeFor({ kind: "post_failed", reason: "weird_code" })).toContain("weird_code");
     expect(noticeFor({ kind: "post_unknown" })).toContain("may or may not have been posted");
-    expect(noticeFor({ kind: "error", status: 500 })).toContain("500");
+    expect(noticeFor({ kind: "error", status: 403 })).toContain("403");
+    // No usable answer: never "not posted"; a retry is safe (same key).
+    for (const status of [0, 200, 500, 502]) {
+      const text = noticeFor({ kind: "unknown", status }) ?? "";
+      expect(text).toContain("may or may not have been posted");
+      expect(text).not.toMatch(/Nothing was posted/);
+    }
+    expect(noticeFor({ kind: "not_sent" })).toContain("nothing was sent");
     expect(noticeFor({ kind: "unavailable" })).toContain("not available");
     expect(noticeFor({ kind: "signed_out" })).toContain("Sign in");
     expect(noticeFor({ kind: "not_found" })).toContain("no longer available");
@@ -201,10 +231,13 @@ describe("the words for an answer", () => {
 
   it("describes an attempt by verdict and count", () => {
     expect(attemptText({ verdict: "approve", draftCount: 0, commentCount: 1 })).toBe(
-      "Approve with 1 comment",
+      "Approve with 1 inline comment",
     );
     expect(attemptText({ verdict: "request_changes", draftCount: 2, commentCount: 1 })).toBe(
-      "Request changes with 3 comments",
+      "Request changes with 3 inline comments",
+    );
+    expect(attemptText({ verdict: "comment", draftCount: 0, commentCount: 0 })).toBe(
+      "Comment, no inline comments",
     );
   });
 });

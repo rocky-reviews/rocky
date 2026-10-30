@@ -6,6 +6,12 @@
  * the modal shows every item's body exactly as it comes back (that is the markdown GitHub will
  * receive), and the click echoes the list's digest and head. Everything in an answer is
  * PR-shaped, untrusted text; components render it as text, never as HTML or markdown.
+ *
+ * An answer is either **definite** (the server said what happened: posted, refused, invalid,
+ * GitHub refused) or **unknown** (no usable answer: the request did not complete, a status
+ * without the server's code, a 200 that does not say "posted"). An unknown answer means the
+ * review may exist: the modal says so and a retry reuses the same idempotency key, so the
+ * server answers the earlier attempt instead of posting again (ADR 0031 §2, review round 1 B1).
  */
 import {
   isReviewVerdict,
@@ -56,7 +62,7 @@ export type ReviewPreview = {
 };
 
 export type SubmitInput = {
-  /** A fresh uuid per click: the same click again answers the same, never posts twice. */
+  /** A uuid per click; kept for a retry after an unknown answer, fresh after a definite one. */
   readonly idempotencyKey: string;
   readonly contentSha256: string;
   readonly headSha: string;
@@ -64,12 +70,16 @@ export type SubmitInput = {
   readonly body: string;
 };
 
-/** An HTTP answer, unchecked: the parsers below turn it into an outcome. */
+/**
+ * An HTTP answer, unchecked: the parsers below turn it into an outcome. `status` 0 means no
+ * request was sent (the source could not get the session's CSRF token).
+ */
 export type Answer = { readonly status: number; readonly body: unknown };
 
 /** The port. Sources return unchecked answers; the page parses them with the functions below. */
 export interface ReviewPostingSource {
   preview(pullRequestId: string, options?: { signal?: AbortSignal }): Promise<Answer>;
+  /** Rejects only when the request itself failed (then the review may or may not exist). */
   submit(pullRequestId: string, input: SubmitInput): Promise<Answer>;
 }
 
@@ -107,12 +117,24 @@ export type SubmitOutcome =
   | { readonly kind: "invalid"; readonly reason: string }
   /** GitHub refused the review; nothing posted, the items are offered again. */
   | { readonly kind: "post_failed"; readonly reason: string }
-  /** No usable answer from GitHub: the review may exist; the attempt stays in flight. */
+  /** The server got no usable answer from GitHub: the review may exist; the attempt stays in flight. */
   | { readonly kind: "post_unknown" }
+  /**
+   * The page got no usable answer from the server (the request did not complete, a status
+   * without the server's code, a 200 that does not say "posted"): the review may exist.
+   */
+  | { readonly kind: "unknown"; readonly status: number }
+  /** Nothing was sent: the session's CSRF token could not be read. */
+  | { readonly kind: "not_sent" }
   | { readonly kind: "not_found" }
   | { readonly kind: "unavailable" }
   | { readonly kind: "signed_out" }
+  /** The server refused the request before doing anything (a 4xx with its code). */
   | { readonly kind: "error"; readonly status: number };
+
+/** Whether the server said what happened (then a retry is a new click, with a fresh key). */
+export const isDefinite = (outcome: SubmitOutcome): boolean =>
+  outcome.kind !== "unknown" && outcome.kind !== "post_unknown";
 
 /** A fixed server code (ADR 0026): never free text, so it can be shown and matched safely. */
 const Code = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
@@ -130,13 +152,23 @@ const Summary = z.object({
   finishedAt: z.iso.datetime().nullable(),
 });
 
+/**
+ * Bounds for parsing only: wide enough to show a list GitHub would refuse (too many comments,
+ * a comment over its limit), so the modal can say why Submit is off instead of failing to
+ * load (review round 1, S2). `listProblem` applies GitHub's limits.
+ */
+const MAX_PARSED_ITEMS = 10_000;
+const MAX_PARSED_BODY = 1_000_000;
+/** The mirror's path limit (packages/schema), wider than GitHub's. */
+export const MAX_PATH_CHARS = 4096;
+
 const Item = z.object({
   kind: z.enum(["draft", "comment"]),
   id: Uuid,
-  path: z.string().min(1).max(1024),
+  path: z.string().min(1).max(MAX_PATH_CHARS),
   line: z.number().int().min(1),
   startLine: z.number().int().min(1).nullable(),
-  body: z.string().min(1).max(MAX_REVIEW_BODY_CHARS),
+  body: z.string().min(1).max(MAX_PARSED_BODY),
 });
 
 const Preview = z.object({
@@ -145,7 +177,7 @@ const Preview = z.object({
   headSha: z.string().regex(/^[0-9a-f]{40}$/),
   revisionKnown: z.boolean(),
   contentSha256: z.string().regex(/^[0-9a-f]{64}$/),
-  items: z.array(Item).max(MAX_REVIEW_COMMENTS),
+  items: z.array(Item).max(MAX_PARSED_ITEMS),
   inFlight: Summary.nullable(),
   latestSubmission: Summary.nullable(),
 });
@@ -157,9 +189,9 @@ const Posted = z.object({
   repeated: z.boolean(),
 });
 
-const Error = z.object({ error: Code, reason: Code.optional() });
+const Refused = z.object({ error: Code, reason: Code.optional() });
 
-export class PostingDataError extends globalThis.Error {
+export class PostingDataError extends Error {
   override readonly name = "PostingDataError";
 }
 
@@ -174,6 +206,15 @@ export const parseReviewPreview = (input: unknown): ReviewPreview => {
     inFlight: verdictOf(raw.data.inFlight),
     latestSubmission: verdictOf(raw.data.latestSubmission),
   };
+};
+
+export type ListProblem = "too_many_comments" | "comment_too_long";
+
+/** Why GitHub would refuse this list as one review, if it would (the server refuses it too). */
+export const listProblem = (items: readonly PreviewItem[]): ListProblem | null => {
+  if (items.length > MAX_REVIEW_COMMENTS) return "too_many_comments";
+  if (items.some((i) => i.body.length > MAX_REVIEW_BODY_CHARS)) return "comment_too_long";
+  return null;
 };
 
 export const previewOutcome = (answer: Answer): PreviewOutcome => {
@@ -197,7 +238,11 @@ export const previewOutcome = (answer: Answer): PreviewOutcome => {
 
 const isRefusal = (code: string): code is Refusal => (REFUSALS as readonly string[]).includes(code);
 
-/** The click's answer as an outcome (ADR 0026 §6). Unknown codes are errors, never successes. */
+/**
+ * The click's answer as an outcome (ADR 0026 §6). Only an answer that carries the server's
+ * fixed code is definite; anything else is `unknown` (never "not posted"), and a 200 that does
+ * not say "posted" is unknown too, never a success.
+ */
 export const submitOutcome = (answer: Answer): SubmitOutcome => {
   const { status } = answer;
   if (status === 200) {
@@ -209,19 +254,23 @@ export const submitOutcome = (answer: Answer): SubmitOutcome => {
           reviewId: posted.data.reviewId,
           repeated: posted.data.repeated,
         }
-      : { kind: "error", status };
+      : { kind: "unknown", status };
   }
+  if (status === 0) return { kind: "not_sent" };
   if (status === 401) return { kind: "signed_out" };
-  if (status === 404) return { kind: "not_found" };
-  if (status === 503) return { kind: "unavailable" };
-  const error = Error.safeParse(answer.body);
-  if (!error.success) return { kind: "error", status };
-  const { error: code, reason } = error.data;
+  const refused = Refused.safeParse(answer.body);
+  if (!refused.success) {
+    // A 4xx the server did not code (a proxy's, say) still never reached the handler.
+    return status >= 400 && status < 500 ? { kind: "error", status } : { kind: "unknown", status };
+  }
+  const { error: code, reason } = refused.data;
+  if (status === 404 && code === "not_found") return { kind: "not_found" };
+  if (status === 503 && code === "posting_unavailable") return { kind: "unavailable" };
   if (status === 400 && code === "invalid_request")
     return { kind: "invalid", reason: reason ?? code };
   if (status === 409 && isRefusal(code)) return { kind: "refused", reason: code };
   if (status === 502 && code === "post_failed")
     return { kind: "post_failed", reason: reason ?? code };
   if (status === 502 && code === "post_unknown") return { kind: "post_unknown" };
-  return { kind: "error", status };
+  return status >= 400 && status < 500 ? { kind: "error", status } : { kind: "unknown", status };
 };

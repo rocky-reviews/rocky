@@ -216,7 +216,7 @@ describe("Finish review (P6-6)", () => {
 
   it("has the primary button in the top bar with the pending count, opening a dialog on ⌘/Ctrl+Enter", () => {
     expect(html).toMatch(
-      /<button type="button" class="btn btn-primary finish-btn" aria-haspopup="dialog" aria-keyshortcuts="Meta\+Enter Control\+Enter">Finish review<span class="count" aria-hidden="true">0<\/span><span class="sr-only">, 0 comments to post<\/span><\/button>/,
+      /<button type="button" class="btn btn-primary finish-btn" aria-haspopup="dialog" aria-keyshortcuts="Meta\+Enter Control\+Enter"><span class="label">Finish review<\/span><span class="count" aria-hidden="true">0<\/span><span class="sr-only">, 0 comments to post<\/span><\/button>/,
     );
     // The modal itself is rendered only when opened.
     expect(html).not.toContain("finish-dialog");

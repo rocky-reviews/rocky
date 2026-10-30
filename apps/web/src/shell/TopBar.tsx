@@ -139,7 +139,7 @@ export const TopBar = ({
         aria-keyshortcuts="Meta+Enter Control+Enter"
         onClick={onFinish}
       >
-        Finish review
+        <span className="label">Finish review</span>
         <span className="count" aria-hidden="true">
           {pending}
         </span>

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isDefinite,
+  listProblem,
   parseReviewPreview,
   PostingDataError,
   previewOutcome,
@@ -68,7 +70,7 @@ describe("parsing the preview", () => {
       preview({ items: [item({ line: 0 })] }),
       preview({ items: [item({ kind: "verdict" })] }),
       preview({ items: [item({ id: "not-a-uuid" })] }),
-      preview({ items: Array.from({ length: 101 }, () => item()) }),
+      preview({ items: [item({ path: "x".repeat(5000) })] }),
       preview({ latestSubmission: summary({ status: "done" }) }),
       preview({ latestSubmission: summary({ verdict: "merge" }) }),
       preview({ latestSubmission: summary({ errorCode: "Secret Value!" }) }),
@@ -87,6 +89,15 @@ describe("parsing the preview", () => {
       expect(String(error)).not.toContain("evil");
       expect(String(error)).not.toContain("Secret");
     }
+  });
+
+  it("shows a list GitHub would refuse, and says why Submit is off (review round 1, S2)", () => {
+    const many = preview({ items: Array.from({ length: 101 }, (_, i) => item({ line: i + 1 })) });
+    expect(parseReviewPreview(many).items).toHaveLength(101);
+    expect(listProblem(parseReviewPreview(many).items)).toBe("too_many_comments");
+    const long = preview({ items: [item({ body: "x".repeat(65_537) })] });
+    expect(listProblem(parseReviewPreview(long).items)).toBe("comment_too_long");
+    expect(listProblem(parseReviewPreview(preview()).items)).toBeNull();
   });
 
   it("turns statuses into outcomes: 200 parsed, 401, 404, 503, anything else an error", () => {
@@ -110,9 +121,9 @@ describe("the click's answer (ADR 0026 §6)", () => {
         body: { status: "posted", submissionId: SUB, reviewId: 77, repeated: true },
       }),
     ).toEqual({ kind: "posted", submissionId: SUB, reviewId: 77, repeated: true });
-    // A 200 that does not say "posted" is never taken as a success.
+    // A 200 that does not say "posted" is never taken as a success, nor as "not posted".
     expect(submitOutcome({ status: 200, body: { status: "ok" } })).toEqual({
-      kind: "error",
+      kind: "unknown",
       status: 200,
     });
   });
@@ -155,19 +166,49 @@ describe("the click's answer (ADR 0026 §6)", () => {
     expect(submitOutcome({ status: 502, body: { error: "post_unknown" } })).toEqual({
       kind: "post_unknown",
     });
-    // A reason that is not a fixed code is never shown.
+    // A reason that is not a fixed code is never shown; an uncoded 502 is unknown.
     expect(
       submitOutcome({ status: 502, body: { error: "post_failed", reason: "GitHub said: x" } }),
-    ).toEqual({ kind: "error", status: 502 });
+    ).toEqual({ kind: "unknown", status: 502 });
   });
 
-  it("401, 404, 503 and the rest", () => {
+  it("401, 404, 503 with their codes are definite; anything uncoded is unknown (review round 1, B1)", () => {
     expect(submitOutcome({ status: 401, body: undefined })).toEqual({ kind: "signed_out" });
     expect(submitOutcome({ status: 404, body: { error: "not_found" } })).toEqual({
       kind: "not_found",
     });
-    expect(submitOutcome({ status: 503, body: {} })).toEqual({ kind: "unavailable" });
-    expect(submitOutcome({ status: 500, body: "oops" })).toEqual({ kind: "error", status: 500 });
+    expect(submitOutcome({ status: 503, body: { error: "posting_unavailable" } })).toEqual({
+      kind: "unavailable",
+    });
+    expect(submitOutcome({ status: 0, body: { error: "not_sent" } })).toEqual({
+      kind: "not_sent",
+    });
+    // A proxy's 4xx never reached the handler: definite, nothing posted.
+    expect(submitOutcome({ status: 403, body: { error: "csrf" } })).toEqual({
+      kind: "error",
+      status: 403,
+    });
+    expect(submitOutcome({ status: 429, body: "<html>" })).toEqual({ kind: "error", status: 429 });
+    expect(submitOutcome({ status: 404, body: "" })).toEqual({ kind: "error", status: 404 });
+    // Uncoded 5xx, a bare 503, a bare 404: the request may have run.
+    for (const answer of [
+      { status: 503, body: {} },
+      { status: 500, body: "oops" },
+      { status: 502, body: "<html>" },
+    ]) {
+      const outcome = submitOutcome(answer);
+      expect(outcome).toEqual({ kind: "unknown", status: answer.status });
+      expect(isDefinite(outcome)).toBe(false);
+    }
+    expect(isDefinite({ kind: "post_unknown" })).toBe(false);
+    for (const outcome of [
+      submitOutcome({ status: 409, body: { error: "stale" } }),
+      submitOutcome({ status: 400, body: { error: "invalid_request", reason: "empty_review" } }),
+      submitOutcome({ status: 502, body: { error: "post_failed", reason: "rejected" } }),
+      submitOutcome({ status: 0, body: { error: "not_sent" } }),
+    ]) {
+      expect(isDefinite(outcome)).toBe(true);
+    }
   });
 });
 
@@ -262,7 +303,8 @@ describe("http posting source", () => {
         verdict: "comment" as const,
         body: "x",
       };
-      await expect(source.submit(PR, input)).rejects.toThrow();
+      // The lookup failed: nothing is sent, and the answer says so (status 0).
+      expect(await source.submit(PR, input)).toEqual({ status: 0, body: { error: "not_sent" } });
       fail = false;
       await source.submit(PR, input);
       await source.submit(PR, input);
@@ -272,7 +314,7 @@ describe("http posting source", () => {
     }
   });
 
-  it("a signed-out session is a 401 error without any answer text", async () => {
+  it("a signed-out session sends nothing: the answer is status 0, never an exception", async () => {
     const { fetch } = fakeFetch((call) =>
       call.url === "/api/session" ? { status: 401 } : { status: 200, body: {} },
     );
@@ -280,17 +322,15 @@ describe("http posting source", () => {
     globalThis.fetch = fetch;
     try {
       const source = createHttpPostingSource({ fetch });
-      const error = await source
-        .submit(PR, {
-          idempotencyKey: CLICK_ID,
-          contentSha256: DIGEST,
-          headSha: HEAD,
-          verdict: "comment",
-          body: "x",
-        })
-        .catch((e: unknown) => e);
-      expect(error).toBeInstanceOf(PostingRequestError);
-      expect((error as PostingRequestError).status).toBe(401);
+      const answer = await source.submit(PR, {
+        idempotencyKey: CLICK_ID,
+        contentSha256: DIGEST,
+        headSha: HEAD,
+        verdict: "comment",
+        body: "x",
+      });
+      expect(answer).toEqual({ status: 0, body: { error: "not_sent" } });
+      expect(PostingRequestError.name).toBe("PostingRequestError");
     } finally {
       globalThis.fetch = original;
     }

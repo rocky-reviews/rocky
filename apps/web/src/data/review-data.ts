@@ -39,15 +39,17 @@ export interface ReviewSource {
   load(analysisId: string, options?: { signal?: AbortSignal }): Promise<unknown>;
   /**
    * `conflict`: another tab decided first; `draft` is the state the server has. `posted`: the
-   * draft was posted to GitHub meanwhile (P3-5 refuses with `already_posted`), so nothing can
-   * change it; the caller loads the review again.
+   * draft (or that content) was posted to GitHub (P3-5 refuses with `already_posted`), so
+   * nothing can change it; `draft` is the server's state, marked posted. `too_long`: the
+   * comment would exceed GitHub's limit (`comment_too_long`); nothing changed.
    */
   decide(
     analysisId: string,
     findingId: string,
     action: DraftAction,
   ): Promise<
-    { readonly kind: "ok" | "conflict"; readonly draft: unknown } | { readonly kind: "posted" }
+    | { readonly kind: "ok" | "conflict" | "posted"; readonly draft: unknown }
+    | { readonly kind: "too_long" }
   >;
   addComment(
     analysisId: string,

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { composePostedComment } from "@rocky-reviews/core";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "json" };
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -397,9 +399,10 @@ describe("own comments", () => {
 
 describe("posted items are flagged (P6-6: read-only once carried by an attempt)", () => {
   /** An attempt as P3-5 records it before the forge call, carrying the given items. */
+  const digestOf = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
   const attempt = async (
     status: "posting" | "posted" | "failed",
-    items: readonly { kind: "draft" | "comment"; itemId: string }[],
+    items: readonly { kind: "draft" | "comment"; itemId: string; body?: string }[],
   ) =>
     db.withOrg(A.orgId, async (tx) => {
       const { rows } = await tx.query<{ id: string }>(
@@ -423,8 +426,8 @@ describe("posted items are flagged (P6-6: read-only once carried by an attempt)"
       for (const [seq, item] of items.entries()) {
         await tx.query(
           `insert into review_submission_items (submission_id, seq, kind, item_id, body_sha256)
-           values ($1, $2, $3, $4, decode(repeat('00', 32), 'hex'))`,
-          [rows[0]!.id, seq, item.kind, item.itemId],
+           values ($1, $2, $3, $4, decode($5, 'hex'))`,
+          [rows[0]!.id, seq, item.kind, item.itemId, digestOf(item.body ?? "")],
         );
       }
     });
@@ -435,6 +438,61 @@ describe("posted items are flagged (P6-6: read-only once carried by an attempt)"
         [A.orgId, A.analysisId, findingId],
       )
     ).rows[0]!.id;
+
+  it("a draft whose content this member already posted from another analysis of the head (a re-run) is reported as posted, even undecided (#39 S1 → P6-6 S3)", async () => {
+    // alice accepts F1 on A1 and posts it; a re-run A2 of the same revision renumbers nothing
+    // here (same document), but its F1 row is new: by id it is not carried, by content it is.
+    await decide("F1", { kind: "accept" });
+    await attempt("posted", [
+      {
+        kind: "draft",
+        itemId: await stateId("F1"),
+        body: composePostedComment(F1, { body: F1.body }),
+      },
+    ]);
+    const a2 = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
+        [A.revisionId, JSON.stringify(pr847)],
+      );
+      return rows[0]!.id;
+    });
+    const view = await db.withOrg(A.orgId, (tx) =>
+      listReviewDrafts(tx, { analysisId: a2, memberId: A.memberId }),
+    );
+    expect(view?.drafts).toEqual([
+      expect.objectContaining({ findingId: "F1", state: "draft", body: null, posted: "posted" }),
+    ]);
+    // Accepting it there is what the server refuses (#39): the page shows it read-only instead.
+    const refused = await db.withOrg(A.orgId, (tx) =>
+      decideDraft(tx, {
+        analysisId: a2,
+        memberId: A.memberId,
+        findingId: "F1",
+        action: { kind: "accept" },
+      }),
+    );
+    expect(refused.outcome).toBe("already_posted");
+    // An edit with other words is new content: offered as an ordinary draft once decided.
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      decideDraft(tx, {
+        analysisId: a2,
+        memberId: A.memberId,
+        findingId: "F2",
+        action: { kind: "edit", body: "Other words." },
+      }),
+    );
+    expect(edited.outcome).toBe("ok");
+    const after = await db.withOrg(A.orgId, (tx) =>
+      listReviewDrafts(tx, { analysisId: a2, memberId: A.memberId }),
+    );
+    expect(after?.drafts.map((d) => [d.findingId, d.state, d.posted])).toEqual([
+      ["F1", "draft", "posted"],
+      ["F2", "accepted", null],
+    ]);
+    await superuser.query("delete from analyses where org_id = $1 and id = $2", [A.orgId, a2]);
+  });
 
   it("an accepted draft and an own comment carried by a posting or posted attempt say so; a failed attempt releases them", async () => {
     await decide("F1", { kind: "accept" });

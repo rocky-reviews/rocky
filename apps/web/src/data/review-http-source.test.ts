@@ -103,8 +103,26 @@ describe("http review source", () => {
         : { status: 409, body: { error: "already_posted", draft: draft({ posted: "posted" }) } },
     );
     const source = createHttpReviewSource({ fetch, csrfToken: async () => "tok" });
-    expect(await source.decide(ID, "F1", { kind: "undo" })).toEqual({ kind: "posted" });
+    expect(await source.decide(ID, "F1", { kind: "undo" })).toEqual({
+      kind: "posted",
+      draft: draft({ posted: "posted" }),
+    });
     expect(await source.deleteComment(ID, COMMENT)).toBe("posted");
+  });
+
+  it("reports a comment GitHub would not take (#39 `comment_too_long`, 400) without throwing", async () => {
+    const { fetch } = fakeFetch(() => ({ status: 400, body: { error: "comment_too_long" } }));
+    const source = createHttpReviewSource({ fetch, csrfToken: async () => "tok" });
+    expect(await source.decide(ID, "F1", { kind: "edit", body: "x" })).toEqual({
+      kind: "too_long",
+    });
+    const other = createHttpReviewSource({
+      fetch: fakeFetch(() => ({ status: 400, body: { error: "invalid_body" } })).fetch,
+      csrfToken: async () => "tok",
+    });
+    await expect(other.decide(ID, "F1", { kind: "edit", body: "x" })).rejects.toBeInstanceOf(
+      ReviewRequestError,
+    );
   });
 
   it("throws on any other status, with the status only", async () => {

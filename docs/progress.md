@@ -129,6 +129,20 @@ Task log for the project plan. Agents append a row when a task is merged.
 - UI nits: at 375 px the modal is as wide as the viewport minus the layer padding and scrolls;
   the "Suggested" tag is a bordered chip (the POC had none); the count pill on the Finish button
   is `--on-you` on `--you` rather than the POC's translucent tint.
+- **Review round 1 applied (B1, S1–S4, UI-verifier):** unknown answers (a dropped request, an
+  uncoded status, an unparseable 200) read "may or may not have been posted" and the retry on
+  the same list reuses the idempotency key (`finish.e2e.spec.ts` "…never double-posts (B1)");
+  full paths in the list and the coverage warning; a list over GitHub's limits is shown with
+  Submit off; content-carried drafts from a re-run (#39) are `posted` in the drafts answer and
+  read-only (one `carriedStatusSql` definition shared with the plan); `refresh` merges instead
+  of resetting; `already_posted` updates one draft; `comment_too_long` is explained; invisible
+  characters are shown as markers; the phone-width button keeps its name; disabled styles; the
+  sticky footer; a contract test runs the real routes' JSON through the web parsers.
+- N5: the shell reads `GET …/review` once per page load for the status pill (one extra request);
+  drop it once the server serves the shell data with `myReview`.
+- N8: the shell data still comes from the fixture source, so against a real server Finish review
+  404s (the fixture pull request id is not a row): a prerequisite for H4 is serving the shell
+  data (`pullRequestId`, `analysisId`, `myReview`) from the server.
 
 ### P6-5 follow-ups
 

@@ -5,7 +5,9 @@
  * included; nothing is cached (the server answers `no-store`).
  *
  * Answers come back unchecked, with their status, for `posting-data.ts` to interpret; a body
- * that is not JSON is `undefined`. Errors thrown here carry a status only, never an answer.
+ * that is not JSON is `undefined`. When the CSRF token cannot be read, nothing is sent and the
+ * answer has status 0 (`not_sent`); a request that fails rejects, and the caller must treat
+ * that as "the review may exist". Errors thrown here carry a status only, never an answer.
  */
 import { CSRF_HEADER, fetchSession } from "../session.js";
 import type { Answer, ReviewPostingSource, SubmitInput } from "./posting-data.js";
@@ -33,6 +35,9 @@ const answerOf = async (response: Response): Promise<Answer> => {
   }
   return { status: response.status, body };
 };
+
+/** Nothing was sent: the caller may retry with the same key, nothing can have been posted. */
+const NOT_SENT: Answer = { status: 0, body: { error: "not_sent" } };
 
 export const createHttpPostingSource = (
   options: { fetch?: Fetch; csrfToken?: () => Promise<string> } = {},
@@ -62,15 +67,21 @@ export const createHttpPostingSource = (
           ...(signal === undefined ? {} : { signal }),
         }),
       ),
-    submit: async (pullRequestId, input: SubmitInput) =>
-      answerOf(
+    submit: async (pullRequestId, input: SubmitInput) => {
+      let csrfToken: string;
+      try {
+        csrfToken = await csrf();
+      } catch {
+        return NOT_SENT;
+      }
+      return answerOf(
         await http(url(pullRequestId), {
           method: "POST",
           credentials: "same-origin",
           headers: {
             accept: "application/json",
             "content-type": "application/json",
-            [CSRF_HEADER]: await csrf(),
+            [CSRF_HEADER]: csrfToken,
           },
           body: JSON.stringify({
             idempotencyKey: input.idempotencyKey,
@@ -80,6 +91,7 @@ export const createHttpPostingSource = (
             body: input.body,
           }),
         }),
-      ),
+      );
+    },
   };
 };

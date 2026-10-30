@@ -221,6 +221,14 @@ describe("decided drafts", () => {
     expect(posting).not.toContain("<button");
   });
 
+  it("undecided but already posted from a re-run (P6-6): one read-only line, no actions", () => {
+    const html = render(F1, { posted: "posted", decision: { state: "draft" } });
+    expect(text(html)).toBe(
+      "AI draft Invitee can choose their own role, e.g. admin (already posted to GitHub from an earlier analysis of this commit) Posted to GitHub, read-only",
+    );
+    expect(html).not.toContain("<button");
+  });
+
   it("dismissed: one collapsed line with the reason and Undo", () => {
     const html = render(F1, { decision: { state: "dismissed", reason: "intentional" } });
     expect(text(html)).toBe(

@@ -6,16 +6,24 @@
  *
  * The list is the server's (`GET …/review`, P3-5): every item's body is shown as the Markdown
  * source GitHub will receive, as text, so nothing a rendering could hide (a link's target, an
- * image, a mention) is hidden. Submit sends that list's digest and head with a fresh key, once
- * per click: the button is inert while it arms, disabled while the request runs, and a ref
- * guards the same frame; the server's idempotency guards the rest. Escape and Keep reviewing
- * close it without sending anything; while the request runs, nothing closes it. A modal like
- * the shortcuts dialog: the shell makes the page inert, Tab stays inside, focus starts on Close
- * and goes back to the opener on close.
+ * image, a mention) is hidden, and every invisible character (a bidi override, a zero-width
+ * space) is shown as a marker. Submit sends that list's digest and head, once per click: the
+ * button is inert while it arms, disabled while the request runs, and a ref guards the same
+ * frame; the server's idempotency guards the rest. A click's idempotency key belongs to the
+ * list it was made for: after an answer that could not say whether the review was posted, the
+ * next click on the same list reuses it (the server answers the earlier attempt, never posts
+ * twice); after a definite answer, or once the list changed, the next click is a new one.
+ * Escape and Keep reviewing close it without sending anything; while the request runs, nothing
+ * closes it. A modal like the shortcuts dialog: the shell makes the page inert, Tab stays
+ * inside, focus starts on Close and goes back to the opener on close.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_REVIEW_BODY_CHARS } from "@rocky-reviews/core";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  isDefinite,
+  listProblem,
   previewOutcome,
+  type PreviewItem,
   type PreviewOutcome,
   type ReviewPostingSource,
   type ReviewPreview,
@@ -32,9 +40,12 @@ import type { SidebarGroup } from "../shell/triage-model.js";
 import {
   attemptText,
   draftSummary,
+  invisibleCodes,
   itemLocation,
+  LIST_PROBLEM_TEXT,
   noticeFor,
   REFUSAL_TEXT,
+  revealInvisible,
   seriousAccepted,
   suggestVerdict,
   undecidedCount,
@@ -48,12 +59,13 @@ export const ARM_MS = 400;
 
 const VERDICTS: readonly ReviewVerdict[] = ["comment", "approve", "request_changes"];
 
-const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-
 type Loaded =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly preview: ReviewPreview }
   | { readonly kind: "failed"; readonly outcome: Exclude<PreviewOutcome, { kind: "ok" }> };
+
+/** The key of a click, valid for one list (its digest) until the server answers definitely. */
+type Click = { readonly key: string; readonly contentSha256: string };
 
 type Props = {
   /** Null when the page's data source has no pull request id: nothing can be posted. */
@@ -84,6 +96,7 @@ export const FinishReview = ({
   const review = useReview();
   const closeButton = useRef<HTMLButtonElement>(null);
   const noticeBox = useRef<HTMLParagraphElement>(null);
+  const sendingBox = useRef<HTMLParagraphElement>(null);
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
   const [verdict, setVerdict] = useState<ReviewVerdict | null>(null);
   const [picked, setPicked] = useState(false);
@@ -93,6 +106,7 @@ export const FinishReview = ({
   const [notice, setNotice] = useState<string | null>(null);
   const [armed, setArmed] = useState(false);
   const sent = useRef(false);
+  const click = useRef<Click | null>(null);
   const alive = useRef(true);
   const [generation, setGeneration] = useState(0);
   const reloadPreview = useCallback(() => setGeneration((g) => g + 1), []);
@@ -145,8 +159,15 @@ export const FinishReview = ({
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, sending]);
 
+  // While the request runs every control is disabled: focus sits on the live status, so the
+  // dialog keeps a focusable element and the answer is announced where it lands.
+  useEffect(() => {
+    if (sending) sendingBox.current?.focus();
+  }, [sending]);
+
   const preview = loaded.kind === "ready" ? loaded.preview : null;
   const items = preview?.items ?? [];
+  const problem = preview === null ? null : listProblem(preview.items);
   const unviewed = useMemo(() => unviewedHighRisk(groups, viewed), [groups, viewed]);
   const undecided = undecidedCount(review.findings, review.state);
   const suggestion = useMemo(
@@ -170,17 +191,23 @@ export const FinishReview = ({
 
   const nothingToSay = items.length === 0 && summary.trim() === "" && verdict !== "approve";
   const blocked =
-    preview === null
-      ? loaded.kind === "loading"
-        ? "Loading what will be posted…"
-        : null
-      : !preview.revisionKnown
-        ? REFUSAL_TEXT.no_revision
-        : verdict === null
-          ? "Pick a verdict to submit."
-          : nothingToSay
-            ? "Write a summary or pick Approve to submit: there is nothing to post yet."
-            : null;
+    pullRequestId === null
+      ? "Posting is not available for this pull request."
+      : preview === null
+        ? loaded.kind === "loading"
+          ? "Loading what will be posted…"
+          : "The list could not be loaded, so nothing can be submitted."
+        : !preview.revisionKnown
+          ? REFUSAL_TEXT.no_revision
+          : problem !== null
+            ? LIST_PROBLEM_TEXT[problem]
+            : verdict === null
+              ? "Pick a verdict to submit."
+              : nothingToSay
+                ? "Write a summary or pick Approve to submit: there is nothing to post yet."
+                : !armed
+                  ? "One moment…"
+                  : null;
   const canSubmit = preview !== null && verdict !== null && blocked === null && !sending;
 
   const close = () => {
@@ -201,12 +228,18 @@ export const FinishReview = ({
     sent.current = true;
     setSending(true);
     setNotice(null);
+    // One key per list: reused after an answer that could not say what happened, so the
+    // server answers that attempt instead of posting again; fresh once the list changed.
+    const current =
+      click.current !== null && click.current.contentSha256 === preview.contentSha256
+        ? click.current
+        : { key: crypto.randomUUID(), contentSha256: preview.contentSha256 };
+    click.current = current;
     let outcome: SubmitOutcome;
     try {
       outcome = submitOutcome(
         await posting.submit(pullRequestId, {
-          // A fresh key per click: the same click again answers the same, never posts twice.
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: current.key,
           contentSha256: preview.contentSha256,
           headSha: preview.headSha,
           verdict,
@@ -215,22 +248,24 @@ export const FinishReview = ({
       );
     } catch {
       // The request did not complete: it may or may not have reached the server.
-      outcome = { kind: "error", status: 0 };
+      outcome = { kind: "unknown", status: 0 };
     }
     if (!alive.current) return;
     if (outcome.kind === "posted") {
       // Stays sent: the shell closes this; nothing can post again from here.
-      review.reload();
+      review.refresh();
       onPosted(verdict);
       return;
     }
+    if (isDefinite(outcome)) click.current = null;
     sent.current = false;
     setSending(false);
     setNotice(noticeFor(outcome));
     // The list may have changed (stale, moved head, an attempt that settled or is in flight, or
-    // the items released by a refusal): show it as the server has it now.
-    if (outcome.kind !== "invalid") reloadPreview();
-    if (outcome.kind === "post_unknown" || outcome.kind === "error") review.reload();
+    // the items released by a refusal): show it as the server has it now. After an unknown
+    // answer the drafts may be carried too.
+    if (outcome.kind !== "invalid" && outcome.kind !== "not_sent") reloadPreview();
+    if (!isDefinite(outcome)) review.refresh();
     window.requestAnimationFrame(() => noticeBox.current?.focus());
   };
 
@@ -247,6 +282,7 @@ export const FinishReview = ({
         aria-modal="true"
         aria-labelledby="finish-title"
         aria-busy={sending}
+        tabIndex={-1}
       >
         <div className="modal-head">
           <h2 id="finish-title">Finish your review</h2>
@@ -281,12 +317,12 @@ export const FinishReview = ({
                 viewed:
               </b>{" "}
               {unviewed.map((path, i) => (
-                <span key={path}>
+                <Fragment key={path}>
                   {i > 0 && ", "}
-                  <code title={path}>
-                    <bdi>{baseName(path)}</bdi>
+                  <code>
+                    <bdi>{path}</bdi>
                   </code>
-                </span>
+                </Fragment>
               ))}
             </p>
           ) : (
@@ -317,13 +353,15 @@ export const FinishReview = ({
           )}
           {loaded.kind === "failed" && (
             <p className="finish-problem" role="alert">
-              {loaded.outcome.kind === "unavailable"
-                ? "Posting is not available on this server yet."
-                : loaded.outcome.kind === "not_found"
-                  ? "This pull request is no longer available to you."
-                  : loaded.outcome.kind === "signed_out"
-                    ? "You are signed out. Sign in again to post."
-                    : "The list of what will be posted could not be loaded."}{" "}
+              <span>
+                {loaded.outcome.kind === "unavailable"
+                  ? "Posting is not available on this server yet."
+                  : loaded.outcome.kind === "not_found"
+                    ? "This pull request is no longer available to you."
+                    : loaded.outcome.kind === "signed_out"
+                      ? "You are signed out. Sign in again to post."
+                      : "The list of what will be posted could not be loaded."}
+              </span>
               {(loaded.outcome.kind === "error" || loaded.outcome.kind === "unavailable") && (
                 <button type="button" className="btn btn-sm" onClick={reloadPreview}>
                   Try again
@@ -358,29 +396,25 @@ export const FinishReview = ({
                   ; its comments are listed again.
                 </p>
               )}
+              {problem !== null && (
+                <p className="finish-problem" role="alert">
+                  {LIST_PROBLEM_TEXT[problem]}
+                </p>
+              )}
               {items.length === 0 ? (
                 <p className="finish-muted">No inline comments.</p>
               ) : (
                 <ol className="post-list">
-                  {items.map((item) => (
-                    <li key={item.id} data-item-kind={item.kind}>
-                      <div className="post-meta">
-                        <bdi className="post-loc">{itemLocation(item)}</bdi>
-                        <span className="post-kind">
-                          · {item.kind === "draft" ? "from AI draft" : "your comment"}
-                        </span>
-                      </div>
-                      <pre className="post-raw">
-                        <bdi>{item.body}</bdi>
-                      </pre>
-                    </li>
+                  {items.map((item, i) => (
+                    <Item key={item.id} item={item} index={i} />
                   ))}
                 </ol>
               )}
               {items.length > 0 && (
                 <p className="finish-fine">
                   Each comment is shown exactly as GitHub will receive it (Markdown source), under
-                  your name.
+                  your name. Characters you cannot see are shown as{" "}
+                  <mark className="invisible-char">U+…</mark> markers.
                 </p>
               )}
             </>
@@ -395,7 +429,7 @@ export const FinishReview = ({
             id="finish-summary"
             rows={3}
             placeholder="Overall comment (optional)"
-            maxLength={65_536}
+            maxLength={MAX_REVIEW_BODY_CHARS}
             value={summary}
             disabled={sending}
             onChange={(e) => setSummary(e.target.value)}
@@ -449,11 +483,9 @@ export const FinishReview = ({
         </fieldset>
 
         <div className="modal-foot">
-          {blocked !== null && (
-            <span className="finish-blocked" role="status">
-              {blocked}
-            </span>
-          )}
+          <p className="finish-blocked" role="status" tabIndex={-1} ref={sendingBox}>
+            {sending ? "Submitting to GitHub… keep this open until it answers." : (blocked ?? "")}
+          </p>
           <button type="button" className="btn" disabled={sending} onClick={close}>
             Keep reviewing
           </button>
@@ -471,5 +503,45 @@ export const FinishReview = ({
         </div>
       </div>
     </div>
+  );
+};
+
+/** One item: full location, kind, the Markdown source with invisible characters marked. */
+const Item = ({ item, index }: { item: PreviewItem; index: number }) => {
+  const codes = invisibleCodes(item.body);
+  const id = `finish-item-${index + 1}`;
+  return (
+    <li data-item-kind={item.kind}>
+      <div className="post-meta" id={id}>
+        <bdi className="post-loc">{itemLocation(item)}</bdi>
+        <span className="post-kind">
+          · {item.kind === "draft" ? "from AI draft" : "your comment"}
+        </span>
+      </div>
+      {codes.length > 0 && (
+        <p className="finish-warn finish-invisible">
+          <b>Contains invisible characters:</b> {codes.join(", ")}. They are posted as part of the
+          comment.
+        </p>
+      )}
+      {/* Scrollable, so focusable and named (axe scrollable-region-focusable). */}
+      <pre className="post-raw" tabIndex={0} aria-labelledby={id}>
+        <bdi>
+          {revealInvisible(item.body).map((segment, i) =>
+            segment.kind === "text" ? (
+              <Fragment key={i}>{segment.text}</Fragment>
+            ) : (
+              <mark
+                key={i}
+                className="invisible-char"
+                aria-label={`invisible character ${segment.code}`}
+              >
+                {segment.code}
+              </mark>
+            ),
+          )}
+        </bdi>
+      </pre>
+    </li>
   );
 };

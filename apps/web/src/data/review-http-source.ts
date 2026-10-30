@@ -81,11 +81,17 @@ export const createHttpReviewSource = (
         `${base(analysisId)}/drafts/${encodeURIComponent(findingId)}`,
         actionBody(action),
       );
+      if (response.status === 400) {
+        const answer = (await response.json().catch(() => ({}))) as { error?: unknown };
+        if (answer.error === "comment_too_long") return { kind: "too_long" };
+        throw new ReviewRequestError("draft", response.status);
+      }
       if (response.status !== 200 && response.status !== 409)
         throw new ReviewRequestError("draft", response.status);
       const answer = (await response.json()) as { error?: unknown; draft?: unknown };
-      if (response.status === 409 && answer.error === "already_posted") return { kind: "posted" };
-      return { kind: response.status === 200 ? "ok" : "conflict", draft: answer.draft };
+      const kind =
+        response.status === 200 ? "ok" : answer.error === "already_posted" ? "posted" : "conflict";
+      return { kind, draft: answer.draft };
     },
     addComment: async (analysisId, comment) => {
       const response = await send("POST", `${base(analysisId)}/comments`, comment);

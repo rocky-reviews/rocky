@@ -20,6 +20,24 @@
 
 .finish-modal {
   width: min(600px, 100%);
+  /* The footer stays in view while the list scrolls (UI-verifier nit). */
+  display: flex;
+  flex-direction: column;
+}
+.finish-modal > .modal-head,
+.finish-modal > .modal-section {
+  flex: none;
+}
+.finish-modal > .modal-foot {
+  flex: none;
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.finish-modal:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: -2px;
 }
 .finish-modal .modal-section + .modal-section {
   border-top: 1px solid var(--border);
@@ -40,6 +58,11 @@
   font-size: var(--text-code);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+/* The notice sits in its own section: the same inset as the warning cards. */
+.finish-modal .finish-notice {
+  margin: var(--space-3) 18px;
+  padding: 9px 12px;
 }
 .finish-warn {
   background: var(--med-bg);
@@ -71,8 +94,28 @@
   outline: 2px solid var(--you);
   outline-offset: 2px;
 }
-.finish-problem .btn {
-  margin-left: var(--space-2);
+.finish-problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.finish-invisible {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+}
+/* An invisible character, made visible: its code point in a small chip. */
+.invisible-char {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--high);
+  border-radius: var(--radius-xs);
+  background: var(--high-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  vertical-align: baseline;
 }
 .finish-muted,
 .finish-fine {
@@ -114,6 +157,10 @@
 }
 .post-kind {
   color: var(--muted);
+}
+.post-raw:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 1px;
 }
 .post-raw {
   margin: 0;
@@ -217,25 +264,52 @@
 }
 .finish-blocked {
   flex: 1 1 100%;
+  margin: 0;
+  min-height: 1.3em;
   text-align: right;
   color: var(--muted);
   font-size: var(--text-sm);
 }
-.finish-modal .btn-primary:disabled,
-.finish-modal .btn-primary[aria-disabled="true"] {
-  opacity: 0.7;
+.finish-blocked:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+/* Disabled controls look it (the shell's .btn has no disabled style). */
+.finish-modal .btn:disabled,
+.finish-modal .btn[aria-disabled="true"] {
+  opacity: 0.55;
   cursor: default;
   filter: none;
 }
-.finish-modal .btn-primary[aria-busy="true"] {
+.finish-modal .btn:disabled:hover {
+  background: var(--panel);
+}
+.finish-modal .btn-primary:disabled:hover,
+.finish-modal .btn-primary[aria-disabled="true"]:hover {
+  background: var(--you);
+}
+.finish-modal[aria-busy="true"] .btn-primary {
   cursor: progress;
 }
 
 @media (max-width: 760px) {
+  /* The POC hid the label; it stays in the accessible name (visually hidden, not removed). */
   .finish-btn .label {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
-  .finish-modal .modal-section {
+  .finish-btn {
+    position: relative;
+  }
+  .finish-modal .modal-section,
+  .finish-modal .modal-foot {
     padding-inline: var(--space-3);
+  }
+  .finish-modal .finish-notice {
+    margin-inline: var(--space-3);
   }
 }

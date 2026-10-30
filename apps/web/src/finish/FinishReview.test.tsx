@@ -77,9 +77,9 @@ describe("finish review modal", () => {
   it("warns about high-risk files not marked viewed, by name, and about undecided drafts", () => {
     const html = render({ viewed: ["src/auth/invitations.ts"] });
     expect(text(html)).toContain(
-      "3 high-risk files not marked viewed: invitations.ts , 20261020_add_invitations.sql , sendInviteEmail.ts",
+      "3 high-risk files not marked viewed: src/api/routes/invitations.ts , db/migrations/20261020_add_invitations.sql , src/jobs/sendInviteEmail.ts",
     );
-    expect(html).toContain('title="src/api/routes/invitations.ts"');
+    expect(html).toContain("<code><bdi>src/api/routes/invitations.ts</bdi></code>");
     expect(text(html)).toContain(
       "10 AI drafts still undecided. They won't be posted. Only what you accepted goes out.",
     );
@@ -116,6 +116,8 @@ describe("finish review modal", () => {
     expect(html).toMatch(
       /<textarea id="finish-summary" rows="3" placeholder="Overall comment \(optional\)" maxLength="65536"/,
     );
+    // The dialog itself is focusable (while sending every control is disabled).
+    expect(html).toMatch(/id="finish-dialog"[^>]*tabindex="-1"/);
     expect(html).toMatch(
       /<button type="button" class="btn btn-sm btn-ai" disabled=""[^>]*>.*Draft a summary from my comments/,
     );
@@ -127,9 +129,9 @@ describe("finish review modal", () => {
     expect(html).not.toContain('checked=""');
   });
 
-  it("says when the page has no pull request id to post through", () => {
-    expect(text(render({ pullRequestId: null }))).toContain(
-      "Posting is not available for this pull request.",
-    );
+  it("says when the page has no pull request id to post through, in the list and the footer", () => {
+    const html = render({ pullRequestId: null });
+    expect(text(html)).toContain("Posting is not available for this pull request.");
+    expect(text(html)).not.toContain("Loading what will be posted");
   });
 });

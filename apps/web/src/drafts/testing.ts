@@ -35,6 +35,7 @@ export const reviewWith = (
     findings,
     state,
     decisionOf: (id) => drafts.get(id)?.decision ?? DRAFT,
+    postedOf: (id) => drafts.get(id)?.posted ?? null,
     ...extra,
   };
 };
@@ -91,7 +92,10 @@ export const memoryReviewSource = (
       const current = decisions.get(findingId) ?? { decision: DRAFT, copiedAt: null };
       const t = applyDraftAction(current.decision, action, finding);
       if (!t.ok)
-        return { kind: "conflict", draft: wire(findingId, current.decision, current.copiedAt) };
+        return {
+          kind: "conflict" as const,
+          draft: wire(findingId, current.decision, current.copiedAt),
+        };
       const copiedAt = t.agentPromptCopied ? new Date(0).toISOString() : current.copiedAt;
       decisions.set(findingId, { decision: t.next, copiedAt });
       return { kind: "ok", draft: wire(findingId, t.next, copiedAt) };

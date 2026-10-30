@@ -107,6 +107,8 @@ export type ReviewApi = {
   clicks(): readonly { key: unknown; contentSha256: unknown; headSha: unknown; verdict: unknown }[];
   /** The next POST answers with this, recording nothing (then back to normal). */
   scriptSubmit(answer: { status: number; body: unknown }): void;
+  /** The next POST is handled (posted and recorded) but its answer never reaches the page. */
+  dropNextAnswer(): void;
   /** Holds every POST until the returned function is called. */
   holdSubmits(): () => void;
   /** Moves the pull request's head: the next plan is for the new commit. */
@@ -162,6 +164,7 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
   const github: PostedReview[] = [];
   const clicks: { key: unknown; contentSha256: unknown; headSha: unknown; verdict: unknown }[] = [];
   let scripted: { status: number; body: unknown } | null = null;
+  let dropAnswer = false;
   let nextReview = 1;
   let clock = Date.parse("2026-10-25T12:10:00.000Z");
 
@@ -310,6 +313,8 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
         return json(route, 400, { error: "invalid_request" });
       const earlier = submissions.find((s) => s.key === key);
       if (earlier !== undefined) return json(route, earlier.answer.status, earlier.answer.body);
+      const dropped = dropAnswer;
+      dropAnswer = false;
       const current = plan();
       if (current.headSha !== headSha) return json(route, 409, { error: "head_moved" });
       if (current.contentSha256 !== digest) return json(route, 409, { error: "stale" });
@@ -351,6 +356,7 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
       });
       carry(current.items, "posted");
       github.push({ id: reviewId, ...review });
+      if (dropped) return route.abort("connectionreset");
       return json(route, answer.status, answer.body);
     }
 
@@ -467,6 +473,9 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
     clicks: () => clicks,
     scriptSubmit: (answer) => {
       scripted = answer;
+    },
+    dropNextAnswer: () => {
+      dropAnswer = true;
     },
     holdSubmits: () => {
       let release!: () => void;

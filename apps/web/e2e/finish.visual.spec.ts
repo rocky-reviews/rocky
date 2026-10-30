@@ -79,6 +79,60 @@ const STATES: State[] = [
     },
   },
   {
+    // The verdict and footer, scrolled into view (the modal scrolls at phone width).
+    id: "finish-verdict",
+    poc: "09-finish",
+    stored: (api) => api.set("F1", { state: "accepted", edited: false, body: "x" }),
+    run: async (page) => {
+      await openFinish(page);
+      await dialog(page)
+        .getByRole("radio", { name: /Request changes/ })
+        .focus();
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // While the request runs: every control disabled, the live status focused.
+    id: "finish-sending",
+    poc: "09-finish",
+    stored: (api) => api.set("F1", { state: "accepted", edited: false, body: "x" }),
+    run: async (page, api) => {
+      await openFinish(page);
+      api.holdSubmits();
+      await dialog(page).getByRole("button", { name: "Submit review" }).click();
+      await expect(dialog(page).getByRole("button", { name: "Submitting…" })).toBeVisible();
+    },
+  },
+  {
+    // GitHub refused: the notice, the items still listed.
+    id: "finish-failed",
+    poc: "09-finish",
+    stored: (api) => api.set("F1", { state: "accepted", edited: false, body: "x" }),
+    run: async (page, api) => {
+      await openFinish(page);
+      api.scriptSubmit({ status: 502, body: { error: "post_failed", reason: "rejected" } });
+      await dialog(page).getByRole("button", { name: "Submit review" }).click();
+      await expect(dialog(page).getByRole("alert")).toContainText("GitHub rejected");
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // No answer from GitHub: the review may exist; the attempt shows in flight.
+    id: "finish-unknown",
+    poc: "09-finish",
+    stored: (api) => api.set("F1", { state: "accepted", edited: false, body: "x" }),
+    run: async (page, api) => {
+      await openFinish(page);
+      api.scriptSubmit({ status: 502, body: { error: "post_unknown", submissionId: "x" } });
+      api.addInFlight();
+      api.markPosted({ findingId: "F1" }, "posting");
+      await dialog(page).getByRole("button", { name: "Submit review" }).click();
+      await expect(dialog(page).getByRole("alert")).toContainText("may or may not");
+      await expect(dialog(page)).toContainText("still being confirmed");
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
     // After the click: the pill, the toast, the posted card read-only.
     id: "finish-posted",
     poc: "04-draft-accepted",

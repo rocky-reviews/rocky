@@ -139,12 +139,25 @@ export const loadReviewPlan = async (
   };
 };
 
-/** Items carried by a submission that is posting or posted: never offered again. */
-const CARRIED_SQL = `exists (
-  select 1 from review_submission_items i
+/**
+ * The attempts carrying item `ITEM` of kind `KIND` for org `ORG` (tokens): posting or posted.
+ * The one definition of "carried" (the plan, `isCarried`, the drafts view's `posted` flag).
+ */
+const CARRIED_FROM = `from review_submission_items i
     join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
-   where i.org_id = $1 and i.kind = $2 and i.item_id = ITEM and s.status in ('posting', 'posted'))`;
+   where i.org_id = ORG and i.kind = KIND and i.item_id = ITEM and s.status in ('posting', 'posted')`;
+
+/** Items carried by a submission that is posting or posted: never offered again. */
+const CARRIED_SQL = `exists (select 1 ${CARRIED_FROM.replace("ORG", "$1").replace("KIND", "$2")})`;
 const NOT_CARRIED = `not ${CARRIED_SQL}`;
+
+/**
+ * A scalar subquery: the status of the attempt carrying the item (`posted` wins over
+ * `posting`), or null. `org`, `kind` and `item` are SQL expressions or placeholders.
+ */
+export const carriedStatusSql = (org: string, kind: string, item: string): string =>
+  `(select s.status ${CARRIED_FROM.replace("ORG", org).replace("KIND", kind).replace("ITEM", item)}
+    order by s.status = 'posted' desc limit 1)`;
 
 /**
  * Whether one item (a `findings_state` id for a draft, a `comments_pending` id for a comment) is
