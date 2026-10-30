@@ -94,6 +94,12 @@ describe("hostile labels render inert", () => {
       expect(map.status).toBe("rendered");
       const report = inspectSvg(map.svg);
       checkTexts(report, label);
+      // P5-3: the interactive map adds only fixed roles, tabindex and names, and stays inert.
+      const source = withLabels(label);
+      const files = pr847().provenance.files.map((file) => file.path);
+      const clickable = renderChangeMap(source, { interactive: { files } });
+      checkTexts(inspectSvg(clickable.svg), label);
+      expect(clickable.svg).toContain('role="button"');
       // Arrowheads only: five markers, every one referenced by its own prefix.
       expect(report.ids).toEqual([
         "cm-arrow-added",

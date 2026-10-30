@@ -79,18 +79,26 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(table).toContain('aria-label="Open pnpm-lock.yaml"');
   });
 
-  it("has the change map slot with its hint, lanes and legend as page HTML", () => {
+  it("has the change map slot: hint and legend as page HTML, the renderer's map between", () => {
     const map = section(html, "Change map");
-    expect(text(map)).toContain("click a card to open its file");
-    expect(text(map)).toMatch(/WEB .*API .*DATA .*WORKERS/);
-    expect(map).toContain('data-path="web/src/pages/InvitePage.tsx"');
-    expect(text(map)).toContain(
-      "InvitePage web/src/pages 1 , 1 finding, worst low , opens web/src/pages/InvitePage.tsx",
-    );
+    expect(text(map)).toContain("click a card to open its file, a badge to open its finding");
     expect(text(map)).toContain(
       "New in this PR Changed Existing, untouched Where the change matters Open findings",
     );
-    expect(map).not.toContain("<svg");
+    expect(map).toMatch(/<div class="map-scroll"><svg [^>]*class="cm"[^>]*role="group"/);
+    expect(text(map)).toMatch(/WEB .*API .*DATA .*WORKERS/);
+  });
+
+  it("makes the map's cards and badges buttons, ids under the brief- prefix (P5-3)", () => {
+    const map = section(html, "Change map");
+    expect(map).toContain(
+      '<g class="cm-node cm-added" data-node="page" tabindex="0" role="button" ' +
+        'aria-label="InvitePage web/src/pages, opens web/src/pages/InvitePage.tsx">',
+    );
+    expect(map.match(/role="button"/g)).toHaveLength(10);
+    expect(map).toContain('id="brief-arrow-hero"');
+    // No handler or style is written into the markup: the listeners are React's, delegated.
+    expect(map).not.toMatch(/ on[a-z]+=| style=/i);
   });
 
   it("numbers the suggested path with why and score, each a button", () => {

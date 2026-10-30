@@ -18,18 +18,18 @@
 <g class="cm-nodes"><g class="cm-node cm-added" data-node="page"><title>InvitePage · web/src/pages · 1 finding, worst low</title>
 <rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="32" y="59">InvitePage</text>
-<text class="cm-node-sub" x="32" y="74">web/src/pages</text>
-<g class="cm-badge cm-low" data-findings="F9"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">1</text></g></g>
+<text class="cm-node-sub" x="32" y="74">web/src/pages</text></g>
+<g class="cm-badge cm-low" data-findings="F9"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">1</text></g>
 <g class="cm-node cm-added" data-node="route"><title>Invitation routes · POST create · accept · 2 findings, worst high</title>
 <rect class="cm-card" x="260.14" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="270.14" y="59">Invitation routes</text>
-<text class="cm-node-sub" x="270.14" y="74">POST create · accept</text>
-<g class="cm-badge cm-high" data-findings="F2 F7"><rect class="cm-badge-bg" x="405.14" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="45.5" text-anchor="middle">2</text></g></g>
+<text class="cm-node-sub" x="270.14" y="74">POST create · accept</text></g>
+<g class="cm-badge cm-high" data-findings="F2 F7"><rect class="cm-badge-bg" x="405.14" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="45.5" text-anchor="middle">2</text></g>
 <g class="cm-node cm-added" data-node="auth"><title>acceptInvitation() · src/auth · 3 findings, worst critical</title>
 <rect class="cm-card" x="260.14" y="112" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="270.14" y="131">acceptInvitation()</text>
-<text class="cm-node-sub" x="270.14" y="146">src/auth</text>
-<g class="cm-badge cm-critical" data-findings="F1 F3 F8"><rect class="cm-badge-bg" x="405.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="117.5" text-anchor="middle">3</text></g></g>
+<text class="cm-node-sub" x="270.14" y="146">src/auth</text></g>
+<g class="cm-badge cm-critical" data-findings="F1 F3 F8"><rect class="cm-badge-bg" x="405.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="414.14" y="117.5" text-anchor="middle">3</text></g>
 <g class="cm-node cm-unchanged" data-node="mem"><title>memberships · existing table</title>
 <rect class="cm-card" x="498.28" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="508.28" y="59">memberships</text>
@@ -37,13 +37,13 @@
 <g class="cm-node cm-added" data-node="inv"><title>invitations · new table · RLS · 2 findings, worst high</title>
 <rect class="cm-card" x="498.28" y="112" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="508.28" y="131">invitations</text>
-<text class="cm-node-sub" x="508.28" y="146">new table · RLS</text>
-<g class="cm-badge cm-high" data-findings="F4 F5"><rect class="cm-badge-bg" x="643.28" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="652.28" y="117.5" text-anchor="middle">2</text></g></g>
+<text class="cm-node-sub" x="508.28" y="146">new table · RLS</text></g>
+<g class="cm-badge cm-high" data-findings="F4 F5"><rect class="cm-badge-bg" x="643.28" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="652.28" y="117.5" text-anchor="middle">2</text></g>
 <g class="cm-node cm-added" data-node="job"><title>send-invite-email · src/jobs · 1 finding, worst medium</title>
 <rect class="cm-card" x="736.42" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="746.42" y="59">send-invite-email</text>
-<text class="cm-node-sub" x="746.42" y="74">src/jobs</text>
-<g class="cm-badge cm-medium" data-findings="F6"><rect class="cm-badge-bg" x="881.42" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="890.42" y="45.5" text-anchor="middle">1</text></g></g>
+<text class="cm-node-sub" x="746.42" y="74">src/jobs</text></g>
+<g class="cm-badge cm-medium" data-findings="F6"><rect class="cm-badge-bg" x="881.42" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="890.42" y="45.5" text-anchor="middle">1</text></g>
 <g class="cm-node cm-unchanged" data-node="mail"><title>Mailer · Postmark · external</title>
 <rect class="cm-card" x="736.42" y="112" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="746.42" y="131">Mailer</text>

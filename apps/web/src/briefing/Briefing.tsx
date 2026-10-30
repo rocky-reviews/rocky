@@ -29,8 +29,11 @@ type Props = {
   run: AnalysisRun;
   /** The PR's current head commit (GitHub's), to tell an out-of-date document. */
   headSha: string;
-  /** Selects the file in the shell (sidebar and main), as a sidebar click does. */
-  onOpenFile: (path: string) => void;
+  /**
+   * Selects the file in the shell (sidebar and main), as a sidebar click does; with a line
+   * (a finding badge on the change map, P5-3), the diff opens focused on that line.
+   */
+  onOpenFile: (path: string, line?: number) => void;
 };
 
 export const BriefingView = ({ analysis, run, headSha, onOpenFile }: Props) =>
@@ -70,7 +73,7 @@ const Briefing = ({
 }: {
   doc: AnalysisDocument;
   banner: Banner | undefined;
-  onOpenFile: (p: string) => void;
+  onOpenFile: (p: string, line?: number) => void;
 }) => {
   const { briefing, provenance } = doc;
   const fallback = provenance.briefingUnavailable;

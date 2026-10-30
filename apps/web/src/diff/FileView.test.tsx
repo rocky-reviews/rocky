@@ -27,12 +27,17 @@ const context = (
 const render = (
   path: string,
   load: DiffLoad = { kind: "ready", data: diff },
-  options: { analysis?: AnalysisDocument; comments?: DiffContextValue["comments"] } = {},
+  options: {
+    analysis?: AnalysisDocument;
+    comments?: DiffContextValue["comments"];
+    line?: number;
+  } = {},
 ) =>
   renderToStaticMarkup(
     <DiffContext value={context(load, options.comments)}>
       <FileView
         path={path}
+        line={options.line}
         analysis={options.analysis ?? doc}
         viewed={new Set()}
         onToggleViewed={() => {}}
@@ -70,6 +75,18 @@ describe("file view", () => {
     );
   });
 
+  it("opened at a finding's line (P5-3), that line is the diff's tab stop", () => {
+    const at = render("src/auth/invitations.ts", undefined, { line: 28 });
+    expect(at).toMatch(/<button[^>]*data-line="28"[^>]*tabindex="0"/);
+    expect(at).toMatch(/<button[^>]*data-line="1"[^>]*tabindex="-1"/);
+  });
+
+  it("opened at a line the diff does not show, the nearest shown line is the tab stop", () => {
+    // The file's hunk is +1,33: line 90 is past its end.
+    const past = render("src/auth/invitations.ts", undefined, { line: 90 });
+    expect(past).toMatch(/<button[^>]*data-line="33"[^>]*tabindex="0"/);
+  });
+
   it("renders the hunk header, numbered lines and highlighted code", () => {
     expect(html).toContain("@@ -0,0 +1,33 @@");
     expect(html).toMatch(/<button[^>]*data-line="1"[^>]*tabindex="0"[^>]*>1<\/button>/);
@@ -100,6 +117,16 @@ describe("file view", () => {
 
   it("offers the next file in review order", () => {
     expect(text(html)).toContain("Mark viewed & next →");
+  });
+
+  it("ignores a finding's line on a diff of another head commit (it may have moved)", () => {
+    const stale = render(
+      "src/auth/invitations.ts",
+      { kind: "ready", data: { ...diff, headSha: "0".repeat(40) } },
+      { line: 28 },
+    );
+    expect(stale).toMatch(/<button[^>]*data-line="1"[^>]*tabindex="0"/);
+    expect(stale).toMatch(/<button[^>]*data-line="28"[^>]*tabindex="-1"/);
   });
 
   it("hides AI notes when the analysis is for another head commit", () => {

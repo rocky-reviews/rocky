@@ -14,7 +14,7 @@ type Props = {
   run: AnalysisRun;
   headSha: string;
   /** Opens a file from the briefing: selects it in the shell, like the sidebar does. */
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   /** P6-3: the file view's viewed state and navigation. */
   files: FileActions;
 };
@@ -29,7 +29,7 @@ export const MainContent = ({ selection, analysis, run, headSha, onOpenFile, fil
           <p className="placeholder">The analysis for this pull request is not ready yet.</p>
         </div>
       ) : (
-        <FileView path={selection.path} analysis={analysis} {...files} />
+        <FileView path={selection.path} line={selection.line} analysis={analysis} {...files} />
       )}
     </article>
   );

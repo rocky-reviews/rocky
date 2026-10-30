@@ -22,7 +22,12 @@ export type FileActions = {
   onSelect: (selection: Selection) => void;
 };
 
-type Props = FileActions & { path: string; analysis: AnalysisDocument };
+type Props = FileActions & {
+  path: string;
+  /** Open focused on this new-side line (a finding from the change map, P5-3). */
+  line?: number | undefined;
+  analysis: AnalysisDocument;
+};
 
 const LEVEL_WORD: Record<TriagedFileLevel, string> = {
   critical: "critical",
@@ -31,7 +36,7 @@ const LEVEL_WORD: Record<TriagedFileLevel, string> = {
   low: "low",
 };
 
-export const FileView = ({ path, analysis, viewed, onToggleViewed, onSelect }: Props) => {
+export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelect }: Props) => {
   const { load, request } = useDiff();
   useEffect(request, [request]);
 
@@ -42,13 +47,17 @@ export const FileView = ({ path, analysis, viewed, onToggleViewed, onSelect }: P
   const isViewed = viewed.has(path);
   const [showRaw, setShowRaw] = useState(false);
 
-  // A new file starts at the top; after "next", focus moves to its title.
+  // A new file starts at the top; after "next", focus moves to its title. A file opened at a
+  // line was scrolled to the top by the briefing and the diff then reveals the line (P5-3):
+  // scrolling here, after the diff's own effects, would hide it again.
   const title = useRef<HTMLHeadingElement>(null);
   const focusTitle = useRef(false);
+  const opensAtLine = useRef(line !== undefined);
+  opensAtLine.current = line !== undefined;
   useEffect(() => {
     setShowRaw(false);
     const card = title.current?.closest("article");
-    card?.parentElement?.scrollTo({ top: 0 });
+    if (!opensAtLine.current) card?.parentElement?.scrollTo({ top: 0 });
     if (focusTitle.current) {
       title.current?.focus();
       focusTitle.current = false;
@@ -146,7 +155,12 @@ export const FileView = ({ path, analysis, viewed, onToggleViewed, onSelect }: P
       )}
 
       {showDiff && (
-        <DiffArea path={path} stale={load.kind === "ready" && !current} annotations={annotations} />
+        <DiffArea
+          path={path}
+          line={line}
+          stale={load.kind === "ready" && !current}
+          annotations={annotations}
+        />
       )}
 
       <footer className="file-foot">
@@ -165,10 +179,12 @@ export const FileView = ({ path, analysis, viewed, onToggleViewed, onSelect }: P
 
 const DiffArea = ({
   path,
+  line,
   stale,
   annotations,
 }: {
   path: string;
+  line: number | undefined;
   stale: boolean;
   annotations: ReturnType<typeof fileAnnotations>;
 }) => {
@@ -197,7 +213,14 @@ const DiffArea = ({
           The AI notes are for an earlier push, so they are hidden on this diff.
         </p>
       )}
-      <DiffBody key={path} path={path} file={file} annotations={annotations} />
+      {/* A finding's line is the analysis's: on a newer push it may be another line. */}
+      <DiffBody
+        key={path}
+        path={path}
+        file={file}
+        annotations={annotations}
+        target={stale ? undefined : line}
+      />
     </>
   );
 };

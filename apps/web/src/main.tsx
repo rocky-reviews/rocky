@@ -1,4 +1,5 @@
 import "./styles/tokens.css";
+import "@rocky-reviews/renderer/change-map.css";
 import "./styles/shell.css";
 import "./styles/diff.css";
 import "./briefing/briefing.css";

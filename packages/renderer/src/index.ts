@@ -89,6 +89,15 @@ export type ChangeMapOptions = {
    * Lowercase letters, digits and hyphens, starting with a letter. Default `cm`.
    */
   idPrefix?: string;
+  /**
+   * Click-through (P5-3, ADR 0028): the paths of the pull request's changed files. A card
+   * backed by one of them becomes a button (`tabindex="0"`, `role="button"`, a name saying
+   * which file it opens), and so does a finding badge whose worst finding is on one; the
+   * root becomes a `group` instead of an `img`, so the buttons are reachable. The page does
+   * the opening: it reads `data-node` / `data-findings` and resolves them in the document.
+   * Without it the map is a picture, as before.
+   */
+  interactive?: { files: readonly string[] };
 };
 
 export type ChangeMap =
@@ -173,6 +182,7 @@ const svgRoot = (
   label: string,
   body: readonly (SvgElement | string)[],
   prefix: string,
+  role: "img" | "group" = "img",
 ): { svg: string; tree: SafeSvg } => {
   const tree = svgDocument(
     wrap(
@@ -183,7 +193,7 @@ const svgRoot = (
         viewBox: `0 0 ${coord(width)} ${coord(height)}`,
         width: coord(width),
         height: coord(height),
-        role: "img",
+        role,
         "aria-label": label,
       },
       ["\n", ...body, "\n"],
@@ -273,47 +283,96 @@ const nodeTooltip = (placed: PlacedNode, badge: NodeFindings | undefined): strin
   return parts.join(" · ");
 };
 
-const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): SvgElement => {
+/** What a card and its badge open, when the map is interactive and they back a PR file. */
+type Targets = { file: string | undefined; finding: Finding | undefined };
+
+const NO_TARGETS: Targets = { file: undefined, finding: undefined };
+
+const targetsOf = (
+  placed: PlacedNode,
+  badge: NodeFindings | undefined,
+  files: ReadonlySet<string> | undefined,
+): Targets => {
+  if (files === undefined) return NO_TARGETS;
+  const worst = badge?.findings[0];
+  return {
+    file: placed.node.files.find((ref) => files.has(ref.path))?.path,
+    finding: worst !== undefined && files.has(worst.path) ? worst : undefined,
+  };
+};
+
+/** A focusable SVG button: fixed values, plus a name (normalised like any text). */
+const button = (name: string) => ({ tabindex: "0", role: "button", "aria-label": name });
+
+const paintBadge = (
+  placed: PlacedNode,
+  badge: NodeFindings,
+  finding: Finding | undefined,
+): SvgElement => {
+  const b = badgeBox(placed.box, badge.findings.length);
+  const count = badge.findings.length;
+  return wrap(
+    "g",
+    {
+      class: `cm-badge cm-${badge.worst}`,
+      "data-findings": badge.findings.map((item) => item.id).join(" "),
+      ...(finding === undefined
+        ? {}
+        : button(
+            `${count} finding${count === 1 ? "" : "s"} on ${placed.node.label}, worst ${badge.worst}: ` +
+              `go to ${finding.path} line ${finding.range.start}`,
+          )),
+    },
+    [
+      tag("rect", {
+        class: "cm-badge-bg",
+        x: coord(b.x),
+        y: coord(b.y),
+        width: coord(b.width),
+        height: coord(b.height),
+        rx: BADGE_SIZE / 2,
+      }),
+      textElement(
+        "text",
+        {
+          class: "cm-badge-count",
+          x: coord(b.x + b.width / 2),
+          y: coord(b.y + BADGE_SIZE / 2 + 3.5),
+          "text-anchor": "middle",
+        },
+        badgeLabel(count),
+      ),
+    ],
+  );
+};
+
+/**
+ * A card, then its badge as a sibling drawn on top of it (P5-3): two buttons side by side, so
+ * neither is nested in the other, and Tab reaches the card and then its badge.
+ */
+const paintNode = (
+  placed: PlacedNode,
+  badge: NodeFindings | undefined,
+  targets: Targets,
+): SvgElement[] => {
   const { node, box } = placed;
   const textX = box.x + CARD_PADDING_X;
   const room = box.width - CARD_PADDING_X * 2 - (badge === undefined ? 0 : BADGE_ROOM);
-  const badgeMarkup =
-    badge === undefined
+  const title = truncate(node.label, "sans-bold", TITLE_SIZE, room);
+  const subtitle =
+    node.subtitle === undefined
       ? undefined
-      : (() => {
-          const b = badgeBox(box, badge.findings.length);
-          return wrap(
-            "g",
-            {
-              class: `cm-badge cm-${badge.worst}`,
-              "data-findings": badge.findings.map((finding) => finding.id).join(" "),
-            },
-            [
-              tag("rect", {
-                class: "cm-badge-bg",
-                x: coord(b.x),
-                y: coord(b.y),
-                width: coord(b.width),
-                height: coord(b.height),
-                rx: BADGE_SIZE / 2,
-              }),
-              textElement(
-                "text",
-                {
-                  class: "cm-badge-count",
-                  x: coord(b.x + b.width / 2),
-                  y: coord(b.y + BADGE_SIZE / 2 + 3.5),
-                  "text-anchor": "middle",
-                },
-                badgeLabel(badge.findings.length),
-              ),
-            ],
-          );
-        })();
-
-  return wrap(
+      : truncate(node.subtitle, "sans", SUBTITLE_SIZE, box.width - CARD_PADDING_X * 2);
+  // The name starts with the text drawn on the card, as drawn (WCAG 2.5.3, label in name), so
+  // a voice user can say what they see; the full label stays in the tooltip.
+  const drawn = subtitle === undefined ? title : `${title} ${subtitle}`;
+  const card = wrap(
     "g",
-    { class: `cm-node cm-${node.delta}`, "data-node": node.id },
+    {
+      class: `cm-node cm-${node.delta}`,
+      "data-node": node.id,
+      ...(targets.file === undefined ? {} : button(`${drawn}, opens ${targets.file}`)),
+    },
     lines([
       textElement("title", {}, nodeTooltip(placed, badge)),
       tag("rect", {
@@ -327,18 +386,18 @@ const paintNode = (placed: PlacedNode, badge: NodeFindings | undefined): SvgElem
       textElement(
         "text",
         { class: "cm-node-title", x: coord(textX), y: coord(box.y + TITLE_BASELINE) },
-        truncate(node.label, "sans-bold", TITLE_SIZE, room),
+        title,
       ),
-      node.subtitle === undefined
+      subtitle === undefined
         ? undefined
         : textElement(
             "text",
             { class: "cm-node-sub", x: coord(textX), y: coord(box.y + SUBTITLE_BASELINE) },
-            truncate(node.subtitle, "sans", SUBTITLE_SIZE, box.width - CARD_PADDING_X * 2),
+            subtitle,
           ),
-      badgeMarkup,
     ]),
   );
+  return badge === undefined ? [card] : [card, paintBadge(placed, badge, targets.finding)];
 };
 
 const edgeClass = (route: Route): string => {
@@ -426,6 +485,7 @@ export const renderChangeMap = (
     throw new Error("renderChangeMap: idPrefix must be lowercase letters, digits and hyphens");
 
   checkSource(source);
+  const files = options.interactive === undefined ? undefined : new Set(options.interactive.files);
 
   if (source.graph === undefined)
     return unavailable(source.provenance.graphUnavailable?.reason, prefix);
@@ -526,7 +586,12 @@ export const renderChangeMap = (
     wrap(
       "g",
       { class: "cm-nodes" },
-      lines(placement.nodes.map((placed) => paintNode(placed, badges.get(placed.node.id)))),
+      lines(
+        placement.nodes.flatMap((placed) => {
+          const badge = badges.get(placed.node.id);
+          return paintNode(placed, badge, targetsOf(placed, badge, files));
+        }),
+      ),
     ),
     wrap(
       "g",
@@ -542,7 +607,15 @@ export const renderChangeMap = (
 
   return {
     status: "rendered",
-    ...svgRoot(width, height, "cm", "Change map", body, prefix),
+    ...svgRoot(
+      width,
+      height,
+      "cm",
+      "Change map",
+      body,
+      prefix,
+      files === undefined ? "img" : "group",
+    ),
     width,
     height,
   };

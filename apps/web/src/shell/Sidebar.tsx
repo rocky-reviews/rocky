@@ -12,7 +12,9 @@ import {
   type SidebarGroup,
 } from "./triage-model.js";
 
-export type Selection = { kind: "briefing" } | { kind: "file"; path: string };
+/** `line`: open the diff focused on that new-side line (a finding from the change map, P5-3). */
+export type Selection =
+  { kind: "briefing" } | { kind: "file"; path: string; line?: number | undefined };
 
 type Props = {
   groups: readonly SidebarGroup[];
