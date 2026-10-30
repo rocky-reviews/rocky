@@ -70,6 +70,8 @@ export default defineConfig({
           {
             command: `pnpm exec vite --port ${PORT} --strictPort --host 127.0.0.1`,
             url: `http://127.0.0.1:${PORT}`,
+            // H4-2: no dev proxy; the suites answer the API and never reach a local server.
+            env: { ROCKY_DEV_SERVER_URL: "off" },
             reuseExistingServer: false,
             timeout: 60_000,
           },
@@ -80,6 +82,9 @@ export default defineConfig({
           {
             command: `pnpm exec vite build --outDir ${PERF_DIST} --emptyOutDir && pnpm exec vite preview --outDir ${PERF_DIST} --port ${PERF_PORT} --strictPort --host 127.0.0.1`,
             url: `http://127.0.0.1:${PERF_PORT}`,
+            // H4-2: a production build that still honours `?fixture=large-diff` (diff.perf);
+            // the fixtures are lazy chunks the LCP page (a real PR address) never loads.
+            env: { ROCKY_DEV_SERVER_URL: "off", VITE_ROCKY_FIXTURES: "on" },
             reuseExistingServer: false,
             timeout: 120_000,
           },

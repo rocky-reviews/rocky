@@ -54,6 +54,30 @@ describe("authFromEnv", () => {
     expect(authFromEnv({})).toEqual({ enabled: false });
   });
 
+  it("H4-2: development behind the Vite proxy: the browser's origin is the public URL, refused in production", () => {
+    const vite = {
+      ...CLIENT,
+      HOST: "127.0.0.1",
+      PORT: "4310",
+      ROCKY_PUBLIC_URL: "http://127.0.0.1:5173",
+    };
+    const setup = authFromEnv(vite);
+    expect(setup).toMatchObject({
+      enabled: true,
+      config: { cookieSecure: false, production: false },
+    });
+    if (setup.enabled) expect(setup.config.publicUrl.origin).toBe("http://127.0.0.1:5173");
+    expect(authFromEnv({ ...vite, ROCKY_PUBLIC_URL: "http://localhost:5173" })).toMatchObject({
+      config: { cookieSecure: false },
+    });
+    // The same allowance never reaches production.
+    for (const prod of [{ NODE_ENV: "production" }, { FLY_APP_NAME: "rocky" }]) {
+      expect(() => authFromEnv({ ...vite, ...prod, ...SECRET, ...APP })).toThrow(
+        "ROCKY_PUBLIC_URL must be https in production",
+      );
+    }
+  });
+
   it("refuses half or malformed credentials, a short secret, a path or a query, and never echoes values", () => {
     const bad = [
       { GITHUB_APP_CLIENT_ID: CLIENT.GITHUB_APP_CLIENT_ID },

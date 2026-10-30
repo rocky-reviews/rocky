@@ -83,24 +83,39 @@ export const TopBar = ({
               {pull.owner}/{pull.repo}
             </bdi>
           </span>
-          <span className="hide-sm">
-            {pull.author === null ? "Someone" : <bdi>@{pull.author}</bdi>} wants to merge{" "}
-            <bdi className="branch">{pull.headRef}</bdi> →{" "}
-            <bdi className="branch">{pull.baseRef}</bdi>
-          </span>
-          <span>
-            <span className="add">+{pull.additions}</span>{" "}
-            <span className="del">−{pull.deletions}</span> ·{" "}
-            {plural(pull.changedFiles, "file", "files")}
-          </span>
-          <span className="hide-sm">updated {timeAgo(pull.updatedAt, now)}</span>
-          <span className="gh-stats">
-            <Approvals approvers={pull.approvers} />
-            <span className="gh-stat">
-              <span aria-hidden="true">💬 </span>
-              {plural(pull.commentCount, "comment", "comments")}
+          {/* H4-2: what the server's mirror does not hold is null and left out, never guessed. */}
+          {pull.headRef !== null && pull.baseRef !== null ? (
+            <span className="hide-sm">
+              {pull.author === null ? "Someone" : <bdi>@{pull.author}</bdi>} wants to merge{" "}
+              <bdi className="branch">{pull.headRef}</bdi> →{" "}
+              <bdi className="branch">{pull.baseRef}</bdi>
             </span>
-          </span>
+          ) : (
+            pull.author !== null && (
+              <span className="hide-sm">
+                by <bdi>@{pull.author}</bdi>
+              </span>
+            )
+          )}
+          {pull.additions !== null && pull.deletions !== null && pull.changedFiles !== null && (
+            <span>
+              <span className="add">+{pull.additions}</span>{" "}
+              <span className="del">−{pull.deletions}</span> ·{" "}
+              {plural(pull.changedFiles, "file", "files")}
+            </span>
+          )}
+          <span className="hide-sm">updated {timeAgo(pull.updatedAt, now)}</span>
+          {(pull.approvers !== null || pull.commentCount !== null) && (
+            <span className="gh-stats">
+              {pull.approvers !== null && <Approvals approvers={pull.approvers} />}
+              {pull.commentCount !== null && (
+                <span className="gh-stat">
+                  <span aria-hidden="true">💬 </span>
+                  {plural(pull.commentCount, "comment", "comments")}
+                </span>
+              )}
+            </span>
+          )}
           {url !== undefined && (
             <a className="gh-link" href={url} target="_blank" rel="noopener noreferrer">
               <span className="sr-only-sm">View on </span>GitHub <span aria-hidden="true">↗</span>

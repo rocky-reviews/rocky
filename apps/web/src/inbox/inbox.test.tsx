@@ -86,7 +86,7 @@ describe("Inbox (static render)", () => {
     const html = render([hostile]);
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
-    expect(html).toContain('href="/?repo=acme%2Fweb&amp;pr=205"');
+    expect(html).toContain('href="/acme/web/pull/205"');
     expect(html.match(/href="/g)).toHaveLength(2); // skip link + the row's title
   });
 
@@ -111,9 +111,9 @@ describe("labels", () => {
     ).toBe("Too large to bulk-approve");
   });
 
-  it("builds the review link from the names, encoded", () => {
+  it("links to the PR's real review page (H4-2), built from the names", () => {
     expect(reviewHref({ repo: { owner: "acme", name: "rocky-app" }, number: 847 })).toBe(
-      "/?repo=acme%2Frocky-app&pr=847",
+      "/acme/rocky-app/pull/847",
     );
   });
 });
@@ -150,7 +150,10 @@ describe("the HTTP source", () => {
     expect(await createHttpInboxSource().load()).toEqual(INBOX_FIXTURE);
     respond({ "GET /api/inbox": { status: 401 } });
     await expect(createHttpInboxSource().load()).rejects.toMatchObject({ reason: "signed_out" });
+    // H4-2: 503 until repository access can be checked; anything else is a plain failure.
     respond({ "GET /api/inbox": { status: 503 } });
+    await expect(createHttpInboxSource().load()).rejects.toMatchObject({ reason: "unavailable" });
+    respond({ "GET /api/inbox": { status: 500 } });
     await expect(createHttpInboxSource().load()).rejects.toMatchObject({ reason: "failed" });
   });
 

@@ -72,6 +72,36 @@ describe("top bar", () => {
     expect(bar).toContain("4 comments");
   });
 
+  it("H4-2: leaves out what the server's mirror does not hold, never guessing it", () => {
+    const html = render({
+      ...data,
+      pull: {
+        ...data.pull,
+        headRef: null,
+        baseRef: null,
+        additions: null,
+        deletions: null,
+        changedFiles: null,
+        approvers: null,
+        commentCount: null,
+      },
+    });
+    const sparse = text(html.split("</header>")[0] ?? "");
+    expect(sparse).toContain("acme/rocky-app by @dana-k");
+    expect(sparse).not.toContain("wants to merge");
+    for (const absent of ["+215", "9 files", "approval", "4 comments"])
+      expect(sparse).not.toContain(absent);
+    expect(html).not.toContain('class="gh-stats"');
+    expect(sparse).toContain("updated 12 min ago");
+    const anonymous = text(
+      render({ ...data, pull: { ...data.pull, author: null, headRef: null } }).split(
+        "</header>",
+      )[0] ?? "",
+    );
+    expect(anonymous).toContain("acme/rocky-app +215");
+    expect(anonymous).toContain("✓ 1 approval");
+  });
+
   it("links to the PR on GitHub in a new tab without an opener", () => {
     expect(render()).toContain(
       '<a class="gh-link" href="https://github.com/acme/rocky-app/pull/847" target="_blank" rel="noopener noreferrer">',

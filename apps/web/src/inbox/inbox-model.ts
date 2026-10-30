@@ -10,6 +10,7 @@ import {
   type InboxRisk,
   type BulkApproveRefusal,
 } from "@rocky-reviews/core";
+import { reviewPagePath } from "../lib/review-path.js";
 
 export const RISK_LABEL: Readonly<Record<InboxRisk, string>> = {
   critical: "Critical",
@@ -73,8 +74,8 @@ export const REFUSAL_LABEL: Readonly<Record<BulkApproveRefusal, string>> = {
   not_eligible: "No longer qualifies for bulk approval",
 };
 
-/** The PR's review page in this app (the PR page reads `repo` and `pr`). */
+/** The PR's review page in this app (H4-2: GitHub's address shape, read from the server). */
 export const reviewHref = (item: Pick<InboxItem, "repo" | "number">): string =>
-  `/?${new URLSearchParams({ repo: `${item.repo.owner}/${item.repo.name}`, pr: String(item.number) })}`;
+  reviewPagePath({ owner: item.repo.owner, repo: item.repo.name, number: item.number });
 
 export const shortSha = (sha: string): string => sha.slice(0, 7);

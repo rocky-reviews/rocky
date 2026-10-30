@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,5 +89,22 @@ describe("the production build", () => {
       )}\n`,
     );
     expect(totalGz, "initial JavaScript, bytes gzipped").toBeLessThanOrEqual(INITIAL_JS_BUDGET_GZ);
+    // H4-2 (review S2): no fixture ships to production, in any file of the build: pr-847's
+    // title and briefing, its diff, the 5,000-line diff and the inbox fixture.
+    const built = readdirSync(join(outDir, "assets")).map((file) =>
+      readFileSync(join(outDir, "assets", file), "utf8"),
+    );
+    for (const marker of [
+      "Team invitations with expiring links",
+      "An admin creates an invite",
+      "Retry failed webhook deliveries with backoff",
+      "ledger-rules",
+      "feat/team-invites",
+    ]) {
+      expect(
+        built.some((text) => text.includes(marker)),
+        marker,
+      ).toBe(false);
+    }
   }, 120_000);
 });

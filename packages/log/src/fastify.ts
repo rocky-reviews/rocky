@@ -9,21 +9,34 @@ import { newRequestId } from "./request.js";
 import { scrubString } from "./scrub.js";
 
 /**
- * Path only, scrubbed: query strings carry OAuth codes, state tokens and API keys, and paths
- * can carry tokens too (`/invite/<token>`).
+ * What a request line says about the path: the matched route's pattern (`/api/repos/:owner/…`),
+ * never the raw path. Raw paths carry query strings (OAuth codes, state tokens, API keys),
+ * tokens (`/invite/<token>`) and names people treat as private: repository owners and names
+ * (`/api/repos/<owner>/<repo>/…`, the PR page `/<owner>/<repo>/pull/<n>`, H4-2). Ids a route
+ * needs to log, it logs itself. A request no route matched (a 404, or the web app's fallback to
+ * `index.html`) gets a fixed marker. The pattern is scrubbed too, as defence in depth.
  */
-const safePath = (url: string | undefined): string => {
-  if (url === undefined || url === "") return "/";
-  const cut = url.search(/[?#]/);
-  return scrubString(cut === -1 ? url : url.slice(0, cut));
+export const UNMATCHED_PATH = "(unmatched)";
+
+const routePath = (req: { routeOptions?: { url?: unknown }; url?: unknown }): string => {
+  // Our own output, serialised again by pino after the logger's scrub (`logger.ts`): a plain
+  // object, not a request. Keep it, so the serializer stays idempotent.
+  if (Object.getPrototypeOf(req) === Object.prototype && typeof req.url === "string")
+    return req.url;
+  const pattern = req.routeOptions?.url;
+  return typeof pattern === "string" && pattern !== "" ? scrubString(pattern) : UNMATCHED_PATH;
 };
 
 /**
- * Allowlist serializers for Fastify's request logging: method and path only. Headers, query
- * string, host and client IP (personal data) are never logged; `requestId` binds the lines.
+ * Allowlist serializers for Fastify's request logging: method and route pattern only. Headers,
+ * query string, raw path, host and client IP (personal data) are never logged; `requestId`
+ * binds the lines.
  */
 const serializers = {
-  req: (req: { method?: string; url?: string }) => ({ method: req.method, url: safePath(req.url) }),
+  req: (req: { method?: string; routeOptions?: { url?: unknown }; url?: unknown }) => ({
+    method: req.method,
+    url: routePath(req),
+  }),
   res: (res: { statusCode?: number }) => ({ statusCode: res.statusCode }),
 };
 
@@ -31,7 +44,7 @@ const serializers = {
 class RedactingLogController extends LogController {
   override routeNotFound(request: FastifyRequest): void {
     if (this.isLogDisabled(request)) return;
-    request.log.info({ method: request.method, url: safePath(request.url) }, "route not found");
+    request.log.info({ method: request.method, url: UNMATCHED_PATH }, "route not found");
   }
 }
 

@@ -38,10 +38,10 @@ test.describe("list and sorting", () => {
     await expect(first).toContainText("acme/rocky-app");
     await expect(first).toContainText("Team invitations with expiring links");
     await expect(first).toContainText("+215 −3");
-    // Each row opens the PR page.
+    // Each row opens the PR's real review page (H4-2).
     await expect(
       first.getByRole("link", { name: "Team invitations with expiring links" }),
-    ).toHaveAttribute("href", "/?repo=acme%2Frocky-app&pr=847");
+    ).toHaveAttribute("href", "/acme/rocky-app/pull/847");
   });
 
   test("states why a PR has no current analysis, and why a low-risk PR is not offered", async ({

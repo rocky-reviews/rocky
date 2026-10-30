@@ -44,3 +44,11 @@ export const parseDiffData = (input: RawDiffData): DiffData => {
   if (!parsed.ok) throw new DiffDataError(`unreadable diff: ${parsed.code}`);
   return { headSha: input.headSha, files: new Map(parsed.files.map((f) => [f.path, f])) };
 };
+
+/**
+ * H4-2: the diff for a PR read from the server, until the server serves diffs (a follow-up):
+ * every load fails, so the file view says the diff could not be loaded.
+ */
+export const unavailableDiffSource: DiffDataSource = {
+  load: () => Promise.reject(new DiffDataError("diff not served yet")),
+};

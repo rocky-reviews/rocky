@@ -4,6 +4,7 @@ import { seriousViolations } from "./axe.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 import { openFile } from "./diff-support.js";
 import { openInbox } from "./inbox-support.js";
+import { mockPullApi, openRealPr, serverShellData } from "./real-pr-support.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
 
 /**
@@ -139,6 +140,40 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
     await page.keyboard.press("Escape");
     await page.getByRole("searchbox", { name: "Search" }).fill("nothing matches this");
     await check(page, found, "inbox, nothing matches");
+  },
+
+  // H4-2: a real PR address, read from the server, and every state before it can be shown.
+  "PR page from the server: loaded, loading, signed out, not found, unavailable": async (
+    page,
+    found,
+  ) => {
+    let answer: { status: number; body: unknown } = { status: 200, body: serverShellData() };
+    const api = await mockPullApi(page, () => answer);
+    await openRealPr(page);
+    await page.locator("#briefing-title").waitFor();
+    await check(page, found, "real PR, loaded");
+    const release = api.hold();
+    await openRealPr(page);
+    await expect(page.getByRole("status")).toHaveText("Loading…");
+    await check(page, found, "real PR, loading");
+    release();
+    for (const [status, state] of [
+      [401, "signed out"],
+      [404, "not found"],
+      [503, "repository access unavailable"],
+    ] as const) {
+      answer = { status, body: { error: "x" } };
+      await openRealPr(page);
+      await page.locator("#main p").waitFor();
+      await check(page, found, `real PR, ${state}`);
+    }
+    await page.goto("/acme/rocky-app/pulls/847");
+    await page.locator("#main p").waitFor();
+    await check(page, found, "no page at this address");
+    await page.route("**/api/inbox", (route) => route.fulfill({ status: 503, json: {} }));
+    await page.goto("/inbox");
+    await page.getByRole("alert").waitFor();
+    await check(page, found, "inbox, repository access unavailable");
   },
 };
 

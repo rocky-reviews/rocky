@@ -23,6 +23,40 @@ const good = {
 };
 
 describe("csrfRefusal", () => {
+  it("H4-2: in development behind the Vite proxy, the dev origin and its non-prefixed cookie pass", () => {
+    const dev = { origin: "http://127.0.0.1:5173", secret, cookieSecure: false };
+    const headers = {
+      cookie: `rocky_session=${token}`,
+      origin: dev.origin,
+      "sec-fetch-site": "same-origin",
+      "x-rocky-csrf": csrfTokenFor(secret, token),
+    };
+    expect(csrfRefusal({ method: "POST", headers }, dev)).toBeUndefined();
+    // The server's own port, another loopback name or a prefixed cookie are someone else.
+    expect(
+      csrfRefusal(
+        { method: "POST", headers: { ...headers, origin: "http://127.0.0.1:4310" } },
+        dev,
+      ),
+    ).toBe("origin");
+    expect(
+      csrfRefusal(
+        { method: "POST", headers: { ...headers, origin: "http://localhost:5173" } },
+        dev,
+      ),
+    ).toBe("origin");
+    expect(
+      csrfRefusal(
+        { method: "POST", headers: { ...headers, cookie: `__Host-rocky_session=${token}` } },
+        dev,
+      ),
+    ).toBe("token");
+    // And production never reads the non-prefixed cookie.
+    expect(
+      csrfRefusal({ method: "POST", headers: { ...headers, origin: policy.origin } }, policy),
+    ).toBe("token");
+  });
+
   it("lets safe methods through and refuses state changes without every check", () => {
     for (const method of ["GET", "HEAD", "OPTIONS"]) {
       expect(csrfRefusal({ method, headers: {} }, policy)).toBeUndefined();

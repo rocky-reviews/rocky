@@ -4,7 +4,8 @@
 - **Date:** 2026-10-27
 - **Task:** P6-1
 - **Amended by:** [ADR 0025](0025-security-headers-and-rate-limits.md) (P7-3: the server serves
-  the build from `ROCKY_WEB_DIR` under a CSP without inline content; the build is checked)
+  the build from `ROCKY_WEB_DIR` under a CSP without inline content; the build is checked);
+  H4-2 (the server-backed source, addresses and the dev proxy; "Amendment (H4-2)" below)
 
 ## Context
 
@@ -82,6 +83,47 @@ implements exactly these rules.
   marked out of date with a banner naming both short SHAs, whatever the run state, `done`
   included.
 - An invalid or contradictory state fails the load ("invalid analysis state"), naming no value.
+
+### Amendment (H4-2): the shell's data from the server, addresses, the dev proxy
+
+- **Endpoint.** `GET /api/repos/:owner/:repo/pulls/:number` (`apps/server/src/pulls/routes.ts`,
+  policy `pull_requests.review` plus the P3-6 repository access check; 503 without it, and an
+  unknown PR, a disabled repository, another org's and a denied repository are the same 404)
+  answers `RawShellData` plus `pullRequestId`. `pull` is the mirror's view (ADR 0010), names as
+  GitHub spells them; `analysis` is the latest finished document, the head's, else an older
+  push's (shown out of date by the head rule above), re-validated and refused unless it
+  describes this PR; `analysisRun` is the head revision's latest `analyses` row as §3's
+  amendment defines it (a stored document that fails validation reads `failed` /
+  `invalid_document`; a `superseded` head run is served without the older document); `myReview`
+  is the member's latest review posted from Rocky (P3-5). The db read is
+  `loadPullRequestPage` (`packages/db/src/pull-request-page.ts`), inside `withOrg`.
+- **What the mirror does not hold is `null`.** `PullSummary.headRef`, `baseRef`, `approvers`
+  and `commentCount` are nullable (the mirror stores neither branch names nor GitHub's reviews
+  and comments), and so are `additions`, `deletions` and `changedFiles` (before the head
+  revision is recorded). The top bar leaves a null fact out ("by @author" instead of "wants to
+  merge a → b") rather than guess it. Storing them in the mirror is a follow-up.
+- **Addresses** (`apps/web/src/route.ts`): `/:owner/:repo/pull/:number` reads the server
+  (`createHttpShellSource`; 401 → sign in with `returnTo` set to the page, 404/400 → not found,
+  503 → "Repository access isn't available yet", anything else or an answer `parseShellData`
+  refuses → "could not be loaded"); `/inbox` reads the server (`?source=fixture` for the
+  fixture); the fixtures are reached only with an explicit switch on `/` (`?fixture=pr-847`,
+  `?fixture=large-diff`, `?pr=`, `?repo=`, `?diff=`); `/` alone goes to `/inbox`; any other
+  address is "no page". Names in an address pass the schema's GitHub rules before anything is
+  built from them. The switches work only in the dev server and in builds with
+  `VITE_ROCKY_FIXTURES=on` (Playwright's `perf` build): `main.tsx` folds the condition to
+  `false` in a production build, which then carries no fixture code or data
+  (`bundle-budget.test.ts` checks; initial JS 155.4 KB gz, was 164.7 KB).
+- **Logs:** Fastify's request lines carry the matched route's pattern, never the raw path, and
+  `(unmatched)` for a 404 or the SPA fallback, so repository names in addresses stay out of the
+  logs (`packages/log/src/fastify.ts`, `docs/logging.md`).
+- **The diff** is not served yet: a real PR's file view says it could not be loaded.
+- **Dev proxy** (`apps/web/vite.config.ts`, `src/dev-proxy.ts`): Vite forwards `/api` and `/auth`
+  (whole path segments) to `ROCKY_DEV_SERVER_URL` (default `http://127.0.0.1:4310`, http only on
+  loopback; `off` disables it, as the Playwright suites do) with Host and Origin unchanged and
+  no `X-Forwarded-*`. With `ROCKY_PUBLIC_URL=http://127.0.0.1:5173` the session cookie (non-Secure,
+  unprefixed: the existing loopback-http development exception, refused in production) and the
+  CSRF Origin check work unchanged; the server needs no new allowance. `vite preview` has no
+  proxy. Runbook: `docs/runbooks/review-a-real-pr.md`.
 
 ## Consequences
 
