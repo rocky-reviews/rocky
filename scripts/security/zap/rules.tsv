@@ -1,0 +1,8 @@
+# ZAP baseline rules (P7-3, ADR 0025). Format: <plugin id>TAB<IGNORE|INFO|WARN|FAIL>TAB(<reason>)
+# Any alert not listed here is a WARN, and the scan fails on any WARN or FAIL. Only Low or
+# Informational alerts may be accepted here, each with its reason; High and Medium alerts fail
+# the run regardless of this file (check-report.mjs reads the JSON report).
+10096	IGNORE	(Timestamp Disclosure - Unix, Low: the login cookie carries its own expiry, HMAC-signed with the state and PKCE verifier (ADR 0020 §1). Not sensitive: it equals Max-Age plus the current time.)
+10049	IGNORE	(Non-Storable Content, Informational: intended. Every answer except hashed static assets is Cache-Control: no-store (ADR 0025 §1).)
+10109	IGNORE	(Modern Web Application, Informational: the web app is a Vite SPA (ADR 0019); ZAP only notes that an AJAX spider would find more.)
+10112	IGNORE	(Session Management Response Identified, Informational: ZAP found the login cookie it is meant to find; its flags are tested in auth.db.test.ts (ADR 0020 §3).)

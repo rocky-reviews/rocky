@@ -53,3 +53,31 @@ jobs:
 
       - name: Lint workflows (pinned actionlint container)
         run: scripts/security/actionlint.sh
+
+  zap:
+    # P7-3 (ADR 0025): OWASP ZAP baseline (passive) against the real server, the built web app
+    # and a throwaway Postgres. Fails on any High or Medium alert and on any alert not accepted
+    # in scripts/security/zap/rules.tsv. Images pinned by digest (scripts/security/images.sh).
+    name: zap baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (version from package.json#packageManager)
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc) with pnpm store cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ZAP baseline scan
+        run: pnpm security:zap

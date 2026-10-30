@@ -313,8 +313,9 @@ describe("sessions", () => {
         ),
       ),
     ).toBe("23514");
-    // Live sessions cannot be deleted by the application (only revoked).
-    const live = await newSession();
+    // Live sessions cannot be deleted by the application (only revoked). The policy compares
+    // `expires_at` with the database clock, so this one must be live by the real clock, not T0.
+    const live = await newSession({ now: new Date() });
     const deleted = await appPool.query("delete from app.sessions where id = $1", [live.sessionId]);
     expect(deleted.rowCount).toBe(0);
   });

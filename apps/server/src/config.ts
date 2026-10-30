@@ -20,6 +20,18 @@ export class ConfigError extends Error {
 export const isProduction = (env: Readonly<Record<string, string | undefined>>): boolean =>
   env["NODE_ENV"] === "production" || (env["FLY_APP_NAME"] ?? "") !== "";
 
+/** `GITHUB_APP_ID` when set (a positive integer), else `undefined`. */
+export const githubAppIdFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+): number | undefined => {
+  const raw = env["GITHUB_APP_ID"];
+  if (raw === undefined || raw === "") return undefined;
+  if (!/^[1-9][0-9]{0,15}$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new ConfigError("GITHUB_APP_ID must be a positive integer");
+  }
+  return Number(raw);
+};
+
 /**
  * `GITHUB_WEBHOOK_SECRET` (P3-2). Required in production (see `isProduction`): the server
  * refuses to boot without it. Elsewhere an unset secret disables the receiver (no route, 404)
@@ -262,17 +274,10 @@ export const authFromEnv = (env: Env): AuthSetup => {
     );
   }
 
-  const appIdRaw = nonEmpty(env, "GITHUB_APP_ID");
-  let appId: number | undefined;
+  const appId = githubAppIdFromEnv(env);
   // Production: installations of any other app must be ignorable (review round 1).
-  if (appIdRaw === undefined && production) {
+  if (appId === undefined && production) {
     throw new ConfigError("GITHUB_APP_ID is required in production (GitHub login)");
-  }
-  if (appIdRaw !== undefined) {
-    if (!/^[1-9][0-9]{0,15}$/.test(appIdRaw) || !Number.isSafeInteger(Number(appIdRaw))) {
-      throw new ConfigError("GITHUB_APP_ID must be a positive integer");
-    }
-    appId = Number(appIdRaw);
   }
 
   const webUrl = nonEmpty(env, "GITHUB_URL");

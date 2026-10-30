@@ -16,6 +16,8 @@ import { signWebhookBody } from "./signature.js";
 
 /** A throwaway secret for tests (long enough for MIN_WEBHOOK_SECRET_LENGTH). */
 export const TEST_WEBHOOK_SECRET = "test-only-webhook-secret-0123456789abcdef";
+/** The GitHub App id test deliveries claim to come from (`signedDelivery`). */
+export const TEST_APP_ID = 424242;
 
 /** Untrusted text planted in fixtures; must never reach storage or logs. */
 export const PLANTED = {
@@ -126,12 +128,21 @@ export interface SignedDelivery {
 export const signedDelivery = (
   event: string,
   payload: unknown,
-  options: { secret?: string; deliveryId?: string; body?: Buffer } = {},
+  options: {
+    secret?: string;
+    deliveryId?: string;
+    body?: Buffer;
+    /** The hook's owner as GitHub reports it; defaults to the test app (`TEST_APP_ID`). */
+    hookTarget?: { type: string; id: string };
+  } = {},
 ): SignedDelivery => {
   const body = options.body ?? Buffer.from(JSON.stringify(payload), "utf8");
+  const target = options.hookTarget ?? { type: "integration", id: String(TEST_APP_ID) };
   return {
     body,
     headers: {
+      "x-github-hook-installation-target-type": target.type,
+      "x-github-hook-installation-target-id": target.id,
       "content-type": "application/json",
       "x-github-event": event,
       "x-github-delivery": options.deliveryId ?? randomUUID(),

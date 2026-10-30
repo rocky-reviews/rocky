@@ -8,8 +8,19 @@ import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp } from "./app.js";
 import type { AuthDeps } from "./auth/routes.js";
-import { authFromEnv, ConfigError, githubAppSetupFromEnv, webhookSecretFromEnv } from "./config.js";
+import {
+  authFromEnv,
+  ConfigError,
+  githubAppSetupFromEnv,
+  githubAppIdFromEnv,
+  isProduction,
+  webhookSecretFromEnv,
+} from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
+import { createRateLimits, rateLimitRulesFromEnv } from "./security/rate-limit.js";
+import { authRateLimit, webhookRateLimit } from "./security/route-limits.js";
+import { loadWebApp, type WebApp } from "./web-app.js";
 import type { WebhookDeps } from "./webhooks.js";
 
 type Env = Readonly<Record<string, string | undefined>>;
@@ -127,6 +138,13 @@ export const startServer = async (
   const webhookSecret = webhookSecretFromEnv(env);
   const setup = githubAppSetupFromEnv(env, homedir());
   const authSetup = authFromEnv(env);
+  // P7-3 (ADR 0025): limits and the trusted proxy are checked before anything opens.
+  const trustProxy = trustProxyFromEnv(env);
+  const rateLimits = createRateLimits({ rules: rateLimitRulesFromEnv(env), trustProxy });
+  const appId = githubAppIdFromEnv(env);
+  const webDir = env["ROCKY_WEB_DIR"];
+  const web: WebApp | undefined =
+    webDir === undefined || webDir === "" ? undefined : loadWebApp(webDir);
   let keys;
   if (authSetup.enabled) {
     try {
@@ -144,6 +162,8 @@ export const startServer = async (
   } else if (setup.reason === "configured" && env["GITHUB_APP_SETUP"] === "true") {
     log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
   }
+  // The mode only: which header (if any) names the client. Never an address.
+  log.info({ trustProxy: describeTrustProxy(trustProxy) }, "rate limits count per client address");
   const pool = createServerPool(env["DATABASE_URL"], log);
   // Review rounds 4 and 5: refuse to start on anything but a plain rocky_app login. Booting does
   // not need the database (health reports it); when it is unreachable now, the pool's hook checks
@@ -164,8 +184,12 @@ export const startServer = async (
   } else {
     const db = createDb({ pool });
     webhooks = {
-      ingress: createGitHubWebhookIngress({ secret: webhookSecret }),
+      ingress: createGitHubWebhookIngress({
+        secret: webhookSecret,
+        ...(appId === undefined ? {} : { appId }),
+      }),
       inbox: { record: (delivery) => db.recordWebhookDelivery(delivery) },
+      rateLimit: webhookRateLimit(rateLimits),
     };
   }
 
@@ -180,13 +204,14 @@ export const startServer = async (
         "ROCKY_PUBLIC_URL is http on loopback: session cookies are not Secure (development only)",
       );
     }
+    const secret =
+      config.sessionSecret === undefined
+        ? randomBytes(32)
+        : Buffer.from(config.sessionSecret, "utf8");
     auth = {
       publicUrl: config.publicUrl,
       cookieSecure: config.cookieSecure,
-      secret:
-        config.sessionSecret === undefined
-          ? randomBytes(32)
-          : Buffer.from(config.sessionSecret, "utf8"),
+      secret,
       login: createGitHubLogin({
         endpoints: config.endpoints,
         clientId: config.clientId,
@@ -196,6 +221,7 @@ export const startServer = async (
       db: createDb({ pool }),
       keys,
       requireTokenExpiry: config.production,
+      rateLimit: authRateLimit(rateLimits, { secret, cookieSecure: config.cookieSecure }),
     };
   } else {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
@@ -204,6 +230,9 @@ export const startServer = async (
   const app = buildApp({
     checkDatabase: async () => (await pool.query("select 1 as ok")).rowCount === 1,
     log,
+    hsts: isProduction(env),
+    rateLimits,
+    ...(web === undefined ? {} : { web }),
     ...(webhooks === undefined ? {} : { webhooks }),
     ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
     ...(auth === undefined ? {} : { auth }),
@@ -225,6 +254,7 @@ export const startServer = async (
       webhooks: webhooks !== undefined,
       auth: auth !== undefined,
       githubAppSetup: githubAppSetup !== undefined,
+      web: web !== undefined,
     },
     "server listening",
   );

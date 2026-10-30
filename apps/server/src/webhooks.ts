@@ -7,7 +7,7 @@ import type {
   WebhookRequest,
 } from "@rocky-reviews/core";
 import { Transform } from "node:stream";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 /**
  * Webhook receiver (P3-2, ADR 0007). The request path does exactly three things: authenticate
@@ -42,13 +42,40 @@ export const INBOX_RECORD_TIMEOUT_MS = 6_000;
  * actually received (not as declared: a client that announces 25 MiB and trickles bytes holds
  * only what it sent). Beyond it → 503. Only a client that really sends that much data, fast,
  * can exhaust it; under such a flood genuine deliveries can be refused (GitHub does not retry a
- * 503) in exchange for not running out of memory, until rate limiting (P7-3).
+ * 503) in exchange for not running out of memory. Rate limits (P7-3) bound how often one
+ * address can try.
  */
 export const MAX_IN_FLIGHT_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Rate limits (P7-3, ADR 0025). The `…Allowed` checks return `false` after answering 429 (or
+ * 503); the route then stops. They do not count: only the outcomes below spend a budget, so
+ * genuine deliveries never use up the per-source budget and replays never use up an
+ * installation's (review round 1).
+ */
+export interface WebhookRateLimit {
+  /**
+   * Per source, before the precheck and before the body is read (cheap). `ownSender`: the
+   * unauthenticated headers claim this deployment's own app (`WebhookIngress.claimsOwnSender`).
+   */
+  sourceAllowed(request: FastifyRequest, reply: FastifyReply, ownSender: boolean): Promise<boolean>;
+  /** A rejection that is the sender's fault: failed precheck, bad signature, oversized body. */
+  sourceRejected(request: FastifyRequest, ownSender: boolean): Promise<void>;
+  /** Per installation (`<forge>:<id>`), only after the signature holds. */
+  installationAllowed(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    installation: string,
+  ): Promise<boolean>;
+  /** The inbox queued a new delivery for the installation (duplicates do not count). */
+  installationQueued(request: FastifyRequest, installation: string): Promise<void>;
+}
 
 export interface WebhookDeps {
   ingress: WebhookIngress;
   inbox: WebhookInbox;
+  /** Omitted only in tests of the HTTP layer; `startServer` always passes it. */
+  rateLimit?: WebhookRateLimit;
   /** Overrides INBOX_RECORD_TIMEOUT_MS (tests). */
   recordTimeoutMs?: number;
   /** Overrides MAX_IN_FLIGHT_BYTES (tests). */
@@ -140,6 +167,11 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
     inFlightBytes -= holding.received;
   };
   const release = async (request: FastifyRequest): Promise<void> => free(holdings.get(request));
+  // Whether each request's headers claimed our own app; read once in onRequest.
+  const ownSenders = new WeakMap<FastifyRequest, boolean>();
+  const sourceRejected = async (request: FastifyRequest): Promise<void> => {
+    await deps.rateLimit?.sourceRejected(request, ownSenders.get(request) ?? false);
+  };
   const overloaded = (request: FastifyRequest, bytes: number | undefined) =>
     request.log.warn(
       { webhook: { forge, outcome: "overloaded", ...(bytes === undefined ? {} : { bytes }) } },
@@ -157,8 +189,17 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
     // Runs before the body is read: no buffering for requests that cannot be valid deliveries,
     // and none beyond the in-flight budget.
     scope.addHook("onRequest", async (request, reply) => {
+      const ownSender = deps.ingress.claimsOwnSender?.(headerOf(request)) ?? false;
+      ownSenders.set(request, ownSender);
+      if (
+        deps.rateLimit !== undefined &&
+        !(await deps.rateLimit.sourceAllowed(request, reply, ownSender))
+      ) {
+        return reply;
+      }
       const rejection = deps.ingress.precheck(headerOf(request));
       if (rejection !== undefined) {
+        await sourceRejected(request);
         request.log.warn(
           { webhook: { forge, outcome: "rejected", reason: rejection, stage: "precheck" } },
           "webhook rejected",
@@ -214,7 +255,8 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
         overloaded(request, undefined);
         return reply.code(503).send({ error: "overloaded" });
       }
-      // Everything else (413, client aborts, …) keeps Fastify's default handling.
+      if (errorCode(error) === "FST_ERR_CTP_BODY_TOO_LARGE") await sourceRejected(request);
+      // Everything else (413, client aborts, …) goes on to the root error handler.
       throw error;
     });
 
@@ -236,6 +278,8 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
         // format-checked after authentication), body size. Never headers, body or signature.
         switch (receipt.outcome) {
           case "rejected":
+            // Only a bad signature is the sender's fault; the other reasons are checked after it.
+            if (receipt.reason === "unauthenticated") await sourceRejected(request);
             request.log.warn(
               { webhook: { forge, outcome: "rejected", reason: receipt.reason, bytes } },
               "webhook rejected",
@@ -264,6 +308,14 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
             return reply.code(200).send({ status: "ignored" });
           case "accepted": {
             const { deliveryId, event } = receipt.delivery;
+            // Authenticated: the installation id is GitHub's, not the attacker's choice.
+            const installation = `${forge}:${event.installationId}`;
+            if (
+              deps.rateLimit !== undefined &&
+              !(await deps.rateLimit.installationAllowed(request, reply, installation))
+            ) {
+              return reply;
+            }
             let stored: "queued" | "duplicate";
             try {
               // A timed-out insert may still commit later; a redelivery then reads `duplicate`.
@@ -282,6 +334,10 @@ export const registerWebhooks = (app: FastifyInstance, deps: WebhookDeps): void 
               );
               return reply.code(503).send({ error: "unavailable" });
             }
+            // Spent only for new deliveries: signatures carry no timestamp, so a replayed signed
+            // delivery must not use up the installation's budget (the inbox dedups it).
+            if (stored === "queued")
+              await deps.rateLimit?.installationQueued(request, installation);
             request.log.info(
               { webhook: { forge, outcome: stored, deliveryId, eventType: event.type, bytes } },
               stored === "queued" ? "webhook queued" : "webhook duplicate",

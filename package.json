@@ -25,6 +25,7 @@
     "design:change-map-screenshots": "tsx scripts/screenshot-change-map.ts",
     "prepare": "simple-git-hooks",
     "security:scan": "scripts/security/gitleaks.sh && scripts/security/osv-scan.sh && scripts/security/semgrep.sh && scripts/security/actionlint.sh",
+    "security:zap": "scripts/security/zap-baseline.sh",
     "schema:emit": "tsx packages/schema/scripts/emit.ts",
     "schema:fixtures": "tsx packages/schema/scripts/generate-large-fixture.ts",
     "db:migrate": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/migrate.ts",

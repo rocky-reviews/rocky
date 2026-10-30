@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { OrgId, Role } from "@rocky-reviews/core";
 import {
   decodeWrappedDataKey,
@@ -40,6 +39,7 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { STYLE } from "../github-app-setup.js";
 import { MEMBER_TOKEN_PURPOSE } from "../repository-access.js";
+import { pageCsp } from "../security/headers.js";
 import {
   clearCookie,
   cookieName,
@@ -70,7 +70,7 @@ import { DEFAULT_RETURN_TO, returnUrl, safeReturnTo } from "./return-to.js";
  *   POST /api/session/active-org {orgId}     (CSRF) chooses the org to work in
  *
  * Logs carry fixed outcomes, ids and counts: never a code, state, verifier, cookie, token, login
- * or email. The rate-limit seam for P7-3 is `AuthDeps.rateLimit`, applied to these routes only.
+ * or email. Rate limits (P7-3, ADR 0025) come through `AuthDeps.rateLimit`, on these routes only.
  */
 
 export const LOGIN_PATH = "/auth/github/login";
@@ -102,7 +102,7 @@ export interface AuthDeps {
    * §6): the server passes the repository access check's `invalidateMember` here.
    */
   readonly onMemberTokenChanged?: (orgId: OrgId, memberId: string) => void;
-  /** P7-3 seam: registers rate limiting on the auth routes' scope. */
+  /** Registers rate limiting on the auth routes' scope (P7-3: `authRateLimit`). */
   readonly rateLimit?: (scope: FastifyInstance) => Promise<void>;
   /**
    * Refuse a GitHub token without an expiry (production; review round 1): the app's "Expire user
@@ -154,23 +154,20 @@ const escapeHtml = (value: string): string =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
-const STYLE_HASH = createHash("sha256").update(STYLE).digest("base64");
+const PAGE_CSP = pageCsp({ style: STYLE });
 
+/**
+ * Explicit on every auth answer, stricter than the app-wide headers (P7-3, ADR 0025): the
+ * callback URL carries the code and state, so no referrer at all.
+ */
 const noStore = (reply: FastifyReply): FastifyReply =>
-  reply
-    .header("cache-control", "no-store")
-    .header("referrer-policy", "no-referrer")
-    .header("x-content-type-options", "nosniff");
+  reply.header("cache-control", "no-store").header("referrer-policy", "no-referrer");
 
 /** A fixed page: `title` and `body` are literals written here, never request or GitHub data. */
 const page = (reply: FastifyReply, status: number, title: string, body: string) =>
   noStore(reply)
     .code(status)
-    .header(
-      "content-security-policy",
-      `default-src 'none'; style-src 'sha256-${STYLE_HASH}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
-    )
-    .header("x-frame-options", "DENY")
+    .header("content-security-policy", PAGE_CSP)
     .type("text/html; charset=utf-8")
     .send(
       `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><h1>${escapeHtml(title)}</h1>${body}<p><a href="${LOGIN_PATH}">Sign in again</a></p></body></html>`,

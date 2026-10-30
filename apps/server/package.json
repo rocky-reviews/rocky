@@ -19,6 +19,7 @@
     "@rocky-reviews/forge-github": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
     "fastify": "5.12.7",
+    "parse5": "8.0.1",
     "pg": "8.23.1"
   },
   "devDependencies": {

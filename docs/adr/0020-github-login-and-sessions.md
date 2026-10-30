@@ -6,6 +6,8 @@
 - **Amends:** [ADR 0005](0005-migrations-and-roles.md) (four more non-tenant tables in `app`, a
   role `rocky_auth` and a schema `auth` with one SECURITY DEFINER function),
   [ADR 0011](0011-repository-access-check.md) §6 (what P7-1 does with the token, done here)
+- **Amended by:** [ADR 0025](0025-security-headers-and-rate-limits.md) (P7-3: §10's rate limits
+  and headers; the pages build their CSP with the shared `pageCsp`)
 
 ## Context
 
@@ -231,16 +233,16 @@ request (ADR 0011 §6).
 
 ### 10. Rate limits, errors and headers
 
-Not in this task (P7-3). `AuthDeps.rateLimit(scope)` registers a limiter on the auth routes'
-encapsulated scope; P7-3 passes `@fastify/rate-limit` there. Rate limits are required before
-production. `createLoginAttempt` deletes up to 100 expired attempts first (through the expiry
+Rate limits came with P7-3 ([ADR 0025](0025-security-headers-and-rate-limits.md) §3):
+`AuthDeps.rateLimit(scope)` registers the in-house limiter (`authRateLimit`) on the auth routes'
+encapsulated scope, per client address. `createLoginAttempt` deletes up to 100 expired attempts first (through the expiry
 index), so unauthenticated login starts cannot grow the table without bound between purges.
 
 The auth scope has its own error handler: it logs a fixed outcome (`request_failed`), the status
 and at most the SQLSTATE, and answers with the fixed HTML page (500) or `{ "error": "internal" }`
 under `/api/`; no error message reaches a client or the log. The HTML pages set their own CSP
-(`default-src 'none'`) and `X-Frame-Options: DENY`; P7-3's security headers must not duplicate
-or loosen them on these routes.
+(`default-src 'none'`, built by `pageCsp`) and `Referrer-Policy: no-referrer`; the app-wide
+headers (ADR 0025 §1, including `X-Frame-Options: DENY`) keep them and add the rest once.
 
 ## Threat model
 
@@ -302,8 +304,8 @@ a GitHub answer that is wrong or hostile; a person removed from an org.
 - **No GitHub-side revocation on logout.** The stored token is deleted, but the token stays valid
   at GitHub until it expires (≤ 8 h). Follow-up: `DELETE /applications/{client_id}/token`.
 - **The token is a JavaScript string** and cannot be zeroed (as in ADR 0011).
-- **Rate limits** on login, callback and session routes arrive with P7-3 and are required before
-  production.
+- **Rate limits** on login, callback, logout and the session API came with P7-3 (ADR 0025); they
+  count per instance (ADR 0025 R1).
 - **Org-wide routes must gate on role (P7-2).** Being a member is now real membership, but every
   member gets the default role; anything org-wide (settings, members, billing) must check the
   role, not just the session.

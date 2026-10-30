@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { AccessDecision, RepositoryAccessRequest } from "@rocky-reviews/core";
@@ -26,6 +27,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
+import { loadWebApp } from "../web-app.js";
 import { csrfTokenFor, CSRF_HEADER, randomToken, sha256 } from "./cookies.js";
 import { publicRoute, RoutePolicyError, requires, type PolicyEntry } from "./policy.js";
 
@@ -97,6 +99,15 @@ const org = (min: "admin" | "owner", method: "GET" | "other", targetsOrgA: boole
 const EXPECTED: Readonly<Record<string, Row>> = {
   "GET /healthz": PUBLIC_GET,
   "HEAD /healthz": PUBLIC_GET,
+  // The built web app (P7-3): the shell and its files hold no tenant data; sign-in lives there.
+  "GET /": PUBLIC_GET,
+  "HEAD /": PUBLIC_GET,
+  "GET /index.html": PUBLIC_GET,
+  "HEAD /index.html": PUBLIC_GET,
+  "GET /assets/index-abc123.js": PUBLIC_GET,
+  "HEAD /assets/index-abc123.js": PUBLIC_GET,
+  "GET /assets/index-abc123.css": PUBLIC_GET,
+  "HEAD /assets/index-abc123.css": PUBLIC_GET,
   "POST /webhooks/github": all("allow"), // HMAC, CSRF-exempt
   "GET /setup/github-app": PUBLIC_GET,
   "HEAD /setup/github-app": PUBLIC_GET,
@@ -124,6 +135,15 @@ const PUBLIC = new URL("https://rocky.example.com/");
 const ORIGIN = PUBLIC.origin;
 const SESSION = "__Host-rocky_session";
 const SECRET = randomBytes(32);
+
+/** A CSP-clean build of the web app, as `ROCKY_WEB_DIR` would hold it (P7-3). */
+const WEB_FILES: Readonly<Record<string, string>> = {
+  "index.html":
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Rocky</title><script type="module" crossorigin src="/assets/index-abc123.js"></script><link rel="stylesheet" crossorigin href="/assets/index-abc123.css"></head><body><div id="app"></div></body></html>',
+  "assets/index-abc123.js": "console.log(1)",
+  "assets/index-abc123.css": "body{margin:0}",
+};
+let webRoot: string;
 
 let pgs: TestPostgres;
 let db: Db;
@@ -159,6 +179,7 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   return buildApp({
     checkDatabase: () => Promise.resolve(true),
     log,
+    web: loadWebApp(webRoot),
     webhooks: {
       ingress: createGitHubWebhookIngress({ secret: TEST_WEBHOOK_SECRET }),
       inbox: { record: () => Promise.resolve("queued") },
@@ -213,6 +234,11 @@ const member = async (o: SeededOrg, forgeUserId: number, role: "owner" | "admin"
 const idOf = (o: SeededOrg, forgeUserId: number) => ids[`${o.orgId}:${forgeUserId}`]!;
 
 beforeAll(async () => {
+  webRoot = mkdtempSync(join(tmpdir(), "rocky-policy-web-"));
+  for (const [path, body] of Object.entries(WEB_FILES)) {
+    mkdirSync(join(webRoot, path, ".."), { recursive: true });
+    writeFileSync(join(webRoot, path), body);
+  }
   pgs = await startPostgres();
   db = createDb({ connectionString: pgs.appUrl, max: 6 });
   superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
@@ -237,6 +263,7 @@ afterAll(async () => {
   await db?.close();
   await superuser?.end();
   await pgs?.stop();
+  rmSync(webRoot, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -371,6 +398,8 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
         ]),
     );
     expect(kinds).toMatchObject({
+      "GET /": "public",
+      "GET /assets/index-abc123.js": "public",
       "GET /api/session": "session",
       "GET /api/org/members": "members.read",
       "PATCH /api/org/members/:memberId": "roles.manage",
@@ -399,6 +428,16 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
         const status = expectedStatus[outcome];
         if (status !== undefined) expect(res.statusCode, `${key} as ${persona}`).toBe(status);
         if (outcome === "allow") expect(res.statusCode, `${key} as ${persona}`).toBeLessThan(500);
+        // Every cell, denials included, carries the security headers (P7-3): the policy answers
+        // from a hook, before any handler, and the header hook still runs.
+        expect(res.headers["content-security-policy"], `${key} as ${persona}`).toMatch(
+          /frame-ancestors 'none'/,
+        );
+        expect(res.headers["x-frame-options"], `${key} as ${persona}`).toBe("DENY");
+        expect(res.headers["x-content-type-options"], `${key} as ${persona}`).toBe("nosniff");
+        if (outcome !== "allow") {
+          expect(res.headers["cache-control"], `${key} as ${persona}`).toBe("no-store");
+        }
       }
     }, 60_000);
   }

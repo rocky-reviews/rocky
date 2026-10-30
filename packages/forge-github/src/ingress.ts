@@ -14,6 +14,9 @@ import {
 
 export const DELIVERY_HEADER = "x-github-delivery";
 export const EVENT_HEADER = "x-github-event";
+/** Set by GitHub on every delivery: what the hook belongs to (`integration` = a GitHub App). */
+export const HOOK_TARGET_TYPE_HEADER = "x-github-hook-installation-target-type";
+export const HOOK_TARGET_ID_HEADER = "x-github-hook-installation-target-id";
 
 /** GitHub delivery ids are GUIDs; normalised to lower case so a re-cased replay is the same key. */
 const DELIVERY_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -50,8 +53,13 @@ const checkHeaders = (
  * property: the signature over the raw bytes is checked first, and nothing else about the
  * request (headers, media type, JSON) is looked at until it holds. Pure: no I/O, never throws.
  */
-export const createGitHubWebhookIngress = (options: { secret: string }): WebhookIngress => {
+export const createGitHubWebhookIngress = (options: {
+  secret: string;
+  /** This deployment's GitHub App id (`GITHUB_APP_ID`), for `claimsOwnSender`. */
+  appId?: number;
+}): WebhookIngress => {
   const verify = webhookVerifier(options.secret);
+  const ownAppId = options.appId === undefined ? undefined : String(options.appId);
 
   const authenticate = (request: WebhookRequest): boolean => {
     try {
@@ -105,6 +113,20 @@ export const createGitHubWebhookIngress = (options: { secret: string }): Webhook
         return "rejection" in headers ? headers.rejection : undefined;
       } catch {
         return "unauthenticated";
+      }
+    },
+    // GitHub sets these from the hook's owner, so another app's deliveries cannot claim ours;
+    // a direct client can, but then it is counted at its own address. Without an app id nothing
+    // is ours (one bucket per address).
+    claimsOwnSender: (header) => {
+      try {
+        return (
+          ownAppId !== undefined &&
+          header(HOOK_TARGET_TYPE_HEADER) === "integration" &&
+          header(HOOK_TARGET_ID_HEADER) === ownAppId
+        );
+      } catch {
+        return false;
       }
     },
     receive: (request) => {

@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P6-1
+- **Amended by:** [ADR 0025](0025-security-headers-and-rate-limits.md) (P7-3: the server serves
+  the build from `ROCKY_WEB_DIR` under a CSP without inline content; the build is checked)
 
 ## Context
 
