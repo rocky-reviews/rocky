@@ -109,6 +109,7 @@ reaches it through its `rocky_app` membership): no other role changes members. E
 | `POST /api/org/members/:memberId/restore`           | `members.manage`              | clears `removed_at`, role back to `member`               |
 | `POST /api/org/ownership {memberId}`                | `ownership.transfer`          | target owner, actor admin; re-checked with rows locked   |
 | `POST /api/analyses/:analysisId/approve-over-limit` | `analysis.approve_over_limit` | plus the P3-6 access check; 503 without it (fail closed) |
+| `GET /api/repos/:owner/:repo/pulls/:number` (H4-2)  | `pull_requests.review`        | the PR page's data; plus the P3-6 access check, as above |
 
 **The actor is re-checked at commit.** The policy check runs in an earlier transaction, so each
 change re-reads the actor inside its own transaction, after the owner lock and with the row

@@ -35,7 +35,7 @@ export interface InboxSource {
 
 export class InboxLoadError extends Error {
   override readonly name = "InboxLoadError";
-  constructor(readonly reason: "signed_out" | "failed") {
+  constructor(readonly reason: "signed_out" | "unavailable" | "failed") {
     super(`inbox: ${reason}`);
   }
 }
@@ -71,6 +71,8 @@ export const createHttpInboxSource = (): InboxSource => ({
       ...(options?.signal === undefined ? {} : { signal: options.signal }),
     });
     if (response.status === 401) throw new InboxLoadError("signed_out");
+    // H4-2: 503 until the server can check repository access (P3-6).
+    if (response.status === 503) throw new InboxLoadError("unavailable");
     if (!response.ok) throw new InboxLoadError("failed");
     return response.json() as Promise<unknown>;
   },

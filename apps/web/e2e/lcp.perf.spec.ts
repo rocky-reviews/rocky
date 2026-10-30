@@ -1,6 +1,7 @@
 import { type CDPSession, expect, type Page, test } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { REAL_PR_API, REAL_PR_PATH, serverShellData } from "./real-pr-support.js";
 
 /**
  * P6-8 acceptance: "LCP < 1.5 s on the PR page with cached data" (ADR 0032).
@@ -8,8 +9,9 @@ import { join, resolve } from "node:path";
  * On the production build (the `perf` project's server), the PR page (pr-847, briefing and
  * change map) is opened once to fill the HTTP cache, then opened RUNS more times; each time a
  * PerformanceObserver (installed before the page's own scripts) records the Largest Contentful
- * Paint. The data is "cached": the PR's data is in the bundle (fixture source) and the drafts
- * API answers at once. Profile, for every measured load:
+ * Paint. The data is "cached": H4-2: the page is the real PR address, which reads the PR from
+ * the server; that request (`GET /api/repos/…/pulls/847`, pr-847 in the server's shape) and the
+ * drafts API answer at once, from the test. Profile, for every measured load:
  * - CPU: Chrome throttled 4x (`PERF_CPU_THROTTLE`), the mid-range laptop of P6-3;
  * - network: 40 ms round trip, 10 Mbit/s down, 5 Mbit/s up (a good home connection);
  * - cache: warm, with the production server's headers: /assets/ immutable, the page and
@@ -89,9 +91,11 @@ const serveLikeProduction = async (cdp: CDPSession): Promise<void> => {
     const [status, body] =
       pathname === "/api/session"
         ? [200, session()]
-        : review !== null && event.request.method === "GET"
-          ? [200, { analysisId: review[1], drafts: [], comments: [] }]
-          : [404, { error: "not_found" }];
+        : pathname === REAL_PR_API && event.request.method === "GET"
+          ? [200, serverShellData()]
+          : review !== null && event.request.method === "GET"
+            ? [200, { analysisId: review[1], drafts: [], comments: [] }]
+            : [404, { error: "not_found" }];
     void cdp
       .send("Fetch.fulfillRequest", {
         requestId: event.requestId,
@@ -127,7 +131,7 @@ type Sample = {
 
 /** Opens the PR page and reads its LCP once the page has settled. */
 const measure = async (page: Page): Promise<Sample> => {
-  await page.goto("/", { waitUntil: "load" });
+  await page.goto(REAL_PR_PATH, { waitUntil: "load" });
   await page.locator("#briefing-title").waitFor();
   await page.locator("#main .map-scroll svg").waitFor();
   // LCP is final once nothing larger paints; at 4x CPU everything has painted well before this.

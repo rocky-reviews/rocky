@@ -21,10 +21,10 @@ export const headOf = (number: number): string => {
 /** Matches a PR's "#number" in an accessible name (built, so it reads as no colour literal). */
 export const numbered = (number: number): RegExp => new RegExp(`#${number}\\b`);
 
-/** Opens the inbox on the fixture source (no server), with a fixed clock. */
+/** Opens the inbox on the fixture source (no server; H4-2: `?source=fixture`), fixed clock. */
 export const openInbox = async (page: Page): Promise<void> => {
   await page.clock.setFixedTime(FIXTURE_NOW);
-  await page.goto("/inbox");
+  await page.goto("/inbox?source=fixture");
   await page.locator("#inbox-title").waitFor();
 };
 
@@ -38,7 +38,7 @@ export interface ApiMock {
 type ApproveAnswer = { status: number; body: unknown };
 
 /**
- * Opens the inbox on the HTTP source (`?source=api`) with the server's routes answered here:
+ * Opens the inbox on the HTTP source (the default since H4-2) with the server's routes answered here:
  * the session (for the CSRF token), the list (the fixture) and the approvals route, whose every
  * request is recorded so a test can prove what was (and was not) sent.
  */
@@ -77,7 +77,7 @@ export const openInboxApi = async (
     await route.fulfill({ status, json: body });
   });
   await page.clock.setFixedTime(FIXTURE_NOW);
-  await page.goto("/inbox?source=api");
+  await page.goto("/inbox");
   await page.locator("#inbox-title").waitFor();
   return { posts, loads: () => loads };
 };

@@ -11,10 +11,13 @@ export type Mode = (typeof MODES)[number];
 /** 12 minutes after the fixture's last update, as in the POC ("updated 12 min ago"). */
 export const FIXTURE_NOW = new Date("2026-10-25T12:12:00.000Z");
 
-/** Opens the shell for pr-847 with a fixed clock and no saved theme choice. */
+/**
+ * Opens the shell for pr-847 with a fixed clock and no saved theme choice. H4-2: the fixture
+ * needs its explicit switch (a real PR address reads the server; see real-pr-support.ts).
+ */
 export const openShell = async (page: Page): Promise<void> => {
   await page.clock.setFixedTime(FIXTURE_NOW);
-  await page.goto("/");
+  await page.goto("/?fixture=pr-847");
   await page.locator("header.topbar").waitFor();
 };
 

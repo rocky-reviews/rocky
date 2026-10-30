@@ -8,6 +8,7 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
+import { registerPullRequestPageRoutes } from "./pulls/routes.js";
 import { createReviewPostingService } from "./reviews/post-review.js";
 import { registerReviewPostingRoutes } from "./reviews/post-routes.js";
 import { registerReviewRoutes } from "./reviews/routes.js";
@@ -152,6 +153,11 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       ...(deps.pullRequestApprover === undefined ? {} : { approver: deps.pullRequestApprover }),
     });
     registerReviewRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+    });
+    // H4-2: the PR page's data, by repository and number.
+    registerPullRequestPageRoutes(app, {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });

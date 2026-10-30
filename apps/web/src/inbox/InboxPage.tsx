@@ -9,6 +9,7 @@ type State =
   | { kind: "loading" }
   | { kind: "ready"; items: readonly InboxItem[] }
   | { kind: "signed_out" }
+  | { kind: "unavailable" }
   | { kind: "failed" };
 
 /**
@@ -32,12 +33,7 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
         // The error may describe PR content; the page says only that it failed.
         (error: unknown) =>
           !abort.signal.aborted &&
-          setState({
-            kind:
-              error instanceof InboxLoadError && error.reason === "signed_out"
-                ? "signed_out"
-                : "failed",
-          }),
+          setState({ kind: error instanceof InboxLoadError ? error.reason : "failed" }),
       );
     return () => abort.abort();
   }, [source, generation]);
@@ -63,6 +59,11 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
       {state.kind === "signed_out" ? (
         <p>
           <a href={signInHref("/inbox")}>Sign in with GitHub</a> to see your inbox.
+        </p>
+      ) : state.kind === "unavailable" ? (
+        <p role="alert">
+          Repository access isn&rsquo;t available yet, so Rocky can&rsquo;t list pull requests. Try
+          again later.
         </p>
       ) : (
         <p role={state.kind === "failed" ? "alert" : "status"}>

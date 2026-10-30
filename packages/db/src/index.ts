@@ -186,6 +186,11 @@ export {
   type TransferResult,
 } from "./members.js";
 export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
+export {
+  loadPullRequestPage,
+  PullRequestPageError,
+  type PullRequestPageRow,
+} from "./pull-request-page.js";
 export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,

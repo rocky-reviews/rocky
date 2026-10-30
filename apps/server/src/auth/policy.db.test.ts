@@ -178,6 +178,10 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   "GET /api/pull-requests/:pullRequestId/review": review("GET", true),
   "HEAD /api/pull-requests/:pullRequestId/review": review("GET", true),
   "POST /api/pull-requests/:pullRequestId/review": review("other", true),
+  // H4-2: the PR page's data, by org A's repository name and number (the P3-6 check runs
+  // inside). From org B the same names find nothing (RLS).
+  "GET /api/repos/:owner/:repo/pulls/:number": review("GET", true),
+  "HEAD /api/repos/:owner/:repo/pulls/:number": review("GET", true),
 };
 
 const NOBODYS_COMMENT = "00000000-0000-4000-8000-000000000000";
@@ -392,7 +396,10 @@ const requestFor = (key: string) => {
     .replace(":analysisId", A.analysisId)
     .replace(":findingId", "F1")
     .replace(":commentId", NOBODYS_COMMENT)
-    .replace(":pullRequestId", A.pullRequestId);
+    .replace(":pullRequestId", A.pullRequestId)
+    // seedOrg's repository is `org-<installation id>/api`, its pull request #847.
+    .replace(":owner/:repo", `org-91/api`)
+    .replace(":number", "847");
   const body =
     path === "/api/org/members/:memberId" && method === "PATCH"
       ? { role: "admin" }
@@ -502,6 +509,7 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "POST /api/analyses/:analysisId/drafts/:findingId": "drafts.own",
       "POST /api/analyses/:analysisId/comments": "drafts.own",
       "DELETE /api/analyses/:analysisId/comments/:commentId": "drafts.own",
+      "GET /api/repos/:owner/:repo/pulls/:number": "pull_requests.review",
     });
   });
 

@@ -76,7 +76,18 @@ code,
   display: grid;
   place-items: center;
   min-height: 100vh;
+  /* H4-2: the side gutter at phone width; long explanations stay a readable measure. */
+  padding: 0 var(--space-4);
   color: var(--muted);
+}
+
+.status-page p {
+  max-width: 60ch;
+  text-align: center;
+}
+
+.status-page a {
+  color: var(--you);
 }
 
 /* ---------- shell ---------- */

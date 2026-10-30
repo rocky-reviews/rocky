@@ -29,7 +29,11 @@ const DisplayLogin = z.string().regex(/^[A-Za-z0-9-]{1,39}(?:\[bot\])?$/, "must 
 const MAX_TITLE_LENGTH = 1024;
 const MAX_APPROVERS = 100;
 
-/** What GitHub says about the PR (the mirror, ADR 0010). GitHub is the source of truth. */
+/**
+ * What GitHub says about the PR (the mirror, ADR 0010). GitHub is the source of truth. H4-2: a
+ * field the server's mirror does not hold is `null` (branch names, approvals and comments today;
+ * the size until the head commit is recorded), and the page leaves it out rather than guess.
+ */
 export const PullSummary = z.strictObject({
   owner: RepoOwner,
   repo: RepoName,
@@ -38,18 +42,18 @@ export const PullSummary = z.strictObject({
   /** Null when GitHub reports no author (a deleted account shows as "ghost"). */
   author: DisplayLogin.nullable(),
   state: z.enum(["open", "closed", "merged"]),
-  headRef: GitRef,
-  baseRef: GitRef,
+  headRef: GitRef.nullable(),
+  baseRef: GitRef.nullable(),
   /** The PR's current head commit; an analysis of another commit is shown as out of date. */
   headSha: FullSha,
-  additions: z.number().int().min(0),
-  deletions: z.number().int().min(0),
-  changedFiles: z.number().int().min(0),
+  additions: z.number().int().min(0).nullable(),
+  deletions: z.number().int().min(0).nullable(),
+  changedFiles: z.number().int().min(0).nullable(),
   updatedAt: z.iso.datetime(),
   /** Logins whose latest review on GitHub is an approval. */
-  approvers: z.array(DisplayLogin).max(MAX_APPROVERS),
+  approvers: z.array(DisplayLogin).max(MAX_APPROVERS).nullable(),
   /** Review and issue comments already on the PR. */
-  commentCount: z.number().int().min(0),
+  commentCount: z.number().int().min(0).nullable(),
 });
 export type PullSummary = z.infer<typeof PullSummary>;
 
