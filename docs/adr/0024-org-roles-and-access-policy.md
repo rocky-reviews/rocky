@@ -185,10 +185,12 @@ webhook-shaped requests; a future route that forgets the check.
 
 - **The repository access check is not wired in `startServer` yet** (it needs installation
   credentials on the server). Until then "Analyze anyway" answers 503 in a running server.
+  (Closed by H4-1, [ADR 0033](0033-repository-access-check-wiring.md).)
 - **An owner who leaves the GitHub org stays the owner** (the webhook does not change roles);
   they cannot sign in, so the org has no reachable owner until they rejoin. Recovery is an
   operator action (follow-up: a documented runbook or an "owner left" admin path).
 - `invalidateMember` is process-local (ADR 0011's broadcast follow-up); the worker cannot reach
   the server's cache, so after a webhook departure a cached allow may live up to 5 minutes. The
-  person's sessions are cut at once, so no route reaches the cache for them.
+  person's sessions are cut at once, so no route reaches the cache for them (tested end to end by
+  ADR 0033's "a removal in Rocky is refused before the cache").
 - Members are listed up to 1000 (paging is a follow-up). `members.login` is display data.

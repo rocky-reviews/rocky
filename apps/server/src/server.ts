@@ -1,8 +1,11 @@
 import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
+import type { RepositoryAccessCheck } from "@rocky-reviews/core";
 import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
 import {
+  createGitHubForge,
   createGitHubLogin,
   createGitHubReviewPoster,
+  createGitHubUserAccessReader,
   createGitHubWebhookIngress,
 } from "@rocky-reviews/forge-github";
 import type { Logger } from "@rocky-reviews/log";
@@ -15,12 +18,14 @@ import type { AuthDeps } from "./auth/routes.js";
 import {
   authFromEnv,
   ConfigError,
+  githubAppAuthFromEnv,
   githubAppSetupFromEnv,
   githubAppIdFromEnv,
   isProduction,
   webhookSecretFromEnv,
 } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { cacheMembershipDenials, createRepositoryAccess } from "./repository-access.js";
 import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
 import { createRateLimits, rateLimitRulesFromEnv } from "./security/rate-limit.js";
 import { authRateLimit, webhookRateLimit } from "./security/route-limits.js";
@@ -114,6 +119,11 @@ export interface RunningServer {
   readonly auth: boolean;
   /** Whether the GitHub App manifest setup routes are registered (P3-1). */
   readonly githubAppSetup: boolean;
+  /**
+   * Whether the repository access check (P3-6) is built (H4-1): login plus the app's key.
+   * Without it every route that reads a repository's data answers 503.
+   */
+  readonly repositoryAccess: boolean;
   close(): Promise<void>;
 }
 
@@ -146,6 +156,7 @@ export const startServer = async (
   const trustProxy = trustProxyFromEnv(env);
   const rateLimits = createRateLimits({ rules: rateLimitRulesFromEnv(env), trustProxy });
   const appId = githubAppIdFromEnv(env);
+  const appAuth = githubAppAuthFromEnv(env);
   const webDir = env["ROCKY_WEB_DIR"];
   const web: WebApp | undefined =
     webDir === undefined || webDir === "" ? undefined : loadWebApp(webDir);
@@ -199,8 +210,10 @@ export const startServer = async (
 
   let auth: AuthDeps | undefined;
   let reviewPosting: ReviewPostingDeps | undefined;
+  let repositoryAccess: RepositoryAccessCheck | undefined;
   if (authSetup.enabled && keys !== undefined) {
     const { config } = authSetup;
+    const db = createDb({ pool });
     if (config.sessionSecret === undefined) {
       log.warn("ROCKY_SESSION_SECRET is not set: generated for this process (development only)");
     }
@@ -213,6 +226,32 @@ export const startServer = async (
       config.sessionSecret === undefined
         ? randomBytes(32)
         : Buffer.from(config.sessionSecret, "utf8");
+    // The repository access check (P3-6, ADR 0011; wired by H4-1, ADR 0033): asks GitHub as
+    // the member with their stored token, and for membership on an installation token minted
+    // with the app's key. Without the key there is no check, and the routes that need one
+    // answer 503 (fail closed): nothing here ever stands in for it.
+    if (appAuth === undefined) {
+      log.warn(
+        "GITHUB_APP_PRIVATE_KEY is not set: repository access check disabled; routes that read a repository's data answer 503 (development only)",
+      );
+    } else {
+      const clock = { now: () => new Date() };
+      repositoryAccess = createRepositoryAccess({
+        db,
+        keys,
+        reader: createGitHubUserAccessReader({
+          api: config.endpoints.api,
+          // "Not a collaborator" answers are kept 30 s below the member's own cache (W11).
+          collaborators: cacheMembershipDenials(
+            createGitHubForge({ auth: appAuth, api: config.endpoints.api, clock }),
+            { clock },
+          ),
+        }),
+        log,
+      });
+    }
+    // A const, so the closure below keeps the narrowing.
+    const access = repositoryAccess;
     auth = {
       publicUrl: config.publicUrl,
       cookieSecure: config.cookieSecure,
@@ -223,13 +262,22 @@ export const startServer = async (
         clientSecret: config.clientSecret,
         ...(config.appId === undefined ? {} : { appId: config.appId }),
       }),
-      db: createDb({ pool }),
+      db,
       keys,
       requireTokenExpiry: config.production,
       rateLimit: authRateLimit(rateLimits, { secret, cookieSecure: config.cookieSecure }),
+      // After each commit that stores or clears a token, changes a role, removes or restores a
+      // member (ADR 0011 §6): the member's cached answers are dropped.
+      ...(access === undefined
+        ? {}
+        : {
+            onMemberTokenChanged: (orgId, memberId) => {
+              access.invalidateMember(orgId, memberId);
+            },
+          }),
     };
     // Posting as the user (P3-5): the one poster in the process, held by the review routes only.
-    // They answer 503 until the repository access check is built here (P7-2 follow-up).
+    // They answer 503 without the repository access check above.
     reviewPosting = { poster: createGitHubReviewPoster({ api: config.endpoints.api }), keys };
   } else {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
@@ -245,6 +293,7 @@ export const startServer = async (
     ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
     ...(auth === undefined ? {} : { auth }),
     ...(reviewPosting === undefined ? {} : { reviewPosting }),
+    ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
@@ -263,6 +312,7 @@ export const startServer = async (
       webhooks: webhooks !== undefined,
       auth: auth !== undefined,
       githubAppSetup: githubAppSetup !== undefined,
+      repositoryAccess: repositoryAccess !== undefined,
       web: web !== undefined,
     },
     "server listening",
@@ -284,6 +334,7 @@ export const startServer = async (
     webhooks: webhooks !== undefined,
     auth: auth !== undefined,
     githubAppSetup: githubAppSetup !== undefined,
+    repositoryAccess: repositoryAccess !== undefined,
     close: () => {
       closing ??= (async () => {
         try {

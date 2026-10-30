@@ -235,6 +235,12 @@ packages/schema (analysis document; shared contract)
   delete the person's stored token and cut the org from their sessions. Roles never widen GitHub
   access: repository routes still run the P3-6 check. The route-permission matrix
   (`policy.db.test.ts`) enumerates Fastify's routes × personas.
+- Repository access in the server (ADR 0033, H4-1): `startServer` builds the P3-6 check from the
+  members' stored tokens and the app's key (`GITHUB_APP_PRIVATE_KEY`, required in production;
+  the membership step mints `metadata: read` installation tokens) and passes it to the drafts,
+  posting, inbox and "Analyze anyway" routes, with `invalidateMember` on every token, role or
+  membership change. Without the key those routes keep answering 503; bulk approval has no
+  approver yet and stays 503.
 - Headers and rate limits (ADR 0025, P7-3): one root `onSend` hook
   (`apps/server/src/security/headers.ts`) gives every answer the CSP (`script-src 'self'`,
   `style-src 'self'`, no inline content; non-documents `default-src 'none'`), `frame-ancestors

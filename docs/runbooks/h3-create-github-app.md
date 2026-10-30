@@ -99,6 +99,10 @@ it. It is mode `0600` in a `0700` directory, written once, and never overwritten
 | `GITHUB_WEBHOOK_SECRET`    | **yes** | webhook signatures (P3-2)                         |
 | `GITHUB_APP_PRIVATE_KEY`   | **yes** | signs the app's JWTs; whoever has it _is_ the app |
 
+The worker needs `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` (installation events, mirror). So
+does the server since H4-1 (ADR 0033): the repository access check asks GitHub for membership as
+the app; without the key a running server answers 503 on every route that reads a repository.
+
 Do this now:
 
 1. **Secret manager:** create one item, for example "Rocky Reviews GitHub App (dev)", holding all

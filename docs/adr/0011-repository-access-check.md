@@ -297,6 +297,8 @@ internal repositories.
 
 The server will build one `createRepositoryAccess({ db, keys, reader, log })` at start-up, with
 `reader = createGitHubUserAccessReader({ api })` and `keys` from `localKeyWrapperFromEnv()` or KMS.
+(Done by H4-1, [ADR 0033](0033-repository-access-check-wiring.md): `startServer` builds it when
+login and `GITHUB_APP_PRIVATE_KEY` are configured, and passes `invalidateMember` to the login.)
 
 **P7-2 (route authorization).** Every route that reads or writes a repository's data follows
 these steps, in this order:
@@ -391,7 +393,8 @@ GitHub tokens, tenant boundaries, and log hygiene.
 ## Consequences
 
 - The check exists, but nothing calls it until P7-2. Until then the server has no route that
-  shows repository data, so nothing is exposed in the meantime.
+  shows repository data, so nothing is exposed in the meantime. (P7-2 made the routes call it;
+  H4-1, ADR 0033, builds it in `startServer`.)
 - `@rocky-reviews/server` depends on `@rocky-reviews/crypto`.
 - A check that asks GitHub costs two requests for a private repository, and five for a public or
   internal one (identity, repository, mint, membership, revoke).

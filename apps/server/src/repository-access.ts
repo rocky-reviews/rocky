@@ -1,9 +1,12 @@
 import {
   createRepositoryAccessCheck,
+  DENY_TTL_MS,
   type Clock,
+  type CollaboratorReader,
   type RepositoryAccessAnswer,
   type RepositoryAccessCheck,
   type RepositoryAccessSource,
+  type RepositoryRef,
   type UserAccessReader,
 } from "@rocky-reviews/core";
 import { decodeWrappedDataKey, OrgKeyring, type KeyWrapper } from "@rocky-reviews/crypto";
@@ -26,6 +29,8 @@ import type { Logger } from "@rocky-reviews/log";
  *
  * Logs carry ids and fixed reason codes; the token, its ciphertext and any error text never.
  */
+
+const systemClock: Clock = { now: () => new Date() };
 
 /** ADR 0006: the AAD purpose of a member's forge token; the record id is the member id. */
 export const MEMBER_TOKEN_PURPOSE = "github_token";
@@ -85,8 +90,6 @@ export interface RepositoryAccessOptions extends MemberAccessSourceOptions {
   readonly maxEntries?: number;
 }
 
-const systemClock: Clock = { now: () => new Date() };
-
 export const createRepositoryAccess = (options: RepositoryAccessOptions): RepositoryAccessCheck =>
   createRepositoryAccessCheck({
     source: memberAccessSource(options),
@@ -108,3 +111,89 @@ export const createRepositoryAccess = (options: RepositoryAccessOptions): Reposi
       else options.log.info(fields, "repository access");
     },
   });
+
+export interface MembershipDenialCacheOptions {
+  readonly clock?: Clock;
+  /** 1 ms … `DENY_TTL_MS` (default: `DENY_TTL_MS`); never longer than the core's deny cache. */
+  readonly ttlMs?: number;
+  readonly maxEntries?: number;
+}
+
+const DEFAULT_MEMBERSHIP_ENTRIES = 10_000;
+const MAX_MEMBERSHIP_ENTRIES = 1_000_000;
+/** GitHub's user-login shape, as the forge adapter checks it; anything else is asked uncached. */
+const USER_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
+const membershipKey = (ref: RepositoryRef, login: string): string | null => {
+  if (
+    !Number.isSafeInteger(ref.installationId) ||
+    ref.installationId <= 0 ||
+    !Number.isSafeInteger(ref.repositoryId) ||
+    ref.repositoryId <= 0 ||
+    typeof login !== "string" ||
+    !USER_LOGIN.test(login)
+  ) {
+    return null;
+  }
+  return `${ref.installationId}:${ref.repositoryId}:${login.toLowerCase()}`;
+};
+
+/**
+ * Remembers "not a collaborator" answers for at most the core's deny lifetime (H4-1, ADR 0033
+ * W11). Every membership question mints and revokes an installation token, and the installation's
+ * rate limit is shared with the worker. The core caches each member's deny for 30 s, but a member
+ * can drop their own entries at will (every sign-in and sign-out invalidates them) and so make the
+ * server mint again for every public or internal repository of the inbox. This cache sits below
+ * that: keyed by installation, repository and the login GitHub gave for the token, so no
+ * invalidation reaches it, and one `false` costs the installation at most one mint per 30 s.
+ *
+ * Only `false` is remembered. A remembered `true` would stretch ADR 0011's 5-minute bound by
+ * this cache's lifetime (the check's allow is dated from its own question, not from the older
+ * membership answer); a remembered `false` can only delay a re-grant, like the core's deny cache.
+ * Errors are never remembered (the next question asks again; the core caches the transient deny
+ * for 5 s). An entry is fresh only when `checkedAt ≤ now < expiresAt`, so a clock that moves
+ * backwards does not keep it alive. Malformed input is passed through uncached (the adapter
+ * refuses it). Bounded, least recently used first.
+ */
+export const cacheMembershipDenials = (
+  inner: CollaboratorReader,
+  options: MembershipDenialCacheOptions = {},
+): CollaboratorReader => {
+  const ttl = options.ttlMs ?? DENY_TTL_MS;
+  if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > DENY_TTL_MS) {
+    throw new RangeError(`membership deny cache ttlMs must be 1 … ${DENY_TTL_MS}`);
+  }
+  const maxEntries = options.maxEntries ?? DEFAULT_MEMBERSHIP_ENTRIES;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > MAX_MEMBERSHIP_ENTRIES) {
+    throw new RangeError(`membership deny cache maxEntries must be 1 … ${MAX_MEMBERSHIP_ENTRIES}`);
+  }
+  const clock = options.clock ?? systemClock;
+  const denied = new Map<string, { checkedAt: number; expiresAt: number }>();
+
+  return {
+    isCollaborator: async (ref, login) => {
+      const key = membershipKey(ref, login);
+      if (key === null) return inner.isCollaborator(ref, login);
+      const now = clock.now().getTime();
+      const entry = denied.get(key);
+      if (entry !== undefined) {
+        if (entry.checkedAt <= now && now < entry.expiresAt) {
+          denied.delete(key);
+          denied.set(key, entry);
+          return false;
+        }
+        denied.delete(key);
+      }
+      const answer = await inner.isCollaborator(ref, login);
+      if (answer === false) {
+        denied.set(key, { checkedAt: now, expiresAt: now + ttl });
+        while (denied.size > maxEntries) {
+          const oldest = denied.keys().next().value;
+          if (oldest === undefined) break;
+          denied.delete(oldest);
+        }
+      }
+      return answer;
+    },
+  };
+};

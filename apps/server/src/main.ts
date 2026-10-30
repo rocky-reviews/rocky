@@ -19,6 +19,10 @@ try {
   }
   process.exit(1);
 }
+// The app's key is parsed into a KeyObject at boot (H4-1); the PEM is dropped from the
+// environment so no child process, diagnostic dump or later `process.env` read sees it (as the
+// worker does, ADR 0009 L24).
+delete process.env["GITHUB_APP_PRIVATE_KEY"];
 
 // server.close() is idempotent, so a second SIGTERM/SIGINT awaits the same shutdown.
 const shutdown = async (): Promise<void> => {

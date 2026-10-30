@@ -135,6 +135,7 @@ Requirements on the implementation (review round 1; also in the port's JSDoc):
   could both reach the approver. The port's required idempotency per (member, PR, head) (§3) is
   the control; until P3-5 delivers it there is no approver at all (503).
 - The repository access check is not wired in `startServer` yet (ADR 0024), so a running server
-  answers 503 on both routes until it is.
+  answers 503 on both routes until it is. (Wired by H4-1, [ADR 0033](0033-repository-access-check-wiring.md);
+  `GET /api/inbox` now answers per access, and approvals still answer 503 for want of the approver.)
 - Low-risk PRs with no findings can still be wrong; the group is a suggestion, the dialog says
   so, and the person decides.

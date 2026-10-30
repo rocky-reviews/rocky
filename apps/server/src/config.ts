@@ -3,7 +3,10 @@ import { isAbsolute, join } from "node:path";
 import {
   buildGitHubAppManifest,
   checkWebhookSecret,
+  GitHubAppConfigError,
   githubEndpoints,
+  parseGitHubAppAuth,
+  type GitHubAppAuth,
   type GitHubEndpoints,
 } from "@rocky-reviews/forge-github";
 import type { GitHubAppSetupConfig } from "./github-app-setup.js";
@@ -30,6 +33,38 @@ export const githubAppIdFromEnv = (
     throw new ConfigError("GITHUB_APP_ID must be a positive integer");
   }
   return Number(raw);
+};
+
+/**
+ * The app's own credentials for the repository access check (H4-1, ADR 0033): `GITHUB_APP_ID`
+ * with `GITHUB_APP_PRIVATE_KEY`, parsed into a `KeyObject` as the worker does (the PEM text is
+ * not kept). The membership step of ADR 0011 §2 mints installation tokens with it. Required in
+ * production; unset outside production means no check, and `startServer` says so and leaves
+ * every route that reads a repository's data at 503 (fail closed). A key that is set but
+ * malformed, or set without the id, is refused everywhere. Messages never contain the value.
+ */
+export const githubAppAuthFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+): GitHubAppAuth | undefined => {
+  const appId = env["GITHUB_APP_ID"];
+  const privateKey = env["GITHUB_APP_PRIVATE_KEY"];
+  if (privateKey === undefined || privateKey === "") {
+    if (isProduction(env)) {
+      throw new ConfigError(
+        "GITHUB_APP_PRIVATE_KEY is required in production (the repository access check asks GitHub for membership as the app)",
+      );
+    }
+    return undefined;
+  }
+  if (appId === undefined || appId === "") {
+    throw new ConfigError("GITHUB_APP_ID must be set with GITHUB_APP_PRIVATE_KEY");
+  }
+  try {
+    return parseGitHubAppAuth({ appId, privateKey });
+  } catch (error) {
+    if (error instanceof GitHubAppConfigError) throw new ConfigError(error.message);
+    throw new ConfigError("GITHUB_APP_PRIVATE_KEY could not be read");
+  }
 };
 
 /**
