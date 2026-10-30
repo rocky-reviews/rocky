@@ -26,8 +26,8 @@ const panel = (decisions: Record<string, DraftDecision> = {}, comments: OwnComme
 const text = (html: string): string =>
   html
     .replace(/<[^>]+>/g, " ")
-    .replace(/&amp;/g, "&")
     .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, "&") // last, so "&amp;#x27;" stays "&#x27;"
     .replace(/\s+/g, " ")
     .trim();
 
