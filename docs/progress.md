@@ -57,10 +57,11 @@ Task log for the project plan. Agents append a row when a task is merged.
 
 - The capture spec (`artifacts/screenshots/P6-9/capture.spec.ts.txt`, not committed) could become
   a Playwright project that CI skips, for repeatable POC audits.
-- The Finish list box can be 64 px on short phones, and long warnings can still push the verdict
-  down (ADR 0031 residual risks). If it bites, collapse the coverage warning's file list.
+- The Finish list box is at its 64 px minimum at 375 × 667; "Show files", a notice or a shorter
+  screen makes the modal scroll (ADR 0031 residual risks).
 - `maxDiffPixelRatio: 0.002` lets a one-line text change pass the visual suite at 1440 px; P6-9
-  regenerated every baseline with `--update-snapshots=all`. Consider a tighter ratio.
+  regenerated every baseline with `--update-snapshots=all`, which also refreshed baselines that
+  were already stale on main from earlier tasks (the `inbox-*` set). Consider a tighter ratio.
 
 ### P6-8 follow-ups
 

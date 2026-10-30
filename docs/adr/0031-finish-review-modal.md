@@ -52,8 +52,10 @@ only side effect in the whole product that a human cannot take back.
   focusable, named region ("Comments to post"), capped in height (`.post-scroll`:
   `90dvh − 660px` from 64 to 360 px; `100dvh − 720px` on phones) so the warnings, the summary,
   the verdict with its suggestion and the footer are in view when the modal opens, at
-  1440 × 900 with one or two comments and at 375 × 812 (`finish.e2e.spec.ts` "the modal
-  fits"). The person scrolls the box to read the rest; nothing in it is hidden or shortened.
+  1440 × 900 with one or two comments and at 375 × 812 and 375 × 667 (`finish.e2e.spec.ts`
+  "the modal fits"). On phones the coverage warning names its files behind a "Show files"
+  toggle (`aria-expanded`; always listed from 761 px) and the spacing is tighter (review round
+  1). The person scrolls the box to read the rest; nothing in it is hidden or shortened.
   (Before P6-9 each body scrolled in its own box and the list pushed the verdict below the
   fold.) A list GitHub would refuse (over 100 comments, a comment over 65,536 characters) is
   parsed with wide bounds and shown, and Submit is off with the reason.
@@ -207,6 +209,7 @@ own bugs. Tenant and credential threats are the server's (ADR 0026 P1–P15) and
   differs (the items are carried), so the retry is a new click: it is answered about the new,
   smaller list, never about the lost one; the modal shows the posted attempt above the list.
 - The POC's mobile breakpoints were not designed for this modal. Since P6-9 it fits 375 × 812
-  with the fixture's warnings; longer warnings (many unviewed files, an in-flight attempt, an
-  error notice) can still push the verdict down, and the modal then scrolls with its head and
-  footer pinned. The list box can be as small as 64 px on short screens: whole, but scrolled.
+  and 375 × 667 with the fixture's warnings (4 unviewed files, 9 undecided drafts, 1–2
+  comments): measured 629 px of 651 at 375 × 667, the list box at its 64 px minimum. Opening
+  "Show files", an error or in-flight notice, or a screen shorter than 667 px makes the modal
+  scroll, with its head and footer pinned; the verdict may then start below the fold.

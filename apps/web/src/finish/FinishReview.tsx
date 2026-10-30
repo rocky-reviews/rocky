@@ -106,6 +106,8 @@ export const FinishReview = ({
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [armed, setArmed] = useState(false);
+  // P6-9: on a phone the coverage warning lists its files on request (CSS hides them otherwise).
+  const [showFiles, setShowFiles] = useState(false);
   const sent = useRef(false);
   const click = useRef<Click | null>(null);
   const alive = useRef(true);
@@ -312,19 +314,30 @@ export const FinishReview = ({
 
         <div className="modal-section finish-warnings">
           {unviewed.length > 0 ? (
-            <p className="finish-warn">
+            <p className="finish-warn finish-coverage" data-files={showFiles}>
               <b>
                 {unviewed.length} high-risk {unviewed.length === 1 ? "file" : "files"} not marked
                 viewed:
               </b>{" "}
-              {unviewed.map((path, i) => (
-                <Fragment key={path}>
-                  {i > 0 && ", "}
-                  <code>
-                    <PathText path={path} />
-                  </code>
-                </Fragment>
-              ))}
+              <span className="warn-files" id="finish-unviewed">
+                {unviewed.map((path, i) => (
+                  <Fragment key={path}>
+                    {i > 0 && ", "}
+                    <code>
+                      <PathText path={path} />
+                    </code>
+                  </Fragment>
+                ))}
+              </span>{" "}
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost warn-toggle"
+                aria-expanded={showFiles}
+                aria-controls="finish-unviewed"
+                onClick={() => setShowFiles((open) => !open)}
+              >
+                {showFiles ? "Hide files" : "Show files"}
+              </button>
             </p>
           ) : (
             <p className="finish-good">✓ You reviewed every Critical and Important file.</p>

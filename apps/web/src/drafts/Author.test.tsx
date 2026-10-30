@@ -22,6 +22,12 @@ describe("Author (P6-9)", () => {
     );
   });
 
+  it("treats an empty login like none", () => {
+    expect(render("")).toBe(
+      '<span class="avatar" aria-hidden="true">Y</span><b><bdi>you</bdi></b>',
+    );
+  });
+
   it("renders the login as text", () => {
     expect(render("<img src=x>")).not.toContain("<img");
     expect(authorName("a")).toBe("@a");

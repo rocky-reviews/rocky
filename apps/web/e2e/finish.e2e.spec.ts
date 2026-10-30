@@ -717,6 +717,8 @@ test.describe("the modal fits", () => {
     { name: "1440 × 900, one comment", size: { width: 1440, height: 900 }, two: false },
     { name: "1440 × 900, two comments", size: { width: 1440, height: 900 }, two: true },
     { name: "375 × 812, one comment", size: { width: 375, height: 812 }, two: false },
+    { name: "375 × 667, one comment", size: { width: 375, height: 667 }, two: false },
+    { name: "375 × 667, two comments", size: { width: 375, height: 667 }, two: true },
   ];
   for (const c of cases) {
     test(`the suggested verdict and Submit are in view on open (${c.name})`, async ({
@@ -743,15 +745,42 @@ test.describe("the modal fits", () => {
     });
   }
 
+  test("phone: the coverage warning names its files on request", async ({ page, reviewApi }) => {
+    await page.setViewportSize({ width: 375, height: 667 });
+    reviewApi.set("F1", { state: "accepted", edited: false, body: "x" });
+    await open(page);
+    await openFinish(page);
+    const files = dialog(page).locator("#finish-unviewed");
+    const toggle = dialog(page).getByRole("button", { name: "Show files" });
+    await expect(dialog(page)).toContainText("4 high-risk files not marked viewed");
+    await expect(files).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    await expect(files).toBeVisible();
+    await expect(files).toContainText("src/api/routes/invitations.ts");
+    await expect(dialog(page).getByRole("button", { name: "Hide files" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    // Wider, the files are always listed and there is no toggle.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(dialog(page).locator(".warn-toggle")).toBeHidden();
+    await expect(files).toBeVisible();
+  });
+
   test("phone: the title and Close stay in view while the modal scrolls", async ({
     page,
     reviewApi,
   }) => {
-    await page.setViewportSize({ width: 375, height: 812 });
+    await page.setViewportSize({ width: 375, height: 667 });
     reviewApi.set("F1", { state: "accepted", edited: false, body: "x" });
     await open(page);
     await openFinish(page);
+    // Listing the files makes the modal taller than the screen, so it scrolls.
+    await dialog(page).getByRole("button", { name: "Show files" }).click();
+    expect(await dialog(page).evaluate((el) => el.scrollHeight > el.clientHeight + 20)).toBe(true);
     await dialog(page).evaluate((el) => (el.scrollTop = el.scrollHeight));
+    expect(await dialog(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(20);
     await expect(
       dialog(page).getByRole("heading", { name: "Finish your review" }),
     ).toBeInViewport();

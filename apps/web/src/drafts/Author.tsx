@@ -8,16 +8,19 @@ import { createContext, useContext } from "react";
 /** The signed-in reviewer's GitHub login, or null until the session is read. */
 export const LoginContext = createContext<string | null>(null);
 
-export const authorName = (login: string | null): string => (login === null ? "you" : `@${login}`);
+/** An empty login counts as none (the session has not said who it is). */
+const known = (login: string | null): login is string => login !== null && login !== "";
+
+export const authorName = (login: string | null): string => (known(login) ? `@${login}` : "you");
 
 /** Two letters for the avatar ("DA" for dana-k); "Y" for "you". */
 export const authorInitials = (login: string | null): string =>
-  login === null
-    ? "Y"
-    : login
+  known(login)
+    ? login
         .replace(/[^A-Za-z0-9]/g, "")
         .slice(0, 2)
-        .toUpperCase() || "Y";
+        .toUpperCase() || "Y"
+    : "Y";
 
 export const Author = () => {
   const login = useContext(LoginContext);

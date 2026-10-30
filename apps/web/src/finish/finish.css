@@ -85,6 +85,10 @@
   font-family: var(--font-mono);
   font-size: var(--text-base);
 }
+/* P6-9: the coverage warning's "Show files" exists only on phones (below). */
+.warn-toggle {
+  display: none;
+}
 .finish-good {
   background: var(--ok-bg);
   color: var(--ok);
@@ -321,6 +325,31 @@
   }
   .finish-blocked {
     flex-basis: 100%;
+  }
+  /* The coverage warning names its files on request, and the spacing is tighter. */
+  .finish-coverage[data-files="false"] .warn-files {
+    display: none;
+  }
+  .warn-toggle {
+    display: inline-flex;
+    padding: 0 6px;
+    min-height: 24px;
+    vertical-align: baseline;
+  }
+  .finish-modal .modal-section {
+    padding-block: var(--space-2);
+  }
+  .finish-modal > .modal-head {
+    padding-block: var(--space-3) 4px;
+  }
+  .finish-warnings {
+    gap: 6px;
+  }
+  .verdict-opts label {
+    padding: 6px 10px;
+  }
+  .finish-modal .modal-foot {
+    padding-block: var(--space-2) var(--space-3);
   }
   /* The options' meanings are plain from their names; the suggested one keeps its reason. */
   .verdict-opts label:not(.suggested) small {

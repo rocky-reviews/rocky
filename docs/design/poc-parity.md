@@ -242,7 +242,8 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   a lost answer) which the POC's mock never had. P6-9: the list and its caption scroll in one
   box of their own so the verdict and Submit are in view when the modal opens (every comment
   stays whole); the head is sticky like the footer; the summary box is two rows (POC three);
-  on phones only the suggested verdict keeps its one-line reason.
+  on phones only the suggested verdict keeps its one-line reason, and the coverage warning lists
+  its files behind "Show files" (the verdict and Submit are in view on open down to 375 × 667).
 - **Shortcuts (P6-5).** "? Shortcuts" stays in the top bar below 760 px as "?" (the POC hid it),
   so the dialog and its switch can be reached at every width. The dialog adds a "Single-key
   shortcuts" switch (WCAG 2.1.4) and a "?" row; "Ask" reads "(not available yet)" until P9-2. The
