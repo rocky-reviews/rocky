@@ -41,6 +41,18 @@ export {
   type TenantTx,
 } from "./client.js";
 export {
+  addOwnComment,
+  decideDraft,
+  deleteOwnComment,
+  DraftStoreError,
+  listReviewDrafts,
+  type AddCommentResult,
+  type DecideDraftResult,
+  type DraftView,
+  type OwnCommentView,
+  type ReviewDraftsView,
+} from "./drafts.js";
+export {
   completeInTenantTx,
   decodeClaimedDelivery,
   isErrorCode,

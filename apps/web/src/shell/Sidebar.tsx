@@ -4,6 +4,8 @@
  */
 import { type ReactNode, useState } from "react";
 import type { Severity } from "@rocky-reviews/schema";
+import { useReview } from "../drafts/ReviewProvider.js";
+import { useToast } from "./Toast.js";
 import {
   type Coverage,
   LEVEL_LABEL,
@@ -68,6 +70,8 @@ export const SidebarContent = ({
   onMarkViewed,
 }: Props) => {
   const [noiseOpen, setNoiseOpen] = useState(false);
+  const { decisionOf } = useReview();
+  const toast = useToast();
   // "Show" and "Trust" replace the box that held focus; hand it to the first noise file.
   const [focusNoise, setFocusNoise] = useState(false);
   const focusFirst = (list: HTMLUListElement | null) => {
@@ -137,7 +141,10 @@ export const SidebarContent = ({
                   <>
                     <span className="dots" aria-hidden="true">
                       {file.findings.map((f) => (
-                        <span key={f.id} className={`dot ${f.severity}`} />
+                        <span
+                          key={f.id}
+                          className={`dot ${f.severity}${decisionOf(f.id).state === "draft" ? "" : " done"}`}
+                        />
                       ))}
                     </span>
                     <span className="score" aria-hidden="true">
@@ -207,6 +214,10 @@ export const SidebarContent = ({
                   onClick={() => {
                     setFocusNoise(true);
                     onMarkViewed(noise.files.map((f) => f.path));
+                    const n = noise.files.length;
+                    toast(
+                      `${n} noise ${n === 1 ? "file" : "files"} marked viewed from the AI summary`,
+                    );
                   }}
                 >
                   Trust &amp; mark viewed

@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./test.js";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { MODES, openShell, settle, WIDTHS } from "./support.js";

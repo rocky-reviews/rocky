@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./test.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
 
 /** P6-1: accessibility, keyboard paths, layout limits and the theme rules. */
@@ -212,7 +212,8 @@ test.describe("keyboard", () => {
       region: "#review-panel",
       close: "Close review panel",
       width: 1024,
-      last: "Close review panel",
+      // P6-4: the panel's last control is the last draft to decide.
+      last: "Missing tests for the two riskiest behavioursinvitations.test.ts:18✦ draft, Low severity",
     },
   ] as const;
 

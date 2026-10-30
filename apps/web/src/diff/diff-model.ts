@@ -6,7 +6,7 @@
  * The patch has already been read by `parseUnifiedDiff` (packages/core), which refuses anything
  * malformed, so this only numbers lines. Every string here is PR content: render it as text.
  */
-import type { Flag } from "@rocky-reviews/schema";
+import type { Finding, Flag } from "@rocky-reviews/schema";
 import type { FileAnnotations, HotKind } from "./annotations.js";
 
 export type LineKind = "add" | "del" | "ctx";
@@ -46,6 +46,8 @@ export type DiffItem =
       readonly kind: "inline";
       readonly line: number;
       readonly flags: readonly Flag[];
+      /** AI drafts whose range ends on this line (P6-4). */
+      readonly findings: readonly Finding[];
       readonly comments: readonly OwnComment[];
       readonly composing: boolean;
     };
@@ -81,14 +83,22 @@ export const fileRows = (patch: string): DiffRow[] => {
 
 /**
  * Rows plus the blocks under them. Keys are stable when blocks come and go (`l<row>` for lines),
- * so the virtualised list keeps each row's measured height.
+ * so the virtualised list keeps each row's measured height. A draft sits under the last line of
+ * its range, as the POC shows it.
  */
 export const diffItems = (
   rows: readonly DiffRow[],
   annotations: FileAnnotations,
   comments: readonly OwnComment[],
   composingLine: number | null,
+  findings: readonly Finding[] = [],
 ): DiffItem[] => {
+  const draftsByLine = new Map<number, Finding[]>();
+  for (const finding of findings) {
+    const list = draftsByLine.get(finding.range.end) ?? [];
+    list.push(finding);
+    draftsByLine.set(finding.range.end, list);
+  }
   const byLine = new Map<number, OwnComment[]>();
   for (const comment of comments) {
     const list = byLine.get(comment.line) ?? [];
@@ -114,10 +124,19 @@ export const diffItems = (
     });
     if (n === null) return;
     const flags = annotations.flags.get(n) ?? [];
+    const drafts = draftsByLine.get(n) ?? [];
     const mine = byLine.get(n) ?? [];
     const composing = composingLine === n;
-    if (flags.length > 0 || mine.length > 0 || composing)
-      items.push({ key: `i${n}`, kind: "inline", line: n, flags, comments: mine, composing });
+    if (flags.length > 0 || drafts.length > 0 || mine.length > 0 || composing)
+      items.push({
+        key: `i${n}`,
+        kind: "inline",
+        line: n,
+        flags,
+        findings: drafts,
+        comments: mine,
+        composing,
+      });
   });
   return items;
 };

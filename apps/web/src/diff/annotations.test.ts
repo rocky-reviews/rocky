@@ -24,6 +24,12 @@ describe("fileAnnotations", () => {
     expect(hot.get(1)).toBeUndefined();
   });
 
+  it("a dismissed draft (P6-4) no longer marks its line; the flags stay", () => {
+    const { hot } = fileAnnotations(doc, "src/auth/invitations.ts", new Set(["F1"]));
+    expect(hot.get(28)).toBeUndefined();
+    expect(hot.get(27)).toBe("question");
+  });
+
   it("marks every line of a multi-line range, keeping the worst severity", () => {
     const base = structuredClone(doc);
     const findings = base.findings.filter((f) => f.path === "src/auth/invitations.ts");

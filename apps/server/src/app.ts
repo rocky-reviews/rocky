@@ -7,6 +7,7 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
+import { registerReviewRoutes } from "./reviews/routes.js";
 import { registerRoleRoutes } from "./roles/routes.js";
 import { frameworkErrors, registerErrorHandler } from "./security/errors.js";
 import { registerSecurityHeaders } from "./security/headers.js";
@@ -129,6 +130,10 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.pullRequestApprover === undefined ? {} : { approver: deps.pullRequestApprover }),
+    });
+    registerReviewRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
   }
   registerWebApp(app, deps.web);

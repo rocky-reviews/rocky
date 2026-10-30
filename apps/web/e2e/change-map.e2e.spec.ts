@@ -1,4 +1,5 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import type { Locator } from "@playwright/test";
+import { expect, type Page, test } from "./test.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 
 /**
@@ -75,6 +76,33 @@ test.describe("mouse", () => {
       await card.click();
       await expect(page.locator("#briefing-title")).toBeVisible();
     }
+  });
+});
+
+test.describe("with the review panel's jumps (P6-4)", () => {
+  const panelItem = (page: Page, title: RegExp) =>
+    page.locator("#review-panel").getByRole("button", { name: title });
+
+  test("after a badge opens a line, a panel jump in the same file focuses its draft", async ({
+    page,
+  }) => {
+    await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+    await map(page).locator('[data-findings="F1 F3 F8"]').click();
+    await expect(page.locator('#main .diff button[data-line="28"]')).toBeFocused();
+    // F3 (line 23) is in the same file: the diff stays mounted and the jump wins the focus.
+    await panelItem(page, /Invitations can be reused/).click();
+    await expect(page.locator('[data-finding="F3"]')).toBeFocused();
+  });
+
+  test("after a panel jump, a badge still opens its finding's line", async ({ page }) => {
+    await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+    await panelItem(page, /Invite token stored in plaintext/).click();
+    await expect(page.locator('[data-finding="F4"]')).toBeFocused();
+    await backToBriefing(page);
+    await map(page).locator('[data-findings="F1 F3 F8"]').click();
+    const line = page.locator('#main .diff button[data-line="28"]');
+    await expect(line).toBeFocused();
+    await expect(line).toBeInViewport();
   });
 });
 

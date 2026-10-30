@@ -25,7 +25,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, minutes of high-risk code left, "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); minutes from `triage.files[].reviewMinutes` (defect 6)
 - [x] P6-2 · "Briefing & change map" entry — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); built with the P6-1 sidebar, returns to the briefing (`briefing.e2e.spec.ts` "the Briefing & change map entry returns to the briefing")
 - [x] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
-- [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the faded state needs draft decisions (P6-4)
+- [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); faded dots once decided (P6-4): [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png)
 - [x] P6-1 · Viewed files struck through — `shell.e2e.spec.ts` "viewed checkboxes update coverage and strike the file through"
 - [x] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Noise files listed once shown or trusted — `shell.e2e.spec.ts` "noise: Show lists the files, Trust marks them viewed"
@@ -47,36 +47,36 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 ## File view (P6-3)
 
 - [x] P6-3 · Sticky header: risk label + score, path, +/−, "Mark viewed (v)" / "✓ Viewed" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `v` itself is P6-5, so the button shows no key hint yet
-- [x] P6-3 · AI strip: "What changed", "Why <level>", "Drafts: n findings" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); "Accept, edit or dismiss each one inline" comes with the inline drafts (P6-4)
+- [x] P6-3 · AI strip: "What changed", "Why <level>", "Drafts: n findings" — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); "Accept, edit or dismiss each one inline" added with the inline drafts (P6-4)
 - [x] P6-3 · Hunk headers — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); modified files: `diff.e2e.spec.ts` "a modified file shows old and new numbers, signs and hunk headers"
 - [x] P6-3 · Old/new line numbers, +/− signs, add/del backgrounds — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-noise-raw-1024-light](../../apps/web/e2e/__screenshots__/file-noise-raw-1024-light.png) (removed lines); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png), `diff.e2e.spec.ts`
 - [x] P6-3 · Syntax highlighting (keywords, strings, comments, numbers) — [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); tokenizer tests in `tokenize.test.ts` (ADR 0023)
 - [x] P6-3 · Hot-line marker on the left edge coloured by severity / flag kind — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `diff.e2e.spec.ts` "hot lines and AI flags sit on their lines"
 - [x] P6-3 · AI flags under lines: "✦ Look here", "✦ Your call" (question for the reviewer), "✓ Checked" — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png)
 - [x] P6-3 · Click a new-line number → compose your own comment (Add / Cancel / "✦ Polish with AI", ⌘↵ to add) — [file-own-comment-1440-light](../../apps/web/e2e/__screenshots__/file-own-comment-1440-light.png), [file-own-comment-375-dark](../../apps/web/e2e/__screenshots__/file-own-comment-375-dark.png); keyboard path in `diff.e2e.spec.ts`. "✦ Polish with AI" is not built (see Intentional differences)
-- [x] P6-3 · Your own pending comments inline with Delete — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-pending-comment-375-dark](../../apps/web/e2e/__screenshots__/file-pending-comment-375-dark.png); `diff.e2e.spec.ts` "arrows move between lines, Enter composes…" (in memory until P6-4 persists drafts)
+- [x] P6-3 · Your own pending comments inline with Delete — [file-pending-comment-1440-light](../../apps/web/e2e/__screenshots__/file-pending-comment-1440-light.png), [file-pending-comment-375-dark](../../apps/web/e2e/__screenshots__/file-pending-comment-375-dark.png); `diff.e2e.spec.ts` "arrows move between lines, Enter composes…"; kept on the server since P6-4 (`drafts.e2e.spec.ts` "own comments: add → refresh…")
 - [x] P6-3 · Footer: "Mark viewed & next →" / "Next file →" — [file-critical-end-1440-light](../../apps/web/e2e/__screenshots__/file-critical-end-1440-light.png), [file-critical-end-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-end-1440-dark.png); [file-critical-1440-light](../../apps/web/e2e/__screenshots__/file-critical-1440-light.png), [file-critical-1440-dark](../../apps/web/e2e/__screenshots__/file-critical-1440-dark.png); `diff.e2e.spec.ts` "Mark viewed & next…"
 - [x] P6-3 · Noise file view: AI summary + "Show raw diff" — [file-noise-raw-1024-light](../../apps/web/e2e/__screenshots__/file-noise-raw-1024-light.png); [file-noise-1440-light](../../apps/web/e2e/__screenshots__/file-noise-1440-light.png), [file-noise-375-dark](../../apps/web/e2e/__screenshots__/file-noise-375-dark.png); the raw diff really expands (the POC showed a toast)
 - [x] P6-3 (not in the POC) · Large files are virtualised: a 5,000-line diff scrolls at 60 fps with the CPU throttled 4x (`diff.perf.spec.ts`, Chrome trace)
 
 ## AI drafts (P6-4)
 
-- [ ] Draft card: "✦ AI draft", severity pill, confidence %, "Only you can see this until you accept it"
-- [ ] Title, body (inline code), suggested-change mini diff (with optional context line)
-- [ ] Project-memory evidence line with source
-- [ ] Accept (a) → becomes "@you · Pending · from AI draft" with Undo
-- [ ] Edit (e) → textarea → "Save as my comment" → "edited from AI draft"
-- [ ] Dismiss (d) → reason chips (Not a real issue / Intentional / Not worth it here / Already handled elsewhere / Cancel) → collapsed "dismissed (reason)" with Undo
-- [ ] "Send to agent ↗" copies a fix prompt (toast)
-- [ ] Focus ring on the focused draft (n/p)
+- [x] Draft card: "✦ AI draft", severity pill, confidence %, "Only you can see this until you accept it" — [drafts-card-1440-light](../../apps/web/e2e/__screenshots__/drafts-card-1440-light.png), [drafts-card-375-dark](../../apps/web/e2e/__screenshots__/drafts-card-375-dark.png); `DraftCard.test.tsx`
+- [x] Title, body (inline code), suggested-change mini diff (with optional context line) — [drafts-card-1440-dark](../../apps/web/e2e/__screenshots__/drafts-card-1440-dark.png); the "−" lines are the range's lines from the diff
+- [x] Project-memory evidence line with source — `DraftCard.test.tsx` "shows the project-memory evidence"; on screen for F2 ([drafts-card-1024-light](../../apps/web/e2e/__screenshots__/drafts-card-1024-light.png) shows F1, which cites none)
+- [x] Accept (a) → becomes "@you · Pending · from AI draft" with Undo — [drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png), [drafts-accepted-375-light](../../apps/web/e2e/__screenshots__/drafts-accepted-375-light.png); kept on the server (`drafts.e2e.spec.ts` "accept → refresh…"); the `a` key is P6-5
+- [x] Edit (e) → textarea → "Save as my comment" → "edited from AI draft" — [drafts-edit-1440-light](../../apps/web/e2e/__screenshots__/drafts-edit-1440-light.png), [drafts-edit-375-dark](../../apps/web/e2e/__screenshots__/drafts-edit-375-dark.png); ⌘/Ctrl+Enter saves, Escape cancels; `e` is P6-5
+- [x] Dismiss (d) → reason chips (Not a real issue / Intentional / Not worth it here / Already handled elsewhere / Cancel) → collapsed "dismissed (reason)" with Undo — [drafts-dismiss-1440-dark](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-dark.png), [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png); the reason is stored as a fixed code for P8; `d` is P6-5
+- [x] "Send to agent ↗" copies a fix prompt (toast) — `drafts.e2e.spec.ts` "send to agent copies the fix prompt…" (clipboard checked); the copy is recorded and shown as "✓ Fix prompt copied" after a reload
+- [x] Focus ring on the focused draft (n/p) — [drafts-dismiss-1440-light](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-light.png); set by acting on a draft or jumping to it from the panel (`drafts.e2e.spec.ts` "an item jumps to its draft…"); `n`/`p` are P6-5
 
 ## Right panel
 
-- [ ] P6-4 · Review tab with count of undecided drafts
-- [ ] P6-4 · Tally: AI drafts to decide / Your comments / Dismissed
-- [ ] P6-4 · "To decide · by severity" list, then "Decided", item → jumps to the draft
-- [ ] P6-4 · "Rocky will remember n dismissals" note (P8-2)
-- [ ] P6-4 · "Your own comments" list → jumps to the line
+- [x] P6-4 · Review tab with count of undecided drafts — [drafts-panel-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-1440-light.png)
+- [x] P6-4 · Tally: AI drafts to decide / Your comments / Dismissed — [drafts-panel-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-1440-light.png), drawer [drafts-panel-375-dark](../../apps/web/e2e/__screenshots__/drafts-panel-375-dark.png)
+- [x] P6-4 · "To decide · by severity" list, then "Decided", item → jumps to the draft — [drafts-panel-1024-light](../../apps/web/e2e/__screenshots__/drafts-panel-1024-light.png); the jump opens the file and focuses the draft, closing the drawer below 1180 px (`drafts.e2e.spec.ts`); defect 2 (clipped badge) fixed
+- [x] P6-4 · "Rocky will remember n dismissals" note (P8-2) — [drafts-panel-end-1440-dark](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-dark.png), drawer [drafts-panel-end-375-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-375-light.png); worded "Rocky keeps the reason for n dismissals…" until P8 learns from them (Intentional differences)
+- [x] P6-4 · "Your own comments" list → jumps to the line — [drafts-panel-end-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-light.png); own comments are now kept on the server too
 - [ ] P9-2 · Ask tab: empty-state hint, suggested questions, chat bubbles, "Reading the code…" typing state, answers with clickable `file:line` citations, Enter to send
 - [ ] P6-5 · Shortcut strip at the bottom of the Review tab
 
@@ -105,7 +105,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Feedback
 
-- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, "✦ Polished" after Polish with AI, review submitted
+- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, "✦ Polished" after Polish with AI, review submitted. P6-4: accepted ([drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png)), agent prompt copied and noise trusted (`drafts.e2e.spec.ts`), plus failure and conflict messages; "Polished" waits for Polish with AI, "review submitted" for P6-6
 
 ## Responsive
 
@@ -187,5 +187,14 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   diagram, but not below 640 px; on phones it keeps its size and scrolls in its box.
 - **Rocky's own briefing (P6-2, not in the POC).** When `provenance.briefingUnavailable` is set,
   the eyebrow reads "Briefing by Rocky" without the AI mark and a note says why.
+- **Drafts (P6-4).** As elsewhere, small AI and severity text is set in `--text`/`--muted` with
+  the colour on a mark, dot or border: the severity pill (dot + tint), "from AI draft", the
+  "✦ draft" badge, the dismissal note (on `--ai-bg`), and the tally numbers (a coloured top border
+  per box instead of coloured numbers). The draft's outer border is `--border` (the POC mixed in
+  `--ai`; colour functions are not allowed outside the tokens) with the cyan left bar kept, and
+  "Send to agent" has a cyan border. The buttons show no `a`/`e`/`d` hints until the keys exist
+  (P6-5). The dismissal note says Rocky keeps the reason rather than "will remember", since
+  project memory (P8) does not learn yet. Drafts are hidden on a diff newer than the analysis,
+  like the AI flags. The POC's Ask tab is not drawn until P9-2.
 - **Not yet in the shell:** "? Shortcuts" (P6-5) and "Finish review" (P6-6) are absent from the top
-  bar until those tasks; the right panel holds a placeholder until P6-4, and the file view until P6-3.
+  bar until those tasks; the right panel's Ask tab comes with P9-2.

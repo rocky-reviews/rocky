@@ -4,11 +4,13 @@ import "./styles/shell.css";
 import "./styles/diff.css";
 import "./briefing/briefing.css";
 import "./inbox/inbox.css";
+import "./drafts/drafts.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
 import { createFixtureDiffSource, fixturePullFromSearch } from "./data/diff-fixture-source.js";
 import { createFixtureSource } from "./data/fixture-source.js";
+import { createHttpReviewSource } from "./data/review-http-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
 import { createFixtureInboxSource, createHttpInboxSource } from "./inbox/inbox-source.js";
 import { InboxPage } from "./inbox/InboxPage.js";
@@ -32,10 +34,12 @@ if (root && window.location.pathname === "/inbox") {
   // `?pr=<number>` the briefing's other fixture states (P6-2).
   const diffSource = createFixtureDiffSource();
   const pull = fixturePullFromSearch(window.location.search);
+  // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
+  const review = createHttpReviewSource();
   createRoot(root).render(
     <StrictMode>
       <DiffProvider source={diffSource} pull={pull}>
-        <App source={source} pull={pull} />
+        <App source={source} pull={pull} review={review} />
       </DiffProvider>
     </StrictMode>,
   );

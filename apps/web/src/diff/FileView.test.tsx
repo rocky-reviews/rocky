@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 import { parseDiffData } from "../data/diff-data.js";
 import { createFixtureDiffSource } from "../data/diff-fixture-source.js";
 import { DEFAULT_PULL } from "../data/fixture-source.js";
+import type { OwnComment } from "./diff-model.js";
+import { ReviewContext, type ReviewContextValue } from "../drafts/ReviewProvider.js";
+import { reviewWith } from "../drafts/testing.js";
+import type { DraftDecision } from "@rocky-reviews/core/drafts";
 import { DiffContext, type DiffContextValue, type DiffLoad } from "./DiffProvider.js";
 import { FileView } from "./FileView.js";
 
@@ -13,37 +17,39 @@ if (!parsed.ok) throw new Error("fixture invalid");
 const doc: AnalysisDocument = parsed.value;
 const diff = parseDiffData(await createFixtureDiffSource().load(DEFAULT_PULL));
 
-const context = (
-  load: DiffLoad,
-  comments: DiffContextValue["comments"] = [],
-): DiffContextValue => ({
-  load,
-  request: () => {},
-  comments,
-  addComment: () => {},
-  deleteComment: () => {},
-});
+const context = (load: DiffLoad): DiffContextValue => ({ load, request: () => {} });
 
 const render = (
   path: string,
   load: DiffLoad = { kind: "ready", data: diff },
   options: {
     analysis?: AnalysisDocument;
-    comments?: DiffContextValue["comments"];
+    comments?: readonly OwnComment[];
+    decisions?: Record<string, DraftDecision>;
     line?: number;
+    status?: ReviewContextValue["status"];
   } = {},
 ) =>
   renderToStaticMarkup(
-    <DiffContext value={context(load, options.comments)}>
-      <FileView
-        path={path}
-        line={options.line}
-        analysis={options.analysis ?? doc}
-        viewed={new Set()}
-        onToggleViewed={() => {}}
-        onSelect={() => {}}
-      />
-    </DiffContext>,
+    <ReviewContext
+      value={reviewWith(
+        (options.analysis ?? doc).findings,
+        options.decisions ?? {},
+        options.comments ?? [],
+        { status: options.status ?? "ready" },
+      )}
+    >
+      <DiffContext value={context(load)}>
+        <FileView
+          path={path}
+          line={options.line}
+          analysis={options.analysis ?? doc}
+          viewed={new Set()}
+          onToggleViewed={() => {}}
+          onSelect={() => {}}
+        />
+      </DiffContext>
+    </ReviewContext>,
   );
 
 const text = (html: string): string =>
@@ -71,7 +77,7 @@ describe("file view", () => {
     expect(strip).toBe(
       "What changed New createInvitation() and acceptInvitation(). Accepting one adds the user to an org. " +
         "Why critical New path that grants org membership and sets the member's role. " +
-        "Drafts 3 findings on this file.",
+        "Drafts 3 findings on this file. Accept, edit or dismiss each one inline.",
     );
   });
 
@@ -134,9 +140,34 @@ describe("file view", () => {
       kind: "ready",
       data: { ...diff, headSha: "0".repeat(40) },
     });
-    expect(text(stale)).toContain("The AI notes are for an earlier push");
+    expect(text(stale)).toContain("The AI notes, drafts and your comments are for an earlier push");
     expect(stale).not.toContain("hot-");
     expect(stale).not.toContain('class="flag');
+    expect(stale).not.toContain("data-finding=");
+  });
+
+  it("on a newer push, hides your comments and takes no new ones (they would land on the old diff)", () => {
+    const stale = render(
+      "src/auth/invitations.ts",
+      { kind: "ready", data: { ...diff, headSha: "0".repeat(40) } },
+      { comments: [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Mine" }] },
+    );
+    expect(text(stale)).toContain(
+      "The AI notes, drafts and your comments are for an earlier push, so they are hidden on this diff. New comments open once this push is analysed.",
+    );
+    expect(text(stale)).not.toContain("Mine");
+    expect(stale).toMatch(/<button[^>]*data-line="3"[^>]*aria-disabled="true"/);
+    expect(stale).not.toContain('aria-label="Comment on line 3"');
+    expect(text(stale)).not.toContain("Select a new-side line number to add your own comment");
+  });
+
+  it("takes no comments until the reviewer's review has loaded", () => {
+    for (const status of ["loading", "failed"] as const) {
+      const html = render("src/auth/invitations.ts", undefined, { status });
+      expect(html).toMatch(/<button[^>]*data-line="3"[^>]*aria-disabled="true"/);
+      expect(html).not.toContain('aria-label="Comment on line 3"');
+    }
+    expect(render("src/auth/invitations.ts")).toContain('aria-label="Comment on line 3"');
   });
 
   it("says when the diff is loading or failed", () => {

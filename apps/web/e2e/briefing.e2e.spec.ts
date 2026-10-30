@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "./test.js";
 import { MODES, WIDTHS } from "./support.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 

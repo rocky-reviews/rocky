@@ -5,20 +5,37 @@
  * page is inert, Tab cycles inside it, and Escape or a click outside closes it and returns
  * focus to its toggle. If the width grows until the panel shows in place, focus moves to it.
  */
+import type { Finding } from "@rocky-reviews/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { focusMain } from "../briefing/focus.js";
+import type { ReviewSource } from "../data/review-data.js";
 import type { ShellData } from "../data/shell-data.js";
+import { ReviewProvider } from "../drafts/ReviewProvider.js";
 import { MainContent } from "./MainArea.js";
 import { RightPanelContent } from "./RightPanel.js";
+import { ToastProvider } from "./Toast.js";
 import { type Selection, SidebarContent } from "./Sidebar.js";
 import { type Drawer, TopBar } from "./TopBar.js";
 import { coverage, noiseGroup, sidebarGroups } from "./triage-model.js";
 import { PANEL_HIDDEN, SIDEBAR_HIDDEN, useMediaQuery } from "./use-media-query.js";
 import { useTheme } from "./use-theme.js";
 
-type Props = { data: ShellData; now: number };
+type Props = {
+  data: ShellData;
+  now: number;
+  /** Where the reviewer's drafts and comments are kept (P6-4). */
+  review: ReviewSource;
+};
 
-export const Shell = ({ data, now }: Props) => {
+export const Shell = (props: Props) => (
+  <ToastProvider>
+    <ShellLayout {...props} />
+  </ToastProvider>
+);
+
+const NO_FINDINGS: readonly Finding[] = [];
+
+const ShellLayout = ({ data, now, review }: Props) => {
   const { mode, toggle } = useTheme();
   const [selection, setSelection] = useState<Selection>({ kind: "briefing" });
   const [viewed, setViewed] = useState<ReadonlySet<string>>(() => new Set());
@@ -97,82 +114,104 @@ export const Shell = ({ data, now }: Props) => {
   const markViewed = (paths: readonly string[]) =>
     setViewed((current) => new Set([...current, ...paths]));
 
+  // A jump from the review panel (P6-4): open the file; a panel shown as a drawer closes, and the
+  // draft or line the jump aims at takes the focus once it is rendered.
+  const jumpToFile = useCallback(
+    (path: string) => {
+      setSelection({ kind: "file", path });
+      if (overlay !== null) {
+        // No focus target here: the draft or line the jump aims at takes it once rendered.
+        returnFocus.current = null;
+        setDrawer(null);
+      }
+    },
+    [overlay],
+  );
+
   return (
-    <div className="app">
-      <div className="topbar-wrap" inert={overlay !== null}>
-        <a className="skip-link" href="#main">
-          Skip to main content
-        </a>
-        <TopBar
-          pull={data.pull}
-          myReview={data.myReview}
-          now={now}
-          mode={mode}
-          onToggleMode={toggle}
-          drawer={drawer}
-          onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
-        />
-      </div>
-      <div className="body">
-        <nav
-          id="sidebar"
-          className="col sidebar"
-          tabIndex={-1}
-          {...(overlay === "files"
-            ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
-            : { "aria-label": "Files" })}
-          data-open={drawer === "files"}
-          inert={overlay !== null && overlay !== "files"}
-        >
-          {drawer === "files" && (
-            <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
-          )}
-          {data.analysis === null ? (
-            <p className="placeholder">Files appear here once the analysis is ready.</p>
-          ) : (
-            <SidebarContent
-              groups={groups}
-              noise={noise}
-              unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
-              coverage={cover}
-              selection={selection}
-              viewed={viewed}
-              onSelect={select}
-              onToggleViewed={toggleViewed}
-              onMarkViewed={markViewed}
-            />
-          )}
-        </nav>
-        <main id="main" className="col main" tabIndex={-1} inert={overlay !== null}>
-          <MainContent
-            selection={selection}
-            analysis={data.analysis}
-            run={data.analysisRun}
-            headSha={data.pull.headSha}
-            onOpenFile={openFile}
-            files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+    <ReviewProvider
+      source={review}
+      analysisId={data.analysis === null ? null : data.analysisId}
+      analysisHead={data.analysis?.provenance.head.sha ?? null}
+      findings={data.analysis?.findings ?? NO_FINDINGS}
+      onOpenFile={jumpToFile}
+    >
+      <div className="app">
+        <div className="topbar-wrap" inert={overlay !== null}>
+          <a className="skip-link" href="#main">
+            Skip to main content
+          </a>
+          <TopBar
+            pull={data.pull}
+            myReview={data.myReview}
+            now={now}
+            mode={mode}
+            onToggleMode={toggle}
+            drawer={drawer}
+            onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
           />
-        </main>
-        <aside
-          id="review-panel"
-          className="panel"
-          tabIndex={-1}
-          {...(overlay === "panel"
-            ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
-            : { "aria-label": "Review panel" })}
-          data-open={drawer === "panel"}
-          inert={overlay !== null && overlay !== "panel"}
-        >
-          {drawer === "panel" && (
-            <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
-          )}
-          <RightPanelContent />
-        </aside>
+        </div>
+        <div className="body">
+          <nav
+            id="sidebar"
+            className="col sidebar"
+            tabIndex={-1}
+            {...(overlay === "files"
+              ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
+              : { "aria-label": "Files" })}
+            data-open={drawer === "files"}
+            inert={overlay !== null && overlay !== "files"}
+          >
+            {drawer === "files" && (
+              <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
+            )}
+            {data.analysis === null ? (
+              <p className="placeholder">Files appear here once the analysis is ready.</p>
+            ) : (
+              <SidebarContent
+                groups={groups}
+                noise={noise}
+                unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
+                coverage={cover}
+                selection={selection}
+                viewed={viewed}
+                onSelect={select}
+                onToggleViewed={toggleViewed}
+                onMarkViewed={markViewed}
+              />
+            )}
+          </nav>
+          <main id="main" className="col main" tabIndex={-1} inert={overlay !== null}>
+            <MainContent
+              selection={selection}
+              analysis={data.analysis}
+              run={data.analysisRun}
+              headSha={data.pull.headSha}
+              onOpenFile={openFile}
+              files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+            />
+          </main>
+          <aside
+            id="review-panel"
+            className="panel"
+            tabIndex={-1}
+            {...(overlay === "panel"
+              ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
+              : { "aria-label": "Review panel" })}
+            data-open={drawer === "panel"}
+            inert={overlay !== null && overlay !== "panel"}
+          >
+            {drawer === "panel" && (
+              <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
+            )}
+            <RightPanelContent />
+          </aside>
+        </div>
+        {overlay !== null && (
+          <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
+        )}
       </div>
-      {overlay !== null && (
-        <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
-      )}
-    </div>
+    </ReviewProvider>
   );
 };
 

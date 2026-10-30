@@ -15,5 +15,6 @@ export {
   plantAuditEvent,
   plantWebhookDelivery,
   seedOrg,
+  setAnalysisDocument,
   type SeededOrg,
 } from "./fixtures.js";

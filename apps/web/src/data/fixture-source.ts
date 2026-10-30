@@ -45,13 +45,21 @@ const matches = (fixture: RawShellData, ref: PullRef): boolean => {
   return pull.owner === ref.owner && pull.repo === ref.repo && pull.number === ref.number;
 };
 
+/**
+ * A stable analysis id per fixture PR (P6-4: the drafts API is keyed by it), as the server's
+ * shell data will carry the row's id: `00000000-0000-4000-8000-<PR number>`.
+ */
+export const fixtureAnalysisId = (number: number): string =>
+  `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
+
 export const createFixtureSource = (
   fixtures: readonly RawShellData[] = FIXTURES,
 ): ShellDataSource => ({
   load: async (ref: PullRef): Promise<RawShellData> => {
     const fixture = fixtures.find((f) => matches(f, ref));
     if (fixture === undefined) throw new ShellDataError("no such pull request");
-    return fixture;
+    if (fixture.analysis === null || fixture.analysisId !== undefined) return fixture;
+    return { ...fixture, analysisId: fixtureAnalysisId(ref.number) };
   },
 });
 

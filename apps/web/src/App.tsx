@@ -5,9 +5,10 @@ import {
   type ShellData,
   type ShellDataSource,
 } from "./data/shell-data.js";
+import type { ReviewSource } from "./data/review-data.js";
 import { Shell } from "./shell/Shell.js";
 
-type Props = { source: ShellDataSource; pull: PullRef };
+type Props = { source: ShellDataSource; pull: PullRef; review: ReviewSource };
 
 type State = { kind: "loading" } | { kind: "ready"; data: ShellData } | { kind: "failed" };
 
@@ -15,7 +16,7 @@ type State = { kind: "loading" } | { kind: "ready"; data: ShellData } | { kind: 
  * Loads the shell's data through the port, validates it here (the one place, so no source can
  * skip it) and keeps "updated N ago" current.
  */
-export const App = ({ source, pull }: Props) => {
+export const App = ({ source, pull, review }: Props) => {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
 
@@ -37,7 +38,7 @@ export const App = ({ source, pull }: Props) => {
     return () => window.clearInterval(timer);
   }, []);
 
-  if (state.kind === "ready") return <Shell data={state.data} now={now} />;
+  if (state.kind === "ready") return <Shell data={state.data} now={now} review={review} />;
   return (
     <main className="status-page" id="main">
       <p role={state.kind === "failed" ? "alert" : "status"}>

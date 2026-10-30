@@ -12,6 +12,7 @@ import {
   markMemberRemoved,
   newOrgId,
   seedOrg,
+  setAnalysisDocument,
   startPostgres,
   type SeededOrg,
   type TestPostgres,
@@ -22,6 +23,7 @@ import {
   githubEndpoints,
 } from "@rocky-reviews/forge-github";
 import { TEST_WEBHOOK_SECRET } from "@rocky-reviews/forge-github/testing";
+import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "json" };
 import { createLogger } from "@rocky-reviews/log";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pg from "pg";
@@ -108,6 +110,18 @@ const review = (method: "GET" | "other", targetsOrgA: boolean): Row => ({
   noActiveOrg: "no_active_org",
 });
 
+/** A member's own drafts (`drafts.own`): every role of the active org; another org's ids 404. */
+const drafts = (method: "GET" | "other"): Row => ({
+  anonymous: method === "GET" ? "unauthenticated" : "csrf",
+  member: "allow",
+  admin: "allow",
+  owner: "allow",
+  removed: "not_a_member",
+  crossOrg: "allow",
+  otherOrg: "not_found",
+  noActiveOrg: "no_active_org",
+});
+
 const EXPECTED: Readonly<Record<string, Row>> = {
   "GET /healthz": PUBLIC_GET,
   "HEAD /healthz": PUBLIC_GET,
@@ -146,8 +160,22 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   "GET /api/inbox": review("GET", false),
   "HEAD /api/inbox": review("GET", false),
   "POST /api/inbox/approvals": review("other", true),
+  // P6-4 (ADR 0027): every member's own drafts, in their active org, with GitHub read access.
+  "GET /api/analyses/:analysisId/review": drafts("GET"),
+  "HEAD /api/analyses/:analysisId/review": drafts("GET"),
+  "POST /api/analyses/:analysisId/drafts/:findingId": drafts("other"),
+  "POST /api/analyses/:analysisId/comments": drafts("other"),
+  // The comment id is nobody's: allowed callers reach the handler, which finds nothing.
+  "DELETE /api/analyses/:analysisId/comments/:commentId": {
+    ...drafts("other"),
+    member: "not_found",
+    admin: "not_found",
+    owner: "not_found",
+    crossOrg: "not_found",
+  },
 };
 
+const NOBODYS_COMMENT = "00000000-0000-4000-8000-000000000000";
 const PUBLIC = new URL("https://rocky.example.com/");
 const ORIGIN = PUBLIC.origin;
 const SESSION = "__Host-rocky_session";
@@ -265,6 +293,9 @@ beforeAll(async () => {
     await seedOrg(w, newOrgId(), { installationId: 91 }),
     await seedOrg(w, newOrgId(), { installationId: 92 }),
   ]);
+  // P6-4: the drafts routes read findings and hunks from a real document.
+  await setAnalysisDocument(db, A.orgId, A.analysisId, pr847);
+  await setAnalysisDocument(db, B.orgId, B.analysisId, pr847);
   await member(A, FORGE.owner, "owner");
   await member(A, FORGE.admin, "admin");
   await member(A, FORGE.member, "member");
@@ -341,7 +372,11 @@ const reset = async () => {
 
 const requestFor = (key: string) => {
   const [method, path] = key.split(" ") as [string, string];
-  const url = path.replace(":memberId", idOf(A, FORGE.target)).replace(":analysisId", A.analysisId);
+  const url = path
+    .replace(":memberId", idOf(A, FORGE.target))
+    .replace(":analysisId", A.analysisId)
+    .replace(":findingId", "F1")
+    .replace(":commentId", NOBODYS_COMMENT);
   const body =
     path === "/api/org/members/:memberId" && method === "PATCH"
       ? { role: "admin" }
@@ -353,11 +388,15 @@ const requestFor = (key: string) => {
             ? { zen: "x" }
             : path === "/api/inbox/approvals"
               ? { pullRequests: [{ id: A.pullRequestId, headSha: "a".repeat(40) }] }
-              : undefined;
+              : path === "/api/analyses/:analysisId/drafts/:findingId"
+                ? { action: "send_to_agent" }
+                : path === "/api/analyses/:analysisId/comments"
+                  ? { path: "src/api/index.ts", line: 21, body: "x" }
+                  : undefined;
   return { method, url, body };
 };
 
-const outcomeOf = (res: LightMyRequestResponse, from: number): Outcome => {
+const outcomeOf = (res: LightMyRequestResponse, from: number, method: string): Outcome => {
   const denial = lines
     .slice(from)
     .map((l) => JSON.parse(l) as { access?: { outcome: string; reason: Outcome } })
@@ -365,7 +404,9 @@ const outcomeOf = (res: LightMyRequestResponse, from: number): Outcome => {
   if (denial?.access !== undefined) return denial.access.reason;
   if (res.statusCode >= 500) return "server_error";
   if (res.statusCode === 403 && res.body.includes('"error":"csrf"')) return "csrf";
-  if (res.statusCode === 404 && res.body.includes('"error":"not_found"')) return "not_found";
+  // A HEAD answer has no body to read the error from (Fastify derives it from the GET).
+  if (res.statusCode === 404 && (method === "HEAD" || res.body.includes('"error":"not_found"')))
+    return "not_found";
   return "allow";
 };
 
@@ -386,7 +427,7 @@ const call = async (key: string, persona: Persona) => {
     headers,
     ...(body === undefined ? {} : { payload: JSON.stringify(body) }),
   });
-  return { res, outcome: outcomeOf(res, from) };
+  return { res, outcome: outcomeOf(res, from, method) };
 };
 
 const keyOf = (e: PolicyEntry) => `${e.method} ${e.url}`;
@@ -431,6 +472,10 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "POST /webhooks/github": "public",
       "GET /api/inbox": "pull_requests.review",
       "POST /api/inbox/approvals": "pull_requests.review",
+      "GET /api/analyses/:analysisId/review": "drafts.own",
+      "POST /api/analyses/:analysisId/drafts/:findingId": "drafts.own",
+      "POST /api/analyses/:analysisId/comments": "drafts.own",
+      "DELETE /api/analyses/:analysisId/comments/:commentId": "drafts.own",
     });
   });
 

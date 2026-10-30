@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./test.js";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { MODES, settle, WIDTHS } from "./support.js";
