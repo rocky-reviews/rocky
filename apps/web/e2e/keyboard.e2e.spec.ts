@@ -194,11 +194,9 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   // changes is pre-selected: F1 is critical), Keep reviewing and Submit; Enter posts once.
   await press(page, "ControlOrMeta+Enter");
   await expect(finish.locator(".post-list > li")).toHaveCount(7);
-  // Each comment's source box is a tab stop (it scrolls when long), then the summary.
-  for (let i = 0; i < 7; i++) {
-    await press(page, "Tab");
-    await expect(finish.locator(".post-raw").nth(i)).toBeFocused();
-  }
+  // The list scrolls in its own box (P6-9): one tab stop, then the summary.
+  await press(page, "Tab");
+  await expect(finish.getByRole("region", { name: "Comments to post" })).toBeFocused();
   await press(page, "Tab");
   await expect(finish.getByRole("textbox", { name: "Overall comment (optional)" })).toBeFocused();
   await page.keyboard.type("Four auth issues to fix before merge; smaller items inline (k, j).");
@@ -213,10 +211,12 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await expect(request).toBeChecked();
   await press(page, "Tab");
   await expect(finish.getByRole("button", { name: "Keep reviewing" })).toBeFocused();
-  await press(page, "Tab");
   const submit = finish.getByRole("button", { name: "Submit review" });
-  await expect(submit).toBeFocused();
+  // Submit is off for a moment after the modal opens; with the list as one tab stop (P6-9)
+  // the keyboard can reach it sooner than that.
   await expect(submit).toHaveAttribute("data-armed", "true");
+  await press(page, "Tab");
+  await expect(submit).toBeFocused();
   await press(page, "Enter");
   await press(page, "Enter");
   await expect(finish).toHaveCount(0);

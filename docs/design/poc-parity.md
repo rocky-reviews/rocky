@@ -4,7 +4,8 @@ Every feature, state, interaction and shortcut in `design-poc/index.html`, mappe
 that builds it in the real app (task P0-9). Screenshots of each state: [`poc/README.md`](poc/README.md).
 
 Phase 6 PRs tick items here (`[x]` + link to the screenshot that proves it). Phase 6 is done
-when every item is `[x]` or has a written reason in **Intentional differences**.
+when every item is `[x]` or has a written reason in **Intentional differences**. The P6-9 audit
+compared every state side by side and checked these ticks: [`parity-audit.md`](parity-audit.md).
 
 ## Top bar
 
@@ -17,8 +18,8 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] P6-1 · Existing comments count (from GitHub) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · "View on GitHub ↗" link (opens the PR) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); built from validated owner/repo/number only
 - [x] P6-1 · Light/dark toggle (☾/☀), remembered per browser, defaults to system — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); no flash on load, storage failures tolerated (`shell.e2e.spec.ts` theme tests)
-- [x] P6-5 · "? Shortcuts" button — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-375-dark](../../apps/web/e2e/__screenshots__/pr-shell-375-dark.png) (just "?" below 760 px, kept there so the dialog and its off switch are reachable at every width); opens the shortcuts dialog (`keyboard.e2e.spec.ts` "the shortcuts dialog")
-- [x] P6-6 · "Finish review" primary button with pending-comment count — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png), [finish-375-dark](../../apps/web/e2e/__screenshots__/finish-375-dark.png); the count is accepted drafts plus own comments not yet posted (`Shell.test.tsx`, `finish.e2e.spec.ts`)
+- [x] P6-5 · "? Shortcuts" button — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-375-dark](../../apps/web/e2e/__screenshots__/pr-shell-375-dark.png) (just "?" below 1180 px, kept below 760 px so the dialog, its off switch and, there, the theme toggle are reachable at every width); opens the shortcuts dialog (`keyboard.e2e.spec.ts` "the shortcuts dialog")
+- [x] P6-6 · "Finish review" primary button with pending-comment count — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png), [finish-375-dark](../../apps/web/e2e/__screenshots__/finish-375-dark.png); the count is accepted drafts plus own comments not yet posted (`Shell.test.tsx`, `finish.e2e.spec.ts`); the label is visible at every width since P6-9 (it was hidden below 760 px: [audit D2](parity-audit.md))
 
 ## Sidebar (triage)
 
@@ -64,7 +65,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] Draft card: "✦ AI draft", severity pill, confidence %, "Only you can see this until you accept it" — [drafts-card-1440-light](../../apps/web/e2e/__screenshots__/drafts-card-1440-light.png), [drafts-card-375-dark](../../apps/web/e2e/__screenshots__/drafts-card-375-dark.png); `DraftCard.test.tsx`
 - [x] Title, body (inline code), suggested-change mini diff (with optional context line) — [drafts-card-1440-dark](../../apps/web/e2e/__screenshots__/drafts-card-1440-dark.png); the "−" lines are the range's lines from the diff
 - [x] Project-memory evidence line with source — `DraftCard.test.tsx` "shows the project-memory evidence"; on screen for F2 ([drafts-card-1024-light](../../apps/web/e2e/__screenshots__/drafts-card-1024-light.png) shows F1, which cites none)
-- [x] Accept (a) → becomes "@you · Pending · from AI draft" with Undo — [drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png), [drafts-accepted-375-light](../../apps/web/e2e/__screenshots__/drafts-accepted-375-light.png); kept on the server (`drafts.e2e.spec.ts` "accept → refresh…"); `a` key and hint since P6-5 [keys-accept-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-light.png)
+- [x] Accept (a) → becomes "@login · Pending · from AI draft" with Undo (the reviewer's login since P6-9, "you" until the session loads; it read "You": [audit D10](parity-audit.md)) — [drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png), [drafts-accepted-375-light](../../apps/web/e2e/__screenshots__/drafts-accepted-375-light.png); kept on the server (`drafts.e2e.spec.ts` "accept → refresh…"); `a` key and hint since P6-5 [keys-accept-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-light.png)
 - [x] Edit (e) → textarea → "Save as my comment" → "edited from AI draft" — [drafts-edit-1440-light](../../apps/web/e2e/__screenshots__/drafts-edit-1440-light.png), [drafts-edit-375-dark](../../apps/web/e2e/__screenshots__/drafts-edit-375-dark.png); ⌘/Ctrl+Enter saves, Escape cancels; `e` since P6-5
 - [x] Dismiss (d) → reason chips (Not a real issue / Intentional / Not worth it here / Already handled elsewhere / Cancel) → collapsed "dismissed (reason)" with Undo — [drafts-dismiss-1440-dark](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-dark.png), [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png); the reason is stored as a fixed code for P8; `d` since P6-5
 - [x] "Send to agent ↗" copies a fix prompt (toast) — `drafts.e2e.spec.ts` "send to agent copies the fix prompt…" (clipboard checked); the copy is recorded and shown as "✓ Fix prompt copied" after a reload
@@ -90,7 +91,7 @@ All in `finish.e2e.spec.ts` and `FinishReview.test.tsx` unless noted; rules in
 - [x] Warning: n AI drafts undecided, won't be posted — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png)
 - [x] Exact list "Will be posted to GitHub as @you (n)" — [finish-covered-1440-light](../../apps/web/e2e/__screenshots__/finish-covered-1440-light.png); the server's list (P3-5 `GET …/review`), each body shown as its Markdown source (the POC showed titles only): "the modal lists exactly the server's plan… and the click posts exactly it"
 - [x] Overall comment textarea + "✦ Draft a summary from my comments" — [finish-covered-1440-light](../../apps/web/e2e/__screenshots__/finish-covered-1440-light.png); the draft is composed from the items to post, no model call, and is a suggestion the person edits or clears
-- [x] Verdict: Comment / Approve / Request changes; Request changes pre-selected (with reason) when a critical/high finding was accepted — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png); Comment is suggested when there is something to post, Approve is suggested but **never pre-selected** (the POC pre-selected it; an approval is the person's pick), and Submit is off until a verdict is picked
+- [x] Verdict: Comment / Approve / Request changes; Request changes pre-selected (with reason) when a critical/high finding was accepted — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png); Comment is suggested when there is something to post, Approve is suggested but **never pre-selected** (the POC pre-selected it; an approval is the person's pick), and Submit is off until a verdict is picked; since P6-9 the suggested verdict and Submit are in view when the modal opens (the list scrolls in its own box: [audit D3](parity-audit.md), `finish.e2e.spec.ts` "the modal fits")
 - [x] Keep reviewing / Submit review → toast + status pill updates — [finish-posted-1440-light](../../apps/web/e2e/__screenshots__/finish-posted-1440-light.png), [finish-posted-375-dark](../../apps/web/e2e/__screenshots__/finish-posted-375-dark.png); the posted drafts and comments then read "Posted" and lose Undo / Delete
 - [x] (not in the POC) Every server answer in words: stale / new commits reload the list, GitHub's refusal with its reason, a lost or unusable answer says the review may exist and links to GitHub ("every answer is shown honestly and posts nothing by itself") — [finish-failed-1440-light](../../apps/web/e2e/__screenshots__/finish-failed-1440-light.png), [finish-unknown-1440-light](../../apps/web/e2e/__screenshots__/finish-unknown-1440-light.png), [finish-sending-1440-light](../../apps/web/e2e/__screenshots__/finish-sending-1440-light.png), [finish-verdict-375-light](../../apps/web/e2e/__screenshots__/finish-verdict-375-light.png)
 - [x] (not in the POC) Invisible characters in a comment (bidi overrides, zero-width spaces) are shown as `U+…` markers with a warning ("invisible characters… show as markers and are named")
@@ -166,10 +167,19 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".
-- **Top bar at ≤ 760 px (P6-1).** The brand mark is hidden (its name already was in the POC), the
-  title stays on one line with `#number` outside the clipped text (full title on hover), and the
-  link reads "GitHub ↗" beside the counts ("View on" is kept for screen readers). The bar is
-  about 96 px tall, close to the POC's 92 px.
+- **Top bar at ≤ 760 px (P6-1, P6-9).** The brand mark is hidden (its name already was in the
+  POC). The Files toggle sits beside the PR, whose title has the full width (up to two lines,
+  `#number` outside the clipped text) above two lines of details; the link reads "GitHub ↗"
+  beside the counts ("View on" is kept for screen readers). "?", "Finish review" with its count
+  and the Review panel toggle take a row of their own below, in DOM order. The light/dark toggle
+  moves into the shortcuts dialog (`m` still works). The bar is about 119 px tall (the POC's
+  92 px bar cut off its own Finish button, defect 1). Until P6-9 the actions shared the title's
+  row, which left the title ten characters and the Finish button only its count
+  ([audit D1, D2](parity-audit.md)).
+- **Top bar from 761 to 1180 px (P6-9).** The "?" button drops the word "Shortcuts" (its name
+  is unchanged), giving the Review panel toggle its room, so the details wrap on two lines as in
+  the POC. At every width the approvals and comments wrap together and the GitHub link on its
+  own, as in the POC ([audit D6](parity-audit.md)).
 - **Drawer toggles (P6-1).** The top bar gains a Files toggle (≤ 760 px) and a Review panel
   toggle (≤ 1180 px), and a skip link; the POC has neither (defect 5).
 - **File view (P6-3).** Line numbers use `--muted` (POC `--faint`, 2.4–2.6:1); comments and
@@ -179,7 +189,8 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   takes its own line in the sticky header. Only new-side lines take a comment (as in the POC).
   "✦ Polish with AI" is left out of the composer until there is an AI endpoint for it. Invisible
   characters in code (bidi controls, zero-width, tag characters) show as visible `U+XXXX` markers. The AI notes are hidden when the
-  analysis is for an older push than the diff.
+  analysis is for an older push than the diff. An added file has one line-number column (the POC
+  kept an empty 44 px old-number column), so code and notes start further left (P6-9 audit A10).
 - **Briefing contrast (P6-2).** As in the shell: the verdict level ("Critical risk") is set in
   `--text` and the level is carried by the box tint and a bar on its left (POC: level colour on
   tint); the risk-table labels use `--text` on the level tint; change-map lane labels and memory
@@ -217,7 +228,10 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   `--ai`; colour functions are not allowed outside the tokens) with the cyan left bar kept, and
   "Send to agent" has a cyan border. The dismissal note says Rocky keeps the reason rather than "will remember", since
   project memory (P8) does not learn yet. Drafts are hidden on a diff newer than the analysis,
-  like the AI flags. The POC's Ask tab is not drawn until P9-2.
+  like the AI flags. The POC's Ask tab is not drawn until P9-2. While a draft is edited, Save /
+  Cancel and the "⌘↵ / Ctrl+Enter to save · Esc to cancel" hint sit under the textarea, above the
+  suggested change (POC: below it), next to the field they act on (P6-9 audit A12). Pending
+  comments are signed with the reviewer's login (P6-9).
 - **Not yet in the shell:** the right panel's Ask tab comes with P9-2.
 - **Finish review (P6-6).** The list shows each comment's Markdown source in a box (the POC
   listed titles only): what GitHub receives is what the person reads. Approve is suggested but
@@ -225,7 +239,10 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   `--you` (the POC used a 22% `color-mix`, not allowed outside the tokens). Submit is disabled
   until a verdict is picked and, for Comment / Request changes, until there is something to
   post or a summary. The modal shows the server's answers (stale, new commits, GitHub's refusal,
-  a lost answer) which the POC's mock never had.
+  a lost answer) which the POC's mock never had. P6-9: the list and its caption scroll in one
+  box of their own so the verdict and Submit are in view when the modal opens (every comment
+  stays whole); the head is sticky like the footer; the summary box is two rows (POC three);
+  on phones only the suggested verdict keeps its one-line reason.
 - **Shortcuts (P6-5).** "? Shortcuts" stays in the top bar below 760 px as "?" (the POC hid it),
   so the dialog and its switch can be reached at every width. The dialog adds a "Single-key
   shortcuts" switch (WCAG 2.1.4) and a "?" row; "Ask" reads "(not available yet)" until P9-2. The

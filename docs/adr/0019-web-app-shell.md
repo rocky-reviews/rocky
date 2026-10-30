@@ -46,7 +46,8 @@ matching the POC at 375/1024/1440 px in light and dark.
    `<head>` (no inline script, so a strict CSP needs no hash), sets `<html data-mode>` from the
    saved choice or `prefers-color-scheme` before the first paint. The app then follows system
    changes until the viewer toggles; the choice is saved in `localStorage` with every access in
-   `try/catch`.
+   `try/catch`. P6-9: at ≤ 760 px the toggle leaves the top bar for the shortcuts dialog (the
+   `m` key works at every width), so the PR title and a labelled Finish review button fit.
 6. **Responsive panels as drawers.** At the POC's breakpoints (right panel hidden at ≤ 1180 px,
    sidebar at ≤ 760 px) top-bar toggles open them as drawers (POC defect 5). An open drawer is a
    modal dialog (`role="dialog"`, `aria-modal`, labelled by its heading): the rest of the page,

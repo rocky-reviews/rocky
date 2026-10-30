@@ -191,7 +191,7 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
 
       <footer className="file-foot">
         <span className="hint">
-          {showDiff && commentable && "Select a new-side line number to add your own comment"}
+          {showDiff && commentable && "Click a line number to add your own comment"}
         </span>
         {next !== undefined && (
           <button type="button" className="btn btn-sm" onClick={goNext}>

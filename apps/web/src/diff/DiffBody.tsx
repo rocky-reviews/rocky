@@ -41,6 +41,7 @@ import { Prose } from "./Prose.js";
 import { Code } from "./Code.js";
 import { type Language, languageFor } from "./tokenize.js";
 import { useVirtualList } from "./use-virtual-list.js";
+import { Author } from "../drafts/Author.js";
 
 const ESTIMATE: Record<DiffItem["kind"], number> = { hunk: 30, note: 20, line: 20, inline: 60 };
 
@@ -510,10 +511,7 @@ const MyComment = ({
 }) => (
   <div className="mine">
     <div className="mine-head">
-      <span className="avatar" aria-hidden="true">
-        Y
-      </span>
-      <b>You</b>
+      <Author />
       <PostedPill posted={comment.posted} />
       <span className="spacer" />
       {comment.posted === null && (

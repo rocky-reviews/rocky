@@ -26,6 +26,7 @@ import type { Language } from "../diff/tokenize.js";
 import { Kbd, useKeyboard } from "../keyboard/KeyboardContext.js";
 import { isMac } from "../keyboard/keymap.js";
 import { useReview } from "./ReviewProvider.js";
+import { Author } from "./Author.js";
 
 export const REASON_LABEL: Record<DismissReason, string> = {
   not_an_issue: "Not a real issue",
@@ -150,10 +151,7 @@ export const DraftCard = ({ finding, original, language }: Props) => {
         data-posted={posted ?? undefined}
       >
         <div className="mine-head">
-          <span className="avatar" aria-hidden="true">
-            Y
-          </span>
-          <b>You</b>
+          <Author />
           <PostedPill posted={posted} />
           <span className="from-ai">· {decision.edited ? "edited from" : "from"} AI draft</span>
           <span className="spacer" />

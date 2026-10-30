@@ -206,10 +206,20 @@ test.describe("states", () => {
     await expect(page.getByRole("status")).toContainText("Analysing this pull request");
   });
 
-  test("without a document the sidebar says files come later", async ({ page }) => {
+  test("without a document the sidebar says files come later, or why there are none", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await openBriefing(page, STATE_PULLS.failed);
+    await openBriefing(page, STATE_PULLS.running);
     await expect(page.locator("#sidebar")).toContainText("Files appear here once");
+    // P6-9: a failed analysis will not produce files by itself, so it does not promise them.
+    await openBriefing(page, STATE_PULLS.failed);
+    await expect(page.locator("#sidebar")).toContainText("No file list: the analysis failed.");
+    await expect(page.locator("#sidebar")).not.toContainText("Files appear here once");
     await expect(page.locator("#main")).toContainText("Code: repository_inaccessible");
+    await openBriefing(page, STATE_PULLS.superseded);
+    await expect(page.locator("#sidebar")).toContainText(
+      "No file list: the analysis is out of date.",
+    );
   });
 });

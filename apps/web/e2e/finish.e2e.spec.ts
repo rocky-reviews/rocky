@@ -665,7 +665,7 @@ test.describe("the list is shown as source, with nothing hidden", () => {
     reviewApi.set("F1", { state: "accepted", edited: true, body: LONG });
     await open(page);
     await openFinish(page);
-    const box = dialog(page).locator(".post-raw").first();
+    const box = dialog(page).locator(".post-scroll");
     await expect(box).toHaveAttribute("tabindex", "0");
     expect(await seriousViolations(page)).toEqual([]);
     await armed(page);
@@ -680,16 +680,91 @@ test.describe("the list is shown as source, with nothing hidden", () => {
     await expect(dialog(page)).toHaveCount(0);
   });
 
-  test("at phone width the Finish button keeps its count and its name, and the title stays", async ({
+  test("at phone width the Finish button keeps its count and its label, and the title stays", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await open(page);
     await expect(finishButton(page)).toHaveAccessibleName(/Finish review.*0 comments to post/);
     await expect(finishButton(page).locator(".count")).toBeVisible();
+    // P6-9 (D2): the label is shown, not only read out.
+    await expect(finishButton(page).locator(".label")).toBeVisible();
     await expect(page.locator(".topbar .pr-title")).toBeVisible();
     const bar = await page.locator("header.topbar").boundingBox();
     expect(bar?.height ?? 999).toBeLessThan(130);
+  });
+});
+
+/** P6-9 (parity audit D3–D5): the verdict and Submit are in view when the modal opens. */
+test.describe("the modal fits", () => {
+  /** True when `el` is wholly inside the modal's visible area, between its head and foot. */
+  const inView = (page: Page, selector: string) =>
+    dialog(page)
+      .locator(selector)
+      .evaluate((el) => {
+        const modal = el.closest(".finish-modal");
+        if (modal === null) return false;
+        const head = modal.querySelector(".modal-head")?.getBoundingClientRect();
+        const foot = modal.querySelector(".modal-foot")?.getBoundingClientRect();
+        const box = el.getBoundingClientRect();
+        const view = modal.getBoundingClientRect();
+        const top = Math.max(view.top, head?.bottom ?? view.top);
+        const bottom = Math.min(view.bottom, foot?.top ?? view.bottom, window.innerHeight);
+        return box.top >= top - 1 && box.bottom <= bottom + 1;
+      });
+
+  const cases = [
+    { name: "1440 × 900, one comment", size: { width: 1440, height: 900 }, two: false },
+    { name: "1440 × 900, two comments", size: { width: 1440, height: 900 }, two: true },
+    { name: "375 × 812, one comment", size: { width: 375, height: 812 }, two: false },
+  ];
+  for (const c of cases) {
+    test(`the suggested verdict and Submit are in view on open (${c.name})`, async ({
+      page,
+      reviewApi,
+    }) => {
+      await page.setViewportSize(c.size);
+      reviewApi.set("F1", { state: "accepted", edited: false, body: "x" });
+      if (c.two)
+        reviewApi.set("F5", { state: "accepted", edited: true, body: "Add `on delete cascade`." });
+      await open(page);
+      await openFinish(page);
+      await expect(dialog(page).getByRole("radio", { name: /Request changes/ })).toBeChecked();
+      expect(await inView(page, ".verdict-opts label:has(input:checked)")).toBe(true);
+      expect(await inView(page, ".verdict-opts")).toBe(true);
+      await expect(submitButton(page)).toBeInViewport();
+      // Every comment is still whole: the list scrolls in its own box, nothing is cut.
+      const list = dialog(page).getByRole("region", { name: "Comments to post" });
+      await list.evaluate((el) => (el.scrollTop = el.scrollHeight));
+      await expect(dialog(page).locator(".post-list > li").last()).toBeInViewport();
+      for (const raw of await dialog(page).locator(".post-raw").all()) {
+        expect(await raw.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+      }
+    });
+  }
+
+  test("phone: the title and Close stay in view while the modal scrolls", async ({
+    page,
+    reviewApi,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    reviewApi.set("F1", { state: "accepted", edited: false, body: "x" });
+    await open(page);
+    await openFinish(page);
+    await dialog(page).evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(
+      dialog(page).getByRole("heading", { name: "Finish your review" }),
+    ).toBeInViewport();
+    await expect(dialog(page).getByRole("button", { name: "Close" })).toBeInViewport();
+  });
+
+  test("the login is shown as written in the upper-case heading", async ({ page, reviewApi }) => {
+    reviewApi.set("F1", { state: "accepted", edited: false, body: "x" });
+    await open(page);
+    await openFinish(page);
+    const who = dialog(page).locator("#finish-list-title bdi");
+    await expect(who).toHaveText(`@${ME.login}`);
+    expect(await who.evaluate((el) => getComputedStyle(el).textTransform)).toBe("none");
   });
 });
 

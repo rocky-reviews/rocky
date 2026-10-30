@@ -7,7 +7,9 @@
   is "may or may not have been posted" and the retry reuses the idempotency key; full paths;
   a list over GitHub's limits is shown and blocks Submit; content-carried drafts from a re-run
   (#39) are read-only; `refresh` keeps the page's state; invisible characters are shown as
-  markers; the phone-width button, disabled styles, sticky footer.
+  markers; the phone-width button, disabled styles, sticky footer. P6-9 (parity audit D2–D5):
+  the list scrolls in its own box so the verdict and Submit are in view when the modal opens;
+  sticky head; the Finish button keeps its label on phones; the login keeps its case.
 - **Builds on:** [ADR 0026](0026-posting-as-the-user.md) (P3-5: the preview/submit API, the
   digest, idempotency, outcomes), [ADR 0027](0027-review-drafts.md) (P6-4: drafts and pending
   comments), [ADR 0030](0030-keyboard-shortcuts.md) (P6-5: ⌘/Ctrl+Enter, modals and shortcuts),
@@ -40,13 +42,20 @@ only side effect in the whole product that a human cannot take back.
   drafts provider's state gives the counts (the Finish button's count, the undecided warning,
   the suggestion), the server's answer gives the items.
 - Each item is shown with its full location (`path:line`) and kind, and its `body` **as
-  Markdown source** in a focusable `<pre>`, as React text inside a `<bdi>`. No Markdown
+  Markdown source** in a `<pre>`, as React text inside a `<bdi>`. No Markdown
   rendering: a rendering could hide a link's target, an image, a mention or HTML, and GitHub's
   rendering is not ours to imitate. Characters a reader cannot see (bidi controls, zero-width
   and joiner characters, C0/C1 controls, tag characters) are shown as `U+…` markers with a
   warning line, since `<bdi>` isolates the body from its surroundings but not the text inside
-  it from an override. The caption says so. Long bodies scroll inside their box; nothing is
-  cut. A list GitHub would refuse (over 100 comments, a comment over 65,536 characters) is
+  it from an override. The caption says so. Nothing is cut or collapsed: every comment is
+  shown whole. P6-9: the list (with the caption) scrolls in **one box of its own**, a single
+  focusable, named region ("Comments to post"), capped in height (`.post-scroll`:
+  `90dvh − 660px` from 64 to 360 px; `100dvh − 720px` on phones) so the warnings, the summary,
+  the verdict with its suggestion and the footer are in view when the modal opens, at
+  1440 × 900 with one or two comments and at 375 × 812 (`finish.e2e.spec.ts` "the modal
+  fits"). The person scrolls the box to read the rest; nothing in it is hidden or shortened.
+  (Before P6-9 each body scrolled in its own box and the list pushed the verdict below the
+  fold.) A list GitHub would refuse (over 100 comments, a comment over 65,536 characters) is
   parsed with wide bounds and shown, and Submit is off with the reason.
 - The click sends the preview's `contentSha256` and `headSha`, the verdict, the summary, and
   an idempotency key, through `POST …/review` with the session's CSRF token
@@ -139,7 +148,11 @@ The shell renders it like the shortcuts dialog: the rest of the page is `inert`,
 (`trapTab`), focus starts on Close, Escape and a click outside close it (never while sending),
 focus returns to the opener (the Finish button) or to the main column. Single-key shortcuts are
 off while it is open (`ShortcutKeys` `active`); ⌘/Ctrl+Enter opens it (ADR 0030 §6 filled), and
-the top bar's "Finish review" button carries the pending count and `aria-keyshortcuts`.
+the top bar's "Finish review" button carries the pending count and `aria-keyshortcuts`. P6-9:
+the head (title and Close) is sticky like the footer, so Close stays in view on a phone; the
+footer's status line shares the buttons' row when it fits; on phones the options other than
+the suggested one show their names only (the suggested one keeps its reason), and the Finish
+button keeps its visible label at every width.
 
 ## Threat model
 
@@ -193,5 +206,7 @@ own bugs. Tenant and credential threats are the server's (ADR 0026 P1–P15) and
 - The key is reused only for the same digest. If an unknown answer did post, the reloaded list
   differs (the items are carried), so the retry is a new click: it is answered about the new,
   smaller list, never about the lost one; the modal shows the posted attempt above the list.
-- The POC's mobile breakpoints were not designed for this modal; at 375 px it scrolls inside
-  the viewport (screenshots in the PR).
+- The POC's mobile breakpoints were not designed for this modal. Since P6-9 it fits 375 × 812
+  with the fixture's warnings; longer warnings (many unviewed files, an in-flight attempt, an
+  error notice) can still push the verdict down, and the modal then scrolls with its head and
+  footer pinned. The list box can be as small as 64 px on short screens: whole, but scrolled.

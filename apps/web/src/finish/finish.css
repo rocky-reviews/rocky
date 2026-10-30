@@ -28,6 +28,13 @@
 .finish-modal > .modal-section {
   flex: none;
 }
+/* P6-9: the title and Close stay in view while the modal scrolls, like the footer. */
+.finish-modal > .modal-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+}
 .finish-modal > .modal-foot {
   flex: none;
   position: sticky;
@@ -129,6 +136,10 @@
 .finish-list h3 {
   margin: 0 0 var(--space-2);
 }
+/* The eyebrow is upper case; the login is shown as written. */
+.finish-list h3 bdi {
+  text-transform: none;
+}
 .finish-list > p + p,
 .finish-list > p + ol {
   margin-top: var(--space-2);
@@ -158,10 +169,6 @@
 .post-kind {
   color: var(--muted);
 }
-.post-raw:focus-visible {
-  outline: 2px solid var(--you);
-  outline-offset: 1px;
-}
 .post-raw {
   margin: 0;
   padding: var(--space-2) 10px;
@@ -174,9 +181,20 @@
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  /* Long comments scroll inside their box; nothing is cut. */
-  max-height: 240px;
+}
+/*
+ * P6-9: the list scrolls in its own box (ADR 0031), sized so the warnings, the summary, the
+ * verdict and the footer fit the modal when it opens; a comment is never cut, only scrolled to.
+ */
+.post-scroll {
+  max-height: clamp(64px, 90dvh - 660px, 360px);
   overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-md);
+}
+.post-scroll:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
 }
 
 .finish-summary textarea {
@@ -262,8 +280,9 @@
   gap: var(--space-2);
   padding: var(--space-3) 18px var(--space-4);
 }
+/* The status shares the buttons' row when it fits, and takes its own line when it does not. */
 .finish-blocked {
-  flex: 1 1 100%;
+  flex: 1 1 12em;
   margin: 0;
   min-height: 1.3em;
   text-align: right;
@@ -293,17 +312,19 @@
 }
 
 @media (max-width: 760px) {
-  /* The POC hid the label; it stays in the accessible name (visually hidden, not removed). */
-  .finish-btn .label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
+  /* P6-9: on a phone the modal takes the height it can, so the verdict fits when it opens. */
+  .modal.finish-modal {
+    max-height: calc(100dvh - 2 * var(--space-2));
   }
-  .finish-btn {
-    position: relative;
+  .post-scroll {
+    max-height: clamp(64px, 100dvh - 720px, 360px);
+  }
+  .finish-blocked {
+    flex-basis: 100%;
+  }
+  /* The options' meanings are plain from their names; the suggested one keeps its reason. */
+  .verdict-opts label:not(.suggested) small {
+    display: none;
   }
   .finish-modal .modal-section,
   .finish-modal .modal-foot {

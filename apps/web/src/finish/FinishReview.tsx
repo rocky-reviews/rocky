@@ -53,6 +53,7 @@ import {
   VERDICT_HINT,
   VERDICT_LABEL,
 } from "./finish-model.js";
+import { PathText } from "../lib/path-text.js";
 
 /** How long Submit stays inert after the modal opens (a double-click on the opener). */
 export const ARM_MS = 400;
@@ -320,7 +321,7 @@ export const FinishReview = ({
                 <Fragment key={path}>
                   {i > 0 && ", "}
                   <code>
-                    <bdi>{path}</bdi>
+                    <PathText path={path} />
                   </code>
                 </Fragment>
               ))}
@@ -404,18 +405,26 @@ export const FinishReview = ({
               {items.length === 0 ? (
                 <p className="finish-muted">No inline comments.</p>
               ) : (
-                <ol className="post-list">
-                  {items.map((item, i) => (
-                    <Item key={item.id} item={item} index={i} />
-                  ))}
-                </ol>
-              )}
-              {items.length > 0 && (
-                <p className="finish-fine">
-                  Each comment is shown exactly as GitHub will receive it (Markdown source), under
-                  your name. Characters you cannot see are shown as{" "}
-                  <mark className="invisible-char">U+…</mark> markers.
-                </p>
+                // P6-9: the list scrolls in its own box, so the verdict and Submit are in view
+                // when the modal opens; every comment stays whole inside it (ADR 0031).
+                // Scrollable, so focusable and named (axe scrollable-region-focusable).
+                <div
+                  className="post-scroll"
+                  role="region"
+                  tabIndex={0}
+                  aria-label="Comments to post"
+                >
+                  <ol className="post-list">
+                    {items.map((item, i) => (
+                      <Item key={item.id} item={item} index={i} />
+                    ))}
+                  </ol>
+                  <p className="finish-fine">
+                    Each comment is shown exactly as GitHub will receive it (Markdown source), under
+                    your name. Characters you cannot see are shown as{" "}
+                    <mark className="invisible-char">U+…</mark> markers.
+                  </p>
+                </div>
               )}
             </>
           )}
@@ -427,7 +436,7 @@ export const FinishReview = ({
           </label>
           <textarea
             id="finish-summary"
-            rows={3}
+            rows={2}
             placeholder="Overall comment (optional)"
             maxLength={MAX_REVIEW_BODY_CHARS}
             value={summary}
@@ -524,8 +533,7 @@ const Item = ({ item, index }: { item: PreviewItem; index: number }) => {
           comment.
         </p>
       )}
-      {/* Scrollable, so focusable and named (axe scrollable-region-focusable). */}
-      <pre className="post-raw" tabIndex={0} aria-labelledby={id}>
+      <pre className="post-raw" aria-labelledby={id}>
         <bdi>
           {revealInvisible(item.body).map((segment, i) =>
             segment.kind === "text" ? (

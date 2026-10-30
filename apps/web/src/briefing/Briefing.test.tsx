@@ -26,6 +26,7 @@ const render = (data: ShellData): string =>
 /** Text content without tags, whitespace collapsed. */
 const text = (html: string): string =>
   html
+    .replace(/<wbr\/>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;/g, "'")
     .replace(/&quot;/g, '"')

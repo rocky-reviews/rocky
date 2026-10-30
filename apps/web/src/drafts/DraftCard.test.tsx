@@ -182,7 +182,7 @@ describe("before the reviewer's decisions are loaded", () => {
 describe("decided drafts", () => {
   it("accepted: the reviewer's pending comment, from the AI draft, with Undo", () => {
     const html = render(F1, { decision: { state: "accepted", edited: false, body: F1.body } });
-    expect(text(html)).toMatch(/^Y You Pending · from AI draft Undo Invitee can choose/);
+    expect(text(html)).toMatch(/^Y you Pending · from AI draft Undo Invitee can choose/);
     expect(html).toContain('class="mine from-draft"');
     expect(html).toContain("Suggested change");
   });
@@ -212,12 +212,12 @@ describe("decided drafts", () => {
   it("accepted and posted to GitHub (P6-6): says Posted, read-only, no Undo", () => {
     const decision = { state: "accepted", edited: false, body: F1.body } as const;
     const posted = render(F1, { decision, posted: "posted" });
-    expect(text(posted)).toMatch(/^Y You Posted to GitHub, read-only · from AI draft Invitee/);
+    expect(text(posted)).toMatch(/^Y you Posted to GitHub, read-only · from AI draft Invitee/);
     expect(posted).not.toContain('data-role="undo"');
     expect(posted).toContain('data-posted="posted"');
     expect(posted).toContain('class="pending posted"');
     const posting = render(F1, { decision, posted: "posting" });
-    expect(text(posting)).toContain("You Posting… , read-only");
+    expect(text(posting)).toContain("you Posting… , read-only");
     expect(posting).not.toContain("<button");
   });
 

@@ -53,7 +53,7 @@ export const TopBar = ({
   const helpKey = useKeyShortcut("Shift+/");
 
   return (
-    <header className="topbar">
+    <header className="topbar pr-bar">
       <button
         type="button"
         className="icon-btn toggle-files"
@@ -100,18 +100,18 @@ export const TopBar = ({
               <span aria-hidden="true">💬 </span>
               {plural(pull.commentCount, "comment", "comments")}
             </span>
-            {url !== undefined && (
-              <a className="gh-link" href={url} target="_blank" rel="noopener noreferrer">
-                <span className="sr-only-sm">View on </span>GitHub <span aria-hidden="true">↗</span>
-                <span className="sr-only"> (opens in a new tab)</span>
-              </a>
-            )}
           </span>
+          {url !== undefined && (
+            <a className="gh-link" href={url} target="_blank" rel="noopener noreferrer">
+              <span className="sr-only-sm">View on </span>GitHub <span aria-hidden="true">↗</span>
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
+          )}
         </div>
       </div>
       <button
         type="button"
-        className="mode-btn"
+        className="mode-btn hide-sm"
         aria-label={`Switch to ${nextMode} mode`}
         aria-keyshortcuts={modeKey}
         title={`Switch to ${nextMode} mode${modeKey === undefined ? "" : " (m)"}`}
@@ -125,10 +125,11 @@ export const TopBar = ({
         aria-label="Keyboard shortcuts"
         aria-haspopup="dialog"
         aria-keyshortcuts={helpKey}
+        title="Keyboard shortcuts (?)"
         onClick={openHelp}
       >
         <kbd aria-hidden="true">?</kbd>
-        <span className="hide-sm" aria-hidden="true">
+        <span className="shortcuts-label" aria-hidden="true">
           Shortcuts
         </span>
       </button>
