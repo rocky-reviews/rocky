@@ -259,6 +259,37 @@ describe("only the server can build the review poster (P3-5 review round 1, N5)"
     },
   );
 
+  it.each(["apps/worker/src/planted.ts", "packages/llm/src/planted.ts"])(
+    "fails on any server source, static or dynamic, and on the poster reached dynamically, in %s (security-boundary nit 5)",
+    async (file) => {
+      const syntax = "no-restricted-syntax";
+      for (const code of [
+        'import { buildApp } from "../../server/src/app.js";\nexport const b = buildApp;\n',
+        'import { buildApp } from "../../../apps/server/src/app.js";\nexport const b = buildApp;\n',
+        'import * as server from "@rocky-reviews/server";\nexport const s = server;\n',
+      ]) {
+        expect(await ruleIds(file, code), code).toContain(rule);
+      }
+      for (const code of [
+        'export const s = await import("../../server/src/reviews/post-review.js");\n',
+        'export const s = await import("../../server/src/app.js");\n',
+        'export const s = await import("@rocky-reviews/server");\n',
+        'export const s = await import("../../forge-github/src/reviews.js");\n',
+        'const m = await import("@rocky-reviews/forge-github");\nexport const p = m.createGitHubReviewPoster;\n',
+        'const { createGitHubReviewPoster } = await import("@rocky-reviews/forge-github");\nexport const p = createGitHubReviewPoster;\n',
+      ]) {
+        expect(await ruleIds(file, code), code).toContain(syntax);
+      }
+      // The repo-wide restrictions still apply there (same rule id, repeated).
+      expect(
+        await ruleIds(
+          file,
+          'export const f = await import("@rocky-reviews/forge-github/testing");\n',
+        ),
+      ).toContain(syntax);
+    },
+  );
+
   it("allows the poster in the server, and other forge-github imports in the worker", async () => {
     expect(await ruleIds("apps/server/src/planted.ts", poster)).not.toContain(rule);
     expect(

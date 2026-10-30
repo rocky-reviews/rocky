@@ -111,7 +111,7 @@ export const loadReviewPlan = async (
   const items: ReviewPlanItem[] = [];
   const analysis = revisionId === null ? null : await latestDoneAnalysis(tx, revisionId);
   if (revisionId !== null && analysis !== null) {
-    items.push(...(await acceptedDrafts(tx, analysis, memberId)));
+    items.push(...(await acceptedDrafts(tx, revisionId, analysis, memberId)));
     items.push(...(await ownComments(tx, pr.id, revisionId, analysis.id, memberId)));
   }
   const { rows: latest } = await tx.query<SubmissionRow>(
@@ -140,10 +140,68 @@ export const loadReviewPlan = async (
 };
 
 /** Items carried by a submission that is posting or posted: never offered again. */
-const NOT_CARRIED = `not exists (
+const CARRIED_SQL = `exists (
   select 1 from review_submission_items i
     join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
    where i.org_id = $1 and i.kind = $2 and i.item_id = ITEM and s.status in ('posting', 'posted'))`;
+const NOT_CARRIED = `not ${CARRIED_SQL}`;
+
+/**
+ * Whether one item (a `findings_state` id for a draft, a `comments_pending` id for a comment) is
+ * carried by a submission that is posting or posted. P6-4's draft routes refuse to change such an
+ * item (`already_posted`, review fix S2); call it after `lockReviewPlan`, so a submission that
+ * starts concurrently is either seen here or sees the change (and answers `stale`).
+ */
+export const isCarried = async (
+  tx: TenantTx,
+  kind: "draft" | "comment",
+  itemId: string,
+): Promise<boolean> => {
+  const { rows } = await tx.query(`select 1 where ${CARRIED_SQL.replace("ITEM", "$3")}`, [
+    tx.orgId,
+    kind,
+    itemId,
+  ]);
+  return rows.length > 0;
+};
+
+/**
+ * A finding of the member's that a posting or posted submission carried from **any** analysis of
+ * the same revision (review fix S1): a re-run of the analysis on the same head gives new
+ * `findings_state` ids, so the id check alone would offer the same finding again. Matched by
+ * finding id, which fails closed (a different finding reusing a carried id is not offered).
+ * Parameters: $1 org, $4 member, $5 revision.
+ */
+const FINDING_NOT_CARRIED = `not exists (
+  select 1 from review_submission_items i
+    join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
+    join findings_state g on g.org_id = i.org_id and g.id = i.item_id
+    join analyses ga on ga.org_id = g.org_id and ga.id = g.analysis_id
+   where i.org_id = $1 and i.kind = 'draft' and s.status in ('posting', 'posted')
+     and s.submitted_by = $4 and g.member_id = $4 and g.finding_id = f.finding_id
+     and ga.revision_id = $5)`;
+
+/**
+ * Whether a draft decision may no longer change: its row, or the same finding of the member's on
+ * another analysis of the revision, is carried by a posting or posted submission (S1, S2). Call
+ * it after `lockReviewPlan`.
+ */
+export const isDraftCarried = async (
+  tx: TenantTx,
+  draft: {
+    readonly findingStateId: string;
+    readonly memberId: string;
+    readonly revisionId: string;
+  },
+): Promise<boolean> => {
+  const { rows } = await tx.query(
+    `select 1 from findings_state f
+      where f.org_id = $1 and f.id = $3
+        and (${CARRIED_SQL.replace("ITEM", "f.id")} or ${FINDING_NOT_CARRIED.replace("not exists", "exists")})`,
+    [tx.orgId, "draft", draft.findingStateId, draft.memberId, draft.revisionId],
+  );
+  return rows.length > 0;
+};
 
 interface DoneAnalysis {
   readonly id: string;
@@ -173,6 +231,7 @@ const latestDoneAnalysis = async (
  */
 const acceptedDrafts = async (
   tx: TenantTx,
+  revisionId: string,
   analysis: DoneAnalysis,
   memberId: string,
 ): Promise<ReviewPlanItem[]> => {
@@ -188,8 +247,9 @@ const acceptedDrafts = async (
         and c.source in ('ai', 'ai_edited')
       where f.org_id = $1 and f.analysis_id = $3 and f.state = 'accepted'
         and f.member_id = $4 and f.decided_by = $4
-        and ${NOT_CARRIED.replace("ITEM", "f.id")}`,
-    [tx.orgId, "draft", analysis.id, memberId],
+        and ${NOT_CARRIED.replace("ITEM", "f.id")}
+        and ${FINDING_NOT_CARRIED}`,
+    [tx.orgId, "draft", analysis.id, memberId, revisionId],
   );
   const byFinding = new Map(accepted.map((row) => [row.finding_id, row]));
   const items: ReviewPlanItem[] = [];
@@ -392,7 +452,12 @@ export type BeginReviewSubmissionResult =
   /** The actor is no longer an active member whose role may review. */
   | { readonly outcome: "not_permitted" };
 
-const lockPlan = (tx: TenantTx, pullRequestId: string, memberId: string) =>
+/**
+ * The per (pull request, member) lock `beginReviewSubmission` holds while it rebuilds and records
+ * the plan. P6-4's draft writes take it too (review fix S2), so a change and a submission are
+ * ordered: whichever comes second sees the other.
+ */
+export const lockReviewPlan = (tx: TenantTx, pullRequestId: string, memberId: string) =>
   tx.query("select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
     `rocky.review:${tx.orgId}:${pullRequestId}:${memberId}`,
   ]);
@@ -429,7 +494,7 @@ export const beginReviewSubmission = async (
   if (typeof input.body !== "string") return { outcome: "invalid", reason: "invalid_body" };
   const expected = Buffer.from(input.contentSha256, "hex");
 
-  await lockPlan(tx, pullRequestId, memberId);
+  await lockReviewPlan(tx, pullRequestId, memberId);
   if (!(await actorMayReview(tx, memberId))) return { outcome: "not_permitted" };
 
   const { rows: earlier } = await tx.query<SubmissionRow>(

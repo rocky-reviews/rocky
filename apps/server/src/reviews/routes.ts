@@ -209,8 +209,13 @@ export const registerReviewRoutes = (app: FastifyInstance, deps: ReviewRoutesDep
               error: "invalid_transition",
               draft: draftJson(result.draft),
             });
+          case "already_posted":
+            // Carried by a review being posted or posted (ADR 0026 S2): the current state, as
+            // a conflict, so the page shows it.
+            return json(reply, 409, { error: "already_posted", draft: draftJson(result.draft) });
           case "invalid_body":
-            return json(reply, 400, { error: "invalid_body" });
+          case "comment_too_long":
+            return json(reply, 400, { error: result.outcome });
           case "unknown_finding":
           case "not_found":
             return json(reply, 404, { error: "not_found" });
@@ -258,7 +263,10 @@ export const registerReviewRoutes = (app: FastifyInstance, deps: ReviewRoutesDep
           deleteOwnComment(tx, { analysisId: ok.analysisId, memberId: ok.me.memberId, commentId }),
         );
         log(request, "comment_delete", outcome, ok.ids);
-        return outcome === "deleted" ? json(reply, 204) : json(reply, 404, { error: "not_found" });
+        if (outcome === "deleted") return json(reply, 204);
+        return outcome === "already_posted"
+          ? json(reply, 409, { error: "already_posted" })
+          : json(reply, 404, { error: "not_found" });
       },
     );
   });

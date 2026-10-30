@@ -67,11 +67,16 @@ directly needs an agent integration that does not exist (follow-up).
 | `GET /api/analyses/:analysisId/review`                 |                              | 200 `{ analysisId, drafts, comments }`            |
 | `POST /api/analyses/:analysisId/drafts/:findingId`     | `{ action, body?, reason? }` | 200 `{ draft }`, 409 `{ error, draft }`, 400, 404 |
 | `POST /api/analyses/:analysisId/comments`              | `{ path, line, body }`       | 201 `{ comment }`, 400, 404                       |
-| `DELETE /api/analyses/:analysisId/comments/:commentId` |                              | 204, 404                                          |
+| `DELETE /api/analyses/:analysisId/comments/:commentId` |                              | 204, 409 `{ error }`, 404                         |
 
 All need `drafts.own` (every role) **and** the P3-6 repository access check (503 without it; a
 denial is the same 404 as an unknown analysis). The member and org come from the session.
-Mutations pass the global CSRF guard. A decision locks its row (`FOR UPDATE`), so two tabs
+Mutations pass the global CSRF guard. An item carried by a review being posted or posted as
+the member (P3-5) cannot change: a decision answers 409 `{ error: "already_posted", draft }`
+with the current state, a delete 409 `{ error: "already_posted" }`; both take P3-5's per (pull
+request, member) lock first, so they are ordered with a submission (ADR 0026 P17). Accepting
+or editing answers 400 `comment_too_long` when `composePostedComment` would exceed 65,536
+characters (one review comment). A decision locks its row (`FOR UPDATE`), so two tabs
 acting at once resolve one after the other and the loser gets 409 with the current state. Logs
 carry the action, a fixed outcome and ids, never a body.
 
