@@ -4,8 +4,10 @@
  * button ignores activation for `ARM_MS` after the dialog opens (so the second click of a
  * double-click on the opener, which can land where the confirm button appears, does nothing),
  * it is disabled while the request runs, a ref guards against a second call in the same
- * frame, and the dialog cannot be dismissed until the answer is in. Cancel (focused first) and
- * Escape close it without sending anything.
+ * frame, and the dialog cannot be dismissed until the answer is in (Escape is cancelled, and a
+ * close the browser forces anyway, e.g. Chrome's close watcher on a second Escape, reopens it).
+ * While sending, focus sits on a live "Approving…" status inside the dialog. Cancel (focused
+ * first) and Escape close it without sending anything.
  */
 import type { InboxItem } from "@rocky-reviews/core";
 import { useEffect, useRef, useState } from "react";
@@ -17,8 +19,12 @@ type Phase = { kind: "confirm" } | { kind: "sending" } | { kind: "result"; resul
 type Props = {
   batch: readonly InboxItem[];
   source: InboxSource;
-  /** `null`: closed without sending. Otherwise the approved ids and whether it was refused. */
-  onClose: (outcome: { approved: readonly string[]; refused: boolean } | null) => void;
+  /**
+   * `null`: closed without sending. Otherwise the approved ids, and whether the inbox must be
+   * loaded again (refused, an unclear answer, or a PR not approved): a selection kept from a
+   * stale list must not be confirmed again as if nothing happened.
+   */
+  onClose: (outcome: { approved: readonly string[]; reload: boolean } | null) => void;
 };
 
 const Name = ({ item }: { item: InboxItem }) => (
@@ -37,6 +43,10 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
   const dialog = useRef<HTMLDialogElement>(null);
   const sent = useRef(false);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
+  const phaseRef = useRef<Phase["kind"]>("confirm");
+  phaseRef.current = phase.kind;
+  /** Set when this component closes the dialog itself. */
+  const closing = useRef(false);
   const [armed, setArmed] = useState(false);
 
   useEffect(() => {
@@ -52,10 +62,12 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
     element?.querySelector<HTMLElement>("[data-cancel]")?.focus();
   }, []);
 
-  // The result replaces the buttons: move focus to Close.
+  // Sending disables the buttons: keep focus in the dialog, on the live status. The result
+  // replaces the buttons: move focus to Close.
   useEffect(() => {
-    if (phase.kind === "result")
-      dialog.current?.querySelector<HTMLElement>("[data-close]")?.focus();
+    const target =
+      phase.kind === "sending" ? "[data-sending]" : phase.kind === "result" ? "[data-close]" : null;
+    if (target !== null) dialog.current?.querySelector<HTMLElement>(target)?.focus();
   }, [phase.kind]);
 
   const outcome = () => {
@@ -66,14 +78,26 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
         result.kind === "done"
           ? result.results.filter((r) => r.outcome === "approved").map((r) => r.id)
           : [],
-      refused: result.kind === "refused",
+      reload: result.kind !== "done" || result.results.some((r) => r.outcome !== "approved"),
     };
   };
 
   const close = () => {
     if (phase.kind === "sending") return;
+    closing.current = true;
     dialog.current?.close();
     onClose(outcome());
+  };
+
+  /** The browser closed the dialog without us (a forced Escape). */
+  const closedByBrowser = () => {
+    if (closing.current) return;
+    if (phaseRef.current === "sending") {
+      dialog.current?.showModal();
+      dialog.current?.querySelector<HTMLElement>("[data-sending]")?.focus();
+      return;
+    }
+    close();
   };
 
   const confirm = async () => {
@@ -96,6 +120,7 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
         event.preventDefault();
         close();
       }}
+      onClose={closedByBrowser}
     >
       <h2 id="approve-title" className="modal-head">
         {phase.kind === "result" ? resultTitle(phase.result) : `Approve ${count}?`}
@@ -121,6 +146,9 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
               </li>
             ))}
           </ul>
+          <p className="batch-hint" role="status" tabIndex={-1} data-sending>
+            {phase.kind === "sending" ? "Approving… keep this open until GitHub answers." : ""}
+          </p>
         </div>
       )}
       <div className="modal-foot">
@@ -158,14 +186,15 @@ export const ApproveDialog = ({ batch, source, onClose }: Props) => {
 
 const resultTitle = (result: ApproveResult): string => {
   if (result.kind === "done") {
-    return result.results.some((r) => r.outcome === "approved")
+    return result.results.every((r) => r.outcome === "approved")
       ? "Batch approved"
-      : "Nothing was approved";
+      : result.results.some((r) => r.outcome === "approved")
+        ? "Batch partly approved"
+        : "Nothing was approved";
   }
   if (result.kind === "refused") return "Batch refused";
   return result.kind === "error" ? "Something went wrong" : "Nothing was approved";
 };
-
 const Result = ({ result, batch }: { result: ApproveResult; batch: readonly InboxItem[] }) => {
   const byId = new Map(batch.map((item) => [item.id, item]));
   if (result.kind === "unavailable") {
@@ -210,6 +239,7 @@ const Result = ({ result, batch }: { result: ApproveResult; batch: readonly Inbo
   }
   const approved = result.results.filter((r) => r.outcome === "approved");
   const failed = result.results.filter((r) => r.outcome === "failed");
+  const moved = result.results.filter((r) => r.outcome === "head_moved");
   return (
     <div className="modal-section">
       {approved.length > 0 && (
@@ -236,6 +266,32 @@ const Result = ({ result, batch }: { result: ApproveResult; batch: readonly Inbo
             })}
           </ul>
         </>
+      )}
+      {moved.length > 0 && (
+        <>
+          <p>
+            {moved.length} had new commits on GitHub since you looked and{" "}
+            {moved.length === 1 ? "was" : "were"} not approved:
+          </p>
+          <ul className="batch-list">
+            {moved.map((r) => {
+              const item = byId.get(r.id);
+              return (
+                <li key={r.id}>
+                  {item !== undefined && (
+                    <span className="batch-name">
+                      <Name item={item} />
+                    </span>
+                  )}{" "}
+                  New commits since you looked
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {(failed.length > 0 || moved.length > 0) && (
+        <p className="batch-hint">The inbox reloads when you close this.</p>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import {
   type AccessDecision,
+  type BulkApproveOutcome,
   type ForgePullRequest,
   InboxResponse,
   type PullRequestApprover,
@@ -60,8 +61,7 @@ let app: FastifyInstance;
 let lines: string[] = [];
 let accessAsked: RepositoryAccessRequest[] = [];
 let approvals: Parameters<PullRequestApprover["approve"]>[0][] = [];
-let approveAnswer: (pullRequestId: string) => Promise<"approved" | "failed"> = async () =>
-  "approved";
+let approveAnswer: (pullRequestId: string) => Promise<BulkApproveOutcome> = async () => "approved";
 /** Pull request ids by name. */
 const prs: Record<string, string> = {};
 
@@ -451,6 +451,18 @@ describe("POST /api/inbox/approvals", () => {
       results: [
         { id: prs.safe1, outcome: "failed" },
         { id: prs.safe2, outcome: "approved" },
+      ],
+    });
+  });
+
+  it("reports the port's head_moved (GitHub's live head differs) for that PR only", async () => {
+    approveAnswer = async (id) => (id === prs.safe2 ? "head_moved" : "approved");
+    const res = await approve(token, batch("safe1", "safe2"));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      results: [
+        { id: prs.safe1, outcome: "approved" },
+        { id: prs.safe2, outcome: "head_moved" },
       ],
     });
   });

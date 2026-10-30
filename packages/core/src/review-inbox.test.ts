@@ -185,7 +185,7 @@ describe("assessPullRequest: safe to bulk-approve (P6-7)", () => {
       "briefing_by_rocky",
     ],
     ["a truncated diff", () => facts({ diffIncomplete: true }), "diff_incomplete"],
-    ["a diff never read", () => facts({ size: null }), "diff_incomplete"],
+    ["a diff never read", () => facts({ size: null }), "diff_not_read"],
     [
       `more than ${MAX_BULK_APPROVE_LINES} changed lines`,
       () => facts({ size: { additions: MAX_BULK_APPROVE_LINES, deletions: 1 } }),
@@ -200,6 +200,76 @@ describe("assessPullRequest: safe to bulk-approve (P6-7)", () => {
       expect(result.bulkApproval.blockers).toContain(blocker);
     });
   }
+
+  /** tiny.json plus one more changed file, triaged by `place`. */
+  const withFile = (
+    file: {
+      path: string;
+      previousPath?: string;
+      status: "added" | "modified" | "removed" | "renamed";
+    },
+    place: "noise" | "low",
+  ) => {
+    const doc = tiny();
+    doc.provenance.files.push({
+      ...file,
+      additions: file.status === "removed" ? 0 : 200,
+      deletions: file.status === "removed" ? 40 : 0,
+      hunks:
+        file.status === "removed"
+          ? [{ oldStart: 1, oldLines: 40, newStart: 0, newLines: 0 }]
+          : [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 200 }],
+    });
+    doc.briefing.estimatedReviewMinutes = 5;
+    if (place === "noise") {
+      doc.triage.noise = [{ path: file.path, summary: "Generated client." }];
+    } else {
+      doc.triage.files.push({
+        path: file.path,
+        score: 5,
+        level: "low",
+        reviewMinutes: 1,
+        reason: "Moved.",
+        whatChanged: "Moved.",
+        whyThisLevel: "Moved.",
+        flags: [],
+      });
+    }
+    return parse(doc);
+  };
+  const small = { size: { additions: 3, deletions: 1 } };
+
+  it("never offers a PR with a file the AI did not read: a generated-looking path (B1)", () => {
+    const doc = withFile({ path: "src/generated/backdoor.ts", status: "added" }, "noise");
+    expect(assessPullRequest(facts(small, doc)).bulkApproval).toEqual({
+      eligible: false,
+      blockers: ["noise_files"],
+    });
+  });
+
+  it("never offers a PR with a lockfile change (its sources are unread) (B1)", () => {
+    const doc = withFile({ path: "pnpm-lock.yaml", status: "modified" }, "noise");
+    expect(assessPullRequest(facts(small, doc)).bulkApproval).toEqual({
+      eligible: false,
+      blockers: ["noise_files"],
+    });
+  });
+
+  it("treats a rename out of an auth path as sensitive (previousPath) (S1)", () => {
+    const doc = withFile(
+      { path: "docs/notes.md", previousPath: "src/auth/session.ts", status: "renamed" },
+      "low",
+    );
+    expect(assessPullRequest(facts(small, doc)).bulkApproval).toEqual({
+      eligible: false,
+      blockers: ["sensitive_paths"],
+    });
+  });
+
+  it("treats deleting a migration as sensitive (S1)", () => {
+    const doc = withFile({ path: "db/migrations/0003_users.sql", status: "removed" }, "low");
+    expect(assessPullRequest(facts(small, doc)).bulkApproval.blockers).toContain("sensitive_paths");
+  });
 
   it("offers exactly the limit of changed lines", () => {
     const result = assessPullRequest(

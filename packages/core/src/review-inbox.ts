@@ -52,7 +52,9 @@ export const BULK_APPROVE_BLOCKERS = [
   "unanalysed_files",
   "read_by_hand",
   "briefing_by_rocky",
+  "noise_files",
   "diff_incomplete",
+  "diff_not_read",
   "too_large",
 ] as const;
 export type BulkApproveBlocker = (typeof BULK_APPROVE_BLOCKERS)[number];
@@ -160,19 +162,30 @@ export const assessPullRequest = (facts: InboxFacts): InboxAssessment => {
       "risky_files",
       usable.triage.files.some((file) => file.level === "critical" || file.level === "important"),
     );
-    // Rocky's own rules, not the model: a migration or an auth path is always read by a person.
+    // Rocky's own rules, not the model: a migration or an auth path is always read by a person,
+    // on either side of a rename (moving a file out of `auth/` is an auth change) and when it is
+    // deleted (the deleted path is `path`).
     block(
       "sensitive_paths",
-      provenance.files.some((file) => {
-        const rule = preTriage(file.path);
-        return rule.kind === "analyse" && rule.floor !== undefined;
-      }),
+      provenance.files.some((file) =>
+        [file.path, file.previousPath].some((path) => {
+          if (path === undefined) return false;
+          const rule = preTriage(path);
+          return rule.kind === "analyse" && rule.floor !== undefined;
+        }),
+      ),
     );
+    // Noise (lockfiles, generated-looking paths) is decided from the path alone and never read
+    // by the model: a "generated" backdoor or a lockfile pointing at another tarball would pass
+    // every other check. The PR page says "the AI did not read it"; the bulk group must not
+    // skip that page.
+    block("noise_files", usable.triage.noise.length > 0);
     block("unanalysed_files", provenance.unanalysed.length > 0);
     block("read_by_hand", provenance.readByHand.length > 0);
     block("briefing_by_rocky", provenance.briefingUnavailable !== undefined);
   }
-  block("diff_incomplete", facts.diffIncomplete || facts.size === null);
+  block("diff_incomplete", facts.size !== null && facts.diffIncomplete);
+  block("diff_not_read", facts.size === null);
   block(
     "too_large",
     facts.size !== null && facts.size.additions + facts.size.deletions > MAX_BULK_APPROVE_LINES,
@@ -281,7 +294,11 @@ export type BulkApproveRequest = z.infer<typeof BulkApproveRequest>;
 export const BULK_APPROVE_REFUSALS = ["head_moved", "not_eligible"] as const;
 export type BulkApproveRefusal = (typeof BULK_APPROVE_REFUSALS)[number];
 
-export const BULK_APPROVE_OUTCOMES = ["approved", "failed"] as const;
+/**
+ * One PR's outcome. `head_moved`: GitHub's live head (or state) no longer matched the commit
+ * the person confirmed, so nothing was submitted for it.
+ */
+export const BULK_APPROVE_OUTCOMES = ["approved", "head_moved", "failed"] as const;
 export type BulkApproveOutcome = (typeof BULK_APPROVE_OUTCOMES)[number];
 
 export const BulkApproveResponse = z.strictObject({
@@ -296,6 +313,19 @@ export type BulkApproveResponse = z.infer<typeof BulkApproveResponse>;
  * (P3-5 fills it: the member's own token, a review with the APPROVE event and no body, pinned
  * to `headSha`). Called only by the approvals route, after a CSRF-checked request from a
  * signed-in member and every re-check; never by the worker, never from model output.
+ *
+ * Requirements on the implementation (ADR 0029 §3):
+ * - **Live head.** The mirror can lag GitHub (a push before its synchronize webhook is
+ *   processed), and an approval at an older `commit_id` still counts for merge unless the repo
+ *   dismisses stale approvals. So it must read the live PR from GitHub, as the member, right
+ *   before submitting, and answer `head_moved` without submitting when `head.sha !== headSha`
+ *   or `state !== "open"`.
+ * - **Idempotent per (member, PR, head).** A second call for the same member, pull request and
+ *   `headSha` (a retry after an unclear answer, another server process, a re-submitted batch)
+ *   must not submit a second review: it answers `approved` if this member's approval at that
+ *   commit exists, and submits nothing more.
+ * - Anything it cannot confirm answers `failed` (or throws, which the route reports as
+ *   `failed`); it never logs the token or forge error text.
  */
 export interface PullRequestApprover {
   approve(request: {

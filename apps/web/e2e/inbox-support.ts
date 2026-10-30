@@ -31,6 +31,8 @@ export const openInbox = async (page: Page): Promise<void> => {
 export interface ApiMock {
   /** Every POST to the approvals route, in order. */
   readonly posts: Request[];
+  /** How many times the page loaded the list. */
+  readonly loads: () => number;
 }
 
 type ApproveAnswer = { status: number; body: unknown };
@@ -63,7 +65,11 @@ export const openInboxApi = async (
       },
     }),
   );
-  await page.route("**/api/inbox", (route) => route.fulfill({ json: INBOX_FIXTURE }));
+  let loads = 0;
+  await page.route("**/api/inbox", (route) => {
+    loads += 1;
+    return route.fulfill({ json: INBOX_FIXTURE });
+  });
   await page.route("**/api/inbox/approvals", async (route) => {
     const request = route.request();
     posts.push(request);
@@ -73,5 +79,5 @@ export const openInboxApi = async (
   await page.clock.setFixedTime(FIXTURE_NOW);
   await page.goto("/inbox?source=api");
   await page.locator("#inbox-title").waitFor();
-  return { posts };
+  return { posts, loads: () => loads };
 };

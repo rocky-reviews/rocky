@@ -43,7 +43,9 @@ const BLOCKER_LABEL: Readonly<Record<Exclude<BulkApproveBlocker, "findings">, st
   unanalysed_files: "Has files the AI could not read",
   read_by_hand: "Has files to read by hand",
   briefing_by_rocky: "Briefing written by Rocky",
+  noise_files: "Has files the AI did not read",
   diff_incomplete: "Diff not read in full",
+  diff_not_read: "Diff not read yet",
   too_large: "Too large to bulk-approve",
 };
 

@@ -244,10 +244,61 @@ test.describe("bulk approval needs an explicit confirmation per batch", () => {
     const confirm = page.getByRole("button", { name: "Approve 1 pull request" });
     await confirm.click();
     await expect(page.getByRole("button", { name: "Approving…" })).toBeDisabled();
+    // Focus stays in the dialog, on a live status.
+    const sending = page.locator("[data-sending]");
+    await expect(sending).toBeFocused();
+    await expect(sending).toHaveAttribute("role", "status");
+    await expect(sending).toContainText("Approving…");
     await page.getByRole("button", { name: "Approving…" }).click({ force: true });
+    // Twice: a browser may force-close on a repeated Escape; the dialog comes back.
     await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeVisible();
     release();
     await expect(page.getByRole("dialog")).toContainText("Approved 1 pull request on GitHub");
+    expect(api.posts).toHaveLength(1);
+  });
+
+  test("a PR whose live head moved on GitHub is not approved, reported, and the inbox reloads", async ({
+    page,
+  }) => {
+    const api = await openInboxApi(page, (body) => ({
+      status: 200,
+      body: {
+        results: body.pullRequests.map((p) => ({
+          id: p.id,
+          outcome: p.id === idOf(205) ? "head_moved" : "approved",
+        })),
+      },
+    }));
+    await safeRegion(page).getByRole("button", { name: "Select all 3" }).click();
+    await page.getByRole("button", { name: "Approve 3 selected…" }).click();
+    await page.getByRole("button", { name: "Approve 3 pull requests" }).click();
+    const dialog = page.getByRole("dialog", { name: "Batch partly approved" });
+    await expect(dialog).toContainText("Approved 2 pull requests on GitHub");
+    await expect(dialog).toContainText("1 had new commits on GitHub since you looked");
+    await expect(dialog).toContainText(`acme/web #${205}`);
+    const before = api.loads();
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect.poll(api.loads).toBe(before + 1);
+    expect(await numbers(page, safeRegion(page))).toEqual([205]);
+    await expect(safeRegion(page).getByRole("checkbox", { name: numbered(205) })).not.toBeChecked();
+  });
+
+  test("an unclear answer reloads the inbox before anything can be confirmed again", async ({
+    page,
+  }) => {
+    const api = await openInboxApi(page, () => ({ status: 500, body: { error: "internal" } }));
+    await safeRegion(page)
+      .getByRole("checkbox", { name: numbered(41) })
+      .check();
+    await page.getByRole("button", { name: "Approve 1 selected…" }).click();
+    await page.getByRole("button", { name: "Approve 1 pull request" }).click();
+    await expect(page.getByRole("dialog")).toContainText("Rocky could not confirm what happened");
+    const before = api.loads();
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect.poll(api.loads).toBe(before + 1);
+    await expect(page.getByRole("button", { name: "Approve selected…" })).toBeDisabled();
     expect(api.posts).toHaveLength(1);
   });
 

@@ -31,24 +31,30 @@ and only when its provenance names this PR (`readInboxDocument`) and the analyse
 
 A PR is **offered** only when every check passes:
 
-| Check                                                  | Written by     | Blocker               |
-| ------------------------------------------------------ | -------------- | --------------------- |
-| open                                                   | GitHub mirror  | `not_open`            |
-| not the viewer's own PR (GitHub refuses self-approval) | GitHub mirror  | `own_pull_request`    |
-| a done, valid analysis of the current head             | pipeline       | `no_current_analysis` |
-| verdict `low`                                          | model          | `risk_not_low`        |
-| verdict not below Rocky's floor (`belowVerdictFloor`)  | pipeline check | `verdict_below_floor` |
-| no findings at all (any severity)                      | model          | `findings`            |
-| no file triaged critical or important                  | model          | `risky_files`         |
-| no migration or auth path (Rocky's `preTriage` rules)  | Rocky's rules  | `sensitive_paths`     |
-| no unanalysed file                                     | pipeline       | `unanalysed_files`    |
-| no read-by-hand file                                   | pipeline       | `read_by_hand`        |
-| the briefing is the AI's (not Rocky's fallback)        | pipeline       | `briefing_by_rocky`   |
-| the head's diff was read in full                       | mirror         | `diff_incomplete`     |
-| at most `MAX_BULK_APPROVE_LINES` (300) changed lines   | GitHub mirror  | `too_large`           |
+| Check                                                                                                        | Written by     | Blocker               |
+| ------------------------------------------------------------------------------------------------------------ | -------------- | --------------------- |
+| open                                                                                                         | GitHub mirror  | `not_open`            |
+| not the viewer's own PR (GitHub refuses self-approval)                                                       | GitHub mirror  | `own_pull_request`    |
+| a done, valid analysis of the current head                                                                   | pipeline       | `no_current_analysis` |
+| verdict `low`                                                                                                | model          | `risk_not_low`        |
+| verdict not below Rocky's floor (`belowVerdictFloor`)                                                        | pipeline check | `verdict_below_floor` |
+| no findings at all (any severity)                                                                            | model          | `findings`            |
+| no file triaged critical or important                                                                        | model          | `risky_files`         |
+| no migration or auth path, on either side of a rename or deleted (Rocky's `preTriage` rules)                 | Rocky's rules  | `sensitive_paths`     |
+| no unanalysed file                                                                                           | pipeline       | `unanalysed_files`    |
+| no read-by-hand file                                                                                         | pipeline       | `read_by_hand`        |
+| the briefing is the AI's (not Rocky's fallback)                                                              | pipeline       | `briefing_by_rocky`   |
+| no noise file (lockfile, generated-looking path): noise is decided from the path and never read by the model | Rocky's rules  | `noise_files`         |
+| the head's diff was read in full                                                                             | mirror         | `diff_incomplete`     |
+| the head's diff was read at all (its size is known)                                                          | mirror         | `diff_not_read`       |
+| at most `MAX_BULK_APPROVE_LINES` (300) changed lines                                                         | GitHub mirror  | `too_large`           |
 
 Several of these do not depend on the model, so a prompt injection that talks the verdict down to
 `low` still cannot put an auth change, a migration, a truncated diff or a large PR in the group.
+Noise files block the group outright (review round 1): a "generated" file such as
+`src/generated/backdoor.ts` or a lockfile whose `resolved` URL points at another tarball would
+otherwise pass every check, because the model never reads them; the PR page is where "the AI did
+not read it" is shown, and the bulk group must not skip that page.
 Sorting is by risk (critical, high, medium, unknown, low), then by critical, high and medium
 finding counts, then the longest-waiting first, then repository and number.
 
@@ -83,6 +89,20 @@ approving review as that member, pinned to `headSha`. `buildApp` takes it as
 `approve_unavailable` and the page says bulk approval is not available. Only the approvals route
 calls it: not the worker, not anything reading model output.
 
+Requirements on the implementation (review round 1; also in the port's JSDoc):
+
+- **Live head.** The mirror can lag GitHub (a push lands before its `synchronize` webhook is
+  processed), and an approval at an older `commit_id` still counts for merge unless the
+  repository dismisses stale approvals. The approver reads the live PR from GitHub, as the
+  member, right before submitting, and answers `head_moved` without submitting when
+  `head.sha !== headSha` or `state !== "open"`. The route reports it per PR; the page lists it
+  ("new commits since you looked"), reloads the inbox and drops the batch's selection.
+- **Idempotent per (member, PR, head).** A second call for the same member, PR and `headSha`
+  (a retry after an unclear answer, a second server process, a re-submitted batch) submits no
+  second review; it answers `approved` when this member's approval at that commit exists. The
+  route's in-flight guard is per process and is not this guarantee.
+- Whatever it cannot confirm is `failed`; it never logs the token or forge error text.
+
 ### 4. Web (`apps/web/src/inbox/`, page `/inbox`)
 
 - An `InboxSource` port with an HTTP source (`?source=api`: same origin, the session's CSRF
@@ -93,9 +113,12 @@ calls it: not the worker, not anything reading model output.
   batch with each short commit; Cancel is focused first, Escape and Cancel send nothing, the
   confirm button is inert for 600 ms after the dialog opens (on narrow screens the second click
   of a double-click on the opener can land where it appears), then sends one request and is
-  disabled (and ref-guarded) while it runs, and the
-  dialog cannot be dismissed until the answer is in. A filter narrows the batch to what is shown. After an approval, focus moves to the group's heading (the
-  opener is gone or disabled).
+  disabled (and ref-guarded) while it runs. While it runs, focus sits on a live "Approving…"
+  status in the dialog, and the dialog cannot be dismissed: Escape is cancelled, and a close the
+  browser forces anyway (a repeated Escape) reopens it. A filter narrows the batch to what is
+  shown. After an approval, focus moves to the group's heading (the opener is gone or
+  disabled). After a refused batch, an unclear answer or any PR not approved, the inbox reloads
+  and the batch's selection is dropped, so nothing is re-confirmed on a stale list.
 - PR text is rendered as React text in `<bdi>`; the row link is built from validated names
   (`/?repo=owner%2Fname&pr=n`), never from data.
 
@@ -109,7 +132,8 @@ calls it: not the worker, not anything reading model output.
 ## Residual risks
 
 - The double-submit guard is per process; with several server processes two identical batches
-  could both reach the approver. P3-5's posting should be idempotent per (member, PR, head).
+  could both reach the approver. The port's required idempotency per (member, PR, head) (§3) is
+  the control; until P3-5 delivers it there is no approver at all (503).
 - The repository access check is not wired in `startServer` yet (ADR 0024), so a running server
   answers 503 on both routes until it is.
 - Low-risk PRs with no findings can still be wrong; the group is a suggestion, the dialog says

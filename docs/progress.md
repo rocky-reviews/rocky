@@ -109,8 +109,12 @@ Task log for the project plan. Agents append a row when a task is merged.
 ### P6-7 follow-ups
 
 - P3-5: implement `PullRequestApprover` (core) with the member's own token (one review, event
-  APPROVE, no body, `commit_id` = `headSha`, idempotent per member/PR/head) and pass it to
-  `buildApp` as `pullRequestApprover` in `startServer`; until then bulk approval answers 503.
+  APPROVE, no body, `commit_id` = `headSha`) and pass it to `buildApp` as `pullRequestApprover`
+  in `startServer`; until then bulk approval answers 503. **Acceptance items for P3-5 (ADR 0029
+  §3):** (1) read the live PR from GitHub right before submitting and answer `head_moved` without
+  submitting when `head.sha !== headSha` or `state !== "open"` (test with a mocked API where the
+  mirror lags); (2) idempotent per (member, PR, `headSha`): a repeated call, from any process,
+  submits no second review (test: two calls, one review).
 - Wire the repository access check in `startServer` (ADR 0024 residual risk); until then
   `GET /api/inbox` answers 503 on a running server.
 - Make `/inbox` read the server by default (today `?source=api`) once the PR page does too, and

@@ -74,7 +74,7 @@ export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload
       return next;
     });
 
-  const closeDialog = (outcome: { approved: readonly string[]; refused: boolean } | null) => {
+  const closeDialog = (outcome: { approved: readonly string[]; reload: boolean } | null) => {
     setBatch(null);
     if (outcome === null) return;
     if (outcome.approved.length > 0) {
@@ -87,7 +87,13 @@ export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload
       // keyboard where the batch was.
       window.requestAnimationFrame(() => document.getElementById("safe-title")?.focus());
     }
-    if (outcome.refused) onReload();
+    // Refused, unclear or not approved: load the inbox again rather than keep a stale list, and
+    // drop the batch's selection, so a second batch is chosen again on fresh data.
+    if (outcome.reload) {
+      const sent = new Set((batch ?? []).map((item) => item.id));
+      setSelected((current) => new Set([...current].filter((id) => !sent.has(id))));
+      onReload();
+    }
   };
 
   return (
@@ -143,8 +149,9 @@ export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload
             )}
           </div>
           <p className="inbox-note">
-            Low risk, no AI findings, no auth or migration files, small, and analysed at the current
-            commit. Rocky suggests these; nothing is approved until you confirm a batch.
+            Low risk, no AI findings, small, analysed at the current commit, with every changed file
+            read by the AI (no lockfiles or generated files) and none under auth or migrations.
+            Rocky suggests these; nothing is approved until you confirm a batch.
           </p>
           {groups.safe.length === 0 ? (
             <p className="inbox-empty">
