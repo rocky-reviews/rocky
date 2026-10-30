@@ -59,6 +59,8 @@ Task log for the project plan. Agents append a row when a task is merged.
   a Playwright project that CI skips, for repeatable POC audits.
 - The Finish list box can be 64 px on short phones, and long warnings can still push the verdict
   down (ADR 0031 residual risks). If it bites, collapse the coverage warning's file list.
+- `maxDiffPixelRatio: 0.002` lets a one-line text change pass the visual suite at 1440 px; P6-9
+  regenerated every baseline with `--update-snapshots=all`. Consider a tighter ratio.
 
 ### P6-8 follow-ups
 
