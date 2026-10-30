@@ -100,7 +100,8 @@ comments moved from the P6-3 in-memory store to the same provider.
 
 - A reload shows the same review; P3-5 and P6-6 read `comments_pending` for "what will be
   posted".
-- Until the repository access check is wired in `startServer` (ADR 0024 residual risk), these
+- Until the repository access check is wired in `startServer` (ADR 0024 residual risk; done by
+  H4-1, [ADR 0033](0033-repository-access-check-wiring.md)), these
   routes answer 503 in a running server; until the server serves the shell data, the dev page has
   fixture analysis ids the server does not know. The e2e suite answers the API from a test-side
   store (`apps/web/e2e/review-api.ts`); the server's persistence is tested on Postgres.

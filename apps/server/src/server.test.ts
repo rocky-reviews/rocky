@@ -1,5 +1,6 @@
 import { generateLocalKek } from "@rocky-reviews/crypto";
 import { WEBHOOK_INBOX_QUERY_TIMEOUT_MS } from "@rocky-reviews/db";
+import { testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config.js";
@@ -319,5 +320,67 @@ describe("GitHub login at boot (P7-1, ADR 0020)", () => {
     expect(
       (await running.app.inject({ method: "GET", url: "/auth/github/login" })).statusCode,
     ).toBe(404);
+  });
+});
+
+describe("the repository access check at boot (H4-1, ADR 0033)", () => {
+  const CLIENT = {
+    GITHUB_APP_CLIENT_ID: "Iv23liTestClient01",
+    GITHUB_APP_CLIENT_SECRET: "test-only-client-secret-0123456789abcdef",
+  };
+  const KEK = { ROCKY_KEK_KEYS: `v1=${generateLocalKek()}` };
+  const { privateKeyPem } = testAppKeys();
+  const APP = { GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: privateKeyPem };
+
+  it("without GITHUB_APP_PRIVATE_KEY the check is off: one clear log line, repositoryAccess: false", async () => {
+    const { log, lines } = capture();
+    running = await startServer({ ...BASE_ENV, ...CLIENT, ...KEK }, log);
+    expect(running.repositoryAccess).toBe(false);
+    expect(lines.map((l) => l["msg"])).toContain(
+      "GITHUB_APP_PRIVATE_KEY is not set: repository access check disabled; routes that read a repository's data answer 503 (development only)",
+    );
+    expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({
+      repositoryAccess: false,
+    });
+  });
+
+  it("with the app's key and login the check is built; the key never reaches the log", async () => {
+    const { log, lines } = capture();
+    running = await startServer({ ...BASE_ENV, ...CLIENT, ...KEK, ...APP }, log);
+    expect(running.repositoryAccess).toBe(true);
+    expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({
+      repositoryAccess: true,
+    });
+    expect(JSON.stringify(lines)).not.toContain("PRIVATE KEY");
+    expect(JSON.stringify(lines)).not.toContain(privateKeyPem.split("\n")[1]);
+  });
+
+  it("without login there is no check either (no session can reach a route)", async () => {
+    const { log, lines } = capture();
+    running = await startServer({ ...BASE_ENV, ...APP }, log);
+    expect(running.auth).toBe(false);
+    expect(running.repositoryAccess).toBe(false);
+    expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({
+      repositoryAccess: false,
+    });
+  });
+
+  it("refuses to start in production without the key, or with a malformed key anywhere", async () => {
+    const { log } = capture();
+    const production = {
+      ...BASE_ENV,
+      ...CLIENT,
+      ...KEK,
+      NODE_ENV: "production",
+      GITHUB_WEBHOOK_SECRET: GOOD,
+      ROCKY_PUBLIC_URL: "https://rocky.example.com",
+      ROCKY_SESSION_SECRET: "x".repeat(32),
+      ROCKY_TRUST_PROXY: "none",
+      GITHUB_APP_ID: "123456",
+    };
+    await expect(startServer(production, log)).rejects.toThrow(/GITHUB_APP_PRIVATE_KEY/);
+    await expect(
+      startServer({ ...BASE_ENV, ...CLIENT, ...KEK, ...APP, GITHUB_APP_PRIVATE_KEY: "nope" }, log),
+    ).rejects.toThrow(ConfigError);
   });
 });

@@ -196,7 +196,7 @@ browser tab, a double click or retry or a crash mid-call, a forge outage, the lo
   returns it: LLM text can carry mentions, links and images, and GitHub renders them under the
   person's name.
 - Wiring `repositoryAccess` in `startServer` is a prerequisite for P6-6 and the H4 gate: until
-  then these routes answer 503.
+  then these routes answer 503. (Done by H4-1, [ADR 0033](0033-repository-access-check-wiring.md).)
 - Three audit actions: `review.submission_started`, `review.posted`, `review.post_failed`.
 - The web app (P6-6) renders `GET …/review` as the exact list, and sends back `contentSha256`,
   `headSha` and a fresh `idempotencyKey` per click; on `stale` or `head_moved` it reloads the
@@ -227,7 +227,8 @@ browser tab, a double click or retry or a crash mid-call, a forge outage, the lo
   [ADR 0031](0031-finish-review-modal.md) §5) shows carried items as posted and read-only from
   the drafts answer's `posted` flag, and updates one draft from the refusal's `draft`.
 - **The routes answer 503 in a running server** until the repository access check is built in
-  `startServer` (P7-2 follow-up), like "Analyze anyway".
+  `startServer` (P7-2 follow-up), like "Analyze anyway". (Built by H4-1, ADR 0033; a server
+  without `GITHUB_APP_PRIVATE_KEY` still answers 503.)
 - The mirror's head may lag GitHub's: a review is posted against the mirrored `commit_id`;
   GitHub accepts it (comments show as outdated when the head moved). A line not in the diff is a
   GitHub 422 (`rejected`), not pre-checked here (follow-up: validate lines against the hunks).

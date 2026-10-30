@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ConfigError, isProduction, webhookSecretFromEnv } from "./config.js";
+import { rsaPrivateKeyPem, testAppKeys } from "@rocky-reviews/forge-github/testing";
+import { ConfigError, githubAppAuthFromEnv, isProduction, webhookSecretFromEnv } from "./config.js";
 
 const GOOD = "0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -108,4 +109,56 @@ describe("production detection (review round 1, item 5)", () => {
     expect(result.status).toBe(1);
     expect(result.stdout + result.stderr).toMatch(/GITHUB_WEBHOOK_SECRET is required/);
   }, 30_000);
+});
+
+describe("githubAppAuthFromEnv (H4-1: the repository access check needs the app's key)", () => {
+  const { privateKeyPem } = testAppKeys();
+  const APP = { GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: privateKeyPem };
+
+  it("parses the id and the PEM into a KeyObject (the PEM text is not kept)", () => {
+    const auth = githubAppAuthFromEnv(APP);
+    expect(auth?.appId).toBe(123456);
+    expect(auth?.privateKey.asymmetricKeyType).toBe("rsa");
+    expect(JSON.stringify(auth)).not.toContain("PRIVATE KEY");
+  });
+
+  it("outside production an unset key means no check (the caller logs and routes answer 503)", () => {
+    expect(githubAppAuthFromEnv({})).toBeUndefined();
+    expect(githubAppAuthFromEnv({ GITHUB_APP_ID: "123456" })).toBeUndefined();
+    expect(githubAppAuthFromEnv({ GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: "" })).toBe(
+      undefined,
+    );
+  });
+
+  it("production requires the key (NODE_ENV=production or FLY_APP_NAME)", () => {
+    for (const env of [
+      { NODE_ENV: "production", GITHUB_APP_ID: "123456" },
+      { FLY_APP_NAME: "rocky", GITHUB_APP_ID: "123456" },
+    ]) {
+      expect(() => githubAppAuthFromEnv(env)).toThrow(ConfigError);
+      expect(() => githubAppAuthFromEnv(env)).toThrow(/GITHUB_APP_PRIVATE_KEY/);
+    }
+    expect(githubAppAuthFromEnv({ NODE_ENV: "production", ...APP })?.appId).toBe(123456);
+  });
+
+  it("refuses a key without the app id, and a malformed or short key, without echoing it", () => {
+    const cases: Record<string, string | undefined>[] = [
+      { GITHUB_APP_PRIVATE_KEY: privateKeyPem },
+      { GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: "not-a-key-0123456789" },
+      { GITHUB_APP_ID: "123456", GITHUB_APP_PRIVATE_KEY: rsaPrivateKeyPem(1024) },
+      { GITHUB_APP_ID: "0", GITHUB_APP_PRIVATE_KEY: privateKeyPem },
+    ];
+    for (const env of cases) {
+      let message = "";
+      try {
+        githubAppAuthFromEnv(env);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigError);
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/GITHUB_APP_(ID|PRIVATE_KEY)/);
+      const key = env["GITHUB_APP_PRIVATE_KEY"] ?? "";
+      expect(message).not.toContain(key.split("\n")[1] ?? key);
+    }
+  });
 });

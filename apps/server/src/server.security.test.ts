@@ -7,6 +7,7 @@ import {
   signedDelivery,
   TEST_APP_ID,
   TEST_WEBHOOK_SECRET as WEBHOOK_SECRET,
+  testAppKeys,
 } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it } from "vitest";
@@ -32,6 +33,8 @@ const PRODUCTION = {
   NODE_ENV: "production",
   GITHUB_WEBHOOK_SECRET: WEBHOOK_SECRET,
   GITHUB_APP_ID: "123456",
+  // H4-1 (ADR 0033): production also needs the app's key for the repository access check.
+  GITHUB_APP_PRIVATE_KEY: testAppKeys().privateKeyPem,
   ROCKY_PUBLIC_URL: "https://rocky.example.com",
   ROCKY_SESSION_SECRET: "s".repeat(40),
 };
