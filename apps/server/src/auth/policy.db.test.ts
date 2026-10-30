@@ -182,6 +182,9 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   // inside). From org B the same names find nothing (RLS).
   "GET /api/repos/:owner/:repo/pulls/:number": review("GET", true),
   "HEAD /api/repos/:owner/:repo/pulls/:number": review("GET", true),
+  // H4-3: the PR's diff, same names and checks (the reader is a stub here: no GitHub).
+  "GET /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
+  "HEAD /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
 };
 
 const NOBODYS_COMMENT = "00000000-0000-4000-8000-000000000000";
@@ -273,6 +276,18 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
     // P6-7: the bulk approval port (P3-5's poster will fill it); the matrix only needs it present.
     pullRequestApprover: { approve: async () => "approved" },
     reviewPosting: { poster: UNREACHABLE_POSTER, keys: KEYS },
+    // H4-3: the diff reader; the matrix only needs it present (it reads nothing from GitHub).
+    pullRequestDiffs: {
+      read: async () => ({
+        kind: "diff",
+        headSha: "a".repeat(40),
+        diff: "",
+        truncation: null,
+        bytes: 0,
+        sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        cached: false,
+      }),
+    },
     ...(options.withoutAccessCheck === true
       ? {}
       : {
@@ -510,6 +525,7 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "POST /api/analyses/:analysisId/comments": "drafts.own",
       "DELETE /api/analyses/:analysisId/comments/:commentId": "drafts.own",
       "GET /api/repos/:owner/:repo/pulls/:number": "pull_requests.review",
+      "GET /api/repos/:owner/:repo/pulls/:number/diff": "pull_requests.review",
     });
   });
 

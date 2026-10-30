@@ -187,8 +187,10 @@ export {
 } from "./members.js";
 export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
 export {
+  loadPullRequestDiffTarget,
   loadPullRequestPage,
   PullRequestPageError,
+  type PullRequestDiffTargetRow,
   type PullRequestPageRow,
 } from "./pull-request-page.js";
 export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";

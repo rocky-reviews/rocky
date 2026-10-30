@@ -4,7 +4,7 @@ import { seriousViolations } from "./axe.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 import { openFile } from "./diff-support.js";
 import { openInbox } from "./inbox-support.js";
-import { mockPullApi, openRealPr, serverShellData } from "./real-pr-support.js";
+import { mockPullApi, openRealPr, serverDiffData, serverShellData } from "./real-pr-support.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
 
 /**
@@ -174,6 +174,41 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
     await page.goto("/inbox");
     await page.getByRole("alert").waitFor();
     await check(page, found, "inbox, repository access unavailable");
+  },
+
+  // H4-3: the file view on a real PR with the diff from the server, and every state the diff
+  // endpoint can answer.
+  "PR page from the server: the diff and its states": async (page, found) => {
+    let diff: { status: number; body: unknown } = { status: 200, body: serverDiffData() };
+    await mockPullApi(page, undefined, () => diff);
+    const file = async () => {
+      await openRealPr(page);
+      if (width(page) <= 760) {
+        await page.getByRole("button", { name: "Files", exact: true }).click();
+      }
+      await page.locator('#sidebar button.nav-file[title="src/auth/invitations.ts"]').click();
+      // A whole diff shows lines; every other state shows a status line.
+      await page.locator(".diff .ln, .diff-status").first().waitFor();
+    };
+    await file();
+    await page.locator(".diff .ln").first().waitFor();
+    await check(page, found, "real PR, file view from the server");
+    diff = { status: 200, body: serverDiffData({ truncation: "max_bytes" }) };
+    await file();
+    await check(page, found, "real PR, truncated diff");
+    for (const [status, error, state] of [
+      [404, "not_found", "diff not found"],
+      [409, "head_moved", "diff head moved"],
+      [413, "diff_too_large", "diff too large"],
+      [503, "access_check_unavailable", "diff access unavailable"],
+      [502, "forge_unavailable", "diff GitHub failed"],
+      [429, "rate_limited", "diff rate limited"],
+      [401, "unauthenticated", "diff signed out"],
+    ] as const) {
+      diff = { status, body: { error } };
+      await file();
+      await check(page, found, `real PR, ${state}`);
+    }
   },
 };
 

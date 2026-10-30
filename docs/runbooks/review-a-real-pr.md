@@ -69,10 +69,13 @@ With `ROCKY_ANALYSIS_AUTO=on`, the next push to a pull request (or a new one) qu
 4. Decide the drafts in the review panel, then **Finish review** (⌘/Ctrl+Enter) to post the
    accepted drafts, your comments and the verdict to GitHub as you.
 
-**Not there yet (H4-2 follow-ups):** the server does not serve the diff, so opening a file says
-"The diff could not be loaded." (use View on GitHub), and the drafts' Accept and Edit buttons
-and own comments live in the file view. Branch names, GitHub approvals and comment counts are
-not in the mirror, so the top bar leaves them out.
+Opening a file reads its diff from GitHub (H4-3): the server mints a read-only token for that
+one repository, checks that GitHub's head is still the one Rocky mirrored, reads the diff and
+revokes the token; nothing is stored, and a second open within a minute is answered from memory.
+The drafts' Accept, Edit and Dismiss buttons and your own comments live in the file view.
+
+**Not there yet (H4-2 follow-ups):** branch names, GitHub approvals and comment counts are not
+in the mirror, so the top bar leaves them out.
 
 ## Fixtures (development and tests)
 
@@ -99,3 +102,8 @@ production build leaves them out, so there `/` with any of these goes to `/inbox
 | "Repository access isn't available yet"         | The server has no repository access check (H4-1).                                                                 |
 | "This pull request isn't in Rocky…"             | Not mirrored (run the rebuild), the repository is disabled, or GitHub says you cannot read it.                    |
 | "No analysis yet"                               | Nothing queued: turn on `ROCKY_ANALYSIS_AUTO` and push to the pull request.                                       |
+| "This pull request changed on GitHub…" (a file) | A push landed after the mirror's last read; the webhook mirrors it shortly (or run the rebuild), then reload.     |
+| "GitHub won't render a diff this large"         | GitHub's own limit for the compare diff; read it on GitHub (the link in the message).                             |
+| "GitHub didn't answer when Rocky asked…"        | A GitHub outage or rate limit for the installation (`forge_failed` in the server log); reload in a moment.        |
+| "Too many diff requests in a row"               | 30 per minute per member (`ROCKY_RATE_LIMIT_DIFF=<max>/<seconds>` to change); wait a minute.                      |
+| "only its first part is shown" (a file)         | The diff is over 1 MiB (the mirror's cap); files past the cut are on GitHub only.                                 |

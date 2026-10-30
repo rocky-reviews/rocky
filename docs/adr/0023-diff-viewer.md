@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P6-3
+- **Amended by:** [ADR 0034](0034-pull-request-diff-endpoint.md) (H4-3: the server-backed
+  `DiffDataSource`, `truncation`, and a reason per failed load)
 
 ## Context
 
@@ -33,11 +35,15 @@ shell's data port (ADR 0019 §3) carries the PR summary and the analysis, not th
    library would not handle; a general library (react-window, TanStack Virtual) would be
    about 6 to 15 KB gz for roughly the same code.
 3. **A separate diff port.** `data/diff-data.ts` defines `DiffDataSource.load(ref)`, which
-   returns unchecked `{ headSha, diff }`. `parseDiffData` checks the sha, bounds the text
-   (20 M characters) and reads it with core's strict `parseUnifiedDiff` (exported as
+   returns unchecked `{ headSha, diff, truncation? }`. `parseDiffData` checks the sha, bounds
+   the text (20 M characters), reads `truncation` (H4-3: `null` or `"max_bytes"`, into
+   `DiffData.truncated`) and reads the diff with core's strict `parseUnifiedDiff` (exported as
    `@rocky-reviews/core/diff`, so the browser bundle takes only that module, which has no
    `node:*` imports). Errors name a field or a fixed code, never content. A `DiffProvider` loads the
-   diff once, on the first file opened, and holds the reviewer's own comments in memory.
+   diff once, on the first file opened, and holds the reviewer's own comments in memory. H4-3:
+   `createHttpDiffSource` (`data/diff-http-source.ts`) is the server-backed source for a real PR
+   (ADR 0034 §5); a failed load carries a fixed `DiffLoadReason` the file view explains, and a
+   truncated diff is said so on every file.
    AI flags and hot lines are shown only when the analysis's head sha equals the diff's; after
    a new push they would point at the wrong lines.
 4. **Text safety in code.** Code, hunk headers, notes and flag text render as text, flag text
@@ -67,5 +73,5 @@ shell's data port (ADR 0019 §3) carries the PR summary and the analysis, not th
   behind the same `Token[]` shape.
 - Content outside the rendered window is not in the DOM, so in-page find (⌘F) and screen
   readers see only the rows near the viewport, as with other virtualised diff viewers.
-- The fixture sources (pr-847 diff from `@rocky-reviews/evals`, the generated large diff) ship
-  in the bundle until a server-backed source replaces them.
+- The fixture sources (pr-847 diff from `@rocky-reviews/evals`, the generated large diff) are
+  reached only behind H4-2's dev-and-test-only switches; a real PR reads the server (H4-3).

@@ -1,14 +1,18 @@
 import { seriousViolations } from "./axe.js";
+import { openFile } from "./diff-support.js";
 import { openInboxApi } from "./inbox-support.js";
 import {
   mockPullApi,
   openRealPr,
   REAL_PR_API,
+  REAL_PR_DIFF_API,
   REAL_PR_PATH,
+  serverDiffData,
   serverShellData,
+  type Answer,
 } from "./real-pr-support.js";
 import { PR_847_ANALYSIS, PR_847_PULL_REQUEST } from "./review-api.js";
-import { expect, test } from "./test.js";
+import { expect, test, type Page } from "./test.js";
 
 /**
  * H4-2 acceptance (e2e): a real PR address loads the PR from the server (answered here, in the
@@ -16,7 +20,32 @@ import { expect, test } from "./test.js";
  * page explains loading, signed out (sign in, then back here), not found and "repository access
  * isn't available yet", and renders every analysis state the briefing has from server data.
  * The fixtures stay behind explicit switches (`/?fixture=pr-847`, `/inbox?source=fixture`).
+ * H4-3: the diff comes from the server too, so drafts, own comments and Finish review work on
+ * a real PR; every state the diff endpoint can answer has its fixed text.
  */
+
+const FILE = "src/auth/invitations.ts";
+const card = (page: Page, id: string) => page.locator(`[data-finding="${id}"]`);
+
+/** The drafts API has answered: the panel's tally only renders then. */
+const reviewReady = (page: Page) =>
+  page.locator("#review-panel .tally").waitFor({ state: "attached" });
+
+/** Scrolls the main column until the (virtualised) draft card is rendered, then shows it. */
+const showCard = async (page: Page, id: string) => {
+  for (let i = 0; i < 30 && (await card(page, id).count()) === 0; i++) {
+    await page.locator("#main").evaluate((main) => main.scrollBy({ top: 400 }));
+  }
+  await card(page, id).scrollIntoViewIfNeeded();
+};
+
+/** Opens the file without waiting for diff lines (the diff may be in another state). */
+const openFileHead = async (page: Page) => {
+  const width = page.viewportSize()?.width ?? 1440;
+  if (width <= 760) await page.getByRole("button", { name: "Files", exact: true }).click();
+  await page.locator(`#sidebar button.nav-file[title="${FILE}"]`).click();
+  await page.locator(".file-head").waitFor();
+};
 
 test.describe("a real PR address reads the server", () => {
   test("loads pr-847 from the server: briefing, top bar without what the mirror lacks", async ({
@@ -59,13 +88,19 @@ test.describe("a real PR address reads the server", () => {
     expect(reviewApi.requests).toContain(`POST /api/pull-requests/${PR_847_PULL_REQUEST}/review`);
   });
 
-  test("the server does not serve diffs yet: a file says so instead of showing a fixture", async ({
+  test("H4-3: opening a file reads the diff from the server once and shows its lines", async ({
     page,
   }) => {
-    await mockPullApi(page);
+    const api = await mockPullApi(page);
     await openRealPr(page);
-    await page.getByRole("button", { name: "Open src/auth/invitations.ts" }).first().click();
-    await expect(page.locator(".diff-status")).toHaveText("The diff could not be loaded.");
+    await openFile(page, FILE);
+    await expect(page.locator(".diff .ln").first()).toBeVisible();
+    await expect(page.locator("#main")).toContainText("INVITE_TTL_MS");
+    // StrictMode loads twice in development; every request is one of the two GETs.
+    expect(new Set(api.requests.map((r) => `${r.method()} ${new URL(r.url()).pathname}`))).toEqual(
+      new Set([`GET ${REAL_PR_API}`, `GET ${REAL_PR_DIFF_API}`]),
+    );
+    expect(api.requests.every((r) => r.headers()["accept"] === "application/json")).toBe(true);
   });
 
   test("the status pill shows the review the server says the person posted", async ({ page }) => {
@@ -136,6 +171,144 @@ test.describe("a real PR address reads the server", () => {
     });
     await openRealPr(page);
     await expect(page.locator("#main")).toContainText("1c2d3e4");
+  });
+});
+
+test.describe("H4-3: reviewing a real PR end to end", () => {
+  test("accept, edit and dismiss drafts, add an own comment, then Finish review posts them", async ({
+    page,
+    reviewApi,
+  }) => {
+    await mockPullApi(page);
+    await openRealPr(page);
+    await reviewReady(page);
+    await openFile(page, FILE);
+
+    await showCard(page, "F1");
+    await card(page, "F1").getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(card(page, "F1")).toContainText(/Pending\s*· from AI draft/);
+    await expect.poll(() => reviewApi.decision("F1").state).toBe("accepted");
+
+    await showCard(page, "F3");
+    await card(page, "F3").getByRole("button", { name: "Edit" }).click();
+    const box = page.getByRole("textbox", { name: "Your comment, edited from the AI draft" });
+    await box.fill("Please check the role before adding the membership.");
+    await card(page, "F3").getByRole("button", { name: "Save as my comment" }).click();
+    await expect
+      .poll(() => reviewApi.decision("F3"))
+      .toEqual({
+        state: "accepted",
+        edited: true,
+        body: "Please check the role before adding the membership.",
+      });
+
+    await showCard(page, "F8");
+    await card(page, "F8").getByRole("button", { name: "Dismiss" }).click();
+    await card(page, "F8")
+      .getByRole("group", { name: /Why\?/ })
+      .getByRole("button", { name: "Intentional" })
+      .click();
+    await expect
+      .poll(() => reviewApi.decision("F8"))
+      .toEqual({
+        state: "dismissed",
+        reason: "intentional",
+      });
+
+    await page.locator("#main").evaluate((main) => main.scrollTo({ top: 0 }));
+    await page.getByRole("button", { name: "Comment on line 10", exact: true }).click();
+    await page.getByRole("textbox", { name: "Your comment on line 10" }).fill("TTL from config?");
+    await page.getByRole("button", { name: "Add comment" }).click();
+    await expect.poll(() => reviewApi.comments().length).toBe(1);
+
+    await page.getByRole("button", { name: /^Finish review/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Finish your review" });
+    await expect(dialog.getByRole("heading", { name: /Will be posted to GitHub/ })).toBeVisible();
+    await expect(dialog.locator(".post-list > li")).toHaveCount(3);
+    const submit = dialog.getByRole("button", { name: /Submit review/ });
+    await expect(submit).toHaveAttribute("data-armed", "true");
+    await submit.click();
+    await expect(dialog).toHaveCount(0);
+    const posted = reviewApi.posted();
+    expect(posted).toHaveLength(1);
+    // Accepted drafts in finding order (F1 at line 28, F3 at 23), then the own comment.
+    expect(posted[0]?.comments.map((c) => [c.path, c.line])).toEqual([
+      [FILE, 28],
+      [FILE, 23],
+      [FILE, 10],
+    ]);
+    expect(reviewApi.requests).toContain(`POST /api/pull-requests/${PR_847_PULL_REQUEST}/review`);
+  });
+
+  test("a truncated diff says so on the file and still takes decisions", async ({
+    page,
+    reviewApi,
+  }) => {
+    await mockPullApi(page, undefined, {
+      status: 200,
+      body: serverDiffData({ truncation: "max_bytes" }),
+    });
+    await openRealPr(page);
+    await reviewReady(page);
+    await openFile(page, FILE);
+    await expect(page.locator(".diff-status[role='note']")).toContainText(
+      "only its first part is shown",
+    );
+    await showCard(page, "F1");
+    await card(page, "F1").getByRole("button", { name: "Accept", exact: true }).click();
+    await expect.poll(() => reviewApi.decision("F1").state).toBe("accepted");
+  });
+
+  test("every state the diff endpoint can answer, with fixed text and no content", async ({
+    page,
+  }) => {
+    let diff: Answer = { status: 200, body: serverDiffData() };
+    await mockPullApi(page, undefined, () => diff);
+    const states: [Answer, string][] = [
+      [{ status: 404, body: { error: "not_found" } }, "This diff isn’t available"],
+      [{ status: 409, body: { error: "head_moved" } }, "changed on GitHub since Rocky last saw it"],
+      [{ status: 413, body: { error: "diff_too_large" } }, "GitHub won’t render a diff this large"],
+      [
+        { status: 503, body: { error: "access_check_unavailable" } },
+        "Repository access isn’t available yet",
+      ],
+      [{ status: 502, body: { error: "forge_unavailable" } }, "GitHub didn’t answer"],
+      [{ status: 429, body: { error: "rate_limited" } }, "Too many diff requests"],
+      [{ status: 401, body: { error: "unauthenticated" } }, "Your session ended"],
+      // An answer that fails validation: a plain failure, showing none of it.
+      [{ status: 200, body: { headSha: "Zebra", diff: "Zebra" } }, "The diff could not be loaded."],
+    ];
+    for (const [answer, text] of states) {
+      diff = answer;
+      await openRealPr(page);
+      await openFileHead(page);
+      const status = page.locator(".diff-status");
+      await expect(status, text).toContainText(text);
+      await expect(status, text).toHaveAttribute("role", "alert");
+      await expect(page.locator("#main"), text).not.toContainText("Zebra");
+    }
+    // The too-large state links to the whole diff on GitHub, reachable by keyboard.
+    diff = { status: 413, body: { error: "diff_too_large" } };
+    await openRealPr(page);
+    await openFileHead(page);
+    const link = page.getByRole("link", { name: "Read it on GitHub" });
+    await expect(link).toHaveAttribute("href", "https://github.com/acme/rocky-app/pull/847/files");
+    await page.locator("#file-title").focus();
+    for (let i = 0; i < 12 && !(await link.evaluate((el) => el === document.activeElement)); i++) {
+      await page.keyboard.press("Tab");
+    }
+    await expect(link).toBeFocused();
+    expect(await seriousViolations(page)).toEqual([]);
+  });
+
+  test("loading: a status until the server answers the diff", async ({ page }) => {
+    const api = await mockPullApi(page);
+    await openRealPr(page);
+    const release = api.hold();
+    await openFileHead(page);
+    await expect(page.locator(".diff-status")).toHaveText("Loading the diff…");
+    release();
+    await expect(page.locator(".diff .ln").first()).toBeVisible();
   });
 });
 

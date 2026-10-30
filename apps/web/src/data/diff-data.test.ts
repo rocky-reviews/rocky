@@ -57,6 +57,19 @@ describe("parseDiffData", () => {
   it("accepts an empty diff (a PR with no file changes)", () => {
     expect(parseDiffData({ headSha: SHA, diff: "" }).files.size).toBe(0);
   });
+
+  it("H4-3: reads the server's truncation flag; absent or null means whole", () => {
+    expect(parseDiffData({ headSha: SHA, diff: ONE_FILE }).truncated).toBe(false);
+    expect(parseDiffData({ headSha: SHA, diff: ONE_FILE, truncation: null }).truncated).toBe(false);
+    expect(parseDiffData({ headSha: SHA, diff: ONE_FILE, truncation: "max_bytes" }).truncated).toBe(
+      true,
+    );
+    for (const truncation of ["forge_limit", "", 1, true, {}]) {
+      expect(() => parseDiffData({ headSha: SHA, diff: ONE_FILE, truncation })).toThrow(
+        "invalid truncation",
+      );
+    }
+  });
 });
 
 describe("fixture diff source", () => {

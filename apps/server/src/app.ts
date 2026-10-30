@@ -8,6 +8,8 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
+import type { PullRequestDiffReader } from "./pulls/diff-reader.js";
+import { registerPullRequestDiffRoutes } from "./pulls/diff-routes.js";
 import { registerPullRequestPageRoutes } from "./pulls/routes.js";
 import { createReviewPostingService } from "./reviews/post-review.js";
 import { registerReviewPostingRoutes } from "./reviews/post-routes.js";
@@ -64,6 +66,11 @@ export interface AppDeps {
    * only object in the process that can post, and only these routes hold it.
    */
   reviewPosting?: ReviewPostingDeps;
+  /**
+   * The PR's diff read from GitHub on demand (H4-3, ADR 0034), on the app's key. Needs login
+   * and `repositoryAccess`; the diff route answers 503 without either.
+   */
+  pullRequestDiffs?: PullRequestDiffReader;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -160,6 +167,12 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     registerPullRequestPageRoutes(app, {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+    });
+    // H4-3: its diff, read from GitHub on demand.
+    registerPullRequestDiffRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+      ...(deps.pullRequestDiffs === undefined ? {} : { diffs: deps.pullRequestDiffs }),
     });
     if (deps.reviewPosting !== undefined) {
       const { poster, keys, now, postingTimeoutMs } = deps.reviewPosting;

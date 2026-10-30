@@ -9,7 +9,13 @@ import type { OwnComment } from "./diff-model.js";
 import { ReviewContext, type ReviewContextValue } from "../drafts/ReviewProvider.js";
 import { reviewWith } from "../drafts/testing.js";
 import type { DraftDecision } from "@rocky-reviews/core/drafts";
-import { DiffContext, type DiffContextValue, type DiffLoad } from "./DiffProvider.js";
+import type { PullRef } from "../data/shell-data.js";
+import {
+  DiffContext,
+  type DiffContextValue,
+  type DiffLoad,
+  type DiffLoadReason,
+} from "./DiffProvider.js";
 import { FileView } from "./FileView.js";
 
 const parsed = parseAnalysisDocument(pr847);
@@ -17,7 +23,16 @@ if (!parsed.ok) throw new Error("fixture invalid");
 const doc: AnalysisDocument = parsed.value;
 const diff = parseDiffData(await createFixtureDiffSource().load(DEFAULT_PULL));
 
-const context = (load: DiffLoad): DiffContextValue => ({ load, request: () => {} });
+const context = (
+  load: DiffLoad,
+  pull: PullRef | null = DEFAULT_PULL,
+  returnTo?: string,
+): DiffContextValue => ({
+  load,
+  request: () => {},
+  pull,
+  ...(returnTo === undefined ? {} : { returnTo }),
+});
 
 const render = (
   path: string,
@@ -28,6 +43,9 @@ const render = (
     decisions?: Record<string, DraftDecision>;
     line?: number;
     status?: ReviewContextValue["status"];
+    /** The PR the diff belongs to (`null`: none known, so no GitHub link can be built). */
+    pull?: PullRef | null;
+    returnTo?: string;
   } = {},
 ) =>
   renderToStaticMarkup(
@@ -39,7 +57,7 @@ const render = (
         { status: options.status ?? "ready" },
       )}
     >
-      <DiffContext value={context(load)}>
+      <DiffContext value={context(load, options.pull, options.returnTo)}>
         <FileView
           path={path}
           line={options.line}
@@ -198,9 +216,74 @@ describe("file view", () => {
     expect(text(render("src/auth/invitations.ts", { kind: "loading" }))).toContain(
       "Loading the diff…",
     );
-    const failed = render("src/auth/invitations.ts", { kind: "failed" });
+    const failed = render("src/auth/invitations.ts", { kind: "failed", reason: "failed" });
     expect(failed).toContain('role="alert"');
     expect(text(failed)).toContain("The diff could not be loaded.");
+  });
+
+  it("H4-3: says why the server's diff could not be loaded, as fixed text per reason", () => {
+    const cases: [DiffLoadReason, string][] = [
+      [
+        "not_found",
+        "This diff isn’t available: the pull request isn’t in Rocky, or you can’t read",
+      ],
+      ["head_moved", "This pull request changed on GitHub since Rocky last saw it."],
+      ["too_large", "GitHub won’t render a diff this large, so Rocky can’t show it."],
+      ["unavailable", "Repository access isn’t available yet, so Rocky can’t load the diff."],
+      ["forge_failed", "GitHub didn’t answer when Rocky asked for the diff."],
+      ["rate_limited", "Too many diff requests in a row."],
+      ["signed_out", "Your session ended."],
+      ["failed", "The diff could not be loaded."],
+    ];
+    for (const [reason, expected] of cases) {
+      const html = render("src/auth/invitations.ts", { kind: "failed", reason });
+      expect(html, reason).toContain('class="diff-status" role="alert"');
+      expect(text(html), reason).toContain(expected);
+      // Nothing from the answer is on the page, only the fixed text and the file's own header.
+      expect(html, reason).not.toContain("Zebra");
+    }
+  });
+
+  it("H4-3: the too-large and signed-out states offer a way out, built from validated names", () => {
+    const large = render("src/auth/invitations.ts", { kind: "failed", reason: "too_large" });
+    expect(large).toContain(
+      '<a href="https://github.com/acme/rocky-app/pull/847/files" target="_blank" rel="noopener noreferrer">Read it on GitHub</a>',
+    );
+    // Without a validated PR there is no link, only the text.
+    const noPull = render(
+      "src/auth/invitations.ts",
+      { kind: "failed", reason: "too_large" },
+      { pull: null },
+    );
+    expect(noPull).not.toContain("github.com");
+    expect(text(noPull)).toContain("GitHub won’t render a diff this large");
+    const signedOut = render("src/auth/invitations.ts", { kind: "failed", reason: "signed_out" });
+    expect(signedOut).toContain('<a href="/auth/github/login">Sign in with GitHub</a>');
+    // With the page's path, sign-in comes back here (the same rule as the page's own state).
+    const back = render(
+      "src/auth/invitations.ts",
+      { kind: "failed", reason: "signed_out" },
+      { returnTo: "/acme/rocky-app/pull/847" },
+    );
+    expect(back).toContain(
+      '<a href="/auth/github/login?returnTo=%2Facme%2Frocky-app%2Fpull%2F847">Sign in with GitHub</a>',
+    );
+  });
+
+  it("H4-3: a truncated diff says so on every file, and a file past the cut says where it is", () => {
+    const truncated = { ...diff, truncated: true };
+    const html = render("src/auth/invitations.ts", { kind: "ready", data: truncated });
+    expect(html).toContain('class="diff-status" role="note"');
+    expect(text(html)).toContain(
+      "This diff is longer than Rocky reads (1 MiB), so only its first part is shown",
+    );
+    expect(html).toContain('class="diff"');
+    const beyond = render("src/missing-past-the-cut.ts", { kind: "ready", data: truncated });
+    expect(text(beyond)).toContain("This file is past the part of the diff Rocky read.");
+    expect(beyond).not.toContain('class="diff"');
+    // A whole diff says nothing of the kind.
+    expect(text(render("src/auth/invitations.ts"))).not.toContain("only its first part");
+    expect(text(render("src/missing-past-the-cut.ts"))).toContain("This file is not in the diff.");
   });
 });
 

@@ -9,6 +9,9 @@
 - **Revised:** review round 1: a lagging pull request read and a compare 404 are retried as
   strikes before they are believed; an `unavailable` diff reading can be replaced; diff size and
   digest are those of the raw bytes read; explicit `org_id` filters next to RLS (M11–M13)
+- **Amended by:** [ADR 0034](0034-pull-request-diff-endpoint.md) (H4-3: the server reads a
+  revision's diff on demand for the file view, through the same session and cap; §3 and §4
+  notes below)
 
 ## Context
 
@@ -110,6 +113,12 @@ when it needs it, verifying it against the digest. Storing it (in Postgres or R2
 decision. No grant changes: the worker writes these tables through `rocky_app`'s existing
 privileges, inside `withOrg`, under the 0003 tenant policies.
 
+H4-3 ([ADR 0034](0034-pull-request-diff-endpoint.md)): the server reads the head revision's
+diff the same way, on demand, when a reviewer opens a file (`openRepository` → the pull request's
+head verified against the mirror's → `getDiff` pinned to the revision → `close`), keeps it in
+memory for at most a minute and stores nothing. The rule stands: no diff text in Postgres or
+anywhere durable.
+
 ### 4. Diffs and truncation limits
 
 Diffs come from `GET /repos/{owner}/{repo}/compare/{base}...{head}` (`application/vnd.github.diff`):
@@ -125,7 +134,9 @@ push between the pull request read and the diff read cannot mix revisions. The r
 | `unavailable`     | GitHub has no diff for the commits (its JSON 404, or a 422), after the retries | none                          |
 
 1 MiB is well above what one analysis can take in (P4-6 sets the per-PR budget), so the cap does
-not cut a diff the analysis could have used whole. Any other answer (a 406 without `too_large`, an HTML 404, a
+not cut a diff the analysis could have used whole. The file view (H4-3, ADR 0034 §3) reads with
+the same cap and trims a `max_bytes` prefix further, to the last complete file, so the page shows
+whole files only. Any other answer (a 406 without `too_large`, an HTML 404, a
 5xx) is a read failure, never truncation. The prefix is cut at a line end, so no hunk line or UTF-8
 sequence is split. Truncated diffs are flagged in the revision (`diff_truncated`) and counted by
 the rebuild (`truncatedDiffs`); the UI and the analysis must say so (P4/P6).
