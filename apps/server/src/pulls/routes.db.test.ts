@@ -1,4 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   AccessDecision,
   ForgePullRequest,
@@ -31,6 +34,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { parseShellData } from "../../../web/src/data/shell-data.js";
 import { buildApp } from "../app.js";
 import { randomToken, sha256 } from "../auth/cookies.js";
+import { loadWebApp } from "../web-app.js";
 
 /**
  * H4-2: the PR page's data on a real Postgres, as the browser asks for it (session cookie). Each
@@ -57,6 +61,14 @@ let dana: string;
 let danaB: string;
 let repoA: string;
 
+/** A CSP-clean build of the web app (P7-3), so the SPA fallback serves the PR page's address. */
+let webRoot: string;
+const WEB_FILES: Readonly<Record<string, string>> = {
+  "index.html":
+    '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Rocky</title><script type="module" crossorigin src="/assets/index-abc123.js"></script></head><body><div id="app"></div></body></html>',
+  "assets/index-abc123.js": "console.log(1)",
+};
+
 const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   const log = createLogger("pull-page-test", {
     level: "debug",
@@ -65,6 +77,7 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   return buildApp({
     checkDatabase: () => Promise.resolve(true),
     log,
+    web: loadWebApp(webRoot),
     auth: {
       publicUrl: PUBLIC,
       cookieSecure: true,
@@ -209,6 +222,8 @@ const get = (token: string | null, url: string, on: FastifyInstance = app) =>
     headers: token === null ? {} : { cookie: `${SESSION}=${token}` },
   });
 
+const PULL_PAGE_PATTERN = "/api/repos/:owner/:repo/pulls/:number";
+
 const page = (number: number, owner = "acme", repo = "rocky-app") =>
   `/api/repos/${owner}/${repo}/pulls/${number}`;
 
@@ -232,6 +247,11 @@ const served = async (number: number, token = dana): Promise<Answer> => {
 };
 
 beforeAll(async () => {
+  webRoot = mkdtempSync(join(tmpdir(), "rocky-pull-page-web-"));
+  for (const [path, body] of Object.entries(WEB_FILES)) {
+    mkdirSync(join(webRoot, path, ".."), { recursive: true });
+    writeFileSync(join(webRoot, path), body);
+  }
   pgs = await startPostgres();
   db = createDb({ connectionString: pgs.appUrl, max: 6 });
   [A, B] = await asWorker(pgs.workerUrl, async (w) => [
@@ -264,6 +284,7 @@ afterAll(async () => {
   await app?.close();
   await db?.close();
   await pgs?.stop();
+  if (webRoot !== undefined) rmSync(webRoot, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
@@ -502,6 +523,19 @@ describe("GET /api/repos/:owner/:repo/pulls/:number: refusals", () => {
     await pullWith(892, [{ status: "done", document: documentFor(892) }]);
     await served(892);
     await get(dana, page(999_998));
+    // The PR page's own address: the SPA fallback serves the app (review S1).
+    const document = await get(dana, "/acme/rocky-app/pull/892");
+    expect(document.statusCode).toBe(200);
+    expect(document.headers["content-type"]).toContain("text/html");
+    // Every line, Fastify's request lines included: the route's pattern or a fixed marker.
+    const all = lines.map((l) => JSON.parse(l) as { req?: { url?: string } });
+    expect(all.filter((l) => l.req !== undefined).map((l) => l.req?.url)).toEqual(
+      expect.arrayContaining([PULL_PAGE_PATTERN, "(unmatched)"]),
+    );
+    for (const line of lines) {
+      expect(line).not.toMatch(/rocky-app|acme\/|Team invitations/);
+      expect(line).not.toContain(pr847.briefing.summary.slice(0, 20));
+    }
     const entries = lines
       .map((l) => JSON.parse(l) as { pull_page?: Record<string, unknown> })
       .filter((l) => l.pull_page !== undefined)

@@ -354,7 +354,8 @@ describe("F9: secrets in request paths are scrubbed by the Fastify serializer", 
       const res = await app.inject({ method: "GET", url: `/invite/${FAKE.ghp}?x=1` });
       expect(res.statusCode).toBe(200);
       const incoming = lines.find((l) => l["msg"] === "incoming request")!;
-      expect(incoming["req"]).toEqual({ method: "GET", url: "/invite/[redacted:github_token]" });
+      // H4-2: the route's pattern, so the token never reaches the line at all.
+      expect(incoming["req"]).toEqual({ method: "GET", url: "/invite/:token" });
       expect(text()).not.toMatch(/ghp_|x=1/);
     } finally {
       await app.close();

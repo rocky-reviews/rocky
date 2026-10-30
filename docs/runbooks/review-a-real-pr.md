@@ -76,7 +76,9 @@ not in the mirror, so the top bar leaves them out.
 
 ## Fixtures (development and tests)
 
-The fixtures stay available behind an explicit switch and never call the server:
+The fixtures stay available behind an explicit switch and never call the server. They work only
+in the Vite dev server (`pnpm dev`) and in test builds made with `VITE_ROCKY_FIXTURES=on`; a
+production build leaves them out, so there `/` with any of these goes to `/inbox`:
 
 | Address                 | Shows                              |
 | ----------------------- | ---------------------------------- |

@@ -74,13 +74,29 @@ describe("fastifyLoggerOptions", () => {
     expect(JSON.stringify(built.lines)).not.toMatch(/gho_|token=abc/);
   });
 
-  it("logs a 404 without the query string", async () => {
+  it("logs a 404 with a fixed marker, never its path or query string", async () => {
     const built = build();
     app = built.app;
-    const res = await app.inject({ method: "GET", url: "/missing?secret=1" });
+    const res = await app.inject({ method: "GET", url: "/acme/private-repo/pull/7?secret=1" });
     expect(res.statusCode).toBe(404);
     const notFound = built.lines.find((l) => l["msg"] === "route not found")!;
-    expect(notFound).toMatchObject({ method: "GET", url: "/missing" });
-    expect(JSON.stringify(built.lines)).not.toContain("secret=1");
+    expect(notFound).toMatchObject({ method: "GET", url: "(unmatched)" });
+    const incoming = built.lines.find((l) => l["msg"] === "incoming request")!;
+    expect(incoming["req"]).toEqual({ method: "GET", url: "(unmatched)" });
+    expect(JSON.stringify(built.lines)).not.toMatch(/secret=1|private-repo|acme/);
+  });
+
+  it("H4-2: logs the matched route's pattern, never the names in the path", async () => {
+    const built = build();
+    app = built.app;
+    built.app.get("/api/repos/:owner/:repo/pulls/:number", async () => ({ ok: true }));
+    const res = await app.inject({ method: "GET", url: "/api/repos/acme/private-repo/pulls/7" });
+    expect(res.statusCode).toBe(200);
+    const incoming = built.lines.find((l) => l["msg"] === "incoming request")!;
+    expect(incoming["req"]).toEqual({
+      method: "GET",
+      url: "/api/repos/:owner/:repo/pulls/:number",
+    });
+    expect(JSON.stringify(built.lines)).not.toMatch(/private-repo|acme/);
   });
 });

@@ -109,7 +109,13 @@ implements exactly these rules.
   fixture); the fixtures are reached only with an explicit switch on `/` (`?fixture=pr-847`,
   `?fixture=large-diff`, `?pr=`, `?repo=`, `?diff=`); `/` alone goes to `/inbox`; any other
   address is "no page". Names in an address pass the schema's GitHub rules before anything is
-  built from them.
+  built from them. The switches work only in the dev server and in builds with
+  `VITE_ROCKY_FIXTURES=on` (Playwright's `perf` build): `main.tsx` folds the condition to
+  `false` in a production build, which then carries no fixture code or data
+  (`bundle-budget.test.ts` checks; initial JS 155.4 KB gz, was 164.7 KB).
+- **Logs:** Fastify's request lines carry the matched route's pattern, never the raw path, and
+  `(unmatched)` for a 404 or the SPA fallback, so repository names in addresses stay out of the
+  logs (`packages/log/src/fastify.ts`, `docs/logging.md`).
 - **The diff** is not served yet: a real PR's file view says it could not be loaded.
 - **Dev proxy** (`apps/web/vite.config.ts`, `src/dev-proxy.ts`): Vite forwards `/api` and `/auth`
   (whole path segments) to `ROCKY_DEV_SERVER_URL` (default `http://127.0.0.1:4310`, http only on

@@ -92,9 +92,12 @@ A `code` key **on an Error** keeps error-code identifiers of these exact shapes:
 - HTTP: `Fastify(fastifyLoggerOptions(log))` + `addRequestIdHeader(app)` (from
   `@rocky-reviews/log/fastify`). Every line of a request carries `requestId` (server-generated
   UUID; client `x-request-id` is ignored), the id is returned in the `x-request-id` response
-  header, and Fastify's own lines log only `method` and a **scrubbed path without the query
-  string** (`/invite/<token>` becomes `/invite/[redacted:github_token]`); no headers, no client
-  IP. `/healthz` runs at `logLevel: "warn"`, so probes are silent unless they fail.
+  header, and Fastify's own lines log only `method` and the **matched route's pattern**, never
+  the raw path (`/invite/<token>` is logged as `/invite/:token`, `/api/repos/<owner>/<repo>/…`
+  as `/api/repos/:owner/:repo/…`; H4-2: repository names stay out of the logs); a request no
+  route matched (a 404, or the web app's fallback to `index.html` for `/<owner>/<repo>/pull/<n>`)
+  is logged as `(unmatched)`. No query string, no headers, no client IP. Ids a route needs, it
+  logs itself. `/healthz` runs at `logLevel: "warn"`, so probes are silent unless they fail.
 - Child loggers: `log.child({...})` and `log.setBindings({...})` bindings go through the same
   redaction and scrubbing (`createLogger` wraps both methods; grandchildren inherit them).
 - Jobs and other entry points: `withRequestId(log, id?)`.

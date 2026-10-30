@@ -10,50 +10,51 @@ import "./finish/finish.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
-import { unavailableDiffSource } from "./data/diff-data.js";
-import { createFixtureDiffSource } from "./data/diff-fixture-source.js";
-import { createFixtureSource } from "./data/fixture-source.js";
+import { unavailableDiffSource, type DiffDataSource } from "./data/diff-data.js";
 import { createHttpPostingSource } from "./data/posting-http-source.js";
 import { createHttpReviewSource } from "./data/review-http-source.js";
+import type { PullRef, ShellDataSource } from "./data/shell-data.js";
 import { createHttpShellSource } from "./data/shell-http-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
-import { createFixtureInboxSource, createHttpInboxSource } from "./inbox/inbox-source.js";
+import { createHttpInboxSource, type InboxSource } from "./inbox/inbox-source.js";
 import { InboxPage } from "./inbox/InboxPage.js";
 import { pageFor } from "./route.js";
 
 const root = document.querySelector("#app");
-// H4-2: the server by default; the fixtures only behind an explicit switch (route.ts).
-const page = pageFor(window.location.pathname, window.location.search);
+// H4-2 (review S2): the fixture switches work only in the Vite dev server and in builds made with
+// `VITE_ROCKY_FIXTURES=on` (the Playwright `perf` build). Vite replaces both at build time; the
+// condition is written out here, not imported, so the bundler folds it to `false` in a
+// production build and drops the fixture branches and their chunks (bundle-budget.test.ts checks).
+const FIXTURES_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ROCKY_FIXTURES === "on";
+// H4-2: the server by default; the fixtures only behind an explicit switch, and only in
+// development and test builds.
+const page = pageFor(window.location.pathname, window.location.search, {
+  fixtures: FIXTURES_ENABLED,
+});
 
-if (page.kind === "home") {
-  window.location.replace("/inbox");
-} else if (root && page.kind === "inbox") {
-  // P6-7: the inbox (ADR 0029); `?source=fixture` serves the fixture instead of /api/inbox.
-  const source = page.source === "fixture" ? createFixtureInboxSource() : createHttpInboxSource();
-  createRoot(root).render(
+const renderInbox = (element: Element, source: InboxSource) =>
+  createRoot(element).render(
     <StrictMode>
       <InboxPage source={source} />
     </StrictMode>,
   );
-} else if (root && page.kind === "pull") {
-  const fixture = page.source === "fixture";
-  const source = fixture ? createFixtureSource() : createHttpShellSource();
-  // P6-3: the diff has its own port. The fixtures serve pr-847's and the 5,000-line diff
-  // (`?fixture=large-diff`); `?diff=newer-push` (P6-5) serves it as a later push. The server
-  // does not serve a diff yet (H4-2 follow-up): a real PR's file view says it could not load.
-  const diffSource = fixture
-    ? createFixtureDiffSource({ newerPush: page.newerPush })
-    : unavailableDiffSource;
+
+const renderPull = (
+  element: Element,
+  pull: PullRef,
+  source: ShellDataSource,
+  diffSource: DiffDataSource,
+) => {
   // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
   const review = createHttpReviewSource();
   // P6-6: Finish review reads the exact list and posts it through the server (ADR 0026).
   const posting = createHttpPostingSource();
-  createRoot(root).render(
+  createRoot(element).render(
     <StrictMode>
-      <DiffProvider source={diffSource} pull={page.ref}>
+      <DiffProvider source={diffSource} pull={pull}>
         <App
           source={source}
-          pull={page.ref}
+          pull={pull}
           review={review}
           posting={posting}
           returnTo={window.location.pathname}
@@ -61,7 +62,38 @@ if (page.kind === "home") {
       </DiffProvider>
     </StrictMode>,
   );
-} else if (root) {
+};
+
+if (page.kind === "home") {
+  window.location.replace("/inbox");
+} else if (!root) {
+  // Nothing to render into.
+} else if (FIXTURES_ENABLED && page.kind === "inbox" && page.source === "fixture") {
+  // P6-7: the inbox fixture (development and tests only).
+  void import("./inbox/inbox-source.js").then(({ createFixtureInboxSource }) =>
+    renderInbox(root, createFixtureInboxSource()),
+  );
+} else if (page.kind === "inbox") {
+  renderInbox(root, createHttpInboxSource());
+} else if (FIXTURES_ENABLED && page.kind === "pull" && page.source === "fixture") {
+  // The fixture PRs (development and tests only): pr-847 (P6-1), the briefing's states
+  // (`?pr=`, P6-2), the 5,000-line diff (`?fixture=large-diff`, P6-3) and a later push
+  // (`?diff=newer-push`, P6-5).
+  void Promise.all([
+    import("./data/fixture-source.js"),
+    import("./data/diff-fixture-source.js"),
+  ]).then(([{ createFixtureSource }, diff]) =>
+    renderPull(
+      root,
+      diff.fixturePullFromSearch(page.search),
+      createFixtureSource(),
+      diff.createFixtureDiffSource({ newerPush: diff.newerPushFromSearch(page.search) }),
+    ),
+  );
+} else if (page.kind === "pull" && page.source === "server") {
+  // The server does not serve a diff yet (H4-2 follow-up): a file view says it could not load.
+  renderPull(root, page.ref, createHttpShellSource(), unavailableDiffSource);
+} else {
   createRoot(root).render(
     <StrictMode>
       <main className="status-page" id="main">

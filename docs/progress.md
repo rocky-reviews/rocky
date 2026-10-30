@@ -103,6 +103,38 @@ Task log for the project plan. Agents append a row when a task is merged.
 - LCP: add the cold-load measurement (P6-8 follow-up); the warm run now answers the PR request.
 - The 409 (no active org) and 403 (not a member) answers show "could not be loaded"; an org
   picker would say more.
+- Review round 1 (fixed): S1 request lines log the route pattern or `(unmatched)`, never the raw
+  path (repository names); S2 the fixture switches work only in dev and `VITE_ROCKY_FIXTURES=on`
+  builds, and production carries no fixture (initial JS 166.1 → 155.4 KB gz).
+- Review round 1 nits (not done):
+  - Timing oracle within an org: an unknown PR answers 404 before the GitHub access check, a known
+    one after it, so response time tells a member which PR numbers exist in repositories they
+    cannot read (same org only; numbers, not content).
+  - The 503 test shows the answer, not that nothing was read from the database (the code checks
+    first; a spy on `withOrg` would prove it).
+  - `NOT_SPA` owner names differ between dev and production: an owner such as `setup`,
+    `assets` or `healthz` gets the app from Vite in development but the server's fixed 404 in
+    production (only `api` and `auth` are proxied in development).
+  - Old `/?repo=<owner>/<name>&pr=<n>` links (from the inbox before H4-2) now open a fixture in
+    development and `/inbox` in production; a redirect to `/<owner>/<repo>/pull/<n>` would keep them.
+  - `vite.config.ts` resolves the proxy target on every command; resolve it only for `serve`, so a
+    bad `ROCKY_DEV_SERVER_URL` cannot fail a build.
+  - `localhost` is in the dev proxy's loopback list although the runbook asks for `127.0.0.1`
+    (cookies are per host name); consider dropping it.
+  - An author login outside the display rule fails the whole page; the server could answer
+    `author: null` for one instead.
+  - Runbook: create the GitHub App (runbook H3) before switching `ROCKY_PUBLIC_URL` to the Vite
+    origin, or the manifest's URLs point at 5173 without a proxy for `/setup`.
+  - `pull-request-page.ts`: tiebreak orders are inconsistent (`x.id desc` for the head run,
+    `x.id` ascending for the document, as `reviews.ts`; `r.updated_at desc, r.id` for two repos of
+    the same name); make them one documented rule.
+- CI flake (not H4-2): `apps/worker/src/analysis-lane.e2e.test.ts` "slots 4, org cap 2, 1 finishing
+  per step: B is never starved" failed once in CI on PR #43 ("expected 6 to be less than or equal
+  to 5") and passed on re-run.
+- e2e flake (P6-4 test, seen once in the H4-2 fix round, 25/25 on repeat):
+  `drafts.e2e.spec.ts` "dismiss with a reason → refresh…" reads `reviewApi.decision("F1")`
+  right after the optimistic card shows "dismissed", before the POST has landed; use
+  `expect.poll`.
 - ui-verifier nits: status pages have no brand mark, heading or per-state `document.title`; the
   503 pages offer no Retry; at 375 px the top bar's "by @author" is hidden (`hide-sm`), so phones
   show no author. Fixed: status-page links use `--you`, messages are centred.
