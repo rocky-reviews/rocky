@@ -170,6 +170,7 @@ export {
   type RoleChangeResult,
   type TransferResult,
 } from "./members.js";
+export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
 export { LLM_USAGE_MAX_RECORDS, recordLlmUsage, UsageStoreError } from "./usage.js";
 export {
   WEBHOOK_INBOX_LOCK_TIMEOUT_MS,

@@ -1,4 +1,4 @@
-import type { RepositoryAccessCheck } from "@rocky-reviews/core";
+import type { PullRequestApprover, RepositoryAccessCheck } from "@rocky-reviews/core";
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -6,6 +6,7 @@ import { registerCsrfGuard } from "./auth/csrf.js";
 import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/policy.js";
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { registerInboxRoutes } from "./inbox/routes.js";
 import { registerRoleRoutes } from "./roles/routes.js";
 import { frameworkErrors, registerErrorHandler } from "./security/errors.js";
 import { registerSecurityHeaders } from "./security/headers.js";
@@ -39,6 +40,11 @@ export interface AppDeps {
    * refuse (503) without it (P7-2).
    */
   repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
+  /**
+   * Submits one approving review as the member (P3-5 fills this port). The inbox's bulk approval
+   * (P6-7) refuses (503) without it.
+   */
+  pullRequestApprover?: PullRequestApprover;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -118,6 +124,11 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
         ? {}
         : { onMemberChanged: deps.auth.onMemberTokenChanged }),
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+    });
+    registerInboxRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+      ...(deps.pullRequestApprover === undefined ? {} : { approver: deps.pullRequestApprover }),
     });
   }
   registerWebApp(app, deps.web);

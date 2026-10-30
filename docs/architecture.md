@@ -16,7 +16,8 @@ Decisions behind this page:
 [ADR 0015 prompt-injection defence](adr/0015-prompt-injection-defence.md),
 [ADR 0019 web app stack and PR page shell](adr/0019-web-app-shell.md),
 [ADR 0020 GitHub login and sessions](adr/0020-github-login-and-sessions.md),
-[ADR 0024 roles per org and the access policy](adr/0024-org-roles-and-access-policy.md).
+[ADR 0024 roles per org and the access policy](adr/0024-org-roles-and-access-policy.md),
+[ADR 0029 review inbox and bulk approval](adr/0029-review-inbox-and-bulk-approval.md).
 
 ## Runtime
 
@@ -247,6 +248,13 @@ packages/schema (analysis document; shared contract)
   `Retry-After` and a fixed body; in memory per instance (follow-up: a shared store).
   `pnpm security:zap` (and CI) runs the pinned OWASP ZAP baseline against the real server and
   fails on any High or Medium alert.
+- Review inbox (ADR 0029, P6-7): `GET /api/inbox` lists open PRs of repositories the member can
+  read on GitHub (P3-6, asked once per repository), assessed by `assessPullRequest`
+  (`packages/core/src/review-inbox.ts`) and sorted by risk; "safe to bulk-approve" is a
+  suggestion computed from the analysis plus model-independent facts (Rocky's path rules, PR
+  size, diff completeness, author). `POST /api/inbox/approvals` approves only a batch the person
+  confirmed, after re-reading and re-assessing every PR at the commit they saw (any failure
+  refuses the whole batch), through the `PullRequestApprover` port (P3-5 fills it; 503 without).
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
