@@ -25,6 +25,11 @@ describe("SafeSvgView", () => {
       renderChangeMap(pr847()),
       renderChangeMap(pr847(), { idPrefix: "brief" }),
       renderChangeMap({ findings: [], provenance: { graphUnavailable: { reason: "timeout" } } }),
+      // P5-3: the interactive map's tabindex, roles and names come through as written.
+      renderChangeMap(pr847(), {
+        idPrefix: "brief",
+        interactive: { files: pr847().provenance.files.map((file) => file.path) },
+      }),
     ])
       expect(canonical(html(map.tree))).toEqual(canonical(map.svg));
   });

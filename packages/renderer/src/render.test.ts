@@ -10,13 +10,22 @@ const SHAPES: Record<string, () => ChangeMapSource> = {
   "long-labels": longLabels,
 };
 
-/** Every `<g class="cm-node …" data-node="id">…</g>` group, by node id. */
+/**
+ * Every `<g class="cm-node …" data-node="id">…</g>` group, with the badge group drawn right
+ * after it (a sibling since P5-3), by node id.
+ */
 const nodeGroups = (svg: string): Map<string, string> =>
   new Map(
-    [...svg.matchAll(/<g class="cm-node[^"]*" data-node="([^"]+)">([\s\S]*?)<\/g>/g)].map(
-      (match) => [match[1] ?? "", match[2] ?? ""],
-    ),
+    [
+      ...svg.matchAll(
+        /<g class="cm-node[^"]*" data-node="([^"]+)"[^>]*>([\s\S]*?<\/g>(?:\n<g class="cm-badge[^"]*"[\s\S]*?<\/g>)?)/g,
+      ),
+    ].map((match) => [match[1] ?? "", match[2] ?? ""]),
   );
+
+/** The opening tag of an element whose attribute `name` is `value`. */
+const openTag = (svg: string, name: string, value: string): string =>
+  new RegExp(`<g [^>]*${name}="${value}"[^>]*>`).exec(svg)?.[0] ?? "";
 
 describe("determinism", () => {
   for (const [name, build] of Object.entries(SHAPES))
@@ -197,6 +206,89 @@ describe("finding badges", () => {
     const long = nodeGroups(svg).get("long");
     expect(long).toMatch(/<text class="cm-badge-count"[^>]*>9\+<\/text>/);
     expect(long).toContain("12 findings, worst high");
+  });
+});
+
+describe("click-through (P5-3)", () => {
+  const files = (doc = pr847()) => doc.provenance.files.map((file) => file.path);
+
+  it("is a picture without the option: no button, no tabindex, role img", () => {
+    const { svg } = renderChangeMap(pr847());
+    expect(svg).not.toContain("tabindex");
+    expect(svg).not.toContain('role="button"');
+    expect(svg).toMatch(/^<svg [^>]*role="img"/);
+  });
+
+  it("makes each card backed by a PR file a named button, and the root a group", () => {
+    const { svg } = renderChangeMap(pr847(), { interactive: { files: files() } });
+    expect(svg).toMatch(/^<svg [^>]*role="group" aria-label="Change map"/);
+    expect(openTag(svg, "data-node", "page")).toBe(
+      '<g class="cm-node cm-added" data-node="page" tabindex="0" role="button" ' +
+        'aria-label="InvitePage web/src/pages, opens web/src/pages/InvitePage.tsx">',
+    );
+    expect(openTag(svg, "data-node", "auth")).toContain(
+      'aria-label="acceptInvitation() src/auth, opens src/auth/invitations.ts"',
+    );
+    // memberships is backed by a file outside the PR; the mailer by none.
+    expect(openTag(svg, "data-node", "mem")).toBe(
+      '<g class="cm-node cm-unchanged" data-node="mem">',
+    );
+    expect(openTag(svg, "data-node", "mail")).toBe(
+      '<g class="cm-node cm-unchanged" data-node="mail">',
+    );
+  });
+
+  it("makes each badge a named button for its worst finding, after its card", () => {
+    const { svg } = renderChangeMap(pr847(), { interactive: { files: files() } });
+    expect(openTag(svg, "data-findings", "F1 F3 F8")).toBe(
+      '<g class="cm-badge cm-critical" data-findings="F1 F3 F8" tabindex="0" role="button" ' +
+        'aria-label="3 findings on acceptInvitation(), worst critical: go to src/auth/invitations.ts line 28">',
+    );
+    expect(openTag(svg, "data-findings", "F9")).toContain(
+      'aria-label="1 finding on InvitePage, worst low: go to web/src/pages/InvitePage.tsx line 13"',
+    );
+    // Tab order is document order: each card, then its badge, never one inside the other.
+    const order = [...svg.matchAll(/tabindex="0"[^>]*aria-label="([^"]*)"/g)].map((m) => m[1]);
+    expect(order.slice(0, 2)).toEqual([
+      "InvitePage web/src/pages, opens web/src/pages/InvitePage.tsx",
+      "1 finding on InvitePage, worst low: go to web/src/pages/InvitePage.tsx line 13",
+    ]);
+    expect(nodeGroups(svg).get("auth")).toMatch(/<\/g>\n<g class="cm-badge cm-critical"/);
+  });
+
+  it("leaves a card and a badge inert when their file is not in the PR", () => {
+    const doc = pr847();
+    const { svg } = renderChangeMap(doc, {
+      interactive: { files: files(doc).filter((path) => path !== "src/auth/invitations.ts") },
+    });
+    expect(openTag(svg, "data-node", "auth")).toBe('<g class="cm-node cm-added" data-node="auth">');
+    expect(openTag(svg, "data-findings", "F1 F3 F8")).toBe(
+      '<g class="cm-badge cm-critical" data-findings="F1 F3 F8">',
+    );
+  });
+
+  it("names a card by the text drawn on it, normalised, then the file it opens", () => {
+    const doc = pr847();
+    const label = `\u202Eevil\u200B${"x".repeat(600)}`;
+    const { svg } = renderChangeMap(
+      { ...doc, graph: { ...doc.graph!, nodes: doc.graph!.nodes.map((n) => ({ ...n, label })) } },
+      { interactive: { files: files(doc) } },
+    );
+    const card = /<g [^>]*data-node="page"[^>]*>[\s\S]*?<\/g>/.exec(svg)?.[0] ?? "";
+    const drawn = /<text class="cm-node-title"[^>]*>([^<]*)<\/text>/.exec(card)?.[1] ?? "";
+    expect(drawn.startsWith("evilxxx")).toBe(true);
+    expect(drawn.endsWith("…")).toBe(true);
+    expect(card).toContain(
+      `aria-label="${drawn} web/src/pages, opens web/src/pages/InvitePage.tsx"`,
+    );
+  });
+
+  it("is deterministic and draws the same picture as the inert map", () => {
+    const options = { interactive: { files: files() } };
+    const first = renderChangeMap(pr847(), options).svg;
+    for (let run = 0; run < 20; run += 1) expect(renderChangeMap(pr847(), options).svg).toBe(first);
+    const strip = (svg: string) => svg.replace(/ (?:tabindex|role|aria-label)="[^"]*"/g, "");
+    expect(strip(first)).toBe(strip(renderChangeMap(pr847()).svg));
   });
 });
 

@@ -85,7 +85,8 @@ const NUMERIC = new Set([
 ]);
 const FIXED: Readonly<Record<string, ReadonlySet<string>>> = {
   xmlns: new Set([SVG_NS]),
-  role: new Set(["img"]),
+  role: new Set(["img", "group", "button"]),
+  tabindex: new Set(["0"]),
   "aria-hidden": new Set(["true"]),
   "text-anchor": new Set(["middle"]),
   orient: new Set(["auto-start-reverse"]),
@@ -130,6 +131,7 @@ export const assertInert = (root: XmlElement, prefix: string): InertReport => {
 
   const visit = (element: XmlElement, parentClass: string): void => {
     if (!ELEMENTS.has(element.name)) throw new Error(`element <${element.name}>`);
+    checkRole(element);
     for (const [name, value] of Object.entries(element.attributes)) {
       checkAttribute(element.name, name, value, prefix, references, report.ids);
     }
@@ -157,6 +159,24 @@ export const assertInert = (root: XmlElement, prefix: string): InertReport => {
   for (const reference of references)
     if (!report.ids.includes(reference)) throw new Error(`dangling reference #${reference}`);
   return report;
+};
+
+/**
+ * P5-3: `img` or `group` (or none) on the root only; `button` only on a card or badge group and always
+ * with `tabindex="0"`; `tabindex` nowhere else.
+ */
+const checkRole = (element: XmlElement): void => {
+  const { role, tabindex, class: className } = element.attributes;
+  if (element.name === "svg") {
+    if (role !== undefined && role !== "img" && role !== "group")
+      throw new Error(`root role=${role}`);
+    if (tabindex !== undefined) throw new Error("tabindex on the root");
+    return;
+  }
+  if (role === undefined && tabindex === undefined) return;
+  const clickable = element.name === "g" && /^cm-(?:node|badge) /.test(className ?? "");
+  if (!clickable || role !== "button" || tabindex !== "0")
+    throw new Error(`role=${String(role)} tabindex=${String(tabindex)} on <${element.name}>`);
 };
 
 const checkAttribute = (

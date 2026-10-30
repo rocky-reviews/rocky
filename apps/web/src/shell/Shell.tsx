@@ -80,9 +80,10 @@ export const Shell = ({ data, now }: Props) => {
   };
 
   // A file opened from the briefing (P6-2): the content under focus is replaced, so focus moves
-  // to the main column, scrolled to the top.
-  const openFile = (path: string) => {
-    select({ kind: "file", path });
+  // to the main column, scrolled to the top. With a line (a finding badge on the change map,
+  // P5-3), the diff then moves focus on to that line once it is rendered.
+  const openFile = (path: string, line?: number) => {
+    select({ kind: "file", path, line });
     focusMain();
   };
 

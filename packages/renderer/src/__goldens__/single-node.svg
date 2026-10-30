@@ -6,7 +6,7 @@
 <g class="cm-nodes"><g class="cm-node cm-added" data-node="only"><title>OnlyModule · src/only.ts · 1 finding, worst high</title>
 <rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="32" y="59">OnlyModule</text>
-<text class="cm-node-sub" x="32" y="74">src/only.ts</text>
-<g class="cm-badge cm-high" data-findings="F1"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">1</text></g></g></g>
+<text class="cm-node-sub" x="32" y="74">src/only.ts</text></g>
+<g class="cm-badge cm-high" data-findings="F1"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">1</text></g></g>
 <g class="cm-labels"></g>
 </svg>

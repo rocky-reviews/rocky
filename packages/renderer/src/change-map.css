@@ -207,3 +207,34 @@
   fill: var(--muted);
   font-size: 12px;
 }
+
+/*
+ * P5-3: cards and badges that open something (only with the `interactive` option). Hover as in
+ * the POC (.node.clickable); the keyboard focus ring is the app's (--you), around the group,
+ * with the card's or badge's outline drawn in the same colour.
+ */
+.cm-node[role="button"],
+.cm-badge[role="button"] {
+  cursor: pointer;
+}
+
+.cm-node[role="button"]:hover .cm-card {
+  stroke-width: 2.2;
+}
+
+.cm-node[role="button"]:focus-visible,
+.cm-badge[role="button"]:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+
+.cm-node[role="button"]:focus-visible .cm-card,
+.cm-badge[role="button"]:focus-visible .cm-badge-bg {
+  stroke: var(--you);
+  stroke-width: 2.5;
+}
+
+.cm-node[role="button"]:focus:not(:focus-visible),
+.cm-badge[role="button"]:focus:not(:focus-visible) {
+  outline: none;
+}

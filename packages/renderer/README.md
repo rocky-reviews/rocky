@@ -29,7 +29,8 @@ dismissed drafts off the badges.
 - **Finding badges** on a card's top-right corner: the number of findings on the files behind the
   card (a file reference with a range only counts findings whose lines overlap it), coloured by
   the worst severity (`cm-critical` … `cm-low`), `9+` above nine. `data-findings` lists the ids,
-  worst first. The tooltip has the exact count.
+  worst first. The tooltip has the exact count. The badge is a sibling drawn right after its
+  card's group (P5-3).
 - **Edges**: a straight drop to the next row of the same lane, the POC's curve to the next lane,
   and routes through the gaps (corridors beside lanes, bands between rows) for anything that
   would otherwise cross a card. Ends sharing a card face are spread along it. Classes: delta,
@@ -81,6 +82,15 @@ Tests: `inert.test.ts` (157-label hostile corpus incl. the P4-4 injection payloa
 saxes and walked by `src/inspect.ts`), `fuzz.test.ts` (fast-check), `markup.test.ts` (the seam),
 `csp.test.ts`, and in the web app `SafeSvg.test.ts` and `e2e/change-map-csp.e2e.spec.ts`. The
 corpus, the inspector and the fixtures are exported for tests as `@rocky-reviews/renderer/testing`.
+
+## Click-through (P5-3)
+
+`renderChangeMap(doc, { interactive: { files } })`, with the PR's changed paths, makes each card
+backed by one of them, and each badge whose worst finding is on one, a focusable button
+(`tabindex="0"`, `role="button"`, a name that starts with the drawn text); the root becomes a
+`group`. Badges are drawn as siblings right after their card, never inside it. The renderer only
+marks them: the page reads `data-node` / `data-findings` with `dataset` and resolves them in the
+document (`apps/web/src/change-map/targets.ts`). Decisions: ADR 0028.
 
 ## Goldens and screenshots
 

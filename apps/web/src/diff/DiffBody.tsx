@@ -20,6 +20,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -52,9 +53,26 @@ const SIGN_TEXT = { add: "added", del: "removed", ctx: "" } as const;
 /** Rows the keyboard moves by with Page Up/Down. */
 const PAGE = 20;
 
-type Props = { path: string; file: DiffFile; annotations: FileAnnotations };
+type Props = {
+  path: string;
+  file: DiffFile;
+  annotations: FileAnnotations;
+  /**
+   * P5-3: a finding's line to open at. Read on mount (the body is keyed by path): that line,
+   * or the nearest new-side line the diff shows, starts active and takes focus.
+   */
+  target?: number | undefined;
+};
 
-export const DiffBody = ({ path, file, annotations }: Props) => {
+/** The new-side line nearest `target` (the earlier one on a tie). */
+const nearestLine = (lines: readonly { n: number }[], target: number): number | undefined =>
+  lines.reduce<number | undefined>(
+    (best, { n }) =>
+      best === undefined || Math.abs(n - target) < Math.abs(best - target) ? n : best,
+    undefined,
+  );
+
+export const DiffBody = ({ path, file, annotations, target }: Props) => {
   const { comments, addComment, deleteComment } = useDiff();
   const [composing, setComposing] = useState<number | null>(null);
   const rows = useMemo(() => fileRows(file.patch), [file.patch]);
@@ -74,7 +92,8 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
       ),
     [items],
   );
-  const [active, setActive] = useState<number | null>(() => lines[0]?.n ?? null);
+  const [opening] = useState(() => (target === undefined ? undefined : nearestLine(lines, target)));
+  const [active, setActive] = useState<number | null>(() => opening ?? lines[0]?.n ?? null);
   const activeIndex = lines.findIndex((l) => l.n === active);
   // The active line and an open composer stay rendered while scrolled away, so neither
   // focus nor the draft is lost when the window moves.
@@ -105,7 +124,8 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
 
   // Focus a line once its row is rendered. A far jump (End, Home) first scrolls by estimated
   // heights; the rows that arrive are measured, so the next pass lands closer. Bounded retries.
-  const pendingFocus = useRef<{ line: number; tries: number } | null>(null);
+  // `center`: a finding opened from the change map sits mid-screen, with the code around it.
+  const pendingFocus = useRef<{ line: number; tries: number; center?: boolean } | null>(null);
   useLayoutEffect(() => {
     const pending = pendingFocus.current;
     if (pending === null) return;
@@ -130,7 +150,9 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
         nearest.focus({ preventScroll: true });
       }
     } else if (button) {
-      reveal(at.i, button.closest<HTMLElement>(".ln") ?? button);
+      const row = button.closest<HTMLElement>(".ln") ?? button;
+      if (pending.center === true) row.scrollIntoView({ block: "center" });
+      reveal(at.i, row);
       button.focus({ preventScroll: true });
       pendingFocus.current = null;
     } else {
@@ -141,6 +163,15 @@ export const DiffBody = ({ path, file, annotations }: Props) => {
   const focusAfterRender = (line: number) => {
     pendingFocus.current = { line, tries: 0 };
   };
+
+  // P5-3: opened at a finding. An effect, declared after useVirtualList, so the list has found
+  // its scroller; the next render reveals and focuses the line (the pass above).
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (opening === undefined) return;
+    pendingFocus.current = { line: opening, tries: 0, center: true };
+    rerender();
+  }, [opening]);
 
   const focusLine = useCallback(
     (n: number) => {

@@ -27,6 +27,7 @@ const PROPS: Readonly<Record<string, string>> = {
   class: "className",
   id: "id",
   role: "role",
+  tabindex: "tabIndex",
   "aria-label": "aria-label",
   "aria-hidden": "aria-hidden",
   "text-anchor": "textAnchor",

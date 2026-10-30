@@ -106,7 +106,7 @@ test.describe("clickable files", () => {
   test("a change-map card, a path step and the start button open their files", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openBriefing(page, STATE_PULLS.main);
-    await page.locator(".map-card button", { hasText: "InvitePage" }).click();
+    await page.locator('.map-scroll [data-node="page"]').click();
     await expect(mainHeading(page)).toHaveText("web/src/pages/InvitePage.tsx");
 
     await page.getByRole("button", { name: "Briefing & change map" }).click();
@@ -174,11 +174,27 @@ test.describe("keyboard", () => {
       );
       if (!inMain) break;
       names.push(
-        await page.evaluate(() => (document.activeElement as HTMLElement).dataset.path ?? ""),
+        await page.evaluate(() => {
+          const { dataset } = document.activeElement as HTMLElement | SVGElement;
+          return dataset.path ?? dataset.node ?? dataset.findings ?? "";
+        }),
       );
     }
-    // 9 risk-table files, 5 map cards backed by a PR file, 4 path steps, the start button.
-    expect(names).toHaveLength(19);
+    // 9 risk-table files, 5 map cards backed by a PR file, each followed by its finding badge
+    // (P5-3), 4 path steps, the start button.
+    expect(names).toHaveLength(24);
+    expect(names.slice(9, 19)).toEqual([
+      "page",
+      "F9",
+      "route",
+      "F2 F7",
+      "auth",
+      "F1 F3 F8",
+      "inv",
+      "F4 F5",
+      "job",
+      "F6",
+    ]);
     expect(names.at(-1)).toBe("src/auth/invitations.ts");
     expect(names.every((p) => p !== "")).toBe(true);
   });

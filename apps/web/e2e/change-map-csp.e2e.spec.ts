@@ -71,6 +71,11 @@ test("a strict CSP accepts the change map as string and as React output", async 
     ...HOSTILE_CORPUS.filter(({ technique }) =>
       ["markup", "styles", "handlers and links", "URLs"].includes(technique),
     ).map(({ label }) => renderChangeMap(withLabels(label))),
+    // P5-3: the clickable map adds only tabindex, roles and names.
+    renderChangeMap(pr847(), {
+      idPrefix: "click",
+      interactive: { files: pr847().provenance.files.map((file) => file.path) },
+    }),
   ];
   const body = maps
     .map(

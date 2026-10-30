@@ -135,102 +135,24 @@
 }
 
 /* ---------- change map slot ---------- */
-/* The map scrolls inside its own box at narrow widths (POC defect 1). */
-.map-canvas {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(150px, 1fr);
-  gap: var(--space-3);
+/* The map scrolls inside its own box when narrower (POC defect 1). The padding leaves room
+   for the focus ring of a card or badge at the edge (P5-3). On wider screens it shrinks to the
+   column, as the POC's diagram does, but never below 640 px, where its text stays legible, and
+   never above its drawn size. On phones it keeps its drawn size and scrolls. */
+.map-scroll {
   overflow-x: auto;
-  /* Room for the finding badges that sit over the cards' top-right corners. */
-  padding: 0 6px 2px 0;
+  padding: 4px;
+  margin: -4px;
+  /* A card scrolled into view by Tab keeps its whole focus ring inside the box. */
+  scroll-padding-inline: 8px;
 }
-.map-lane {
-  background: var(--panel-2);
-  border-radius: var(--radius-lg);
-  padding: 10px var(--space-2) var(--space-2);
-  min-width: 0;
-}
-/* POC: lane labels in --faint (below AA on the lane background). */
-.map-lane-label {
-  font-size: var(--text-2xs);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin: 0 var(--space-1) var(--space-2);
-}
-.map-cards {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--space-2);
-}
-.map-card {
-  position: relative;
-}
-.map-card-body {
-  display: grid;
-  gap: 2px;
-  width: 100%;
-  text-align: left;
-  padding: 7px 10px;
-  border-radius: var(--radius-md);
-  border: 1.5px solid var(--border);
-  background: var(--panel);
-  font: inherit;
-  color: var(--text);
-}
-button.map-card-body:hover {
-  border-width: 2px;
-  padding: 6.5px 9.5px;
-}
-.d-added .map-card-body {
-  background: var(--add-bg);
-  border-color: var(--add-sign);
-}
-.d-modified .map-card-body {
-  background: var(--med-bg);
-  border-color: var(--med);
-}
-.d-removed .map-card-body {
-  background: var(--del-bg);
-  border-color: var(--del-sign);
-}
-.map-card-title {
-  font-size: var(--text-base);
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.map-card-sub {
-  font-size: var(--text-2xs);
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-.map-badge {
-  position: absolute;
-  top: -7px;
-  right: -5px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-pill);
-  border: 2px solid var(--low);
-  background: var(--panel);
-  color: var(--text);
-  font-size: var(--text-2xs);
-  font-weight: 700;
-  line-height: 14px;
-  text-align: center;
-}
-.map-badge.sev-critical {
-  border-color: var(--crit);
-}
-.map-badge.sev-high {
-  border-color: var(--high);
-}
-.map-badge.sev-medium {
-  border-color: var(--med);
+@media (min-width: 760px) {
+  .map-scroll > .cm {
+    width: 100%;
+    height: auto;
+    min-width: 640px;
+    max-width: max-content;
+  }
 }
 .legend {
   display: flex;

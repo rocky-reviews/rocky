@@ -23,8 +23,8 @@
 <g class="cm-nodes"><g class="cm-node cm-added" data-node="hub"><title>hub · src/hub.ts · 2 findings, worst critical</title>
 <rect class="cm-card" x="22" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="32" y="59">hub</text>
-<text class="cm-node-sub" x="32" y="74">src/hub.ts</text>
-<g class="cm-badge cm-critical" data-findings="F1 F2"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">2</text></g></g>
+<text class="cm-node-sub" x="32" y="74">src/hub.ts</text></g>
+<g class="cm-badge cm-critical" data-findings="F1 F2"><rect class="cm-badge-bg" x="167" y="33" width="18" height="18" rx="9"/><text class="cm-badge-count" x="176" y="45.5" text-anchor="middle">2</text></g>
 <g class="cm-node cm-modified" data-node="leaf-00"><title>leaf-00</title>
 <rect class="cm-card" x="236.38" y="40" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="246.38" y="59">leaf-00</text></g>
@@ -36,8 +36,8 @@
 <text class="cm-node-title" x="246.38" y="203">leaf-02</text></g>
 <g class="cm-node cm-modified" data-node="leaf-03"><title>leaf-03 · 1 finding, worst medium</title>
 <rect class="cm-card" x="236.38" y="256" width="156" height="44" rx="8"/>
-<text class="cm-node-title" x="246.38" y="275">leaf-03</text>
-<g class="cm-badge cm-medium" data-findings="F3"><rect class="cm-badge-bg" x="381.38" y="249" width="18" height="18" rx="9"/><text class="cm-badge-count" x="390.38" y="261.5" text-anchor="middle">1</text></g></g>
+<text class="cm-node-title" x="246.38" y="275">leaf-03</text></g>
+<g class="cm-badge cm-medium" data-findings="F3"><rect class="cm-badge-bg" x="381.38" y="249" width="18" height="18" rx="9"/><text class="cm-badge-count" x="390.38" y="261.5" text-anchor="middle">1</text></g>
 <g class="cm-node cm-unchanged" data-node="leaf-04"><title>leaf-04</title>
 <rect class="cm-card" x="236.38" y="328" width="156" height="44" rx="8"/>
 <text class="cm-node-title" x="246.38" y="347">leaf-04</text></g>
@@ -64,8 +64,8 @@
 <text class="cm-node-title" x="675.14" y="59">far-a</text></g>
 <g class="cm-node cm-added" data-node="far-b"><title>far-b · 1 finding, worst low</title>
 <rect class="cm-card" x="665.14" y="112" width="156" height="44" rx="8"/>
-<text class="cm-node-title" x="675.14" y="131">far-b</text>
-<g class="cm-badge cm-low" data-findings="F4"><rect class="cm-badge-bg" x="810.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="819.14" y="117.5" text-anchor="middle">1</text></g></g></g>
+<text class="cm-node-title" x="675.14" y="131">far-b</text></g>
+<g class="cm-badge cm-low" data-findings="F4"><rect class="cm-badge-bg" x="810.14" y="105" width="18" height="18" rx="9"/><text class="cm-badge-count" x="819.14" y="117.5" text-anchor="middle">1</text></g></g>
 <g class="cm-labels"><g class="cm-label" data-edge="hub-leaf-00" aria-hidden="true"><rect class="cm-pill" x="187.42" y="50.6" width="45.38" height="14" rx="7"/><text class="cm-pill-text" x="210.11" y="60.9" text-anchor="middle">dispatch</text></g>
 <g class="cm-label" data-edge="hub-far-a" aria-hidden="true"><rect class="cm-pill" x="384.5" y="88.5" width="69.15" height="14" rx="7"/><text class="cm-pill-text" x="419.07" y="98.8" text-anchor="middle">enqueue far-a</text></g>
 <g class="cm-label" data-edge="hub-far-b" aria-hidden="true"><rect class="cm-pill" x="303.74" y="93.5" width="69.15" height="14" rx="7"/><text class="cm-pill-text" x="338.32" y="103.8" text-anchor="middle">enqueue far-b</text></g></g>

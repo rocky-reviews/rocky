@@ -149,7 +149,10 @@ describe("the markup layer refuses what could run, load or restyle", () => {
     ["marker-end", "url(https://evil.example/x.svg#a)"],
     ["marker-end", "url(#cm-a) url(#cm-b)"],
     ["marker-end", "url('#cm-a')"],
-    ["role", "button"],
+    ["role", "link"],
+    ["role", "presentation"],
+    ["tabindex", "1"],
+    ["tabindex", "-1"],
     ["aria-hidden", "false"],
     ["text-anchor", "evil"],
     ["orient", "0deg"],
@@ -181,6 +184,18 @@ describe("the markup layer refuses what could run, load or restyle", () => {
     ).not.toThrow();
   });
 
+  it("allows role and tabindex only as a root role or a focusable group button (P5-3)", () => {
+    expect(() => tag("g", { tabindex: "0", role: "button", "aria-label": "Open" })).not.toThrow();
+    expect(() => tag("svg", { role: "group" })).not.toThrow();
+    expect(() => tag("svg", { role: "img" })).not.toThrow();
+    expect(() => tag("g", { role: "button" })).toThrow(/role or tabindex/);
+    expect(() => tag("g", { tabindex: "0" })).toThrow(/role or tabindex/);
+    expect(() => tag("g", { role: "group" })).toThrow(/role or tabindex/);
+    expect(() => tag("rect", { tabindex: "0", role: "button" })).toThrow(/role or tabindex/);
+    expect(() => tag("svg", { role: "button", tabindex: "0" })).toThrow(/role or tabindex/);
+    expect(() => tag("text", { role: "img" })).toThrow(/role or tabindex/);
+  });
+
   it("writes text only into text and title", () => {
     expect(() => textElement("g" as "text", {}, "x")).toThrow(/text and title/);
   });
@@ -188,6 +203,18 @@ describe("the markup layer refuses what could run, load or restyle", () => {
   it("refuses text where only markup belongs", () => {
     expect(() => wrap("g", {}, ["hello"])).toThrow(/text/);
     expect(() => wrap("g", {}, ["\n"])).not.toThrow();
+  });
+
+  it("normalises an accessible name and caps it like a tooltip (P5-3)", () => {
+    const named = tag("g", {
+      tabindex: "0",
+      role: "button",
+      "aria-label": `\u202Ea\u200B${"b".repeat(1000)}`,
+    });
+    const name = named.attributes.find(([attribute]) => attribute === "aria-label")?.[1] ?? "";
+    expect(name.startsWith("ab")).toBe(true);
+    expect([...name]).toHaveLength(401);
+    expect(name.endsWith("…")).toBe(true);
   });
 
   it("escapes attribute values", () => {

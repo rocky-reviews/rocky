@@ -238,7 +238,10 @@ const ATTRIBUTES: Readonly<Record<string, (value: string) => boolean>> = {
   d: (value) => PATH_DATA.test(value),
   class: isClassList,
   id: (value) => PREFIXED_ID.test(value),
-  role: fixed("img"),
+  // P5-3: `group` is the root of an interactive map; `button` and `tabindex="0"` make a card
+  // or a badge focusable. Fixed values only: no other role, no positive tabindex.
+  role: fixed("img", "group", "button"),
+  tabindex: fixed("0"),
   "aria-label": anyText,
   "aria-hidden": fixed("true"),
   "text-anchor": fixed("middle"),
@@ -292,19 +295,38 @@ const attributeList = (attributes: Attributes): (readonly [string, string])[] =>
     .map(([name, raw]) => {
       // Free text is normalised; every other value must already have its exact shape, so an
       // id carrying a bidi control is refused rather than quietly becoming another id.
-      const value = name === "aria-label" ? cleanText(String(raw)) : String(raw);
+      const value =
+        name === "aria-label" ? cap(cleanText(String(raw)), MAX_TITLE_LENGTH) : String(raw);
       checkAttribute(name, value);
       return Object.freeze([name, value] as const);
     });
+
+/**
+ * Roles by element (P5-3): the root is a picture (`img`) or, when it holds buttons, a `group`;
+ * a group is a `button` only together with `tabindex="0"`, and nothing else takes either.
+ */
+const checkRole = (name: string, list: readonly (readonly [string, string])[]): void => {
+  const role = list.find(([attribute]) => attribute === "role")?.[1];
+  const focusable = list.some(([attribute]) => attribute === "tabindex");
+  const allowed =
+    name === "svg"
+      ? role !== "button" && !focusable
+      : name === "g"
+        ? (role === undefined && !focusable) || (role === "button" && focusable)
+        : role === undefined && !focusable;
+  if (!allowed) throw new Error(`change map: this role or tabindex is not allowed on <${name}>`);
+};
 
 const build = (
   name: string,
   attributes: Attributes,
   children: readonly SvgNode[] | undefined,
 ): SvgElement => {
+  const list = attributeList(attributes);
+  checkRole(name, list);
   const element = Object.freeze({
     name: checkElement(name),
-    attributes: Object.freeze(attributeList(attributes)),
+    attributes: Object.freeze(list),
     children: children === undefined ? undefined : Object.freeze([...children]),
   });
   BUILT.add(element);
