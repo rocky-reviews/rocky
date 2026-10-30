@@ -256,7 +256,6 @@ export {
 } from "./review-inbox.js";
 export {
   canonicalReviewPlan,
-  findingCommentBody,
   isReviewPath,
   isReviewVerdict,
   MAX_REVIEW_BODY_CHARS,

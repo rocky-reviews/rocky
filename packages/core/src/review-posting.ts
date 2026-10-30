@@ -1,4 +1,3 @@
-import type { Finding } from "@rocky-reviews/schema";
 import type { ForgeKind, ForgeNumericId, ForgeUserCredential } from "./forge.js";
 
 /**
@@ -146,26 +145,6 @@ export const canonicalReviewPlan = (headSha: string, items: readonly ReviewPlanI
     headSha,
     items: items.map((i) => [i.kind, i.id, i.path, i.line, i.startLine, i.body]),
   });
-
-/** The longest run of backticks in `lines`, so a fence can be chosen that none of them closes. */
-const longestBacktickRun = (lines: readonly string[]): number =>
-  Math.max(0, ...lines.map((l) => Math.max(0, ...(l.match(/`+/g) ?? []).map((r) => r.length))));
-
-/**
- * How an accepted draft reads once posted: its title, its body, and its suggestion as a
- * suggestion block the forge can apply. Nothing the person did not see: no severity, no
- * confidence, no agent prompt. The fence is longer than any backtick run inside the suggestion
- * so the block cannot be closed early by its content.
- */
-export const findingCommentBody = (finding: Finding): string => {
-  const parts = [`**${finding.title}**`, finding.body];
-  if (finding.suggestion !== undefined) {
-    const fence = "`".repeat(Math.max(3, longestBacktickRun(finding.suggestion.lines) + 1));
-    const lines = finding.suggestion.lines.map((l) => `${l}\n`).join("");
-    parts.push(`${fence}suggestion\n${lines}${fence}`);
-  }
-  return parts.join("\n\n");
-};
 
 export type ReviewSubmissionProblem =
   | "invalid_submission"

@@ -1,8 +1,6 @@
-import type { Finding } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
 import {
   canonicalReviewPlan,
-  findingCommentBody,
   isReviewVerdict,
   MAX_REVIEW_BODY_CHARS,
   MAX_REVIEW_COMMENTS,
@@ -71,54 +69,6 @@ describe("canonicalReviewPlan", () => {
     expect(() => JSON.parse(tricky)).not.toThrow();
     const parsed = JSON.parse(tricky) as { items: unknown[] };
     expect(parsed.items).toHaveLength(1);
-  });
-});
-
-describe("findingCommentBody", () => {
-  const finding: Finding = {
-    id: "f-1",
-    severity: "high",
-    confidence: 0.9,
-    path: "src/invite.ts",
-    range: { start: 12, end: 14 },
-    title: "Email is not validated",
-    body: "The address goes straight to the mailer.\n\nUse the shared validator.",
-    suggestion: { lines: ["const email = validateEmail(input.email);", "send(email);"] },
-    memory: [],
-    agentPrompt: "Validate the email with the shared validator before sending.",
-  };
-
-  it("renders title, body and a suggestion block the reviewer can see in full", () => {
-    const body = findingCommentBody(finding);
-    expect(body.startsWith("**Email is not validated**\n\n")).toBe(true);
-    expect(body).toContain("The address goes straight to the mailer.");
-    expect(body).toContain(
-      "```suggestion\nconst email = validateEmail(input.email);\nsend(email);\n```",
-    );
-    // Nothing the person did not accept: no agent prompt, no severity, no confidence.
-    expect(body).not.toContain("agentPrompt");
-    expect(body).not.toContain("Validate the email with the shared validator before sending.");
-    expect(body).not.toMatch(/high|0\.9/);
-  });
-
-  it("omits the suggestion block when there is none, and an empty suggestion deletes the range", () => {
-    const plain = { ...finding };
-    delete plain.suggestion;
-    expect(findingCommentBody(plain)).toBe(
-      "**Email is not validated**\n\nThe address goes straight to the mailer.\n\nUse the shared validator.",
-    );
-    expect(findingCommentBody({ ...finding, suggestion: { lines: [] } })).toContain(
-      "```suggestion\n```",
-    );
-  });
-
-  it("keeps a suggestion line that contains a fence from closing the block early", () => {
-    const body = findingCommentBody({
-      ...finding,
-      suggestion: { lines: ["```", "x"] },
-    });
-    // A longer fence than any run of backticks inside: the block still contains both lines.
-    expect(body).toMatch(/````suggestion\n```\nx\n````$/);
   });
 });
 

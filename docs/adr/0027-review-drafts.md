@@ -52,7 +52,7 @@ directly needs an agent integration that does not exist (follow-up).
   block with a fence longer than any backtick run inside it. No severity, confidence or agent
   prompt. The accepted card renders the same parts (`postedCommentParts`), so the reviewer sees
   what will be posted. An edit replaces the body only; it cannot remove the suggestion. P3-5's
-  `findingCommentBody` has the same format and switches to this function when the two merge.
+  `loadReviewPlan` posts exactly this (ADR 0026 §2, P15).
 - Location and body of a draft come from the stored, re-validated document, never from the
   request: the client names a finding id. An own comment's line must be a new-side line of one
   of the analysed file's hunks.

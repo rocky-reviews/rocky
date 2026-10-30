@@ -178,6 +178,7 @@ export default tseslint.config(
             {
               group: [
                 "**/reviews/post-review*",
+                "**/reviews/post-routes*",
                 "**/forge-github/src/reviews*",
                 "@rocky-reviews/server/**",
               ],

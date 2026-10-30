@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { canonicalReviewPlan, findingCommentBody } from "@rocky-reviews/core";
+import { canonicalReviewPlan, composePostedComment, type DraftAction } from "@rocky-reviews/core";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
+import { decideDraft } from "./drafts.js";
 import {
   beginReviewSubmission,
   finishReviewSubmission,
@@ -53,6 +54,23 @@ const findingBy = (id: string) => {
   return finding;
 };
 
+/** What an accepted draft posts with its body unedited: what the accepted card shows (P6-4). */
+const posted = (id: string, body = findingBy(id).body) =>
+  composePostedComment(findingBy(id), { body });
+
+/** One reviewer's draft action, through P6-4's store (both rows written as the page writes them). */
+const decide = (org: SeededOrg, memberId: string, findingId: string, action: DraftAction) =>
+  db.withOrg(org.orgId, async (tx) => {
+    const result = await decideDraft(tx, {
+      analysisId: org.analysisId,
+      memberId,
+      findingId,
+      action,
+    });
+    if (result.outcome !== "ok") throw new Error(`decideDraft: ${result.outcome}`);
+    return result.draft;
+  });
+
 /** The seeded analysis gets the real pr-847 document and accepted drafts F1 and F3 by alice. */
 const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]) => {
   // The application cannot delete attempts (N6): the superuser clears them between tests.
@@ -65,11 +83,17 @@ const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]
     await tx.query("delete from findings_state where analysis_id = $1", [org.analysisId]);
     await tx.query("delete from comments_pending where pull_request_id = $1", [org.pullRequestId]);
     const ids: Record<string, string> = {};
-    for (const [i, id] of findings.entries()) {
+    for (const id of findings) {
+      const result = await decideDraft(tx, {
+        analysisId: org.analysisId,
+        memberId,
+        findingId: id,
+        action: { kind: "accept" },
+      });
+      if (result.outcome !== "ok") throw new Error(`decideDraft: ${result.outcome}`);
       const { rows } = await tx.query<{ id: string }>(
-        `insert into findings_state (analysis_id, finding_id, state, decided_by, decided_at)
-         values ($1, $2, 'accepted', $3, now() + make_interval(secs => $4)) returning id`,
-        [org.analysisId, id, memberId, i],
+        "select id from findings_state where analysis_id = $1 and member_id = $2 and finding_id = $3",
+        [org.analysisId, memberId, id],
       );
       ids[id] = rows[0]!.id;
     }
@@ -81,16 +105,24 @@ const comment = (
   org: SeededOrg,
   authorId: string,
   body: string,
-  options: { path?: string | null; line?: number | null; revisionId?: string } = {},
+  options: {
+    path?: string | null;
+    line?: number | null;
+    revisionId?: string;
+    analysisId?: string | null;
+  } = {},
 ) =>
   db.withOrg(org.orgId, async (tx) => {
+    // An own comment as P6-4 stores it (`source` defaults to 'own'), on the analysis seen.
     const { rows } = await tx.query<{ id: string }>(
-      `insert into comments_pending (pull_request_id, revision_id, author_id, path, line, body)
-       values ($1, $2, $3, $4, $5, $6) returning id`,
+      `insert into comments_pending
+         (pull_request_id, revision_id, author_id, analysis_id, path, line, body)
+       values ($1, $2, $3, $4, $5, $6, $7) returning id`,
       [
         org.pullRequestId,
         options.revisionId ?? org.revisionId,
         authorId,
+        options.analysisId === undefined ? org.analysisId : options.analysisId,
         options.path === undefined ? "src/invite.ts" : options.path,
         options.line === undefined ? 12 : options.line,
         body,
@@ -166,8 +198,8 @@ describe("loadReviewPlan", () => {
       ["comment", "src/invite.ts", 12, null],
       ["comment", "src/mailer.ts", 40, null],
     ]);
-    expect(plan!.items[0]?.body).toBe(findingCommentBody(findingBy("F1")));
-    expect(plan!.items[1]?.body).toBe(findingCommentBody(findingBy("F3")));
+    expect(plan!.items[0]?.body).toBe(posted("F1"));
+    expect(plan!.items[1]?.body).toBe(posted("F3"));
     expect(plan!.items[2]).toMatchObject({ id: mine, body: "Validate the email first." });
     expect(plan!.contentSha256).toEqual(sha256(canonicalReviewPlan(HEAD, plan!.items)));
   });
@@ -182,29 +214,88 @@ describe("loadReviewPlan", () => {
          values ($1, repeat('c', 40), repeat('b', 40)) returning id`,
         [A.pullRequestId],
       );
-      await tx.query(
-        `insert into findings_state (analysis_id, finding_id, state, reason, decided_by, decided_at)
-         values ($1, 'F2', 'dismissed', 'not here', $2, now()), ($1, 'F4', 'draft', null, null, null)`,
-        [A.analysisId, A.memberId],
-      );
-      // A draft bob accepted on the same analysis is bob's to post, not alice's.
-      await tx.query(
-        `insert into findings_state (analysis_id, finding_id, state, decided_by, decided_at)
-         values ($1, 'F5', 'accepted', $2, now())`,
-        [A.analysisId, bob],
-      );
       return rows[0]!.id;
     });
+    await decide(A, A.memberId, "F2", { kind: "dismiss", reason: "not_an_issue" });
+    await decide(A, A.memberId, "F4", { kind: "send_to_agent" });
+    // A draft bob accepted on the same analysis is bob's to post, not alice's.
+    await decide(A, bob, "F5", { kind: "accept" });
     await comment(A, A.memberId, "older revision", { revisionId: other });
     const alice = await planOf(A, A.memberId);
     expect(alice!.items.map((i) => i.kind)).toEqual(["draft", "draft"]);
     const bobs = await planOf(A, bob);
     expect(bobs!.items.map((i) => [i.kind, i.body])).toEqual([
-      ["draft", findingCommentBody(findingBy("F5"))],
+      ["draft", posted("F5")],
       ["comment", "bob's comment"],
     ]);
     // Bob and alice cannot see each other's items (the hash differs, so a swap would be stale).
     expect(alice!.contentSha256.equals(bobs!.contentSha256)).toBe(false);
+  });
+
+  it("posts an accepted draft once, as a draft: its pending row (source ai) is not also an own comment", async () => {
+    const ids = await prepare(A, A.memberId);
+    const pending = await db.withOrg(A.orgId, (tx) =>
+      tx.query<{ id: string; source: string }>(
+        "select id, source from comments_pending where author_id = $1 order by source",
+        [A.memberId],
+      ),
+    );
+    // P6-4 wrote one pending row per accepted draft, in the same transaction as the decision.
+    expect(pending.rows.map((r) => r.source)).toEqual(["ai", "ai"]);
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.items.map((i) => [i.kind, i.id])).toEqual([
+      ["draft", ids["F1"]],
+      ["draft", ids["F3"]],
+    ]);
+    const offered = new Set(plan.items.map((i) => i.id));
+    for (const row of pending.rows) expect(offered.has(row.id)).toBe(false);
+    // An edited draft (source ai_edited) is not offered as a comment either.
+    await decide(A, A.memberId, "F1", { kind: "undo" });
+    await decide(A, A.memberId, "F1", { kind: "edit", body: "Validate it first." });
+    const edited = (await planOf(A, A.memberId))!;
+    expect(edited.items.map((i) => i.kind)).toEqual(["draft", "draft"]);
+  });
+
+  it("an edited draft posts the edited body, in exactly the format the accepted card shows", async () => {
+    const ids = await prepare(A, A.memberId);
+    await decide(A, A.memberId, "F1", { kind: "undo" });
+    const draft = await decide(A, A.memberId, "F1", { kind: "edit", body: "Validate it first." });
+    expect(draft).toMatchObject({ state: "accepted", edited: true, body: "Validate it first." });
+    const plan = (await planOf(A, A.memberId))!;
+    const item = plan.items[0]!;
+    // Same findings_state id across undo and re-accept; the body is the card's parts composed.
+    expect(item.id).toBe(ids["F1"]);
+    expect(item.body).toBe(posted("F1", "Validate it first."));
+    expect(item.body).toBe(composePostedComment(findingBy("F1"), { body: draft.body! }));
+    expect(item.body).not.toContain(findingBy("F1").body);
+    expect(item.body.startsWith(`**${findingBy("F1").title}**\n\nValidate it first.`)).toBe(true);
+    // An undo takes it off the list; the digest moves with it.
+    await decide(A, A.memberId, "F1", { kind: "undo" });
+    const undone = (await planOf(A, A.memberId))!;
+    expect(undone.items.map((i) => i.id)).toEqual([ids["F3"]]);
+    expect(undone.contentSha256.equals(plan.contentSha256)).toBe(false);
+  });
+
+  it("offers only own comments on the analysis it posts from, and only drafts the member decided", async () => {
+    await prepare(A, A.memberId, []);
+    const older = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        "insert into analyses (revision_id, status) values ($1, 'failed') returning id",
+        [A.revisionId],
+      );
+      return rows[0]!.id;
+    });
+    const kept = await comment(A, A.memberId, "on the analysis shown");
+    await comment(A, A.memberId, "on another analysis", { analysisId: older });
+    await comment(A, A.memberId, "on no analysis", { analysisId: null });
+    // A row that claims to be alice's decision but was decided by bob is nobody's to post.
+    await decide(A, A.memberId, "F1", { kind: "accept" });
+    await db.withOrg(A.orgId, (tx) =>
+      tx.query("update findings_state set decided_by = $2 where member_id = $1", [A.memberId, bob]),
+    );
+    const plan = (await planOf(A, A.memberId))!;
+    expect(plan.items.map((i) => [i.kind, i.id])).toEqual([["comment", kept]]);
+    expect((await planOf(A, bob))!.items).toEqual([]);
   });
 
   it("offers nothing when the head has no mirrored revision, the analysis is not done, or the document does not parse", async () => {
@@ -347,11 +438,8 @@ describe("beginReviewSubmission", () => {
     );
     expect(await begin(A, inputFor(A, A.memberId, fresh))).toEqual({ outcome: "stale" });
     const edited = (await planOf(A, A.memberId))!;
-    await db.withOrg(A.orgId, (tx) =>
-      tx.query(
-        "update findings_state set state = 'dismissed', reason = 'no' where finding_id = 'F1'",
-      ),
-    );
+    await decide(A, A.memberId, "F1", { kind: "undo" });
+    await decide(A, A.memberId, "F1", { kind: "dismiss", reason: "intentional" });
     expect(await begin(A, inputFor(A, A.memberId, edited))).toEqual({ outcome: "stale" });
     const again = (await planOf(A, A.memberId))!;
     expect(await begin(A, inputFor(A, A.memberId, again, { headSha: "f".repeat(40) }))).toEqual({

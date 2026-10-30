@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   canonicalReviewPlan,
+  composePostedComment,
   ForgeReadError,
   type AccessDecision,
   type OrgId,
@@ -18,6 +19,7 @@ import {
 import {
   clearForgeToken,
   createDb,
+  decideDraft,
   reviewSha256,
   storeForgeToken,
   storeOrgDataKey,
@@ -45,6 +47,7 @@ import {
   type FakeGitHubApi,
 } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
+import type { AnalysisDocument } from "@rocky-reviews/schema";
 import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -68,7 +71,12 @@ const DOCUMENT = JSON.parse(
     new URL("../../../../packages/schema/fixtures/pr-847.json", import.meta.url),
     "utf8",
   ),
-) as { findings: { title: string }[] };
+) as AnalysisDocument;
+const findingBy = (id: string) => {
+  const finding = DOCUMENT.findings.find((f) => f.id === id);
+  if (finding === undefined) throw new Error(`no finding ${id}`);
+  return finding;
+};
 const HEAD = "a".repeat(40);
 const PUBLIC = new URL("https://rocky.example.com/");
 const SESSION = "__Host-rocky_session";
@@ -244,6 +252,23 @@ const post = (
     payload: JSON.stringify(body),
   });
 
+/** One reviewer action through P6-4's draft route (the accepted card's source of truth). */
+const draftAction = async (
+  token: string,
+  org: SeededOrg,
+  findingId: string,
+  body: Record<string, unknown>,
+) => {
+  const res = await app.inject({
+    method: "POST",
+    url: `/api/analyses/${org.analysisId}/drafts/${findingId}`,
+    headers: { ...headersFor(token), "content-type": "application/json" },
+    payload: JSON.stringify(body),
+  });
+  expect(res.statusCode, res.body).toBe(200);
+  return (res.json() as { draft: { state: string; edited: boolean; body: string | null } }).draft;
+};
+
 interface Attempt {
   submissionId: string;
   status: string;
@@ -297,25 +322,30 @@ const reset = async () => {
         "update pull_requests set head_sha = $2, author_login = 'someone' where id = $1",
         [org.pullRequestId, HEAD],
       );
+      // Accepted through P6-4's store, so both rows are what the page writes (ADR 0027).
       for (const id of ["F1", "F3"]) {
-        await tx.query(
-          `insert into findings_state (analysis_id, finding_id, state, decided_by, decided_at)
-           values ($1, $2, 'accepted', $3, now())`,
-          [org.analysisId, id, org.memberId],
-        );
+        const result = await decideDraft(tx, {
+          analysisId: org.analysisId,
+          memberId: org.memberId,
+          findingId: id,
+          action: { kind: "accept" },
+        });
+        if (result.outcome !== "ok") throw new Error(`decideDraft: ${result.outcome}`);
       }
       await tx.query(
-        `insert into comments_pending (pull_request_id, revision_id, author_id, path, line, body)
-         values ($1, $2, $3, 'src/auth/invitations.ts', 31, 'Also log the inviter id here.')`,
-        [org.pullRequestId, org.revisionId, org.memberId],
+        `insert into comments_pending
+           (pull_request_id, revision_id, author_id, analysis_id, path, line, body)
+         values ($1, $2, $3, $4, 'src/auth/invitations.ts', 31, 'Also log the inviter id here.')`,
+        [org.pullRequestId, org.revisionId, org.memberId, org.analysisId],
       );
     });
   }
   await db.withOrg(A.orgId, (tx) =>
     tx.query(
-      `insert into comments_pending (pull_request_id, revision_id, author_id, path, line, body)
-       values ($1, $2, $3, 'src/auth/invitations.ts', 40, 'bob was here')`,
-      [A.pullRequestId, A.revisionId, bob],
+      `insert into comments_pending
+         (pull_request_id, revision_id, author_id, analysis_id, path, line, body)
+       values ($1, $2, $3, $4, 'src/auth/invitations.ts', 40, 'bob was here')`,
+      [A.pullRequestId, A.revisionId, bob, A.analysisId],
     ),
   );
   github.reviews.length = 0;
@@ -478,18 +508,16 @@ describe("posted content equals what the user saw (acceptance criterion)", () =>
     expect(edited.statusCode).toBe(409);
     expect(edited.json()).toEqual({ error: "stale" });
     const plan2 = (await preview(alice, A.pullRequestId)).json() as Preview;
-    await db.withOrg(A.orgId, (tx) =>
-      tx.query(
-        "update findings_state set state = 'dismissed', reason = 'nah' where finding_id = 'F1'",
-      ),
-    );
+    await draftAction(alice, A, "F1", { action: "undo" });
+    await draftAction(alice, A, "F1", { action: "dismiss", reason: "not_worth_it" });
     expect((await post(alice, A.pullRequestId, click(plan2))).json()).toEqual({ error: "stale" });
     const plan3 = (await preview(alice, A.pullRequestId)).json() as Preview;
     await db.withOrg(A.orgId, (tx) =>
       tx.query(
-        `insert into comments_pending (pull_request_id, revision_id, author_id, path, line, body)
-         values ($1, $2, $3, 'src/x.ts', 1, 'late')`,
-        [A.pullRequestId, A.revisionId, A.memberId],
+        `insert into comments_pending
+           (pull_request_id, revision_id, author_id, analysis_id, path, line, body)
+         values ($1, $2, $3, $4, 'src/x.ts', 1, 'late')`,
+        [A.pullRequestId, A.revisionId, A.memberId, A.analysisId],
       ),
     );
     expect((await post(alice, A.pullRequestId, click(plan3))).json()).toEqual({ error: "stale" });
@@ -500,6 +528,43 @@ describe("posted content equals what the user saw (acceptance criterion)", () =>
     expect(github.reviews).toHaveLength(0);
     expect(github.requests).toEqual([]);
     expect((await submissions(A)).rowCount).toBe(0);
+  });
+
+  it("an accepted draft is posted once (not again as an own comment) and an edited draft posts the edited body, as the card shows it (P6-4)", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F1", { action: "undo" });
+    const edited = await draftAction(alice, A, "F1", {
+      action: "edit",
+      body: "Validate it first.",
+    });
+    expect(edited).toMatchObject({ state: "accepted", edited: true, body: "Validate it first." });
+    // What the page loads for the accepted cards: their pending bodies.
+    const page = await app.inject({
+      method: "GET",
+      url: `/api/analyses/${A.analysisId}/review`,
+      headers: headersFor(alice),
+    });
+    const cards = (page.json() as { drafts: { findingId: string; body: string | null }[] }).drafts;
+    const cardBody = (id: string) => cards.find((d) => d.findingId === id)?.body ?? null;
+    expect(cardBody("F1")).toBe("Validate it first.");
+    expect(cardBody("F3")).toBe(findingBy("F3").body);
+
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect(plan.items.map((i) => i.kind)).toEqual(["draft", "draft", "comment"]);
+    const posted = await post(alice, A.pullRequestId, click(plan));
+    expect(posted.statusCode, posted.body).toBe(200);
+    expect(github.reviews).toHaveLength(1);
+    const comments = github.reviews[0]!.payload["comments"] as { body: string }[];
+    // Three comments, not five: the drafts' pending rows are not posted again as own comments.
+    expect(comments.map((c) => c.body)).toEqual([
+      composePostedComment(findingBy("F1"), { body: cardBody("F1")! }),
+      composePostedComment(findingBy("F3"), { body: cardBody("F3")! }),
+      "Also log the inviter id here.",
+    ]);
+    expect(comments[0]!.body).toContain("Validate it first.");
+    expect(comments[0]!.body).not.toContain(findingBy("F1").body);
+    expect(comments.filter((c) => c.body.includes(findingBy("F3").title))).toHaveLength(1);
+    expect((await submissions(A)).rows[0]).toMatchObject({ draft_count: 2, comment_count: 1 });
   });
 
   it("the preview is the member's own: bob sees his comment, not alice's drafts, and posts under his own name", async () => {

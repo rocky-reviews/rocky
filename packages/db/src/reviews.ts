@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import {
   can,
   canonicalReviewPlan,
-  findingCommentBody,
+  composePostedComment,
   isReviewVerdict,
   validateReviewSubmission,
   type ReviewComment,
@@ -17,10 +17,12 @@ import type { TenantTx } from "./client.js";
 /**
  * Posting a review as the user: the tenant side (P3-5, migration 0016, ADR 0026).
  *
- * `loadReviewPlan` builds the exact list a person can post on a pull request **now**: the drafts
- * they accepted on the latest finished analysis of the head revision, and their own pending
- * comments on that revision, minus anything already carried by a submission in flight or
- * posted. The plan's canonical form (packages/core) is hashed; the web app shows the plan and
+ * `loadReviewPlan` builds the exact list a person can post on a pull request **now**, from the
+ * latest finished analysis of the head revision and that person's rows of P6-4's tables
+ * (ADR 0027): the drafts they accepted (`findings_state`, posted as `composePostedComment` of
+ * the finding and their `ai`/`ai_edited` pending row, which is what the accepted card shows),
+ * and their own pending comments (`comments_pending` with `source = 'own'`), minus anything
+ * already carried by a submission in flight or posted. The plan's canonical form (packages/core) is hashed; the web app shows the plan and
  * echoes the hash, so `beginReviewSubmission` can refuse (`stale`) when the list changed in
  * between, instead of posting something the person did not see.
  *
@@ -107,9 +109,10 @@ export const loadReviewPlan = async (
   );
   const revisionId = revisions[0]?.id ?? null;
   const items: ReviewPlanItem[] = [];
-  if (revisionId !== null) {
-    items.push(...(await acceptedDrafts(tx, revisionId, memberId)));
-    items.push(...(await ownComments(tx, pr.id, revisionId, memberId)));
+  const analysis = revisionId === null ? null : await latestDoneAnalysis(tx, revisionId);
+  if (revisionId !== null && analysis !== null) {
+    items.push(...(await acceptedDrafts(tx, analysis, memberId)));
+    items.push(...(await ownComments(tx, pr.id, revisionId, analysis.id, memberId)));
   }
   const { rows: latest } = await tx.query<SubmissionRow>(
     `select ${SUBMISSION_COLUMNS} from review_submissions
@@ -142,68 +145,103 @@ const NOT_CARRIED = `not exists (
     join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
    where i.org_id = $1 and i.kind = $2 and i.item_id = ITEM and s.status in ('posting', 'posted'))`;
 
-const acceptedDrafts = async (
+interface DoneAnalysis {
+  readonly id: string;
+  readonly document: unknown;
+}
+
+/** The head revision's latest finished analysis: the one the page shows and drafts belong to. */
+const latestDoneAnalysis = async (
   tx: TenantTx,
   revisionId: string,
-  memberId: string,
-): Promise<ReviewPlanItem[]> => {
-  const { rows: analyses } = await tx.query<{ id: string; document: unknown }>(
+): Promise<DoneAnalysis | null> => {
+  const { rows } = await tx.query<{ id: string; document: unknown }>(
     `select id, document from analyses
       where org_id = $1 and revision_id = $2 and status = 'done'
       order by completed_at desc nulls last, created_at desc, id limit 1`,
     [tx.orgId, revisionId],
   );
-  const analysis = analyses[0];
-  if (analysis === undefined) return [];
+  return rows[0] ?? null;
+};
+
+/**
+ * The member's accepted drafts on `analysis`: their own decision (P6-4 keeps one row per
+ * reviewer; `decided_by` is checked too) joined with the pending row written with it. The body
+ * posted is `composePostedComment(finding, pending)`: the finding's title and suggestion with the
+ * pending body, the finding's or the member's edit (`ai_edited`), exactly as the accepted card
+ * shows it. Location and title come from the stored document, validated again here.
+ */
+const acceptedDrafts = async (
+  tx: TenantTx,
+  analysis: DoneAnalysis,
+  memberId: string,
+): Promise<ReviewPlanItem[]> => {
   // The document is validated again at the read (never trust a row's shape); a document that
   // does not parse offers nothing to post.
   const parsed = parseAnalysisDocument(analysis.document);
   if (!parsed.ok) return [];
-  const { rows: accepted } = await tx.query<{ id: string; finding_id: string }>(
-    `select f.id, f.finding_id from findings_state f
-      where f.org_id = $1 and f.analysis_id = $3 and f.state = 'accepted' and f.decided_by = $4
+  const { rows: accepted } = await tx.query<{ id: string; finding_id: string; body: string }>(
+    `select f.id, f.finding_id, c.body from findings_state f
+       join comments_pending c
+         on c.org_id = f.org_id and c.analysis_id = f.analysis_id
+        and c.author_id = f.member_id and c.finding_id = f.finding_id
+        and c.source in ('ai', 'ai_edited')
+      where f.org_id = $1 and f.analysis_id = $3 and f.state = 'accepted'
+        and f.member_id = $4 and f.decided_by = $4
         and ${NOT_CARRIED.replace("ITEM", "f.id")}`,
     [tx.orgId, "draft", analysis.id, memberId],
   );
-  const byFinding = new Map(accepted.map((row) => [row.finding_id, row.id]));
+  const byFinding = new Map(accepted.map((row) => [row.finding_id, row]));
   const items: ReviewPlanItem[] = [];
   // Document order: the order the person saw the drafts in.
   for (const finding of parsed.value.findings) {
-    const stateId = byFinding.get(finding.id);
-    if (stateId === undefined) continue;
+    const row = byFinding.get(finding.id);
+    if (row === undefined) continue;
     items.push({
       kind: "draft",
-      id: stateId,
+      id: row.id,
       path: finding.path,
       line: finding.range.end,
       startLine: finding.range.start === finding.range.end ? null : finding.range.start,
-      body: findingCommentBody(finding),
+      body: composePostedComment(finding, { body: row.body }),
     });
   }
   return items;
 };
 
+/**
+ * The member's own pending comments on `analysis` (`source = 'own'`). Accepted drafts also have
+ * a pending row (`ai`/`ai_edited`); they are posted once, as drafts, above.
+ */
 const ownComments = async (
   tx: TenantTx,
   pullRequestId: string,
   revisionId: string,
+  analysisId: string,
   memberId: string,
 ): Promise<ReviewPlanItem[]> => {
   // A comment without a line cannot be an inline review comment: it is not offered.
-  const { rows } = await tx.query<{ id: string; path: string; line: number; body: string }>(
-    `select c.id, c.path, c.line, c.body from comments_pending c
-      where c.org_id = $1 and c.pull_request_id = $3 and c.revision_id = $4 and c.author_id = $5
+  const { rows } = await tx.query<{
+    id: string;
+    path: string;
+    line: number;
+    start_line: number | null;
+    body: string;
+  }>(
+    `select c.id, c.path, c.line, c.start_line, c.body from comments_pending c
+      where c.org_id = $1 and c.pull_request_id = $3 and c.revision_id = $4
+        and c.analysis_id = $5 and c.author_id = $6 and c.source = 'own'
         and c.path is not null and c.line is not null
         and ${NOT_CARRIED.replace("ITEM", "c.id")}
       order by c.created_at, c.id`,
-    [tx.orgId, "comment", pullRequestId, revisionId, memberId],
+    [tx.orgId, "comment", pullRequestId, revisionId, analysisId, memberId],
   );
   return rows.map((row) => ({
     kind: "comment",
     id: row.id,
     path: row.path,
     line: row.line,
-    startLine: null,
+    startLine: row.start_line,
     body: row.body,
   }));
 };
