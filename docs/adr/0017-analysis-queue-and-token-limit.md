@@ -172,10 +172,16 @@ first-come, first-served: AAAAAAAAAAB (review round 1, SF1).
 
 - Every org's next row comes before any org's row after it. An org with nothing running goes
   before a busy one, whatever the ages, and orgs tied on the round take turns.
+- **The fair share**, whatever order runs finish in: a claim hands an org a row only when every
+  other org with rows waiting is at its cap or has more running (counting rows handed out
+  earlier in the same claim), or has as many and was served at least as recently.
 - **The bound:** with `k` orgs waiting, an org's next analysis is among the next `k` rows handed
-  out, whatever another org's backlog and however the slots free up. With two orgs, B's i-th
-  analysis is among the first `2(i + 1)` started. With `s` slots freeing together, each org gets
-  `min(cap, ⌊s/2⌋)` slots per step until one runs out.
+  out, whatever another org's backlog, when runs finish in the order they were handed out. With
+  two orgs, B's i-th analysis is among the first `2(i + 1)` started. With `s` slots freeing
+  together, each org gets `min(cap, ⌊s/2⌋)` slots per step until one runs out. When runs finish
+  out of order, an org can sit at its cap while another takes the free slots (both of A's runs
+  end before B's older ones: BABAAAB), and the bound no longer applies; the fair share still
+  does.
 - The per-org cap is global across workers. It counts `running` rows in the database. The lane
   sets it (`ROCKY_ANALYSIS_ORG_CONCURRENCY`, default 2); a worker's own slots are
   `ROCKY_ANALYSIS_CONCURRENCY` (default 4).
