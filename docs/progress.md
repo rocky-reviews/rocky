@@ -67,8 +67,16 @@ Task log for the project plan. Agents append a row when a task is merged.
   more than one server; a worker-side removal does not need it (ADR 0033 §5).
 - ADR 0011's live-installation confirmation of the membership step is still open; the first
   public or internal repository exercises it (denies, never allows, if GitHub answers otherwise).
-- ADR 0011 A14 (installation rate limit): every public/internal question now mints and revokes a
-  token from the server too.
+- ADR 0011 A14 (installation rate limit): every public/internal question by a collaborator still
+  mints and revokes a token from the server (non-collaborators are remembered 30 s, ADR 0033 W11);
+  token reuse per (installation, repository) would remove the mint.
+- Review nits (not done): `server.access.db.test.ts` covers the 200/404 wiring for the drafts
+  `GET`, the review preview `GET` and the inbox; add the wired 200/404 cases for
+  `POST …/approve-over-limit` (only its 503 is covered) and for the posting `POST` (the preview
+  stands in for it). `githubAppAuthFromEnv` validates the key even when login is off (a malformed
+  key refuses to boot although nothing would use it); acceptable, or skip the parse without
+  login. The test file depends on test order (sessions, bob's cookie and GitHub state carry
+  across tests); a per-test sign-in would make each test standalone.
 
 ### P6-9 follow-ups
 

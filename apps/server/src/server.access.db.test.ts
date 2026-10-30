@@ -301,6 +301,17 @@ describe("a running server with the check wired (H4-1)", () => {
       [true, null],
       [false, "not_collaborator"],
     ]);
+    // W11: bob drops his own cache entries by signing out and in again, which makes the check
+    // ask GitHub again as bob, but "not a collaborator" is remembered below that cache for 30 s:
+    // no new installation token is minted for him. Alice's "collaborator" is not remembered
+    // (it would stretch the 5-minute bound), so her next fresh question mints again.
+    expect((await send(bob, "POST", "/auth/logout")).statusCode).toBe(204);
+    bob = await signIn(BOB);
+    const userCalls = githubCalls(/^user$/);
+    expect((await drafts(bob, A)).statusCode).toBe(404);
+    expect(githubCalls(/^user$/)).toBe(userCalls + 1);
+    expect(github.tokens.mints.length).toBe(mints + 2);
+    expect(accessEvents().at(-1)).toMatchObject({ allowed: false, cached: false });
   });
 
   it("an allow cached in org A does not answer for org B (same member, same repository id)", async () => {
@@ -367,7 +378,9 @@ describe("a running server with the check wired (H4-1)", () => {
       200,
     );
     // Restored, but their sessions were cut at removal (P7-2): bob signs in again, and the
-    // allow cached before the removal is gone (restore and login both invalidate).
+    // allow cached before the removal is gone. Through the routes this cannot tell the restore's
+    // invalidation from the sign-in's (both call the same hook, ADR 0033 W2); the hook's calls
+    // are asserted per action in `auth.db.test.ts` and `policy.db.test.ts`.
     bob = await signIn(BOB);
     expect((await drafts(bob, A)).statusCode).toBe(404);
     expect(accessEvents().at(-1)).toMatchObject({ allowed: false, cached: false });

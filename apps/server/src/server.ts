@@ -25,7 +25,7 @@ import {
   webhookSecretFromEnv,
 } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
-import { createRepositoryAccess } from "./repository-access.js";
+import { cacheMembershipDenials, createRepositoryAccess } from "./repository-access.js";
 import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
 import { createRateLimits, rateLimitRulesFromEnv } from "./security/rate-limit.js";
 import { authRateLimit, webhookRateLimit } from "./security/route-limits.js";
@@ -241,7 +241,11 @@ export const startServer = async (
         keys,
         reader: createGitHubUserAccessReader({
           api: config.endpoints.api,
-          collaborators: createGitHubForge({ auth: appAuth, api: config.endpoints.api, clock }),
+          // "Not a collaborator" answers are kept 30 s below the member's own cache (W11).
+          collaborators: cacheMembershipDenials(
+            createGitHubForge({ auth: appAuth, api: config.endpoints.api, clock }),
+            { clock },
+          ),
         }),
         log,
       });
