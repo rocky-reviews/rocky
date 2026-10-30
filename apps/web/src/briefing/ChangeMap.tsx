@@ -5,7 +5,17 @@
  */
 import { renderChangeMap } from "@rocky-reviews/renderer";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
-import { Component, type KeyboardEvent, type MouseEvent, type ReactNode, useMemo } from "react";
+import {
+  Component,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { SafeSvgView } from "../change-map/SafeSvg.js";
 import { mapTargets, targetAt } from "../change-map/targets.js";
 import { graphState } from "./briefing-model.js";
@@ -93,12 +103,42 @@ const MapView = ({ doc, onOpenFile }: CanvasProps) => {
     // Space would scroll the page; Enter has nothing else to do here.
     if (open(event.currentTarget, event.target)) event.preventDefault();
   };
+  const box = useRef<HTMLDivElement>(null);
+  const overflows = useOverflow(box, map);
   return (
-    // The listeners only delegate: the focusable controls are the SVG buttons inside.
-    <div className="map-scroll" onClick={onClick} onKeyDown={onKeyDown}>
-      <SafeSvgView svg={map.tree} />
-    </div>
+    <>
+      {/* The listeners only delegate: the focusable controls are the SVG buttons inside. */}
+      <div className="map-scroll" ref={box} onClick={onClick} onKeyDown={onKeyDown}>
+        <SafeSvgView svg={map.tree} />
+      </div>
+      {overflows && (
+        <p className="map-scroll-hint">
+          Scroll sideways to see the whole map <span aria-hidden="true">→</span>
+        </p>
+      )}
+    </>
   );
+};
+
+/**
+ * P6-8: whether the box is narrower than its content (the map scrolls sideways on phones), so
+ * the page can say so; nothing else shows that part of the map is out of view. Both the box and
+ * the map inside it are watched, and a new map (`content`) checks again.
+ */
+const useOverflow = (ref: RefObject<HTMLElement | null>, content: unknown): boolean => {
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (el === null) return;
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    for (const child of el.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [ref, content]);
+  return overflows;
 };
 
 /**

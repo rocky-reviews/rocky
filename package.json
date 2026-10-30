@@ -20,6 +20,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test -c apps/web/playwright.config.ts",
+    "test:a11y": "playwright test -c apps/web/playwright.config.ts --project=e2e a11y.e2e.spec.ts",
+    "test:lcp": "playwright test -c apps/web/playwright.config.ts --project=perf --no-deps lcp.perf.spec.ts",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
     "design:poc-screenshots": "tsx scripts/screenshot-poc.ts",
     "design:change-map-screenshots": "tsx scripts/screenshot-change-map.ts",

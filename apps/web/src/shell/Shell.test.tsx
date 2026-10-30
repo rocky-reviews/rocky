@@ -176,6 +176,21 @@ describe("sidebar", () => {
     expect(html).not.toMatch(/<button[^>]*>(?:(?!<\/button>).)*<(?:button|input|a)\b/s);
   });
 
+  it("shows no progressbar when there is nothing high-risk to count (P6-8)", () => {
+    // A progressbar whose maximum equals its minimum has no valid value.
+    const analysis = data.analysis;
+    if (analysis === null) throw new Error("fixture has an analysis");
+    const files = analysis.triage.files.map((f) =>
+      f.level === "critical" || f.level === "important" ? { ...f, level: "normal" as const } : f,
+    );
+    const html = render({
+      ...data,
+      analysis: { ...analysis, triage: { ...analysis.triage, files } },
+    });
+    expect(html).toContain("0/0");
+    expect(html).not.toContain('role="progressbar"');
+  });
+
   it("says when there is no analysis yet", () => {
     const t = text(render({ ...data, analysis: null }));
     expect(t).toContain("Files appear here once the analysis is ready.");

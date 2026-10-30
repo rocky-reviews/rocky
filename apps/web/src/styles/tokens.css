@@ -65,6 +65,16 @@
   --low-bg: #eef1f5;
   --ok: #15803d;
   --ok-bg: #e9f7ee;
+  /*
+   * Text on a solid severity fill (P6-8): the change map's badge digits. White on --high and
+   * --med is about 3.6:1 in light mode, so those two take the text colour (about 5:1).
+   */
+  --on-crit: var(--panel);
+  --on-high: var(--text);
+  --on-med: var(--text);
+  --on-low: var(--panel);
+  /* Text on the critical tint (status pill): --crit on --crit-bg is 3.9:1 in light mode only. */
+  --crit-tint-text: var(--text);
   /* Diff */
   --add-bg: #e7f6ec;
   --add-sign: #1a7f37;
@@ -116,6 +126,11 @@
   --low-bg: #1f2633;
   --ok: #4ade80;
   --ok-bg: #12301d;
+  --on-crit: var(--panel);
+  --on-high: var(--panel);
+  --on-med: var(--panel);
+  --on-low: var(--panel);
+  --crit-tint-text: var(--crit);
   /* Diff */
   --add-bg: #0f2a1c;
   --add-sign: #4ade80;

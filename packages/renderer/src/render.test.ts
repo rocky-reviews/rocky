@@ -287,8 +287,44 @@ describe("click-through (P5-3)", () => {
     const options = { interactive: { files: files() } };
     const first = renderChangeMap(pr847(), options).svg;
     for (let run = 0; run < 20; run += 1) expect(renderChangeMap(pr847(), options).svg).toBe(first);
-    const strip = (svg: string) => svg.replace(/ (?:tabindex|role|aria-label)="[^"]*"/g, "");
+    // The badges' hit areas are invisible (fill none, P6-8), so they are not part of the picture.
+    const strip = (svg: string) =>
+      svg
+        .replace(/ (?:tabindex|role|aria-label)="[^"]*"/g, "")
+        .replace(/<rect class="cm-badge-hit"[^>]*\/>\n?/g, "");
     expect(strip(first)).toBe(strip(renderChangeMap(pr847()).svg));
+  });
+
+  it("gives each clickable badge, and only those, a 32-unit target centred on it (P6-8)", () => {
+    const doc = pr847();
+    const { svg } = renderChangeMap(doc, {
+      interactive: { files: files(doc).filter((path) => path !== "src/auth/invitations.ts") },
+    });
+    const badges = [...svg.matchAll(/<g class="cm-badge [^"]*"[^>]*>([\s\S]*?)<\/g>/g)];
+    expect(badges.length).toBe(5);
+    for (const [group, body] of badges) {
+      const hit =
+        /<rect class="cm-badge-hit" x="([\d.-]+)" y="([\d.-]+)" width="32" height="32"\/>/.exec(
+          body ?? "",
+        );
+      // acceptInvitation()'s file is left out, so its badge is inert and has no target.
+      if (group.includes('data-findings="F1 F3 F8"')) {
+        expect(hit).toBeNull();
+        continue;
+      }
+      expect(hit, group).not.toBeNull();
+      const bg =
+        /<rect class="cm-badge-bg" x="([\d.-]+)" y="([\d.-]+)" width="([\d.-]+)" height="([\d.-]+)"/.exec(
+          body ?? "",
+        );
+      const [hx, hy, bx, by, bw, bh] = [hit?.[1], hit?.[2], bg?.[1], bg?.[2], bg?.[3], bg?.[4]].map(
+        Number,
+      ) as [number, number, number, number, number, number];
+      expect(hx + 16).toBeCloseTo(bx + bw / 2, 1);
+      expect(hy + 16).toBeCloseTo(by + bh / 2, 1);
+      // Drawn first, so the visible badge paints over it.
+      expect(body?.indexOf("cm-badge-hit")).toBeLessThan(body?.indexOf("cm-badge-bg") ?? 0);
+    }
   });
 });
 

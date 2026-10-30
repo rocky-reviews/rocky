@@ -26,6 +26,7 @@ import {
   type GraphUnavailableReason,
 } from "@rocky-reviews/schema";
 import {
+  BADGE_HIT_SIZE,
   BADGE_INSET,
   BADGE_MAX_COUNT,
   BADGE_PADDING_X,
@@ -324,6 +325,18 @@ const paintBadge = (
           )),
     },
     [
+      // Only a badge that opens something needs the larger target (P6-8).
+      ...(finding === undefined
+        ? []
+        : [
+            tag("rect", {
+              class: "cm-badge-hit",
+              x: coord(b.x + b.width / 2 - BADGE_HIT_SIZE / 2),
+              y: coord(b.y + BADGE_SIZE / 2 - BADGE_HIT_SIZE / 2),
+              width: BADGE_HIT_SIZE,
+              height: BADGE_HIT_SIZE,
+            }),
+          ]),
       tag("rect", {
         class: "cm-badge-bg",
         x: coord(b.x),

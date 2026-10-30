@@ -42,6 +42,11 @@ export const BADGE_SIZE = 18;
 export const BADGE_INSET = 2;
 export const BADGE_TEXT_SIZE = 9.5;
 export const BADGE_PADDING_X = 4;
+/**
+ * P6-8: a clickable badge takes pointer input from this square around its centre (invisible),
+ * so it stays a 24 CSS px target (WCAG 2.2 2.5.8) while the page draws the map at 3/4 size.
+ */
+export const BADGE_HIT_SIZE = 32;
 /** Above this the badge shows "9+"; the tooltip carries the exact count. */
 export const BADGE_MAX_COUNT = 9;
 

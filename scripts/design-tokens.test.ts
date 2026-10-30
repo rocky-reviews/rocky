@@ -31,6 +31,12 @@ const app = read("apps/web/src/styles/tokens.css");
 const DERIVED = /^--(font|text|radius|space)-|^--shadow-modal$|^--overlay$/;
 
 /**
+ * P6-8: text on a solid severity fill. Not colours of their own: each is one of the POC's
+ * surface or text tokens, chosen per mode for contrast.
+ */
+const ON_SEVERITY = /^--on-(crit|high|med|low)$|^--crit-tint-text$/;
+
+/**
  * P6-3 syntax colours: each `--syn-*` is a POC `--tk-*` token or one of these reviewed AA
  * shades of the same hue, so the prefix cannot bring in arbitrary colours.
  */
@@ -53,14 +59,61 @@ describe("design tokens match the POC", () => {
         expect(actual.get(name), name).toBe(value);
       }
       const unexpected = [...actual.keys()].filter(
-        (name) => !expected.has(name) && !DERIVED.test(name) && !SYNTAX.test(name),
+        (name) =>
+          !expected.has(name) &&
+          !DERIVED.test(name) &&
+          !SYNTAX.test(name) &&
+          !ON_SEVERITY.test(name),
       );
+      for (const [name, value] of actual) {
+        if (!ON_SEVERITY.test(name)) continue;
+        expect(value, name).toMatch(/^var\(--(panel|text|crit)\)$/);
+      }
       for (const [name, value] of actual) {
         if (!SYNTAX.test(name)) continue;
         const ok = /^var\(--tk-[a-z]+\)$/.test(value) || SYNTAX_SHADES[mode].includes(value);
         expect(ok, `${name}: ${value} is neither var(--tk-*) nor a listed shade`).toBe(true);
       }
       expect(unexpected, "tokens not in the POC and not listed as derived").toEqual([]);
+    });
+  }
+});
+
+/** WCAG 2 relative luminance of a #rrggbb colour. */
+const luminance = (hex: string): number => {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+const contrast = (a: string, b: string): number => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+};
+
+describe("text on a severity fill (P6-8)", () => {
+  for (const [mode, selector] of [
+    ["light", LIGHT],
+    ["dark", DARK],
+  ] as const) {
+    it(`reaches 4.5:1 on every severity in ${mode} mode`, () => {
+      // Dark mode overrides colours only; anything it leaves out comes from light.
+      const merged = new Map([...tokens(app, LIGHT), ...tokens(app, selector)]);
+      const resolve = (value: string): string => {
+        const ref = /^var\((--[\w-]+)\)$/.exec(value)?.[1];
+        return ref === undefined ? value : resolve(merged.get(ref) ?? "");
+      };
+      for (const severity of ["crit", "high", "med", "low"]) {
+        const fill = resolve(merged.get(`--${severity}`) ?? "");
+        const text = resolve(merged.get(`--on-${severity}`) ?? "");
+        expect(contrast(text, fill), `--on-${severity} on --${severity}`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+      const tint = resolve(merged.get("--crit-bg") ?? "");
+      const onTint = resolve(merged.get("--crit-tint-text") ?? "");
+      expect(contrast(onTint, tint), "--crit-tint-text on --crit-bg").toBeGreaterThanOrEqual(4.5);
     });
   }
 });
