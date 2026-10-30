@@ -26,6 +26,10 @@ letters must type.
      `contenteditable` (`isTextEntry`). Checkboxes and buttons are not text entries.
    - Single-character keys fire only without Ctrl, ⌘ or Alt (Shift is part of `?`). ⌘/Ctrl+Enter
      fires only with no Alt or Shift.
+   - Letters are matched lower-case when Shift is not held, so Caps Lock does not disable them;
+     on a layout whose letters are not ASCII (Cyrillic, Greek…) the physical key (`event.code`
+     `KeyK`) stands in, so each shortcut sits where its letter is on a US keyboard. Shift+letter
+     matches nothing.
    - Not for an event a component already handled (`defaultPrevented`, e.g. the diff's arrow keys
      or a draft's Escape), not during IME composition, and on key repeat only for movement
      (k j n p).
@@ -37,18 +41,25 @@ letters must type.
    and `aria-keyshortcuts`; the Review panel's strip says they are off. ⌘/Ctrl+Enter has a
    modifier and stays on; the dialog stays reachable from the "? Shortcuts" button in the top bar
    at every width. Remapping was not chosen: one switch covers the criterion with far less UI.
-4. **Keys act through the same paths as the mouse.** n/p call the review panel's
-   `jumpToFinding` (open the file, focus the draft card). a/e/d act on the focused draft only when
-   it is undecided and in the file on screen, by clicking that card's own Accept/Edit/Dismiss
-   button, so every guard the card applies (a disabled or absent button while state loads, a
-   stale diff, a save in flight) applies to the key as well, and focus moves exactly as after a
-   click. A card scrolled out of the virtualised diff is brought back first; the next press acts.
+4. **Keys act through the same paths as the mouse.** n/p do what the review panel's items do
+   (`jumpToFinding`: open the file, focus the draft card), and only when those items are
+   enabled: the review state is loaded (`status === "ready"`) and the diff is of the analysed
+   commit (not `stale`); otherwise they do nothing. a/e/d act on the focused draft only under the
+   same conditions, when it is undecided and in the file on screen, by clicking that card's own
+   Accept/Edit/Dismiss button, so the card's guards (a disabled button, a save in flight) apply
+   to the key as well and focus moves exactly as after a click. A card scrolled out of the
+   virtualised diff is brought back first and the next press acts; a card whose button is not
+   shown (it is being edited or dismissed) ignores the key. a/e/d act on the highlighted
+   (focused) draft, which may not be the one scrolled into view.
    k/j select a file like the sidebar and move focus to the main column; j from the first file
    returns to the briefing; a noise file reached this way opens the sidebar's noise group.
 5. **Discoverable.** `?` and the top-bar button open a modal dialog (focus on Close, Tab trapped
    with the drawers' `trapTab`, Escape or a click outside closes it, focus returns to where it
    was). Buttons that a key triggers show the key in an `aria-hidden` `<kbd>` (so their accessible
-   name is unchanged) and carry `aria-keyshortcuts`.
+   name is unchanged) and carry `aria-keyshortcuts`, which names physical keys as ARIA requires:
+   the dialog button's is `Shift+/` (US layout), not `?`. Closing the dialog returns focus to
+   its opener, or to the main column when nothing had focus. If the browser cannot save the
+   switch, the dialog says the choice lasts until a reload instead of "Remembered".
 6. **Entry points that later tasks fill.** `/` (Ask, P9-2) and ⌘/Ctrl+Enter (Finish review,
    P6-6) show a "not available yet" toast through `onAsk` / `onFinish` in the shell; those tasks
    replace the handlers.

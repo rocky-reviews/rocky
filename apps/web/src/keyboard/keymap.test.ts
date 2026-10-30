@@ -14,6 +14,7 @@ import {
 
 const key = (k: string, extra: Partial<KeyInput> = {}): KeyInput => ({
   key: k,
+  code: /^[a-z]$/i.test(k) ? `Key${k.toUpperCase()}` : "",
   ctrlKey: false,
   metaKey: false,
   altKey: false,
@@ -38,9 +39,28 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("?", { shiftKey: true }), true)).toBe("help");
   });
 
-  it("ignores other keys, upper case and inherited names", () => {
-    for (const k of ["x", "K", "Enter", "Escape", " ", "toString", "constructor"])
+  it("ignores other keys, Shift+letter and inherited names", () => {
+    for (const k of ["x", "Enter", "Escape", " ", "toString", "constructor"])
       expect(shortcutFor(key(k), true)).toBeNull();
+    expect(shortcutFor(key("K", { shiftKey: true }), true)).toBeNull();
+  });
+
+  it("works with Caps Lock on (an upper-case letter without Shift)", () => {
+    expect(shortcutFor(key("K"), true)).toBe("nextFile");
+    expect(shortcutFor(key("A"), true)).toBe("accept");
+  });
+
+  it("uses the physical key on layouts whose letters are not ASCII", () => {
+    // Russian: the key where k is types "л", where n is "т"; Greek: where m is "μ".
+    expect(shortcutFor(key("л", { code: "KeyK" }), true)).toBe("nextFile");
+    expect(shortcutFor(key("т", { code: "KeyN" }), true)).toBe("nextDraft");
+    expect(shortcutFor(key("μ", { code: "KeyM" }), true)).toBe("mode");
+    // Caps Lock there too; but not with Shift, and not for a key that is not a letter key.
+    expect(shortcutFor(key("Л", { code: "KeyK" }), true)).toBe("nextFile");
+    expect(shortcutFor(key("Л", { code: "KeyK", shiftKey: true }), true)).toBeNull();
+    expect(shortcutFor(key("ж", { code: "Semicolon" }), true)).toBeNull();
+    // An ASCII letter wins over its physical key (AZERTY's "a" is where q is).
+    expect(shortcutFor(key("a", { code: "KeyQ" }), true)).toBe("accept");
   });
 
   it("ignores single keys with Ctrl, ⌘ or Alt", () => {

@@ -48,6 +48,8 @@ const REPEATABLE: ReadonlySet<ShortcutAction> = new Set([
 
 export type KeyInput = {
   readonly key: string;
+  /** The physical key (`KeyK`), for layouts whose letters are not ASCII. */
+  readonly code: string;
   readonly ctrlKey: boolean;
   readonly metaKey: boolean;
   readonly altKey: boolean;
@@ -55,6 +57,20 @@ export type KeyInput = {
   readonly repeat: boolean;
   readonly isComposing: boolean;
   readonly defaultPrevented: boolean;
+};
+
+/**
+ * The key as the shortcut table spells it. Letters are matched lower-case without Shift, so
+ * Caps Lock does not turn them off; on a layout whose letters are not ASCII (Cyrillic, Greek…)
+ * the physical key stands in, so "k" is where k is on a US keyboard. Shift+letter stays itself
+ * and matches nothing.
+ */
+const keyName = (event: KeyInput): string => {
+  if (/^[a-z]$/i.test(event.key)) return event.shiftKey ? event.key : event.key.toLowerCase();
+  const physical = /^Key([A-Z])$/.exec(event.code);
+  if (physical !== null && !event.shiftKey && [...event.key].length === 1)
+    return (physical[1] ?? "").toLowerCase();
+  return event.key;
 };
 
 /** The action for a key press, or null. `singleKeys`: the reviewer's on/off choice. */
@@ -65,8 +81,9 @@ export const shortcutFor = (event: KeyInput, singleKeys: boolean): ShortcutActio
       ? "finish"
       : null;
   if (!singleKeys || event.ctrlKey || event.metaKey || event.altKey) return null;
-  if (!Object.hasOwn(SINGLE_KEYS, event.key)) return null;
-  const action = SINGLE_KEYS[event.key] ?? null;
+  const name = keyName(event);
+  if (!Object.hasOwn(SINGLE_KEYS, name)) return null;
+  const action = SINGLE_KEYS[name] ?? null;
   if (action === null || (event.repeat && !REPEATABLE.has(action))) return null;
   return action;
 };

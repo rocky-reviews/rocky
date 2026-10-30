@@ -75,18 +75,20 @@ const ShellLayout = ({ data, now, review }: Props) => {
     [data.analysis],
   );
 
-  // P6-5: single-key shortcuts on or off (WCAG 2.1.4), and the shortcuts dialog, which returns
-  // focus to wherever it was opened from.
+  // P6-5: single-key shortcuts on or off (WCAG 2.1.4), whether this browser kept the choice,
+  // and the shortcuts dialog, which returns focus to wherever it was opened from (the main
+  // column when that was nothing).
   const [singleKeys, setSingleKeysState] = useState(() =>
     typeof window === "undefined" ? true : readSingleKeys(storage),
   );
+  const [remembered, setRemembered] = useState(true);
   const [help, setHelp] = useState(false);
   const helpReturn = useRef<Element | null>(null);
   const keyboard = useMemo<KeyboardContextValue>(
     () => ({
       singleKeys,
       setSingleKeys: (on) => {
-        saveSingleKeys(storage, on);
+        setRemembered(saveSingleKeys(storage, on));
         setSingleKeysState(on);
       },
       openHelp: () => {
@@ -99,8 +101,10 @@ const ShellLayout = ({ data, now, review }: Props) => {
   const closeHelp = useCallback(() => setHelp(false), []);
   useEffect(() => {
     if (help || helpReturn.current === null) return;
-    if (helpReturn.current instanceof HTMLElement) helpReturn.current.focus();
+    const back = helpReturn.current;
     helpReturn.current = null;
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+    else document.getElementById("main")?.focus({ preventScroll: true });
   }, [help]);
   const modal = overlay !== null || help;
 
@@ -278,6 +282,7 @@ const ShellLayout = ({ data, now, review }: Props) => {
           {help && (
             <ShortcutsDialog
               singleKeys={singleKeys}
+              remembered={remembered}
               onSingleKeys={keyboard.setSingleKeys}
               onClose={closeHelp}
             />

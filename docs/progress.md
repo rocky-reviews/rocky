@@ -121,6 +121,8 @@ Task log for the project plan. Agents append a row when a task is merged.
 - The single-key preference is per browser (`localStorage`); move it to user settings when
   those exist, so it follows the reviewer across devices.
 - Remapping keys (the other WCAG 2.1.4 option) is not offered; consider it if users ask.
+- a/e/d act on the highlighted (focused) draft, which after scrolling may not be the one in
+  view (review round 1 nit 4, kept as in the POC). Revisit if reviewers find it surprising.
 - UI-verifier nits (not done): the `--overlay` scrim barely dims the page in dark mode (also the
   drawers'); the top-bar "?" chip stays while single-key shortcuts are off; the strip's "Turn them
   on in Keyboard shortcuts" could be a button that opens the dialog; at 375 px the "?" button is a

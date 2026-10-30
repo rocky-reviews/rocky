@@ -185,7 +185,7 @@ describe("keyboard shortcuts (P6-5)", () => {
 
   it("has a Keyboard shortcuts button in the top bar that opens a dialog", () => {
     expect(html).toMatch(
-      /<button[^>]*class="btn btn-ghost btn-sm shortcuts-btn"[^>]*aria-label="Keyboard shortcuts"[^>]*aria-haspopup="dialog"[^>]*aria-keyshortcuts="\?"/,
+      /<button[^>]*class="btn btn-ghost btn-sm shortcuts-btn"[^>]*aria-label="Keyboard shortcuts"[^>]*aria-haspopup="dialog"[^>]*aria-keyshortcuts="Shift\+\/"/,
     );
     // The dialog itself is rendered only when opened.
     expect(html).not.toContain('role="dialog"');

@@ -23,6 +23,8 @@ kbd {
 }
 .btn kbd {
   margin-left: 2px;
+  /* The hint is taller than a small button's line; it may not make the button taller. */
+  margin-block: -3px;
 }
 
 .shortcuts-btn {

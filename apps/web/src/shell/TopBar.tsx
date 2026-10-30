@@ -43,7 +43,8 @@ export const TopBar = ({
   const nextMode = mode === "dark" ? "light" : "dark";
   const { openHelp } = useKeyboard();
   const modeKey = useKeyShortcut("m");
-  const helpKey = useKeyShortcut("?");
+  // ARIA names the physical keys: "?" is Shift+/ on a US keyboard (not "?" or "Shift+?").
+  const helpKey = useKeyShortcut("Shift+/");
 
   return (
     <header className="topbar">

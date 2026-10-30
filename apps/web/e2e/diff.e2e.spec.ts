@@ -89,7 +89,8 @@ test.describe("keyboard", () => {
 
     // Shift+Tab goes back out of the diff in one step.
     await page.keyboard.press("Shift+Tab");
-    // "v": the P6-5 key hint, hidden from the accessible name.
+    // `focusedLabel` reads textContent, which includes the P6-5 key hint "v"; the hint is
+    // aria-hidden, so the button's accessible name is still "Mark viewed".
     expect(await focusedLabel(page)).toBe("Mark viewed v");
   });
 

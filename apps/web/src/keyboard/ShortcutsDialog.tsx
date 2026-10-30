@@ -12,11 +12,13 @@ const MAC = typeof navigator !== "undefined" && isMac(navigator.userAgent);
 
 type Props = {
   singleKeys: boolean;
+  /** False once saving the choice failed (storage blocked): it then lasts until a reload. */
+  remembered: boolean;
   onSingleKeys: (on: boolean) => void;
   onClose: () => void;
 };
 
-export const ShortcutsDialog = ({ singleKeys, onSingleKeys, onClose }: Props) => {
+export const ShortcutsDialog = ({ singleKeys, remembered, onSingleKeys, onClose }: Props) => {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
 
@@ -82,7 +84,14 @@ export const ShortcutsDialog = ({ singleKeys, onSingleKeys, onClose }: Props) =>
           </label>
           <p id="single-keys-note" className="note">
             Turn these off if single letters get in your way, for example with speech input. Esc and{" "}
-            {finishKeys(MAC)} keep working. Remembered in this browser.
+            {finishKeys(MAC)} keep working.{" "}
+            {remembered ? (
+              "Remembered in this browser."
+            ) : (
+              <span role="status">
+                This browser could not save the choice, so it lasts until you reload the page.
+              </span>
+            )}
           </p>
         </div>
       </div>

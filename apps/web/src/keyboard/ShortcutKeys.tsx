@@ -2,11 +2,13 @@
  * The page's one keydown listener for shortcuts (P6-5, ADR 0030). Rendered inside the review
  * provider so n/p and a/e/d go through the same paths as the mouse: n/p are the right panel's
  * jump to a draft, and a/e/d press the focused draft card's own Accept/Edit/Dismiss button, so
- * whatever guards the card has (a disabled or missing button) apply to the key too.
+ * whatever guards the card has (a disabled or missing button) apply to the key too. Like the
+ * panel, they do nothing until the review state is loaded or when the drafts are hidden because
+ * the diff is from a newer push than the analysis.
  */
 import { useEffect, useRef } from "react";
 import { bySeverity } from "../drafts/ReviewPanel.js";
-import { useReview } from "../drafts/ReviewProvider.js";
+import { type ReviewContextValue, useReview } from "../drafts/ReviewProvider.js";
 import { isTextEntry, type ShortcutAction, shortcutFor, stepDraft, stepFile } from "./keymap.js";
 
 type Props = {
@@ -27,6 +29,9 @@ type Props = {
 
 const ROLE = { accept: "accept", edit: "edit", dismiss: "dismiss" } as const;
 
+/** The panel's jump items are enabled (P6-4): state loaded, diff of the analysed commit. */
+const draftsShown = (r: ReviewContextValue): boolean => r.status === "ready" && !r.stale;
+
 export const ShortcutKeys = (props: Props) => {
   const review = useReview();
   const latest = useRef({ props, review });
@@ -45,6 +50,7 @@ export const ShortcutKeys = (props: Props) => {
         }
         case "nextDraft":
         case "prevDraft": {
+          if (!draftsShown(r)) return true;
           const ids = bySeverity(r.findings).map((f) => f.id);
           const undecided = (id: string) => r.decisionOf(id).state === "draft";
           const to = stepDraft(ids, undecided, r.focused, action === "nextDraft" ? 1 : -1);
@@ -54,6 +60,7 @@ export const ShortcutKeys = (props: Props) => {
         case "accept":
         case "edit":
         case "dismiss": {
+          if (!draftsShown(r)) return true;
           const finding = r.findings.find((f) => f.id === r.focused);
           if (finding === undefined || finding.path !== p.current) return true;
           const card = document.querySelector(`[data-finding="${CSS.escape(finding.id)}"]`);

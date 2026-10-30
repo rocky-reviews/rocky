@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "./test.js";
-import { MODES, openShell, WIDTHS } from "./support.js";
+import { FIXTURE_NOW, MODES, openShell, WIDTHS } from "./support.js";
+import pr847 from "../../../packages/schema/fixtures/pr-847.json" with { type: "json" };
+
+const F2_BODY = pr847.findings.find((f) => f.id === "F2")?.body ?? "";
 
 /**
  * P6-5 acceptance criterion: "keyboard-only e2e completes a full review". The first test uses
@@ -99,6 +102,8 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await press(page, "e");
   const box = page.getByRole("textbox", { name: "Your comment, edited from the AI draft" });
   await expect(box).toBeFocused();
+  // The editor starts from the draft's text; the letters below replace it.
+  await expect(box).toHaveValue(F2_BODY);
   await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("Check the caller is an org admin (k, j, n, v).");
   await expect(fileTitle(page)).toHaveText(ROUTES);
@@ -168,7 +173,7 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
     "Finish review is not available yet. Your decisions and comments are saved.",
   );
 
-  // Every decision reached the server, as a reload shows.
+  // Every decision reached the drafts API (the test's store, not the page).
   expect(reviewApi.decision("F1").state).toBe("accepted");
   expect(reviewApi.decision("F10").state).toBe("accepted");
   expect(reviewApi.decision("F8").state).toBe("dismissed");
@@ -375,6 +380,69 @@ test("shortcuts are off while a drawer is open, and work at phone width", async 
   await expect(fileTitle(page)).toHaveText(AUTH);
   await press(page, "n");
   expect(await activeFinding(page)).toBe("F1");
+});
+
+test("on a diff from a newer push, n and p do nothing (the drafts are hidden)", async ({
+  page,
+  reviewApi,
+}) => {
+  await page.clock.setFixedTime(FIXTURE_NOW);
+  await page.goto("/?diff=newer-push");
+  await reviewReady(page);
+  await press(page, "k");
+  await expect(fileTitle(page)).toHaveText(AUTH);
+  await expect(page.locator("main")).toContainText("hidden on this diff");
+  const before = await page.evaluate(() => document.activeElement?.id);
+  for (const key of ["n", "p", "a", "e", "d"]) await press(page, key);
+  await expect(fileTitle(page)).toHaveText(AUTH);
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe(before);
+  await expect(page.locator(".f-item.focus")).toHaveCount(0);
+  expect(reviewApi.requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+  // k still walks the files.
+  await press(page, "k");
+  await expect(fileTitle(page)).toHaveText(ROUTES);
+});
+
+test("help opened with nothing focused returns focus to the main column", async ({ page }) => {
+  await open(page);
+  await press(page, "?");
+  await press(page, "Escape");
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("main");
+});
+
+test("when the browser cannot save the switch, the dialog says so", async ({ page }) => {
+  await page.addInitScript(() => {
+    const blocked = () => {
+      throw new DOMException("blocked", "SecurityError");
+    };
+    Storage.prototype.setItem = blocked;
+    Storage.prototype.removeItem = blocked;
+  });
+  await open(page);
+  await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+  await expect(dialog(page)).toContainText("Remembered in this browser.");
+  await dialog(page).getByRole("switch", { name: "Single-key shortcuts" }).press("Space");
+  await expect(dialog(page)).toContainText(
+    "This browser could not save the choice, so it lasts until you reload the page.",
+  );
+  await expect(dialog(page)).not.toContainText("Remembered in this browser.");
+  // It still applies for this page.
+  await press(page, "Escape");
+  await press(page, "k");
+  await expect(fileTitle(page)).toHaveCount(0);
+});
+
+test("key hints do not make small buttons taller", async ({ page }) => {
+  await open(page);
+  await press(page, "k");
+  await press(page, "n");
+  const height = (role: string) =>
+    card(page, "F1")
+      .locator(`[data-role="${role}"]`)
+      .evaluate((el) => el.getBoundingClientRect().height);
+  // "Send to agent" has no hint; Accept, Edit and Dismiss do.
+  const plain = await height("agent");
+  for (const role of ["accept", "edit", "dismiss"]) expect(await height(role)).toBe(plain);
 });
 
 test("the key hints are on the buttons they trigger", async ({ page }) => {

@@ -96,8 +96,8 @@ All in `keyboard.e2e.spec.ts` "a full review with the keyboard only" unless note
 [ADR 0030](../adr/0030-keyboard-shortcuts.md).
 
 - [x] k next file, j previous file (risk order, noise included) — j from the first file returns to the briefing; a noise file opens the noise group ("j on the first file…")
-- [x] n / p next / previous draft (undecided first) — [keys-draft-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-light.png), [keys-draft-focus-1024-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-1024-dark.png), [keys-draft-focus-375-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-375-dark.png)
-- [x] a accept, e edit, d dismiss (focused draft in the current file) — [keys-accept-focus-1440-dark](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-dark.png), [keys-accept-focus-375-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-375-light.png); they press the card's own buttons, so its guards apply ("a, e and d act only on the focused draft…")
+- [x] n / p next / previous draft (undecided first); like the panel's items, nothing while the review state loads or on a diff from a newer push ("on a diff from a newer push…") — [keys-draft-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-light.png), [keys-draft-focus-1024-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-1024-dark.png), [keys-draft-focus-375-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-375-dark.png)
+- [x] a accept, e edit, d dismiss (focused draft in the current file) — [keys-accept-focus-1440-dark](../../apps/web/e2e/__screenshots__/keys-accept-focus-1440-dark.png), [keys-accept-focus-375-light](../../apps/web/e2e/__screenshots__/keys-accept-focus-375-light.png); they press the card's own buttons, so its guards apply, and do nothing while the drafts are hidden or the card is being edited or dismissed ("a, e and d act only on the focused draft…", "while a draft is being dismissed or edited…")
 - [x] v toggle viewed
 - [ ] / open Ask, pre-filled with selected code — the key is bound and shows "Ask is not available yet." until Ask (P9-2) exists
 - [x] b back to briefing

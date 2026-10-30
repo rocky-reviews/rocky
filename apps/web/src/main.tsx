@@ -9,7 +9,11 @@ import "./keyboard/keyboard.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
-import { createFixtureDiffSource, fixturePullFromSearch } from "./data/diff-fixture-source.js";
+import {
+  createFixtureDiffSource,
+  fixturePullFromSearch,
+  newerPushFromSearch,
+} from "./data/diff-fixture-source.js";
 import { createFixtureSource } from "./data/fixture-source.js";
 import { createHttpReviewSource } from "./data/review-http-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
@@ -33,7 +37,10 @@ if (root && window.location.pathname === "/inbox") {
   const source = createFixtureSource();
   // P6-3: the diff has its own port; `?fixture=large-diff` opens the 5,000-line fixture, and
   // `?pr=<number>` the briefing's other fixture states (P6-2).
-  const diffSource = createFixtureDiffSource();
+  // `?diff=newer-push` (P6-5) serves the same diff as a later push, so the drafts are hidden.
+  const diffSource = createFixtureDiffSource({
+    newerPush: newerPushFromSearch(window.location.search),
+  });
   const pull = fixturePullFromSearch(window.location.search);
   // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
   const review = createHttpReviewSource();

@@ -1,5 +1,5 @@
 const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * Keeps Tab and Shift+Tab inside a modal (a drawer, P6-1; the shortcuts dialog, P6-5), wrapping
