@@ -41,13 +41,18 @@ directly needs an agent integration that does not exist (follow-up).
 - `findings_state` becomes **per reviewer**: one row per (analysis, member, finding), with the
   state, the reason code, who decided and when, and `agent_prompt_copied_at`. Two reviewers of
   one PR decide independently ("only you can see this until you accept it").
-- `comments_pending` is **exactly what Finish review would post as that reviewer**: own comments
-  (`source = 'own'`) and accepted drafts (`ai`, or `ai_edited` after an edit), each with
-  `analysis_id`, the final `body` and the new-side location (`path`, `start_line`..`line`;
+- `comments_pending` holds **one row per comment Finish review would post as that reviewer**:
+  own comments (`source = 'own'`) and accepted drafts (`ai`, or `ai_edited` after an edit), each
+  with `analysis_id`, its body and the new-side location (`path`, `start_line`..`line`;
   `start_line` only for multi-line ranges). An accepted draft's row is written in the same
   transaction as its decision and deleted by its undo; a unique key allows one row per draft.
-- For an accepted draft, P3-5/P6-6 compose the posted comment from that row's body and, through
-  (`analysis_id`, `finding_id`), the finding's title and suggestion in the stored document.
+- What is posted: an own comment's body as it is; for an accepted draft,
+  `composePostedComment(finding, row)` (`packages/core/src/drafts.ts`): `**title**`, the row's
+  body (the finding's, or the reviewer's edit), and the finding's suggestion as a `suggestion`
+  block with a fence longer than any backtick run inside it. No severity, confidence or agent
+  prompt. The accepted card renders the same parts (`postedCommentParts`), so the reviewer sees
+  what will be posted. An edit replaces the body only; it cannot remove the suggestion. P3-5's
+  `findingCommentBody` has the same format and switches to this function when the two merge.
 - Location and body of a draft come from the stored, re-validated document, never from the
   request: the client names a finding id. An own comment's line must be a new-side line of one
   of the analysed file's hunks.

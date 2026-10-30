@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDraftAction,
+  composePostedComment,
   DISMISS_REASONS,
   isDismissReason,
   MAX_COMMENT_BODY,
   normaliseCommentBody,
   parseDraftAction,
+  postedCommentParts,
   type DraftAction,
   type DraftDecision,
 } from "./drafts.js";
@@ -186,5 +188,60 @@ describe("dismiss reasons and comment bodies", () => {
     expect(normaliseCommentBody("")).toBeNull();
     expect(normaliseCommentBody("x\u0000")).toBeNull();
     expect(normaliseCommentBody(7)).toBeNull();
+  });
+});
+
+describe("what an accepted draft posts (one format for the card, P3-5 and P6-6)", () => {
+  const finding = {
+    title: "Email is not validated",
+    body: "The address goes straight to the mailer.\n\nUse the shared validator.",
+    suggestion: { lines: ["const email = validateEmail(input.email);", "send(email);"] },
+  };
+
+  it("is the title, the pending comment's body and the suggestion block", () => {
+    expect(postedCommentParts(finding, { body: finding.body })).toEqual({
+      title: "Email is not validated",
+      body: finding.body,
+      suggestion: ["const email = validateEmail(input.email);", "send(email);"],
+    });
+    expect(composePostedComment(finding, { body: finding.body })).toBe(
+      "**Email is not validated**\n\nThe address goes straight to the mailer.\n\nUse the shared validator." +
+        "\n\n```suggestion\nconst email = validateEmail(input.email);\nsend(email);\n```",
+    );
+  });
+
+  it("an edit replaces the body only; the title and the suggestion stay", () => {
+    const posted = composePostedComment(finding, { body: "Validate it first." });
+    expect(posted).toBe(
+      "**Email is not validated**\n\nValidate it first.\n\n```suggestion\nconst email = validateEmail(input.email);\nsend(email);\n```",
+    );
+  });
+
+  it("never carries severity, confidence or the agent prompt, even when the finding has them", () => {
+    const full = {
+      ...finding,
+      severity: "high",
+      confidence: 91,
+      agentPrompt: "Do the secret thing.",
+    };
+    const posted = composePostedComment(full, { body: full.body });
+    expect(posted).not.toMatch(/high|91|secret thing/);
+  });
+
+  it("no suggestion: no block; an empty suggestion deletes the range", () => {
+    const plain = { title: finding.title, body: finding.body };
+    expect(postedCommentParts(plain, { body: "b" }).suggestion).toBeNull();
+    expect(composePostedComment(plain, { body: "b" })).toBe("**Email is not validated**\n\nb");
+    expect(composePostedComment({ ...finding, suggestion: { lines: [] } }, { body: "b" })).toBe(
+      "**Email is not validated**\n\nb\n\n```suggestion\n```",
+    );
+  });
+
+  it("a suggestion line with a fence cannot close the block early", () => {
+    const posted = composePostedComment(
+      { ...finding, suggestion: { lines: ["```", "x"] } },
+      { body: "b" },
+    );
+    expect(posted).toMatch(/\n\n````suggestion\n```\nx\n````$/);
   });
 });

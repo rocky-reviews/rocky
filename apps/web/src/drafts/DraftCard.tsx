@@ -13,7 +13,7 @@
  * so the keyboard path never drops to the page. Every string is text: the finding is model
  * output about PR content, the edit is the reviewer's own.
  */
-import type { DismissReason } from "@rocky-reviews/core/drafts";
+import { type DismissReason, postedCommentParts } from "@rocky-reviews/core/drafts";
 import type { Finding, Severity } from "@rocky-reviews/schema";
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { Code } from "../diff/Code.js";
@@ -105,6 +105,9 @@ export const DraftCard = ({ finding, original, language }: Props) => {
   }
 
   if (decision.state === "accepted") {
+    // Exactly what Finish review will post (ADR 0027 §2): the finding's title and suggestion with
+    // the pending comment's body.
+    const posted = postedCommentParts(finding, decision);
     return (
       <article {...common} className={`mine from-draft${focusClass}`} aria-labelledby={titleId}>
         <div className="mine-head">
@@ -125,14 +128,21 @@ export const DraftCard = ({ finding, original, language }: Props) => {
           </button>
         </div>
         <h3 className="draft-title" id={titleId}>
-          <bdi>{finding.title}</bdi>
+          <bdi>{posted.title}</bdi>
         </h3>
         <p className="mine-body">
           <bdi>
-            <Prose text={decision.body} />
+            <Prose text={posted.body} />
           </bdi>
         </p>
-        <Suggestion finding={finding} original={original} language={language} />
+        {posted.suggestion !== null && (
+          <Suggestion
+            context={finding.suggestion?.context}
+            lines={posted.suggestion}
+            original={original}
+            language={language}
+          />
+        )}
       </article>
     );
   }
@@ -172,7 +182,14 @@ export const DraftCard = ({ finding, original, language }: Props) => {
           </bdi>
         </p>
       )}
-      <Suggestion finding={finding} original={original} language={language} />
+      {finding.suggestion !== undefined && (
+        <Suggestion
+          context={finding.suggestion.context}
+          lines={finding.suggestion.lines}
+          original={original}
+          language={language}
+        />
+      )}
       {finding.memory.map((ref) => (
         <p key={ref.entryId} className="evidence">
           <span className="mark" aria-hidden="true">
@@ -339,22 +356,20 @@ const EditArea = ({
 
 /** The suggested change as a small diff: the context line, the lines it replaces, the new ones. */
 const Suggestion = ({
-  finding,
+  context,
+  lines,
   original,
   language,
 }: {
-  finding: Finding;
+  context: string | undefined;
+  lines: readonly string[];
   original: readonly string[];
   language: Language;
 }) => {
-  const suggestion = finding.suggestion;
-  if (suggestion === undefined) return null;
   const rows: { kind: "ctx" | "del" | "add"; text: string }[] = [
-    ...(suggestion.context === undefined
-      ? []
-      : [{ kind: "ctx" as const, text: suggestion.context }]),
+    ...(context === undefined ? [] : [{ kind: "ctx" as const, text: context }]),
     ...original.map((text) => ({ kind: "del" as const, text })),
-    ...suggestion.lines.map((text) => ({ kind: "add" as const, text })),
+    ...lines.map((text) => ({ kind: "add" as const, text })),
   ];
   const sign = { ctx: " ", del: "−", add: "+" } as const;
   const word = { ctx: "", del: "removed: ", add: "added: " } as const;

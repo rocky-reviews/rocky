@@ -121,3 +121,50 @@ export const parseDraftAction = (input: unknown): DraftAction | null => {
       return null;
   }
 };
+
+/** What an accepted draft posts, in parts: the accepted card shows exactly these. */
+export interface PostedCommentParts {
+  readonly title: string;
+  /** The pending comment's body: the finding's, or the reviewer's edit. */
+  readonly body: string;
+  /** The suggested lines (an empty list deletes the range), or `null` without a suggestion. */
+  readonly suggestion: readonly string[] | null;
+}
+
+/**
+ * An accepted draft as posted: the finding's title and suggestion with the pending comment's
+ * body (`comments_pending.body`). An edit replaces the body only. Nothing the reviewer did not
+ * see on the card: no severity, no confidence, no agent prompt.
+ */
+export const postedCommentParts = (
+  finding: {
+    readonly title: string;
+    readonly suggestion?: { readonly lines: readonly string[] } | undefined;
+  },
+  pending: { readonly body: string },
+): PostedCommentParts => ({
+  title: finding.title,
+  body: pending.body,
+  suggestion: finding.suggestion === undefined ? null : [...finding.suggestion.lines],
+});
+
+const longestBacktickRun = (lines: readonly string[]): number =>
+  Math.max(0, ...lines.map((l) => Math.max(0, ...(l.match(/`+/g) ?? []).map((r) => r.length))));
+
+/**
+ * The markdown Finish review (P6-6, P3-5) posts for an accepted draft: `**title**`, the body, and
+ * the suggestion as a block the forge can apply. The fence is longer than any backtick run in
+ * the suggestion, so its content cannot close the block early.
+ */
+export const composePostedComment = (
+  finding: Parameters<typeof postedCommentParts>[0],
+  pending: { readonly body: string },
+): string => {
+  const { title, body, suggestion } = postedCommentParts(finding, pending);
+  const parts = [`**${title}**`, body];
+  if (suggestion !== null) {
+    const fence = "`".repeat(Math.max(3, longestBacktickRun(suggestion) + 1));
+    parts.push(`${fence}suggestion\n${suggestion.map((l) => `${l}\n`).join("")}${fence}`);
+  }
+  return parts.join("\n\n");
+};

@@ -1,4 +1,4 @@
-import type { DraftDecision } from "@rocky-reviews/core/drafts";
+import { type DraftDecision, postedCommentParts } from "@rocky-reviews/core/drafts";
 import { type Finding, parseAnalysisDocument } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -163,6 +163,18 @@ describe("decided drafts", () => {
     expect(html).toContain("<code>invite.role</code>");
     expect(html).toContain("&lt;img src=x&gt;");
     expect(html).not.toContain("<img");
+  });
+
+  it("accepted shows exactly what Finish review will post (core postedCommentParts)", () => {
+    const body = "Always use the invited role.";
+    const html = render(F1, { decision: { state: "accepted", edited: true, body } });
+    const parts = postedCommentParts(F1, { body });
+    expect(text(html.split('id="draft-F1-title">')[1]?.split("</h3>")[0] ?? "")).toBe(parts.title);
+    expect(text(html.split('class="mine-body">')[1]?.split("</p>")[0] ?? "")).toBe(parts.body);
+    const added = [...html.matchAll(/added: <\/span>(.*?)<\/code>/g)].map((m) => text(m[1] ?? ""));
+    expect(added).toEqual(parts.suggestion?.map((line) => line.trim()));
+    // Nothing that is not posted: no severity, no confidence, no project-memory evidence.
+    expect(text(html)).not.toMatch(/Critical|confident|Seen in/);
   });
 
   it("dismissed: one collapsed line with the reason and Undo", () => {

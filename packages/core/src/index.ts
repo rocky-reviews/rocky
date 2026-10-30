@@ -15,18 +15,21 @@ export {
 } from "./roles.js";
 export {
   applyDraftAction,
+  composePostedComment,
   DISMISS_REASONS,
   DRAFT,
   isDismissReason,
   MAX_COMMENT_BODY,
   normaliseCommentBody,
   parseDraftAction,
+  postedCommentParts,
   type DismissReason,
   type DraftAction,
   type DraftActionKind,
   type DraftDecision,
   type DraftState,
   type DraftTransition,
+  type PostedCommentParts,
 } from "./drafts.js";
 export {
   EXTERNAL_TENANT_STORES,

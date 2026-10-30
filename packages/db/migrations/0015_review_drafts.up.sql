@@ -8,10 +8,12 @@
 --     reviewing the same PR each decide for themselves ("only you can see this until you accept
 --     it"). A dismissal stores a fixed reason code (no free text), which project memory (P8) can
 --     learn from later; nothing reads it yet. `agent_prompt_copied_at` notes "Send to agent".
---   * comments_pending is exactly what Finish review (P6-6) will post as the reviewer (P3-5): the
---     reviewer's own comments (`source = 'own'`) and accepted drafts (`ai`, or `ai_edited` when
---     the reviewer rewrote the body), each with its final body and new-side location
---     (`path`, `start_line`..`line`). An accepted draft has exactly one row, written in the same
+--   * comments_pending holds one row per comment Finish review (P6-6) will post as the reviewer
+--     (P3-5): the reviewer's own comments (`source = 'own'`, posted as their body) and accepted
+--     drafts (`ai`, or `ai_edited` when the reviewer rewrote the body), each with its new-side
+--     location (`path`, `start_line`..`line`). For a draft, `body` is the comment's body only:
+--     the posted text adds the finding's title and suggestion (core `composePostedComment`,
+--     which the accepted card shows). An accepted draft has exactly one row, written in the same
 --     transaction as its decision and deleted by its undo.
 --   * Both belong to the analysis the reviewer saw (`analysis_id`); deleting the analysis
 --     (retention) deletes them.
