@@ -1,6 +1,7 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readdirSync, readSync } from "node:fs";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { parse, type DefaultTreeAdapterTypes as Tree } from "parse5";
 import { publicRoute } from "./auth/policy.js";
 import { ConfigError } from "./config.js";
 
@@ -10,6 +11,9 @@ import { ConfigError } from "./config.js";
  * header module). Files are read once at boot into a fixed route table: a request never touches
  * the filesystem, so there is no path to traverse. Symlinks, unknown file types and an
  * `index.html` with inline script or style are refused at boot (the CSP would block them).
+ *
+ * Every file is read through one handle opened with `O_NOFOLLOW`: what is checked (`fstat`) is
+ * what is read, so a path swapped for a symlink or a device between the two cannot be served.
  */
 
 export interface WebFile {
@@ -51,56 +55,136 @@ const SPA_PATH = /^(?:\/(?!\.+(?:\/|$))[A-Za-z0-9._~@+-]+)*\/?$/;
 /** Paths that are never the SPA, even when nothing matches (fixed 404 instead). */
 const NOT_SPA = /^\/(?:api|auth|webhooks|setup|assets|healthz)(?:\/|$)/;
 
-/** Inline content a strict CSP would block, found in an HTML document. Names only. */
+const isElement = (node: Tree.Node): node is Tree.Element => "tagName" in node;
+const isTemplate = (node: Tree.Element): node is Tree.Template => "content" in node;
+const isText = (node: Tree.ChildNode): node is Tree.TextNode => node.nodeName === "#text";
+
+/**
+ * A URL a browser would run as script: the URL parser drops every tab, LF and CR and leading
+ * C0 controls and spaces before it reads the scheme, case-insensitively.
+ */
+const isJavascriptUrl = (value: string): boolean => {
+  const stripped = value.replaceAll(/[\t\n\r]/g, "");
+  let start = 0;
+  while (start < stripped.length && stripped.charCodeAt(start) <= 0x20) start += 1;
+  return stripped.slice(start).toLowerCase().startsWith("javascript:");
+};
+
+/**
+ * Inline content a strict CSP would block, found in an HTML document. Names only, each once.
+ *
+ * The document is parsed as a browser parses it (parse5, the WHATWG algorithm) and every
+ * element is visited, in every namespace (`<svg>`), inside `<template>` contents and, with
+ * scripting disabled for the parse, inside `<noscript>` too: a text search for tags cannot know
+ * where a `<script>` ends (`</script\t\n bar>`) or what a parser makes of odd markup.
+ */
 export const findInlineContent = (html: string): string[] => {
-  const found: string[] = [];
-  for (const [, attrs = "", body = ""] of html.matchAll(
-    /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi,
-  )) {
-    if (!/\ssrc\s*=/i.test(attrs) || body.trim() !== "") found.push("inline <script>");
+  const found = new Set<string>();
+  const visit = (node: Tree.Node): void => {
+    if (isElement(node)) {
+      const name = node.tagName.toLowerCase();
+      if (name === "script") {
+        const src = node.attrs.find((a) => a.name.toLowerCase() === "src")?.value ?? "";
+        const body = node.childNodes.map((c) => (isText(c) ? c.value : "")).join("");
+        if (src.trim() === "" || body.trim() !== "") found.add("inline <script>");
+      }
+      if (name === "style") found.add("<style> element");
+      for (const attr of node.attrs) {
+        const attrName = attr.name.toLowerCase();
+        if (attrName === "style") found.add("style= attribute");
+        else if (attrName.startsWith("on")) found.add("on*= event handler");
+        if (isJavascriptUrl(attr.value)) found.add("javascript: URL");
+      }
+      if (isTemplate(node)) visit(node.content);
+    }
+    if ("childNodes" in node) for (const child of node.childNodes) visit(child);
+  };
+  visit(parse(html, { scriptingEnabled: false }));
+  return [...found];
+};
+
+/** `fs.constants` without the flag this needs (another platform): refuse, never read bare. */
+const flag = (name: "O_RDONLY" | "O_NOFOLLOW" | "O_NONBLOCK"): number => {
+  const value = (constants as Readonly<Record<string, number | undefined>>)[name];
+  if (value === undefined) {
+    throw new ConfigError(
+      `ROCKY_WEB_DIR cannot be loaded safely here: fs.constants.${name} is missing`,
+    );
   }
-  if (/<style\b/i.test(html)) found.push("<style> element");
-  if (/<[^>]*\sstyle\s*=/i.test(html)) found.push("style= attribute");
-  if (/<[^>]*\son[a-z]+\s*=/i.test(html)) found.push("on*= event handler");
-  if (/javascript:/i.test(html)) found.push("javascript: URL");
-  return found;
+  return value;
+};
+
+/**
+ * Opens without following a symlink at the last step (`O_NOFOLLOW`) and without blocking on a
+ * FIFO (`O_NONBLOCK`; a regular file reads the same). The error says what, never the path.
+ */
+const openNoFollow = (path: string, flags: number): number => {
+  try {
+    return openSync(path, flags);
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    throw new ConfigError(
+      code === "ELOOP"
+        ? "ROCKY_WEB_DIR must not contain symlinks"
+        : "ROCKY_WEB_DIR has a file that cannot be read",
+    );
+  }
+};
+
+/** Exactly the `fstat` size from the same handle; a file that grew or shrank meanwhile is refused. */
+const readExactly = (fd: number, size: number): Buffer => {
+  const body = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const read = readSync(fd, body, offset, size - offset, offset);
+    if (read === 0) break;
+    offset += read;
+  }
+  if (offset !== size || readSync(fd, Buffer.alloc(1), 0, 1, size) !== 0) {
+    throw new ConfigError("ROCKY_WEB_DIR changed while it was being loaded");
+  }
+  return body;
 };
 
 export const loadWebApp = (dir: string): WebApp => {
   if (!isAbsolute(dir)) throw new ConfigError("ROCKY_WEB_DIR must be an absolute path");
+  const flags = flag("O_RDONLY") | flag("O_NOFOLLOW") | flag("O_NONBLOCK");
   const files = new Map<string, WebFile>();
   let total = 0;
   const walk = (current: string): void => {
-    let entries: string[];
+    let names: string[];
     try {
-      entries = readdirSync(current);
+      names = readdirSync(current);
     } catch {
       throw new ConfigError("ROCKY_WEB_DIR is not a readable directory");
     }
-    for (const name of entries.sort()) {
+    for (const name of names.sort()) {
       if (name.startsWith(".")) continue;
       const path = join(current, name);
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) {
-        throw new ConfigError("ROCKY_WEB_DIR must not contain symlinks");
+      const fd = openNoFollow(path, flags);
+      try {
+        // The handle decides: whatever the directory listing said, this is what gets read.
+        const stat = fstatSync(fd);
+        if (stat.isDirectory()) {
+          walk(path);
+          continue;
+        }
+        const contentType = TYPES[extname(name).toLowerCase()];
+        if (!stat.isFile() || contentType === undefined) continue;
+        const url = `/${relative(dir, path).split(sep).join("/")}`;
+        if (!SAFE_PATH.test(url)) continue;
+        total += stat.size;
+        if (files.size >= MAX_FILES || total > MAX_TOTAL_BYTES) {
+          throw new ConfigError("ROCKY_WEB_DIR is too large for a web app build");
+        }
+        files.set(url, {
+          body: readExactly(fd, stat.size),
+          contentType,
+          cacheControl: url.startsWith("/assets/") ? IMMUTABLE : REVALIDATE,
+        });
+      } finally {
+        closeSync(fd);
       }
-      if (stat.isDirectory()) {
-        walk(path);
-        continue;
-      }
-      const contentType = TYPES[extname(name).toLowerCase()];
-      if (!stat.isFile() || contentType === undefined) continue;
-      const url = `/${relative(dir, path).split(sep).join("/")}`;
-      if (!SAFE_PATH.test(url)) continue;
-      total += stat.size;
-      if (files.size >= MAX_FILES || total > MAX_TOTAL_BYTES) {
-        throw new ConfigError("ROCKY_WEB_DIR is too large for a web app build");
-      }
-      files.set(url, {
-        body: readFileSync(path),
-        contentType,
-        cacheControl: url.startsWith("/assets/") ? IMMUTABLE : REVALIDATE,
-      });
     }
   };
   walk(dir);
@@ -128,7 +212,8 @@ const sendFile = (reply: FastifyReply, file: WebFile) =>
 
 /**
  * The fixed 404 (never echoes the URL), and with a web app its files plus the SPA fallback:
- * a GET for a path that is not an API, auth, webhook or file path gets `index.html`.
+ * a GET for a path that is not an API, auth, webhook or file path gets `index.html`. The files
+ * are public routes (P7-2): the shell holds no tenant data, and the sign-in page is in it.
  */
 export const registerWebApp = (app: FastifyInstance, web: WebApp | undefined): void => {
   if (web !== undefined) {

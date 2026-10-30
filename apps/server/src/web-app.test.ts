@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,7 +126,11 @@ describe("serving the built web app", () => {
 
     const linked = webDir();
     symlinkSync("/etc/hosts", join(linked, "assets", "hosts.js"));
-    expect(() => loadWebApp(linked)).toThrow(ConfigError);
+    expect(() => loadWebApp(linked)).toThrow("must not contain symlinks");
+    // A symlinked directory is refused too: the open itself refuses to follow (O_NOFOLLOW).
+    const linkedDir = webDir();
+    symlinkSync(webDir(), join(linkedDir, "vendor"));
+    expect(() => loadWebApp(linkedDir)).toThrow("must not contain symlinks");
 
     for (const bad of [
       INDEX.replace("</head>", "<script>alert(1)</script></head>"),
@@ -141,6 +146,44 @@ describe("serving the built web app", () => {
 describe("findInlineContent", () => {
   it("passes the real shape of the Vite build (external scripts and styles only)", () => {
     expect(findInlineContent(INDEX)).toEqual([]);
+  });
+
+  it("a FIFO or other special file never blocks boot and is not served", () => {
+    const root = webDir();
+    execFileSync("mkfifo", [join(root, "assets", "pipe.js")]);
+    const web = loadWebApp(root);
+    expect(web.files.has("/assets/pipe.js")).toBe(false);
+    expect(web.files.has("/assets/index-abc123.js")).toBe(true);
+  });
+
+  it("finds what a tag regexp misses: odd end tags, cases, svg, template, noscript, entities", () => {
+    for (const [html, name] of [
+      ["<script>x</script\t\n bar>", "inline <script>"],
+      ['<script src="/a.js"></script><script>y</script\n>', "inline <script>"],
+      ['<script src="">x</script>', "inline <script>"],
+      ['<script src=" "></script>', "inline <script>"],
+      ['<script type="importmap">{}</script>', "inline <script>"],
+      ["<svg><script>x</script></svg>", "inline <script>"],
+      ["<template><script>x</script></template>", "inline <script>"],
+      ["<noscript><style>a{}</style></noscript>", "<style> element"],
+      ["<svg><style>a{}</style></svg>", "<style> element"],
+      ['<p STYLE="x">', "style= attribute"],
+      ['<svg><rect ONCLICK="x"/></svg>', "on*= event handler"],
+      ['<a href="  JAVA\nSCRIPT:alert(1)">', "javascript: URL"],
+      ['<a href="&#106;avascript:alert(1)">', "javascript: URL"],
+      ['<form action="\tjavascript:x">', "javascript: URL"],
+      ['<svg><a xlink:href="javascript:x"><text>t</text></a></svg>', "javascript: URL"],
+    ] as const) {
+      expect(findInlineContent(html), JSON.stringify(html)).toContain(name);
+    }
+  });
+
+  it("does not flag external scripts with whitespace bodies, data attributes or paths that contain the word", () => {
+    expect(
+      findInlineContent(
+        '<script src="/a.js">\n</script><p data-style="1"></p><a href="/javascript:not-a-scheme">x</a>',
+      ),
+    ).toEqual([]);
   });
 
   it("finds inline scripts, style elements and attributes, event handlers and javascript: URLs", () => {

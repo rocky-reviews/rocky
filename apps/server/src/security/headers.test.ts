@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from "fastify";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
+import { requires, SESSION_ROUTE } from "../auth/policy.js";
 import {
   APP_CSP,
   BASELINE_HEADERS,
@@ -162,6 +163,23 @@ describe("buildApp applies the headers everywhere (P7-3)", () => {
     const res = await app.inject({ url: "/no/such/route?x=%3Cscript%3E" });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("on the access policy's denials (P7-2 hook answers before any handler)", async () => {
+    const app = buildApp({ checkDatabase: () => Promise.resolve(true), hsts: true });
+    app.get("/api/private", { config: { policy: SESSION_ROUTE } }, async () => ({ leak: 1 }));
+    app.get("/api/admin", { config: { policy: requires("members.read") } }, async () => ({
+      leak: 1,
+    }));
+    for (const url of ["/api/private", "/api/admin"]) {
+      const res = await app.inject({ url, headers: { cookie: "__Host-rocky_session=forged" } });
+      expect(res.statusCode, url).toBe(401);
+      expect(res.body).not.toContain("leak");
+      expectBaseline(res);
+      expect(res.headers["content-security-policy"]).toBe(NON_DOCUMENT_CSP);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.headers["strict-transport-security"]).toBe(HSTS);
+    }
   });
 
   it("sends HSTS when built for production", async () => {
