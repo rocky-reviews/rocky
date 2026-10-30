@@ -197,6 +197,7 @@ const CLASS_TOKENS = new Set([
   "cm-node-sub",
   "cm-badge",
   "cm-badge-bg",
+  "cm-badge-hit",
   "cm-badge-count",
   "cm-labels",
   "cm-label",

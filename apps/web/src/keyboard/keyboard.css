@@ -27,6 +27,16 @@ kbd {
   margin-block: -3px;
 }
 
+/*
+ * P6-8: a touch screen without hover usually has no keyboard, so the hints inside buttons go.
+ * The top bar's "?" stays: it is that button's only visible label on a phone.
+ */
+@media (hover: none) and (pointer: coarse) {
+  .btn:not(.shortcuts-btn) kbd {
+    display: none;
+  }
+}
+
 .shortcuts-btn {
   gap: 6px;
 }

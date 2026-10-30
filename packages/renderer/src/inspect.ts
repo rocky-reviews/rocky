@@ -99,7 +99,7 @@ const SEVERITY = "(?:critical|high|medium|low)";
  */
 const CLASSES: Readonly<Record<string, RegExp>> = {
   svg: /^cm(?: cm-unavailable)?$/,
-  rect: /^(?:cm-unavailable-bg|cm-lane-bg|cm-card|cm-badge-bg|cm-pill)$/,
+  rect: /^(?:cm-unavailable-bg|cm-lane-bg|cm-card|cm-badge-bg|cm-badge-hit|cm-pill)$/,
   text: /^(?:cm-unavailable-title|cm-unavailable-reason|cm-lane-label|cm-node-title|cm-node-sub|cm-badge-count|cm-pill-text)$/,
   g: new RegExp(
     `^(?:cm-lanes|cm-lane|cm-edges|cm-nodes|cm-labels|cm-label|cm-node cm-${DELTA}|cm-badge cm-${SEVERITY})$`,

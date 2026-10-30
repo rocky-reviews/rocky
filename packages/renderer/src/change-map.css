@@ -105,10 +105,36 @@
   fill: var(--low);
 }
 
+/*
+ * P6-8: a clickable badge's invisible target, larger than the badge (BADGE_HIT_SIZE), so the
+ * badge stays a 24 CSS px pointer target when the map is drawn smaller than its size.
+ */
+.cm-badge-hit {
+  fill: none;
+  pointer-events: all;
+}
+
 .cm-badge-count {
   fill: var(--panel);
   font-size: 9.5px;
   font-weight: 700;
+}
+
+/* P6-8: digits in the badge's text-on-fill token (AA on every fill, light and dark). */
+.cm-critical .cm-badge-count {
+  fill: var(--on-crit);
+}
+
+.cm-high .cm-badge-count {
+  fill: var(--on-high);
+}
+
+.cm-medium .cm-badge-count {
+  fill: var(--on-med);
+}
+
+.cm-low .cm-badge-count {
+  fill: var(--on-low);
 }
 
 .cm-edge {

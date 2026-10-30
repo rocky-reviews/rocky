@@ -154,6 +154,11 @@
     max-width: max-content;
   }
 }
+.map-scroll-hint {
+  margin: 8px 0 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
 .legend {
   display: flex;
   gap: 6px 14px;

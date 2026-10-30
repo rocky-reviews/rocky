@@ -94,13 +94,18 @@ export const SidebarContent = ({
             {coverage.reviewed}/{coverage.total}
           </b>
         </div>
+        {/* With nothing high-risk there is no range to report: the "0/0" says it (P6-8). */}
         <div
           className="bar"
-          role="progressbar"
-          aria-labelledby="coverage-label"
-          aria-valuemin={0}
-          aria-valuemax={coverage.total}
-          aria-valuenow={coverage.reviewed}
+          {...(coverage.total === 0
+            ? { "aria-hidden": true }
+            : {
+                role: "progressbar",
+                "aria-labelledby": "coverage-label",
+                "aria-valuemin": 0,
+                "aria-valuemax": coverage.total,
+                "aria-valuenow": coverage.reviewed,
+              })}
         >
           <div style={{ width: `${percent}%` }} />
         </div>

@@ -3,7 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * P6-1: Playwright for the web app. `visual` takes the screenshots (baselines in
  * e2e/__screenshots__/, copies for the PR in artifacts/screenshots/<task>/); `e2e` runs axe,
- * the keyboard paths and the theme checks; `perf` records the diff scroll trace (P6-3). Data
+ * the keyboard paths and the theme checks (and the P6-8 axe sweep, a11y.e2e.spec.ts); `perf`
+ * records the diff scroll trace (P6-3) and the LCP budget (P6-8, ADR 0032). Data
  * is the pr-847 fixture (and the generated large diff), so runs are repeatable.
  * Run: pnpm test:e2e (pnpm test:e2e --update-snapshots to accept a reviewed change).
  */
@@ -32,10 +33,12 @@ export default defineConfig({
     { name: "visual", testMatch: /\.visual\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },
     { name: "e2e", testMatch: /\.e2e\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },
     // P6-3: the scroll performance trace runs after the others, alone, so they don't share CPU,
-    // on the production build and without Playwright's own tracing.
+    // on the production build and without Playwright's own tracing. P6-8: the LCP budget runs
+    // here too; one worker, so the two measurements never share the CPU either.
     {
       name: "perf",
       testMatch: /\.perf\.spec\.ts$/,
+      workers: 1,
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://127.0.0.1:${PERF_PORT}`,

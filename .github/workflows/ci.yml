@@ -41,6 +41,37 @@ jobs:
       - name: Verify (typecheck, lint, format:check, test:coverage)
         run: pnpm verify
 
+  a11y:
+    # P6-8 (ADR 0032): the axe sweep over every page and state of the web app at
+    # 375/1024/1440 px x light/dark, failing on any serious or critical issue. The screenshot
+    # baselines are macOS-only, so the visual project does not run here.
+    name: axe sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm (version from package.json#packageManager)
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node (version from .nvmrc) with pnpm store cache
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: axe sweep
+        run: pnpm test:a11y
+
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest
