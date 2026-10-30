@@ -83,7 +83,8 @@ export const createHttpReviewSource = (
       );
       if (response.status !== 200 && response.status !== 409)
         throw new ReviewRequestError("draft", response.status);
-      const answer = (await response.json()) as { draft?: unknown };
+      const answer = (await response.json()) as { error?: unknown; draft?: unknown };
+      if (response.status === 409 && answer.error === "already_posted") return { kind: "posted" };
       return { kind: response.status === 200 ? "ok" : "conflict", draft: answer.draft };
     },
     addComment: async (analysisId, comment) => {
@@ -97,8 +98,10 @@ export const createHttpReviewSource = (
         "DELETE",
         `${base(analysisId)}/comments/${encodeURIComponent(commentId)}`,
       );
+      if (response.status === 409) return "posted";
       if (response.status !== 204 && response.status !== 404)
         throw new ReviewRequestError("delete comment", response.status);
+      return "deleted";
     },
   };
 };

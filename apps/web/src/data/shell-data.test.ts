@@ -51,6 +51,17 @@ describe("parseShellData", () => {
     expect(data.analysisId).toBe("00000000-0000-4000-8000-000000000847");
   });
 
+  it("carries the pull request id posting is keyed by (P6-6), when the source has one", async () => {
+    expect(parseShellData(valid).pullRequestId).toBeNull();
+    expect(parseShellData({ ...valid, pullRequestId: null }).pullRequestId).toBeNull();
+    expect(parseShellData({ ...valid, pullRequestId: ID.toUpperCase() }).pullRequestId).toBe(ID);
+    for (const pullRequestId of ["", "../x", 7, `${ID} `]) {
+      expect(() => parseShellData({ ...valid, pullRequestId })).toThrow("invalid pull request id");
+    }
+    const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
+    expect(data.pullRequestId).toBe("00000000-0000-4000-8001-000000000847");
+  });
+
   it.each(["john--doe", "foo-", "-legacy", "a"])(
     "accepts the legacy login %s as author and approver",
     (login) => {

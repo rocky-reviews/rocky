@@ -30,6 +30,9 @@ import type { ActiveMember } from "../auth/routes.js";
  * location and body come from the stored analysis, never from the request. State changes are
  * CSRF-checked by the global guard (ADR 0020 §5).
  *
+ * Each draft and comment says whether a review attempt carries it (`posted`: `posting`,
+ * `posted` or null, P3-5): the page shows such items as posted and read-only (P6-6).
+ *
  * Logs carry the action, a fixed outcome and ids; never a body, a title or a path.
  */
 
@@ -86,6 +89,7 @@ const draftJson = (d: DraftView) => ({
   body: d.body,
   agentPromptCopiedAt: d.agentPromptCopiedAt?.toISOString() ?? null,
   updatedAt: d.updatedAt.toISOString(),
+  posted: d.posted,
 });
 
 const commentJson = (c: OwnCommentView) => ({
@@ -94,6 +98,7 @@ const commentJson = (c: OwnCommentView) => ({
   line: c.line,
   body: c.body,
   createdAt: c.createdAt.toISOString(),
+  posted: c.posted,
 });
 
 export const registerReviewRoutes = (app: FastifyInstance, deps: ReviewRoutesDeps): void => {

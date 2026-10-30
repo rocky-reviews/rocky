@@ -9,8 +9,9 @@ const F2_BODY = pr847.findings.find((f) => f.id === "F2")?.body ?? "";
  * P6-5 acceptance criterion: "keyboard-only e2e completes a full review". The first test uses
  * only the keyboard (no clicks, no `focus()`): it walks the files in risk order, marks them
  * viewed, walks the AI drafts and accepts, edits and dismisses them, toggles the theme, opens
- * the help and the Ask and Finish entry points. Finish review itself is P6-6: when it exists,
- * the test continues from the ⌘↵ step into the modal and submits (see docs/progress.md).
+ * the help and the Ask entry point, then finishes the review (P6-6): ⌘/Ctrl+Enter opens the
+ * modal, Tab reaches the verdict and Submit, Enter posts once, the toast and the status pill
+ * update, and Escape closes the modal and returns focus.
  *
  * The others pin the rules (ADR 0030): nothing fires while typing or with Ctrl/⌘/Alt, nothing
  * behind a modal, single-key shortcuts can be turned off (WCAG 2.1.4), the help dialog traps
@@ -165,18 +166,69 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await press(page, "m");
   await expect(page.locator("html")).toHaveAttribute("data-mode", mode ?? "");
 
-  // / is the Ask entry point (Ask is P9); ⌘/Ctrl+Enter the Finish review one (P6-6).
+  // / is the Ask entry point (Ask is P9).
   await press(page, "/");
   await expect(toast(page)).toHaveText("Ask is not available yet.");
-  await press(page, "ControlOrMeta+Enter");
-  await expect(toast(page)).toHaveText(
-    "Finish review is not available yet. Your decisions and comments are saved.",
-  );
 
   // Every decision reached the drafts API (the test's store, not the page).
   expect(reviewApi.decision("F1").state).toBe("accepted");
   expect(reviewApi.decision("F10").state).toBe("accepted");
   expect(reviewApi.decision("F8").state).toBe("dismissed");
+
+  // ⌘/Ctrl+Enter opens Finish review (P6-6): focus starts inside, single keys are off.
+  await press(page, "ControlOrMeta+Enter");
+  const finish = page.getByRole("dialog", { name: "Finish your review" });
+  await expect(finish).toBeVisible();
+  await expect(finish.getByRole("button", { name: "Close" })).toBeFocused();
+  await expect(finish).toContainText("✓ You reviewed every Critical and Important file.");
+  await expect(finish).toContainText("Will be posted to GitHub as @dana-k (7)");
+  await expect(finish.locator(".post-list > li")).toHaveCount(7);
+  await press(page, "k");
+  await expect(fileTitle(page)).toHaveText(JOB);
+  // Escape closes it and returns focus to the main column (nothing had focus before).
+  await press(page, "Escape");
+  await expect(finish).toHaveCount(0);
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("main");
+
+  // Again, through to Submit: Tab to the summary, the draft button, the verdict (Request
+  // changes is pre-selected: F1 is critical), Keep reviewing and Submit; Enter posts once.
+  await press(page, "ControlOrMeta+Enter");
+  await expect(finish.locator(".post-list > li")).toHaveCount(7);
+  await press(page, "Tab");
+  await expect(finish.getByRole("textbox", { name: "Overall comment (optional)" })).toBeFocused();
+  await page.keyboard.type("Four auth issues to fix before merge; smaller items inline (k, j).");
+  await press(page, "Tab");
+  // The summary has the person's own words now, so the draft button offers to replace them.
+  await expect(
+    finish.getByRole("button", { name: "Replace with a draft from my comments" }),
+  ).toBeFocused();
+  await press(page, "Tab");
+  const request = finish.getByRole("radio", { name: /Request changes/ });
+  await expect(request).toBeFocused();
+  await expect(request).toBeChecked();
+  await press(page, "Tab");
+  await expect(finish.getByRole("button", { name: "Keep reviewing" })).toBeFocused();
+  await press(page, "Tab");
+  const submit = finish.getByRole("button", { name: "Submit review" });
+  await expect(submit).toBeFocused();
+  await expect(submit).toHaveAttribute("data-armed", "true");
+  await press(page, "Enter");
+  await press(page, "Enter");
+  await expect(finish).toHaveCount(0);
+  await expect(toast(page)).toHaveText("Review submitted to GitHub as @dana-k.");
+  await expect(page.locator(".topbar .status-pill")).toHaveText("Changes requested");
+  expect(reviewApi.posted()).toHaveLength(1);
+  expect(reviewApi.posted()[0]).toMatchObject({
+    verdict: "request_changes",
+    body: "Four auth issues to fix before merge; smaller items inline (k, j).",
+  });
+  expect(reviewApi.posted()[0]?.comments).toHaveLength(7);
+  // Focus is back on the page, and the posted drafts are read-only: n finds nothing to decide,
+  // a does nothing.
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe("main");
+  await press(page, "n");
+  await press(page, "a");
+  expect(reviewApi.posted()).toHaveLength(1);
 });
 
 test.describe("shortcuts never fire while typing", () => {
@@ -346,7 +398,8 @@ test.describe("the shortcuts dialog", () => {
     await expect(fileTitle(page)).toHaveCount(0);
     // ⌘/Ctrl+Enter has a modifier, so it stays on.
     await press(page, "ControlOrMeta+Enter");
-    await expect(toast(page)).toContainText("Finish review is not available yet.");
+    await expect(page.getByRole("dialog", { name: "Finish your review" })).toBeVisible();
+    await press(page, "Escape");
 
     await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
     await dialog(page).getByRole("switch", { name: "Single-key shortcuts" }).check();

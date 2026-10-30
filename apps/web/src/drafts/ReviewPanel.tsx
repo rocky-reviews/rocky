@@ -43,11 +43,14 @@ export const ReviewPanelContent = () => {
 
   const item = (finding: Finding) => {
     const decision = decisionOf(finding.id);
+    const posted = state.drafts.get(finding.id)?.posted ?? null;
     const badge =
       decision.state === "draft"
         ? "✦ draft"
         : decision.state === "accepted"
-          ? "yours"
+          ? posted === null
+            ? "yours"
+            : "posted"
           : "dismissed";
     return (
       <li key={finding.id}>
@@ -89,6 +92,7 @@ export const ReviewPanelContent = () => {
             <bdi>{baseName(c.path)}</bdi>:{c.line}
           </span>
         </span>
+        {c.posted !== null && <span className="st-badge is-accepted">posted</span>}
       </button>
     </li>
   );

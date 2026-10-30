@@ -6,6 +6,7 @@ import "./briefing/briefing.css";
 import "./inbox/inbox.css";
 import "./drafts/drafts.css";
 import "./keyboard/keyboard.css";
+import "./finish/finish.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -15,6 +16,7 @@ import {
   newerPushFromSearch,
 } from "./data/diff-fixture-source.js";
 import { createFixtureSource } from "./data/fixture-source.js";
+import { createHttpPostingSource } from "./data/posting-http-source.js";
 import { createHttpReviewSource } from "./data/review-http-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
 import { createFixtureInboxSource, createHttpInboxSource } from "./inbox/inbox-source.js";
@@ -44,10 +46,12 @@ if (root && window.location.pathname === "/inbox") {
   const pull = fixturePullFromSearch(window.location.search);
   // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
   const review = createHttpReviewSource();
+  // P6-6: Finish review reads the exact list and posts it through the server (ADR 0026).
+  const posting = createHttpPostingSource();
   createRoot(root).render(
     <StrictMode>
       <DiffProvider source={diffSource} pull={pull}>
-        <App source={source} pull={pull} review={review} />
+        <App source={source} pull={pull} review={review} posting={posting} />
       </DiffProvider>
     </StrictMode>,
   );

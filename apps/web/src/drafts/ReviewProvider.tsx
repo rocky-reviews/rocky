@@ -5,6 +5,10 @@
  * same function) and reconciled with the server's answer: a refusal from a stale tab shows the
  * server's state, a failure puts the old state back. Nothing here posts to GitHub.
  *
+ * P6-6: a draft or comment carried by a review attempt (`posted`, P3-5) is read-only here: no
+ * action is sent for it, and a server refusal `already_posted` (the attempt happened in another
+ * tab) loads the review again and says so. After Finish review posts, the shell calls `reload`.
+ *
  * Also the UI state the draft cards share with the right panel: which draft is being edited or
  * dismissed (the text survives the diff's virtualisation), which one has the focus ring, and
  * jump requests from the panel to a draft or a comment.
@@ -59,6 +63,7 @@ export const TOAST = {
   conflict: "This draft was decided in another tab. It now shows that decision.",
   commentFailed: "Your comment could not be saved. Try again.",
   deleteFailed: "Your comment could not be deleted. Try again.",
+  posted: "This was already posted to GitHub, so it can no longer be changed.",
 } as const;
 
 export type DraftMode =
@@ -97,6 +102,8 @@ export type ReviewContextValue = {
   readonly doneJump: (seq: number) => void;
   readonly jumpToFinding: (findingId: string) => void;
   readonly jumpToComment: (comment: OwnComment) => void;
+  /** Loads the review again from the server (after a post, or a refusal because of one). */
+  readonly reload: () => void;
 };
 
 /** Without a provider: no analysis, nothing to decide. Tests spread it and override fields. */
@@ -119,6 +126,7 @@ export const NO_REVIEW: ReviewContextValue = {
   doneJump: () => {},
   jumpToFinding: () => {},
   jumpToComment: () => {},
+  reload: () => {},
 };
 
 export const ReviewContext = createContext<ReviewContextValue>(NO_REVIEW);
@@ -170,6 +178,9 @@ export const ReviewProvider = ({
   // One session per analysis on screen: an answer that arrives after it changed is dropped
   // (it is about another pull request's drafts), see `untilAborted`.
   const session = useRef<AbortSignal>(AbortSignal.abort());
+  // A reload (P6-6) counts up; the effect below runs again for the same analysis.
+  const [generation, setGeneration] = useState(0);
+  const reload = useCallback(() => setGeneration((g) => g + 1), []);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -200,7 +211,7 @@ export const ReviewProvider = ({
         () => !abort.signal.aborted && setStatus("failed"),
       );
     return () => abort.abort();
-  }, [source, analysisId]);
+  }, [source, analysisId, generation]);
 
   const decisionOf = useCallback(
     (findingId: string) => state.drafts.get(findingId)?.decision ?? DRAFT,
@@ -230,6 +241,11 @@ export const ReviewProvider = ({
       // the analysis this action was made on.
       if (analysisId === null || !ready.current || scope.aborted) return;
       const before = drafts.current.get(finding.id);
+      // Posted (or being posted) to GitHub: read-only, whatever the action (P6-6).
+      if (before !== undefined && before.posted !== null) {
+        toast(TOAST.posted);
+        return;
+      }
       const transition = applyDraftAction(before?.decision ?? DRAFT, action, finding);
       if (!transition.ok) return;
       putDraft(finding.id, {
@@ -238,6 +254,7 @@ export const ReviewProvider = ({
         agentPromptCopiedAt: transition.agentPromptCopied
           ? new Date().toISOString()
           : (before?.agentPromptCopiedAt ?? null),
+        posted: null,
       });
       setMode(null);
       setFocused(finding.id);
@@ -245,6 +262,12 @@ export const ReviewProvider = ({
       busy(finding.id, true);
       try {
         const answer = await untilAborted(source.decide(analysisId, finding.id, action), scope);
+        if (answer.kind === "posted") {
+          // Posted from another tab meanwhile: the server's view replaces the page's.
+          toast(TOAST.posted);
+          reload();
+          return;
+        }
         putDraft(finding.id, parseDraftRecord(answer.draft));
         if (answer.kind === "conflict") toast(TOAST.conflict);
       } catch {
@@ -255,7 +278,7 @@ export const ReviewProvider = ({
         if (!scope.aborted) busy(finding.id, false);
       }
     },
-    [analysisId, source, toast, busy, putDraft],
+    [analysisId, source, toast, busy, putDraft, reload],
   );
 
   const act = useCallback(
@@ -288,7 +311,13 @@ export const ReviewProvider = ({
     async (path: string, line: number, body: string): Promise<boolean> => {
       const scope = session.current;
       if (analysisId === null || !ready.current || scope.aborted) return false;
-      const temp: OwnComment = { id: `pending-${++seq.current}`, path, line, body: body.trim() };
+      const temp: OwnComment = {
+        id: `pending-${++seq.current}`,
+        path,
+        line,
+        body: body.trim(),
+        posted: null,
+      };
       setState((s) => ({ ...s, comments: [...s.comments, temp] }));
       try {
         const saved = parseOwnComment(
@@ -315,16 +344,24 @@ export const ReviewProvider = ({
       if (analysisId === null || !ready.current || scope.aborted) return;
       const removed = current.current.comments.find((c) => c.id === id);
       if (removed === undefined || id.startsWith("pending-")) return;
+      if (removed.posted !== null) {
+        toast(TOAST.posted);
+        return;
+      }
       setState((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== id) }));
       try {
-        await untilAborted(source.deleteComment(analysisId, id), scope);
+        const answer = await untilAborted(source.deleteComment(analysisId, id), scope);
+        if (answer === "posted") {
+          toast(TOAST.posted);
+          reload();
+        }
       } catch {
         if (scope.aborted) return;
         setState((s) => ({ ...s, comments: [...s.comments, removed] }));
         toast(TOAST.deleteFailed);
       }
     },
-    [analysisId, source, toast],
+    [analysisId, source, toast, reload],
   );
 
   const jumpToFinding = useCallback(
@@ -368,6 +405,7 @@ export const ReviewProvider = ({
       doneJump,
       jumpToFinding,
       jumpToComment,
+      reload,
     }),
     [
       status,
@@ -386,6 +424,7 @@ export const ReviewProvider = ({
       doneJump,
       jumpToFinding,
       jumpToComment,
+      reload,
     ],
   );
   return <ReviewContext value={value}>{children}</ReviewContext>;

@@ -7,6 +7,7 @@
  * - editing: the body in a textarea, "Save as my comment" (⌘/Ctrl+Enter) or Cancel (Escape);
  * - dismissing: the four reasons or Cancel (Escape);
  * - accepted: the reviewer's pending comment, "from AI draft" or "edited from AI draft", Undo;
+ *   once posted to GitHub (P6-6): "Posted" instead of "Pending" and no Undo (it stands);
  * - dismissed: one collapsed line with the reason, Undo.
  *
  * After a decision focus moves to the control that undoes it (and back to Accept after an undo),
@@ -18,6 +19,7 @@ import type { Finding, Severity } from "@rocky-reviews/schema";
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { Code } from "../diff/Code.js";
 import { Prose } from "../diff/Prose.js";
+import type { PostedState } from "../diff/diff-model.js";
 import type { Language } from "../diff/tokenize.js";
 import { Kbd, useKeyboard } from "../keyboard/KeyboardContext.js";
 import { isMac } from "../keyboard/keymap.js";
@@ -63,6 +65,7 @@ export const DraftCard = ({ finding, original, language }: Props) => {
   } = useReview();
   const decision = decisionOf(finding.id);
   const copiedAt = state.drafts.get(finding.id)?.agentPromptCopiedAt ?? null;
+  const posted = state.drafts.get(finding.id)?.posted ?? null;
   const busy = saving.has(finding.id);
   const editing = mode?.kind === "edit" && mode.findingId === finding.id ? mode : null;
   const dismissing = mode?.kind === "dismiss" && mode.findingId === finding.id;
@@ -121,38 +124,47 @@ export const DraftCard = ({ finding, original, language }: Props) => {
   if (decision.state === "accepted") {
     // Exactly what Finish review will post (ADR 0027 §2): the finding's title and suggestion with
     // the pending comment's body.
-    const posted = postedCommentParts(finding, decision);
+    const parts = postedCommentParts(finding, decision);
     return (
-      <article {...common} className={`mine from-draft${focusClass}`} aria-labelledby={titleId}>
+      <article
+        {...common}
+        className={`mine from-draft${focusClass}`}
+        aria-labelledby={titleId}
+        data-posted={posted ?? undefined}
+      >
         <div className="mine-head">
           <span className="avatar" aria-hidden="true">
             Y
           </span>
           <b>You</b>
-          <span className="pending">Pending</span>
+          <PostedPill posted={posted} />
           <span className="from-ai">· {decision.edited ? "edited from" : "from"} AI draft</span>
           <span className="spacer" />
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            data-role="undo"
-            onClick={() => then('[data-role="accept"]', () => void act(finding, { kind: "undo" }))}
-          >
-            Undo
-          </button>
+          {posted === null && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              data-role="undo"
+              onClick={() =>
+                then('[data-role="accept"]', () => void act(finding, { kind: "undo" }))
+              }
+            >
+              Undo
+            </button>
+          )}
         </div>
         <h3 className="draft-title" id={titleId}>
-          <bdi>{posted.title}</bdi>
+          <bdi>{parts.title}</bdi>
         </h3>
         <p className="mine-body">
           <bdi>
-            <Prose text={posted.body} />
+            <Prose text={parts.body} />
           </bdi>
         </p>
-        {posted.suggestion !== null && (
+        {parts.suggestion !== null && (
           <Suggestion
             context={finding.suggestion?.context}
-            lines={posted.suggestion}
+            lines={parts.suggestion}
             original={original}
             language={language}
           />
@@ -320,6 +332,22 @@ export const DraftCard = ({ finding, original, language }: Props) => {
     </article>
   );
 };
+
+/**
+ * "Pending" until Finish review posts the comment; then "Posted" (or "Posting…" while the
+ * attempt is confirmed), and the comment is read-only: it is on GitHub, or may be.
+ */
+export const PostedPill = ({ posted }: { posted: PostedState }) =>
+  posted === null ? (
+    <span className="pending">Pending</span>
+  ) : (
+    <span className="pending posted">
+      {posted === "posted" ? "Posted" : "Posting…"}
+      <span className="sr-only">
+        {posted === "posted" ? " to GitHub, read-only" : ", read-only"}
+      </span>
+    </span>
+  );
 
 const EditArea = ({
   finding,

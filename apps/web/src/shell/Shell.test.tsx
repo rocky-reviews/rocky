@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { memoryReviewSource } from "../drafts/testing.js";
+import { memoryPostingSource } from "../finish/testing.js";
 import { Shell } from "./Shell.js";
 
 const NOW = Date.parse("2026-10-25T12:12:00.000Z");
 const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
 const render = (d: ShellData = data): string =>
-  renderToStaticMarkup(<Shell data={d} now={NOW} review={memoryReviewSource([])} />);
+  renderToStaticMarkup(
+    <Shell data={d} now={NOW} review={memoryReviewSource([])} posting={memoryPostingSource()} />,
+  );
 
 /** Text content without tags, whitespace collapsed. */
 const text = (html: string): string =>
@@ -205,5 +208,21 @@ describe("keyboard shortcuts (P6-5)", () => {
 
   it("puts the k hint on Start with the riskiest file", () => {
     expect(html).toMatch(/aria-keyshortcuts="k">Start with the riskiest file <kbd class="kbd-on"/);
+  });
+});
+
+describe("Finish review (P6-6)", () => {
+  const html = render();
+
+  it("has the primary button in the top bar with the pending count, opening a dialog on ⌘/Ctrl+Enter", () => {
+    expect(html).toMatch(
+      /<button type="button" class="btn btn-primary finish-btn" aria-haspopup="dialog" aria-keyshortcuts="Meta\+Enter Control\+Enter">Finish review<span class="count" aria-hidden="true">0<\/span><span class="sr-only">, 0 comments to post<\/span><\/button>/,
+    );
+    // The modal itself is rendered only when opened.
+    expect(html).not.toContain("finish-dialog");
+  });
+
+  it("the status pill shows the submitted review the data carries", () => {
+    expect(text(render({ ...data, myReview: "approved" }))).toContain("Approved");
   });
 });

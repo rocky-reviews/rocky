@@ -42,6 +42,13 @@ const uuid = (value: unknown, what: string): string => {
   return value.toLowerCase();
 };
 
+/**
+ * Carried by a review attempt (P3-5, ADR 0026): `posted` once the forge took it, `posting`
+ * while the attempt's answer is awaited or reconciled. Such an item is read-only for the page
+ * (P6-6): the review on GitHub stands, and the item is never offered for posting again.
+ */
+export type PostedState = "posting" | "posted" | null;
+
 /** One reviewer's decision about one draft, as the page shows it after a reload. */
 export interface DraftView {
   readonly findingId: string;
@@ -53,6 +60,7 @@ export interface DraftView {
   readonly body: string | null;
   readonly agentPromptCopiedAt: Date | null;
   readonly updatedAt: Date;
+  readonly posted: PostedState;
 }
 
 /** A comment the reviewer wrote on a line (not from a draft). */
@@ -62,6 +70,7 @@ export interface OwnCommentView {
   readonly line: number;
   readonly body: string;
   readonly createdAt: Date;
+  readonly posted: PostedState;
 }
 
 export interface ReviewDraftsView {
@@ -110,10 +119,25 @@ interface DraftRow {
   updated_at: Date;
   source: string | null;
   body: string | null;
+  posted: string | null;
 }
 
+/**
+ * The status of the attempt carrying `ITEM` of `KIND`, when one is `posting` or `posted` (a
+ * `failed` attempt released its items). Mirrors P3-5's `NOT_CARRIED` (reviews.ts).
+ */
+const CARRIED_STATUS = `(select s.status from review_submission_items i
+    join review_submissions s on s.org_id = i.org_id and s.id = i.submission_id
+   where i.org_id = f.org_id and i.kind = 'KIND' and i.item_id = ITEM
+     and s.status in ('posting', 'posted')
+   order by s.status = 'posted' desc limit 1)`;
+
+const postedOf = (value: string | null): PostedState =>
+  value === "posting" || value === "posted" ? value : null;
+
 const DRAFT_COLUMNS = `f.finding_id, f.state, f.reason, f.agent_prompt_copied_at, f.updated_at,
-       c.source, c.body`;
+       c.source, c.body,
+       ${CARRIED_STATUS.replace("KIND", "draft").replace("ITEM", "f.id")} as posted`;
 const DRAFT_JOIN = `findings_state f
   left join comments_pending c
     on c.org_id = f.org_id and c.analysis_id = f.analysis_id
@@ -140,6 +164,7 @@ const viewOf = (row: DraftRow): DraftView => {
     body: accepted ? row.body : null,
     agentPromptCopiedAt: row.agent_prompt_copied_at,
     updatedAt: row.updated_at,
+    posted: postedOf(row.posted),
   };
 };
 
@@ -172,11 +197,13 @@ export const listReviewDrafts = async (
     line: number;
     body: string;
     created_at: Date;
+    posted: string | null;
   }>(
-    `select id, path, line, body, created_at
-       from comments_pending
-      where org_id = $1 and analysis_id = $2 and author_id = $3 and source = 'own'
-      order by created_at, id`,
+    `select f.id, f.path, f.line, f.body, f.created_at,
+            ${CARRIED_STATUS.replace("KIND", "comment").replace("ITEM", "f.id")} as posted
+       from comments_pending f
+      where f.org_id = $1 and f.analysis_id = $2 and f.author_id = $3 and f.source = 'own'
+      order by f.created_at, f.id`,
     [tx.orgId, analysisId, memberId],
   );
   return {
@@ -187,6 +214,7 @@ export const listReviewDrafts = async (
       line: c.line,
       body: c.body,
       createdAt: c.created_at,
+      posted: postedOf(c.posted),
     })),
   };
 };
@@ -391,7 +419,7 @@ export const addOwnComment = async (
   if (row === undefined) throw new DraftStoreError("drafts: comment not stored");
   return {
     outcome: "created",
-    comment: { id: row.id, path, line, body, createdAt: row.created_at },
+    comment: { id: row.id, path, line, body, createdAt: row.created_at, posted: null },
   };
 };
 

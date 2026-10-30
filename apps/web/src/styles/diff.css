@@ -360,6 +360,10 @@
   color: var(--you);
   font-weight: 600;
 }
+/* P6-6: on GitHub (or on its way there): read-only. */
+.pending.posted {
+  color: var(--ok);
+}
 .mine-body {
   margin: 0;
   white-space: pre-wrap;

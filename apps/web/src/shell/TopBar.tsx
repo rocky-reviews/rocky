@@ -1,7 +1,8 @@
 /**
  * The top bar (POC `renderTop`): brand, PR title and number, status, repo and branches, size,
  * GitHub's approvals and comments, the View on GitHub link and the light/dark toggle, plus the
- * toggles that open the sidebar and right panel when the width hides them.
+ * toggles that open the sidebar and right panel when the width hides them. P6-6: "Finish review"
+ * with the count of comments waiting to be posted; it opens the finish modal (also ⌘/Ctrl+Enter).
  *
  * Every PR string is rendered as a React text child: React escapes it, nothing here builds HTML.
  * Each one sits in a <bdi>, so bidi controls in it (U+202E) cannot reorder the text around it.
@@ -25,6 +26,9 @@ type Props = {
   onToggleMode: () => void;
   drawer: Drawer | null;
   onToggleDrawer: (drawer: Drawer) => void;
+  /** Accepted drafts and own comments not yet posted (P6-6). */
+  pending: number;
+  onFinish: () => void;
 };
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
@@ -37,6 +41,8 @@ export const TopBar = ({
   onToggleMode,
   drawer,
   onToggleDrawer,
+  pending,
+  onFinish,
 }: Props) => {
   const status = statusOf(pull.state, myReview);
   const url = pullRequestUrl(pull);
@@ -124,6 +130,21 @@ export const TopBar = ({
         <kbd aria-hidden="true">?</kbd>
         <span className="hide-sm" aria-hidden="true">
           Shortcuts
+        </span>
+      </button>
+      <button
+        type="button"
+        className="btn btn-primary finish-btn"
+        aria-haspopup="dialog"
+        aria-keyshortcuts="Meta+Enter Control+Enter"
+        onClick={onFinish}
+      >
+        Finish review
+        <span className="count" aria-hidden="true">
+          {pending}
+        </span>
+        <span className="sr-only">
+          , {pending} {pending === 1 ? "comment" : "comments"} to post
         </span>
       </button>
       <button

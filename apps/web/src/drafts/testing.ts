@@ -11,7 +11,7 @@ import {
 } from "@rocky-reviews/core/drafts";
 import type { Finding } from "@rocky-reviews/schema";
 import type { DraftRecord, ReviewSource, ReviewState } from "../data/review-data.js";
-import type { OwnComment } from "../diff/diff-model.js";
+import type { OwnComment, PostedState } from "../diff/diff-model.js";
 import { NO_REVIEW, type ReviewContextValue } from "./ReviewProvider.js";
 
 export const reviewWith = (
@@ -19,11 +19,13 @@ export const reviewWith = (
   decisions: Readonly<Record<string, DraftDecision>> = {},
   comments: readonly OwnComment[] = [],
   extra: Partial<ReviewContextValue> = {},
+  /** Drafts carried by a review attempt (P6-6). */
+  posted: Readonly<Record<string, PostedState>> = {},
 ): ReviewContextValue => {
   const drafts = new Map<string, DraftRecord>(
     Object.entries(decisions).map(([findingId, decision]) => [
       findingId,
-      { findingId, decision, agentPromptCopiedAt: null },
+      { findingId, decision, agentPromptCopiedAt: null, posted: posted[findingId] ?? null },
     ]),
   );
   const state: ReviewState = { drafts, comments };
@@ -44,6 +46,7 @@ type Wire = {
   edited: boolean;
   body: string | null;
   agentPromptCopiedAt: string | null;
+  posted: PostedState;
 };
 
 const wire = (findingId: string, decision: DraftDecision, copiedAt: string | null): Wire => ({
@@ -53,6 +56,7 @@ const wire = (findingId: string, decision: DraftDecision, copiedAt: string | nul
   edited: decision.state === "accepted" && decision.edited,
   body: decision.state === "accepted" ? decision.body : null,
   agentPromptCopiedAt: copiedAt,
+  posted: null,
 });
 
 /** The server's behaviour in memory: what the e2e mock and the provider tests rely on. */
@@ -95,10 +99,11 @@ export const memoryReviewSource = (
     addComment: async (_analysisId, comment) => {
       calls.push(`add ${comment.path}:${comment.line}`);
       check();
-      const saved = {
+      const saved: OwnComment = {
         id: `00000000-0000-4000-8000-${String(next++).padStart(12, "0")}`,
         ...comment,
         body: comment.body.trim(),
+        posted: null,
       };
       comments.push(saved);
       return saved;
@@ -108,6 +113,7 @@ export const memoryReviewSource = (
       check();
       const at = comments.findIndex((c) => c.id === id);
       if (at !== -1) comments.splice(at, 1);
+      return "deleted";
     },
   };
 };

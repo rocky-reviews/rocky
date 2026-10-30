@@ -14,7 +14,7 @@ import {
   MAX_COMMENT_BODY,
 } from "@rocky-reviews/core/drafts";
 import { z } from "zod";
-import type { OwnComment } from "../diff/diff-model.js";
+import type { OwnComment, PostedState } from "../diff/diff-model.js";
 
 /** What the server keeps about one draft for this reviewer. */
 export type DraftRecord = {
@@ -22,6 +22,8 @@ export type DraftRecord = {
   readonly decision: DraftDecision;
   /** "Send to agent" was used; ISO time. */
   readonly agentPromptCopiedAt: string | null;
+  /** Carried by a review attempt (P3-5, P6-6): then read-only, the undo is gone. */
+  readonly posted: PostedState;
 };
 
 export type ReviewState = {
@@ -35,17 +37,24 @@ export const EMPTY_REVIEW: ReviewState = { drafts: new Map(), comments: [] };
 /** The port. Sources return unchecked JSON; the page parses it with the functions below. */
 export interface ReviewSource {
   load(analysisId: string, options?: { signal?: AbortSignal }): Promise<unknown>;
-  /** `conflict`: another tab decided first; `draft` is the state the server has. */
+  /**
+   * `conflict`: another tab decided first; `draft` is the state the server has. `posted`: the
+   * draft was posted to GitHub meanwhile (P3-5 refuses with `already_posted`), so nothing can
+   * change it; the caller loads the review again.
+   */
   decide(
     analysisId: string,
     findingId: string,
     action: DraftAction,
-  ): Promise<{ readonly kind: "ok" | "conflict"; readonly draft: unknown }>;
+  ): Promise<
+    { readonly kind: "ok" | "conflict"; readonly draft: unknown } | { readonly kind: "posted" }
+  >;
   addComment(
     analysisId: string,
     comment: { readonly path: string; readonly line: number; readonly body: string },
   ): Promise<unknown>;
-  deleteComment(analysisId: string, commentId: string): Promise<void>;
+  /** `posted`: the comment was posted meanwhile and stays (P3-5 `already_posted`). */
+  deleteComment(analysisId: string, commentId: string): Promise<"deleted" | "posted">;
 }
 
 export class ReviewDataError extends Error {
@@ -53,6 +62,8 @@ export class ReviewDataError extends Error {
 }
 
 const Body = z.string().min(1).max(MAX_COMMENT_BODY);
+/** Absent from answers of a server older than P6-6: then nothing is posted. */
+const Posted = z.enum(["posting", "posted"]).nullable().optional();
 const FindingId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/);
 
 const RawDraft = z.object({
@@ -62,6 +73,7 @@ const RawDraft = z.object({
   edited: z.boolean(),
   body: Body.nullable(),
   agentPromptCopiedAt: z.iso.datetime().nullable(),
+  posted: Posted,
 });
 
 const RawComment = z.object({
@@ -69,6 +81,7 @@ const RawComment = z.object({
   path: z.string().min(1).max(4096),
   line: z.number().int().min(1),
   body: Body,
+  posted: Posted,
 });
 
 const RawReview = z.object({
@@ -99,13 +112,15 @@ export const parseDraftRecord = (input: unknown): DraftRecord => {
     findingId: raw.data.findingId,
     decision,
     agentPromptCopiedAt: raw.data.agentPromptCopiedAt,
+    posted: raw.data.posted ?? null,
   };
 };
 
 export const parseOwnComment = (input: unknown): OwnComment => {
   const raw = RawComment.safeParse(input);
   if (!raw.success) throw new ReviewDataError("invalid comment");
-  return raw.data;
+  const { id, path, line, body } = raw.data;
+  return { id, path, line, body, posted: raw.data.posted ?? null };
 };
 
 export const parseReviewState = (input: unknown): ReviewState => {

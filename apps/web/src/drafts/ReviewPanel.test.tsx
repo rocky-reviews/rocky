@@ -68,7 +68,15 @@ describe("review panel", () => {
         F2: { state: "dismissed", reason: "intentional" },
         F3: { state: "dismissed", reason: "not_worth_it" },
       },
-      [{ id: "c1", path: "src/api/index.ts", line: 21, body: "Mount order matters." }],
+      [
+        {
+          id: "c1",
+          path: "src/api/index.ts",
+          line: 21,
+          body: "Mount order matters.",
+          posted: null,
+        },
+      ],
     );
     expect(text(html)).toMatch(/^Review · 7 AI drafts to decide/);
     expect(text((html.split('<dl class="tally">')[1] ?? "").split("</dl>")[0] ?? "")).toBe(
@@ -83,6 +91,24 @@ describe("review panel", () => {
     );
     const own = html.split('id="own-comments"')[1] ?? "";
     expect(text(own)).toContain("Mount order matters. index.ts :21");
+  });
+
+  it("marks drafts and comments already posted to GitHub (P6-6)", () => {
+    const html = render(
+      reviewWith(
+        findings,
+        { F1: { state: "accepted", edited: false, body: "x" } },
+        [{ id: "c1", path: "src/api/index.ts", line: 21, body: "Mount order.", posted: "posted" }],
+        {},
+        { F1: "posted" },
+      ),
+    );
+    const decided = (html.split('id="decided"')[1] ?? "").split("</ul>")[0] ?? "";
+    expect(text(decided)).toContain("posted");
+    expect(text(decided)).not.toContain("yours");
+    expect(text(html.split('id="own-comments"')[1] ?? "")).toContain(
+      "Mount order. index.ts :21 posted",
+    );
   });
 
   it("says when every draft has a decision", () => {
@@ -114,7 +140,7 @@ describe("when the diff is from a newer push than the analysis", () => {
       reviewWith(
         findings,
         { F2: { state: "dismissed", reason: "intentional" } },
-        [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why?" }],
+        [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why?", posted: null }],
         { stale: true },
       ),
     );

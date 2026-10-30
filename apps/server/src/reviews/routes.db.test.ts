@@ -171,8 +171,9 @@ const reloadAs = async (token: string) => {
         edited: boolean;
         body: string | null;
         agentPromptCopiedAt: string | null;
+        posted: string | null;
       }[];
-      comments: { id: string; path: string; line: number; body: string }[];
+      comments: { id: string; path: string; line: number; body: string; posted: string | null }[];
     };
   } finally {
     await fresh.close();
@@ -247,10 +248,60 @@ describe("drafts API: every transition, then a reload (P6-4 acceptance criterion
     expect(created.statusCode).toBe(201);
     const { comment } = created.json() as { comment: { id: string } };
     expect((await reloadAs(dana)).comments).toEqual([
-      expect.objectContaining({ id: comment.id, path: "src/api/index.ts", line: 21 }),
+      expect.objectContaining({ id: comment.id, path: "src/api/index.ts", line: 21, posted: null }),
     ]);
     expect((await call(dana, "DELETE", `${base()}/comments/${comment.id}`)).statusCode).toBe(204);
     expect((await reloadAs(dana)).comments).toEqual([]);
+  });
+
+  it("a draft or comment carried by a posted attempt is reported as posted (P6-6 reads it as read-only)", async () => {
+    const dana = await sessionFor("dana");
+    expect((await act(dana, "F1", { action: "accept" })).statusCode).toBe(200);
+    const created = await call(dana, "POST", `${base()}/comments`, {
+      path: "src/api/index.ts",
+      line: 21,
+      body: "Mount order matters here.",
+    });
+    const { comment } = created.json() as { comment: { id: string } };
+    expect((await reloadAs(dana)).drafts[0]).toMatchObject({ findingId: "F1", posted: null });
+    // An attempt as P3-5 records it (the app role may insert; the superuser clears it).
+    await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into review_submissions
+           (pull_request_id, revision_id, submitted_by, idempotency_key, head_sha, verdict,
+            content_sha256, body_sha256, draft_count, comment_count, status, forge_review_id,
+            finished_at)
+         values ($1, $2, $3, gen_random_uuid(), repeat('a', 40), 'comment',
+                 decode(repeat('00', 32), 'hex'), decode(repeat('00', 32), 'hex'), 1, 1, 'posted',
+                 91, now())
+         returning id`,
+        [A.pullRequestId, A.revisionId, members["dana"]],
+      );
+      const { rows: state } = await tx.query<{ id: string }>(
+        "select id from findings_state where analysis_id = $1 and member_id = $2 and finding_id = 'F1'",
+        [A.analysisId, members["dana"]],
+      );
+      for (const [seq, item] of [
+        ["draft", state[0]!.id],
+        ["comment", comment.id],
+      ].entries()) {
+        await tx.query(
+          `insert into review_submission_items (submission_id, seq, kind, item_id, body_sha256)
+           values ($1, $2, $3, $4, decode(repeat('00', 32), 'hex'))`,
+          [rows[0]!.id, seq, item[0], item[1]],
+        );
+      }
+    });
+    try {
+      const view = await reloadAs(dana);
+      expect(view.drafts[0]).toMatchObject({ findingId: "F1", posted: "posted" });
+      expect(view.comments[0]).toMatchObject({ id: comment.id, posted: "posted" });
+    } finally {
+      await superuser.query("delete from review_submissions where org_id = $1 and id <> $2", [
+        A.orgId,
+        A.reviewSubmissionId,
+      ]);
+    }
   });
 
   it("a stale tab: a refused transition answers 409 with the current state, nothing changes", async () => {

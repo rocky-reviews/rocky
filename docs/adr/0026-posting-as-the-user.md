@@ -223,6 +223,9 @@ browser tab, a double click or retry or a crash mid-call, a forge outage, the lo
   released it), GitHub has the original text while the page shows the change, and the changed
   item now counts as posted. Rare (it needs a lost answer, the 60 s timeout, an edit, then a
   late answer); the review on GitHub is the record.
+- P6-4's routes refuse changes to a carried item (`already_posted`, #39); the page (P6-6,
+  [ADR 0031](0031-finish-review-modal.md) §5) shows carried items as posted and read-only from
+  the drafts answer's `posted` flag, and updates one draft from the refusal's `draft`.
 - **The routes answer 503 in a running server** until the repository access check is built in
   `startServer` (P7-2 follow-up), like "Analyze anyway".
 - The mirror's head may lag GitHub's: a review is posted against the mirrored `commit_id`;

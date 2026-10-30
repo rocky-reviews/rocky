@@ -18,7 +18,7 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 - [x] P6-1 · "View on GitHub ↗" link (opens the PR) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); built from validated owner/repo/number only
 - [x] P6-1 · Light/dark toggle (☾/☀), remembered per browser, defaults to system — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); no flash on load, storage failures tolerated (`shell.e2e.spec.ts` theme tests)
 - [x] P6-5 · "? Shortcuts" button — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-375-dark](../../apps/web/e2e/__screenshots__/pr-shell-375-dark.png) (just "?" below 760 px, kept there so the dialog and its off switch are reachable at every width); opens the shortcuts dialog (`keyboard.e2e.spec.ts` "the shortcuts dialog")
-- [ ] P6-6 · "Finish review" primary button with pending-comment count
+- [x] P6-6 · "Finish review" primary button with pending-comment count — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png), [finish-375-dark](../../apps/web/e2e/__screenshots__/finish-375-dark.png); the count is accepted drafts plus own comments not yet posted (`Shell.test.tsx`, `finish.e2e.spec.ts`)
 
 ## Sidebar (triage)
 
@@ -82,13 +82,17 @@ when every item is `[x]` or has a written reason in **Intentional differences**.
 
 ## Finish review modal (P6-6)
 
-- [ ] Warning: high-risk files not marked viewed (names)
-- [ ] Success state: all Critical/Important reviewed
-- [ ] Warning: n AI drafts undecided, won't be posted
-- [ ] Exact list "Will be posted to GitHub as @you (n)"
-- [ ] Overall comment textarea + "✦ Draft a summary from my comments"
-- [ ] Verdict: Comment / Approve / Request changes; Request changes pre-selected (with reason) when a critical/high finding was accepted
-- [ ] Keep reviewing / Submit review → toast + status pill updates
+All in `finish.e2e.spec.ts` and `FinishReview.test.tsx` unless noted; rules in
+[ADR 0031](../adr/0031-finish-review-modal.md).
+
+- [x] Warning: high-risk files not marked viewed (names) — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png), [finish-1024-dark](../../apps/web/e2e/__screenshots__/finish-1024-dark.png); file names, full path in a tooltip ("coverage and undecided warnings, then the success line")
+- [x] Success state: all Critical/Important reviewed — [finish-covered-1440-light](../../apps/web/e2e/__screenshots__/finish-covered-1440-light.png), [finish-covered-375-dark](../../apps/web/e2e/__screenshots__/finish-covered-375-dark.png)
+- [x] Warning: n AI drafts undecided, won't be posted — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png)
+- [x] Exact list "Will be posted to GitHub as @you (n)" — [finish-covered-1440-light](../../apps/web/e2e/__screenshots__/finish-covered-1440-light.png); the server's list (P3-5 `GET …/review`), each body shown as its Markdown source (the POC showed titles only): "the modal lists exactly the server's plan… and the click posts exactly it"
+- [x] Overall comment textarea + "✦ Draft a summary from my comments" — [finish-covered-1440-light](../../apps/web/e2e/__screenshots__/finish-covered-1440-light.png); the draft is composed from the items to post, no model call, and is a suggestion the person edits or clears
+- [x] Verdict: Comment / Approve / Request changes; Request changes pre-selected (with reason) when a critical/high finding was accepted — [finish-1440-light](../../apps/web/e2e/__screenshots__/finish-1440-light.png); Comment is suggested when there is something to post, Approve is suggested but **never pre-selected** (the POC pre-selected it; an approval is the person's pick), and Submit is off until a verdict is picked
+- [x] Keep reviewing / Submit review → toast + status pill updates — [finish-posted-1440-light](../../apps/web/e2e/__screenshots__/finish-posted-1440-light.png), [finish-posted-375-dark](../../apps/web/e2e/__screenshots__/finish-posted-375-dark.png); the posted drafts and comments then read "Posted" and lose Undo / Delete
+- [x] (not in the POC) Every server answer in words: stale / new commits reload the list, GitHub's refusal with its reason, a lost answer says the review may exist and links to GitHub ("every answer is shown honestly and posts nothing by itself")
 
 ## Keyboard (P6-5)
 
@@ -103,13 +107,13 @@ All in `keyboard.e2e.spec.ts` "a full review with the keyboard only" unless note
 - [x] b back to briefing
 - [x] m toggle light/dark
 - [x] ? shortcuts dialog — [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png), [keys-help-1440-dark](../../apps/web/e2e/__screenshots__/keys-help-1440-dark.png), [keys-help-1024-light](../../apps/web/e2e/__screenshots__/keys-help-1024-light.png), [keys-help-1024-dark](../../apps/web/e2e/__screenshots__/keys-help-1024-dark.png), [keys-help-375-light](../../apps/web/e2e/__screenshots__/keys-help-375-light.png), [keys-help-375-dark](../../apps/web/e2e/__screenshots__/keys-help-375-dark.png); focus trap, Escape, click outside, axe 0 serious ("the shortcuts dialog")
-- [ ] ⌘↵ open Finish review; Esc closes dialogs / cancels edit, dismiss, compose — Esc done (dialog, drawers, edit, dismiss, compose); ⌘/Ctrl+Enter is bound and shows "Finish review is not available yet…" until the modal (P6-6)
+- [x] ⌘↵ open Finish review; Esc closes dialogs / cancels edit, dismiss, compose — ⌘/Ctrl+Enter opens the Finish review modal (P6-6), Esc closes it (never while the review is being sent) and the dialog, drawers, edit, dismiss and compose; "a full review with the keyboard only" now ends with the review submitted
 - [x] Shortcuts ignored while typing in a text field — composer, draft editor and contenteditable ("shortcuts never fire while typing"); also with Ctrl/⌘/Alt ("shortcuts respect modifiers")
 - [x] (not in the POC) Single-key shortcuts can be turned off (WCAG 2.1.4), remembered per browser — [keys-help-off-1440-light](../../apps/web/e2e/__screenshots__/keys-help-off-1440-light.png), [keys-help-off-375-dark](../../apps/web/e2e/__screenshots__/keys-help-off-375-dark.png)
 
 ## Feedback
 
-- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, "✦ Polished" after Polish with AI, review submitted. P6-4: accepted ([drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png)), agent prompt copied and noise trusted (`drafts.e2e.spec.ts`), plus failure and conflict messages; "Polished" waits for Polish with AI, "review submitted" for P6-6
+- [ ] P6-4 · Toasts: accepted ("not posted yet"), agent prompt copied, noise trusted, "✦ Polished" after Polish with AI, review submitted. P6-4: accepted ([drafts-accepted-1440-light](../../apps/web/e2e/__screenshots__/drafts-accepted-1440-light.png)), agent prompt copied and noise trusted (`drafts.e2e.spec.ts`), plus failure and conflict messages; P6-6: "Review submitted to GitHub as @login." ([finish-posted-1440-light](../../apps/web/e2e/__screenshots__/finish-posted-1440-light.png)) and "already posted" when a posted item is touched; "Polished" waits for Polish with AI
 
 ## Responsive
 
@@ -199,8 +203,14 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   "Send to agent" has a cyan border. The dismissal note says Rocky keeps the reason rather than "will remember", since
   project memory (P8) does not learn yet. Drafts are hidden on a diff newer than the analysis,
   like the AI flags. The POC's Ask tab is not drawn until P9-2.
-- **Not yet in the shell:** "Finish review" (P6-6) is absent from the top bar until that task;
-  the right panel's Ask tab comes with P9-2.
+- **Not yet in the shell:** the right panel's Ask tab comes with P9-2.
+- **Finish review (P6-6).** The list shows each comment's Markdown source in a box (the POC
+  listed titles only): what GitHub receives is what the person reads. Approve is suggested but
+  not pre-selected (the POC pre-selected it). The count pill on the button is `--on-you` on
+  `--you` (the POC used a 22% `color-mix`, not allowed outside the tokens). Submit is disabled
+  until a verdict is picked and, for Comment / Request changes, until there is something to
+  post or a summary. The modal shows the server's answers (stale, new commits, GitHub's refusal,
+  a lost answer) which the POC's mock never had.
 - **Shortcuts (P6-5).** "? Shortcuts" stays in the top bar below 760 px as "?" (the POC hid it),
   so the dialog and its switch can be reached at every width. The dialog adds a "Single-key
   shortcuts" switch (WCAG 2.1.4) and a "?" row; "Ask" reads "(not available yet)" until P9-2. The

@@ -34,7 +34,7 @@ import {
   fileRows,
   type OwnComment,
 } from "./diff-model.js";
-import { DraftCard } from "../drafts/DraftCard.js";
+import { DraftCard, PostedPill } from "../drafts/DraftCard.js";
 import { useReview } from "../drafts/ReviewProvider.js";
 import { MAX_COMMENT_CHARS } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
@@ -514,16 +514,18 @@ const MyComment = ({
         Y
       </span>
       <b>You</b>
-      <span className="pending">Pending</span>
+      <PostedPill posted={comment.posted} />
       <span className="spacer" />
-      <button
-        type="button"
-        className="btn btn-sm btn-ghost"
-        aria-label={`Delete your comment on line ${comment.line}`}
-        onClick={() => onDelete(comment)}
-      >
-        Delete
-      </button>
+      {comment.posted === null && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          aria-label={`Delete your comment on line ${comment.line}`}
+          onClick={() => onDelete(comment)}
+        >
+          Delete
+        </button>
+      )}
     </div>
     <p className="mine-body">{comment.body}</p>
   </div>

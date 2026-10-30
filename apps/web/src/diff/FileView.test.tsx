@@ -116,11 +116,29 @@ describe("file view", () => {
 
   it("shows the reviewer's own comments as pending, with Delete", () => {
     const withComment = render("src/auth/invitations.ts", undefined, {
-      comments: [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why <b>this</b>?" }],
+      comments: [
+        {
+          id: "c1",
+          path: "src/auth/invitations.ts",
+          line: 3,
+          body: "Why <b>this</b>?",
+          posted: null,
+        },
+      ],
     });
     expect(text(withComment)).toContain("Y You Pending Delete Why <b>this</b>?");
     expect(withComment).toContain("Why &lt;b&gt;this&lt;/b&gt;?");
     expect(withComment).toContain('aria-label="Delete your comment on line 3"');
+  });
+
+  it("an own comment posted to GitHub (P6-6) says Posted and has no Delete", () => {
+    const html = render("src/auth/invitations.ts", undefined, {
+      comments: [
+        { id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why?", posted: "posted" },
+      ],
+    });
+    expect(text(html)).toContain("Y You Posted to GitHub, read-only Why?");
+    expect(html).not.toContain("Delete your comment");
   });
 
   it("offers the next file in review order", () => {
@@ -152,7 +170,11 @@ describe("file view", () => {
     const stale = render(
       "src/auth/invitations.ts",
       { kind: "ready", data: { ...diff, headSha: "0".repeat(40) } },
-      { comments: [{ id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Mine" }] },
+      {
+        comments: [
+          { id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Mine", posted: null },
+        ],
+      },
     );
     expect(text(stale)).toContain(
       "The AI notes, drafts and your comments are for an earlier push, so they are hidden on this diff. New comments open once this push is analysed.",
