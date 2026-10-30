@@ -4,6 +4,7 @@
  * diff. Like any source it returns unchecked data; the view runs it through `parseDiffData`.
  */
 import { pr847Diff } from "@rocky-reviews/evals/pr-847/diff";
+import { RepoName, RepoOwner } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { DiffDataError, type DiffDataSource, type RawDiffData } from "./diff-data.js";
 import { DEFAULT_PULL } from "./fixture-source.js";
@@ -28,13 +29,21 @@ export const createFixtureDiffSource = (): DiffDataSource => ({
 
 /**
  * Which fixture PR the page shows: the large diff with `?fixture=large-diff`, a briefing fixture
- * PR with `?pr=<number>` (P6-2), otherwise pr-847.
+ * PR with `?pr=<number>` (P6-2), otherwise pr-847. `?repo=<owner>/<name>` (the inbox's links,
+ * P6-7) names the repository; a name that fails GitHub's rules is ignored.
  */
 export const fixturePullFromSearch = (search: string): PullRef => {
   const params = new URLSearchParams(search);
   if (params.get("fixture") === "large-diff") return LARGE_PULL;
+  const [owner, repo, extra] = (params.get("repo") ?? "").split("/");
+  const ownerOk = RepoOwner.safeParse(owner);
+  const repoOk = RepoName.safeParse(repo);
+  const named =
+    extra === undefined && ownerOk.success && repoOk.success && ![".", ".."].includes(repoOk.data)
+      ? { owner: ownerOk.data, repo: repoOk.data }
+      : { owner: DEFAULT_PULL.owner, repo: DEFAULT_PULL.repo };
   const requested = Number(params.get("pr"));
   return Number.isSafeInteger(requested) && requested > 0
-    ? { ...DEFAULT_PULL, number: requested }
+    ? { ...named, number: requested }
     : DEFAULT_PULL;
 };

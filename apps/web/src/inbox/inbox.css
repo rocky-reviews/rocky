@@ -1,0 +1,382 @@
+/*
+ * The inbox (P6-7). Not in the POC: built from the shell's top bar, cards, pills and buttons
+ * (shell.css, briefing.css) and the POC's modal. Colours only through tokens.css. As in the
+ * shell, levels are carried by tints and dots; text on a tint uses --text (WCAG AA).
+ */
+
+.inbox-app {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.inbox-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: var(--space-3);
+  min-width: 0;
+  flex: 1;
+}
+.inbox-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.inbox-sub {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+.inbox-main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-4) 60px;
+  display: grid;
+  gap: var(--space-3);
+}
+.inbox-main:focus,
+.inbox-group-head h2:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ---------- filters ---------- */
+.inbox-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-3);
+}
+.inbox-field {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.inbox-field select,
+.inbox-field input {
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px var(--space-2);
+  min-width: 0;
+}
+.inbox-search {
+  flex: 1;
+  min-width: 180px;
+}
+.inbox-counts {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-base);
+  /* Holds the live regions; it takes no room of its own while they are empty. */
+  margin: calc(-1 * var(--space-2)) 0;
+}
+.inbox-counts:has(p:not(:empty)) {
+  margin: 0;
+}
+/* Selecting is the person's act (indigo), not "done" (the shell's green check), and its border
+   keeps 3:1 against the panel in both modes. */
+.inbox-check {
+  border-color: var(--muted);
+}
+.inbox-check:checked {
+  background: var(--you);
+  border-color: var(--you);
+}
+.inbox-check:checked::after {
+  color: var(--on-you);
+}
+.inbox-counts p {
+  margin: 0;
+}
+.inbox-status {
+  color: var(--text);
+  font-weight: 550;
+}
+
+/* ---------- groups ---------- */
+.inbox-group {
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  min-width: 0;
+}
+/* Rocky's suggestion: the AI colour on the edge, never the "you" colour. */
+.inbox-safe {
+  border-left: 3px solid var(--ai);
+}
+.inbox-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.inbox-group-head h2 {
+  font-size: var(--text-md);
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.inbox-count {
+  font-size: var(--text-xs);
+  font-weight: 650;
+  color: var(--text);
+  background: var(--panel-2);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+.inbox-note {
+  color: var(--muted);
+  font-size: var(--text-base);
+  margin: var(--space-1) 0 var(--space-2);
+}
+.inbox-empty {
+  color: var(--muted);
+  margin: var(--space-2) 0 0;
+}
+.inbox-group-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
+.inbox-group-foot .btn-primary:disabled {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ---------- rows ---------- */
+.inbox-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.inbox-row {
+  display: grid;
+  /* A fixed column for the risk pill, so titles line up. */
+  grid-template-columns: 7em minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.inbox-list > .inbox-row:first-child {
+  border-top: 0;
+}
+.inbox-safe .inbox-row {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+.risk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+  color: var(--text);
+  background: var(--panel-2);
+  justify-self: start;
+}
+/* The level's colour on a dot; the text stays --text on the tint (AA). */
+.risk-critical .risk-pill::before,
+.risk-high .risk-pill::before,
+.risk-medium .risk-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.risk-critical .risk-pill {
+  background: var(--crit-bg);
+}
+.risk-critical .risk-pill::before {
+  background: var(--crit);
+}
+.risk-high .risk-pill {
+  background: var(--high-bg);
+}
+.risk-high .risk-pill::before {
+  background: var(--high);
+}
+.risk-medium .risk-pill {
+  background: var(--med-bg);
+}
+.risk-medium .risk-pill::before {
+  background: var(--med);
+}
+.risk-low .risk-pill {
+  background: var(--low-bg);
+}
+.risk-unknown .risk-pill {
+  background: var(--panel);
+  border: 1px dashed var(--faint);
+}
+.inbox-row-main {
+  min-width: 0;
+}
+.inbox-row-title {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-row-title:hover {
+  color: var(--you);
+  text-decoration: underline;
+}
+.inbox-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.inbox-row-meta > * + *::before {
+  content: "·";
+  margin-right: var(--space-2);
+}
+.inbox-row-meta .add {
+  color: var(--add-sign);
+}
+.inbox-row-meta .del {
+  color: var(--del-sign);
+}
+.inbox-row-side {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px var(--space-2);
+  font-size: var(--text-base);
+}
+.inbox-findings {
+  display: inline-flex;
+  align-items: center;
+}
+.inbox-minutes {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.inbox-note-pill {
+  font-size: var(--text-xs);
+  color: var(--text);
+  background: var(--panel-2);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+  white-space: nowrap;
+}
+
+/* ---------- the confirmation (POC .modal) ---------- */
+.inbox-dialog {
+  border: 1px solid var(--border);
+  padding: 0;
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-modal);
+  width: min(560px, 100% - 32px);
+  max-height: 90vh;
+  overflow: auto;
+}
+.inbox-dialog::backdrop {
+  background: var(--overlay);
+}
+.inbox-dialog .modal-head {
+  padding: var(--space-4) 18px 6px;
+  font-size: 16px;
+  font-weight: 650;
+}
+.inbox-dialog .modal-section {
+  padding: var(--space-2) 18px;
+}
+.inbox-dialog .modal-section p {
+  margin: 0 0 var(--space-2);
+}
+.inbox-dialog .modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3) 18px var(--space-4);
+}
+.inbox-dialog .btn-primary[aria-disabled="true"],
+.inbox-dialog .btn-primary:disabled {
+  cursor: progress;
+  filter: none;
+}
+.batch-list {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.batch-list li {
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+}
+.batch-list li + li {
+  border-top: 1px solid var(--border);
+}
+.batch-name {
+  font-weight: 600;
+}
+.batch-title {
+  color: var(--muted);
+}
+.batch-sha {
+  font-size: var(--text-xs);
+  background: var(--panel-2);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-1);
+}
+.batch-hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+
+@media (max-width: 760px) {
+  .inbox-main {
+    padding: var(--space-3) var(--space-4) 60px;
+  }
+  .inbox-group {
+    padding: var(--space-3);
+  }
+  /* One column: the pill above the title, the details under it; the checkbox stays left. */
+  .inbox-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .inbox-safe .inbox-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .inbox-safe .inbox-row > :not(.inbox-check) {
+    grid-column: 2;
+  }
+  .inbox-row-meta > * + *::before {
+    content: none;
+  }
+  .inbox-row-meta {
+    column-gap: var(--space-3);
+  }
+  .inbox-row-side {
+    justify-content: flex-start;
+  }
+  .inbox-row-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .inbox-field {
+    flex: 1 1 140px;
+  }
+}

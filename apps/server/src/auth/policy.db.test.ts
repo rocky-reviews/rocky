@@ -96,6 +96,18 @@ const org = (min: "admin" | "owner", method: "GET" | "other", targetsOrgA: boole
   noActiveOrg: "no_active_org",
 });
 
+/** `pull_requests.review` routes: every role of the active org. */
+const review = (method: "GET" | "other", targetsOrgA: boolean): Row => ({
+  anonymous: method === "GET" ? "unauthenticated" : "csrf",
+  member: "allow",
+  admin: "allow",
+  owner: "allow",
+  removed: "not_a_member",
+  crossOrg: "allow",
+  otherOrg: targetsOrgA ? "not_found" : "allow",
+  noActiveOrg: "no_active_org",
+});
+
 const EXPECTED: Readonly<Record<string, Row>> = {
   "GET /healthz": PUBLIC_GET,
   "HEAD /healthz": PUBLIC_GET,
@@ -129,6 +141,11 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   "POST /api/org/members/:memberId/restore": org("admin", "other", true),
   "POST /api/org/ownership": org("owner", "other", true),
   "POST /api/analyses/:analysisId/approve-over-limit": org("admin", "other", true),
+  // P6-7 (ADR 0029): every member reviews; the list is the caller's own org (and only the
+  // repositories GitHub lets them read). A batch naming org A's PR from org B is not found.
+  "GET /api/inbox": review("GET", false),
+  "HEAD /api/inbox": review("GET", false),
+  "POST /api/inbox/approvals": review("other", true),
 };
 
 const PUBLIC = new URL("https://rocky.example.com/");
@@ -207,6 +224,8 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
       keys: new LocalKeyWrapper([["v1", Buffer.from(generateLocalKek(), "base64")]]),
       onMemberTokenChanged: (_orgId, memberId) => changedMembers.push(memberId),
     },
+    // P6-7: the bulk approval port (P3-5 fills it); the matrix only needs it present.
+    pullRequestApprover: { approve: async () => "approved" },
     ...(options.withoutAccessCheck === true
       ? {}
       : {
@@ -332,7 +351,9 @@ const requestFor = (key: string) => {
           ? { orgId: A.orgId }
           : path === "/webhooks/github"
             ? { zen: "x" }
-            : undefined;
+            : path === "/api/inbox/approvals"
+              ? { pullRequests: [{ id: A.pullRequestId, headSha: "a".repeat(40) }] }
+              : undefined;
   return { method, url, body };
 };
 
@@ -408,6 +429,8 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "POST /api/org/ownership": "ownership.transfer",
       "POST /api/analyses/:analysisId/approve-over-limit": "analysis.approve_over_limit",
       "POST /webhooks/github": "public",
+      "GET /api/inbox": "pull_requests.review",
+      "POST /api/inbox/approvals": "pull_requests.review",
     });
   });
 

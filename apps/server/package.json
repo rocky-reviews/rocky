@@ -23,6 +23,7 @@
     "pg": "8.23.1"
   },
   "devDependencies": {
+    "@rocky-reviews/schema": "workspace:*",
     "@types/pg": "8.23.1",
     "fast-check": "4.10.2"
   }
