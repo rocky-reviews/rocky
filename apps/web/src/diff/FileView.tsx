@@ -7,11 +7,12 @@
  * AI notes (flags, hot lines) are shown only when the analysis is for the diff's head commit;
  * after a new push they would point at the wrong lines.
  */
-import type { AnalysisDocument, TriagedFileLevel } from "@rocky-reviews/schema";
+import type { AnalysisDocument, Finding, TriagedFileLevel } from "@rocky-reviews/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Selection } from "../shell/Sidebar.js";
 import { LEVEL_LABEL } from "../shell/triage-model.js";
 import { fileAnnotations, fileTriage, NO_ANNOTATIONS, reviewOrder } from "./annotations.js";
+import { useReview } from "../drafts/ReviewProvider.js";
 import { DiffBody } from "./DiffBody.js";
 import { useDiff } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
@@ -72,8 +73,23 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
   };
 
   const current = load.kind === "ready" && load.data.headSha === analysis.provenance.head.sha;
+  const { state } = useReview();
+  const dismissed = useMemo(
+    () =>
+      new Set(
+        [...state.drafts.values()]
+          .filter((d) => d.decision.state === "dismissed")
+          .map((d) => d.findingId),
+      ),
+    [state.drafts],
+  );
   const annotations = useMemo(
-    () => (current ? fileAnnotations(analysis, path) : NO_ANNOTATIONS),
+    () => (current ? fileAnnotations(analysis, path, dismissed) : NO_ANNOTATIONS),
+    [current, analysis, path, dismissed],
+  );
+  // P6-4: the drafts sit under their lines, only on the diff the analysis was made for.
+  const findings = useMemo<readonly Finding[]>(
+    () => (current ? analysis.findings.filter((f) => f.path === path) : []),
     [current, analysis, path],
   );
 
@@ -128,6 +144,7 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
               <dt className="k">Drafts</dt>
               <dd>
                 {triage.findings} {triage.findings === 1 ? "finding" : "findings"} on this file.
+                Accept, edit or dismiss each one inline.
               </dd>
             </div>
           )}
@@ -160,6 +177,7 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
           line={line}
           stale={load.kind === "ready" && !current}
           annotations={annotations}
+          findings={findings}
         />
       )}
 
@@ -182,11 +200,13 @@ const DiffArea = ({
   line,
   stale,
   annotations,
+  findings,
 }: {
   path: string;
   line: number | undefined;
   stale: boolean;
   annotations: ReturnType<typeof fileAnnotations>;
+  findings: readonly Finding[];
 }) => {
   const { load } = useDiff();
   if (load.kind === "failed")
@@ -210,7 +230,7 @@ const DiffArea = ({
     <>
       {stale && (
         <p className="diff-status" role="note">
-          The AI notes are for an earlier push, so they are hidden on this diff.
+          The AI notes and drafts are for an earlier push, so they are hidden on this diff.
         </p>
       )}
       {/* A finding's line is the analysis's: on a newer push it may be another line. */}
@@ -220,6 +240,7 @@ const DiffArea = ({
         file={file}
         annotations={annotations}
         target={stale ? undefined : line}
+        findings={findings}
       />
     </>
   );

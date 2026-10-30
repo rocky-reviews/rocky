@@ -34,7 +34,14 @@ const RANK: Record<HotKind, number> = {
   ok: 6,
 };
 
-export const fileAnnotations = (doc: AnalysisDocument, path: string): FileAnnotations => {
+/**
+ * `dismissed`: drafts the reviewer dismissed (P6-4) no longer mark their lines, as in the POC.
+ */
+export const fileAnnotations = (
+  doc: AnalysisDocument,
+  path: string,
+  dismissed: ReadonlySet<string> = new Set(),
+): FileAnnotations => {
   const hot = new Map<number, HotKind>();
   const mark = (start: number, end: number, kind: HotKind) => {
     for (let n = start; n <= end; n++) {
@@ -51,7 +58,8 @@ export const fileAnnotations = (doc: AnalysisDocument, path: string): FileAnnota
     flags.set(flag.range.end, list);
   }
   for (const finding of doc.findings) {
-    if (finding.path === path) mark(finding.range.start, finding.range.end, finding.severity);
+    if (finding.path === path && !dismissed.has(finding.id))
+      mark(finding.range.start, finding.range.end, finding.severity);
   }
   return { hot, flags: new Map([...flags].sort(([a], [b]) => a - b)) };
 };

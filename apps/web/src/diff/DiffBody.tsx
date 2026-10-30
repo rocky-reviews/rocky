@@ -1,7 +1,8 @@
 /**
  * One file's diff (P6-3): hunk headers, old/new line numbers, +/− signs, syntax highlighting,
- * hot-line markers, AI flags under their lines, and the reviewer's own comments. Rows are
- * virtualised, so a 5,000-line file renders a screenful at a time.
+ * hot-line markers, AI flags and AI drafts (P6-4) under their lines, and the reviewer's own
+ * comments (kept on the server, P6-4). Rows are virtualised, so a 5,000-line file renders a
+ * screenful at a time.
  *
  * Keyboard: the new-side line numbers are one tab stop (roving tabindex). Arrow keys, Page
  * Up/Down, Home and End move between them; Enter opens the comment composer for that line;
@@ -10,7 +11,7 @@
  * Every string is PR content or the reviewer's text, rendered as React text only.
  */
 import type { DiffFile } from "@rocky-reviews/core/diff";
-import type { Flag, FlagKind } from "@rocky-reviews/schema";
+import type { Finding, Flag, FlagKind } from "@rocky-reviews/schema";
 import {
   type CSSProperties,
   type FocusEvent,
@@ -33,10 +34,12 @@ import {
   fileRows,
   type OwnComment,
 } from "./diff-model.js";
-import { MAX_COMMENT_CHARS, useDiff } from "./DiffProvider.js";
+import { DraftCard } from "../drafts/DraftCard.js";
+import { useReview } from "../drafts/ReviewProvider.js";
+import { MAX_COMMENT_CHARS } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
-import { codePoint, splitControls } from "./text.js";
-import { type Language, languageFor, tokenize } from "./tokenize.js";
+import { Code } from "./Code.js";
+import { type Language, languageFor } from "./tokenize.js";
 import { useVirtualList } from "./use-virtual-list.js";
 
 const ESTIMATE: Record<DiffItem["kind"], number> = { hunk: 30, note: 20, line: 20, inline: 60 };
@@ -62,7 +65,11 @@ type Props = {
    * or the nearest new-side line the diff shows, starts active and takes focus.
    */
   target?: number | undefined;
+  /** This file's AI drafts (none when the analysis is for another push). */
+  findings?: readonly Finding[];
 };
+
+const NO_FINDINGS: readonly Finding[] = [];
 
 /** The new-side line nearest `target` (the earlier one on a tie). */
 const nearestLine = (lines: readonly { n: number }[], target: number): number | undefined =>
@@ -72,15 +79,34 @@ const nearestLine = (lines: readonly { n: number }[], target: number): number | 
     undefined,
   );
 
-export const DiffBody = ({ path, file, annotations, target }: Props) => {
-  const { comments, addComment, deleteComment } = useDiff();
+export const DiffBody = ({ path, file, annotations, target, findings = NO_FINDINGS }: Props) => {
+  const { state, addComment, deleteComment, mode, jump, doneJump } = useReview();
+  const comments = state.comments;
   const [composing, setComposing] = useState<number | null>(null);
   const rows = useMemo(() => fileRows(file.patch), [file.patch]);
   const language = languageFor(path);
   const mine = useMemo(() => comments.filter((c) => c.path === path), [comments, path]);
   const items = useMemo(
-    () => diffItems(rows, annotations, mine, composing),
-    [rows, annotations, mine, composing],
+    () => diffItems(rows, annotations, mine, composing, findings),
+    [rows, annotations, mine, composing, findings],
+  );
+  // New-side text by line number: a suggestion shows the lines it replaces.
+  const newText = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const row of rows)
+      if (row.kind === "line" && row.newNo !== null) map.set(row.newNo, row.text);
+    return map;
+  }, [rows]);
+  const originalOf = useCallback(
+    (finding: Finding) => {
+      const lines: string[] = [];
+      for (let n = finding.range.start; n <= finding.range.end; n++) {
+        const text = newText.get(n);
+        if (text !== undefined) lines.push(text);
+      }
+      return lines;
+    },
+    [newText],
   );
   const keys = useMemo(() => items.map((item) => item.key), [items]);
   const estimate = useCallback((i: number) => ESTIMATE[items[i]?.kind ?? "line"], [items]);
@@ -102,7 +128,15 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
     () => (composing === null ? -1 : keys.indexOf(`i${composing}`)),
     [keys, composing],
   );
-  const pinned = useMemo(() => [activeItem, composerItem], [activeItem, composerItem]);
+  // A draft being edited keeps its text box rendered while scrolled away, like the composer.
+  const editingItem = useMemo(() => {
+    const finding = mode === null ? undefined : findings.find((f) => f.id === mode.findingId);
+    return finding === undefined ? -1 : keys.indexOf(`i${finding.range.end}`);
+  }, [keys, mode, findings]);
+  const pinned = useMemo(
+    () => [activeItem, composerItem, editingItem],
+    [activeItem, composerItem, editingItem],
+  );
   const { listRef, measureRef, range, parts, reveal } = useVirtualList(keys, estimate, pinned);
   // Drafts by line, kept here so they outlive the composer element.
   const [drafts, setDrafts] = useState<ReadonlyMap<number, string>>(() => new Map());
@@ -160,6 +194,23 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
       reveal(at.i);
     }
   });
+  // A jump from the right panel (P6-4): bring the draft card (or the comment's line) into view
+  // and focus it, once its row has been rendered.
+  const pendingCard = useRef<{ i: number; selector: string; tries: number } | null>(null);
+  useLayoutEffect(() => {
+    const pending = pendingCard.current;
+    if (pending === null) return;
+    const el = listRef.current?.querySelector<HTMLElement>(pending.selector);
+    if (el) {
+      reveal(pending.i, el);
+      el.focus({ preventScroll: true });
+      pendingCard.current = null;
+    } else if (pending.tries++ < 10) {
+      reveal(pending.i);
+    } else {
+      pendingCard.current = null;
+    }
+  });
   const focusAfterRender = (line: number) => {
     pendingFocus.current = { line, tries: 0 };
   };
@@ -183,6 +234,22 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
     },
     [lines, reveal],
   );
+
+  useEffect(() => {
+    if (jump === null) return;
+    if (jump.kind === "finding") {
+      const finding = findings.find((f) => f.id === jump.findingId);
+      if (finding === undefined) return;
+      doneJump(jump.seq);
+      const i = keys.indexOf(`i${finding.range.end}`);
+      if (i === -1) return;
+      pendingCard.current = { i, selector: `[data-finding="${CSS.escape(finding.id)}"]`, tries: 0 };
+      reveal(i);
+    } else if (jump.path === path) {
+      doneJump(jump.seq);
+      focusLine(jump.line);
+    }
+  }, [jump, doneJump, findings, keys, reveal, path, focusLine]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -224,16 +291,22 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
   );
   const submit = useCallback(
     (n: number, body: string) => {
-      addComment(path, n, body);
       setDraft(n, null);
       focusAfterRender(n);
       setComposing(null);
+      // Shown at once; if the server refuses it, the composer opens again with the text.
+      void addComment(path, n, body).then((saved) => {
+        if (saved) return;
+        setDraft(n, body);
+        composerFocus.current = true;
+        setComposing(n);
+      });
     },
     [addComment, path, setDraft],
   );
   const remove = useCallback(
     (comment: OwnComment) => {
-      deleteComment(comment.id);
+      void deleteComment(comment.id);
       focusAfterRender(comment.line);
     },
     [deleteComment],
@@ -256,7 +329,8 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
       onKeyDown={onKeyDown}
       onFocus={onFocusList}
     >
-      {parts.map((part) =>
+      {/* One flat keyed list: a row keeps its element (and focus) when runs merge or split. */}
+      {parts.flatMap((part) =>
         part.kind === "spacer" ? (
           <div key={part.key} style={{ height: part.height }} aria-hidden="true" />
         ) : (
@@ -295,6 +369,14 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
                     {item.flags.map((flag, i) => (
                       <FlagNote key={i} flag={flag} />
                     ))}
+                    {item.findings.map((finding) => (
+                      <DraftCard
+                        key={finding.id}
+                        finding={finding}
+                        original={originalOf(finding)}
+                        language={language}
+                      />
+                    ))}
                     {item.comments.map((comment) => (
                       <MyComment key={comment.id} comment={comment} onDelete={remove} />
                     ))}
@@ -320,27 +402,6 @@ export const DiffBody = ({ path, file, annotations, target }: Props) => {
 
 const lineMax = (row: DiffRow): number =>
   row.kind === "line" ? Math.max(row.oldNo ?? 0, row.newNo ?? 0) : 0;
-
-/** Code as highlighted text; invisible characters show as visible markers. */
-const Code = ({ text, language }: { text: string; language: Language }) =>
-  tokenize(text, language).map((token, i) => {
-    const parts = splitControls(token.text).map((part, j) =>
-      part.control ? (
-        <span key={j} className="bidi-ctl" title={`Invisible character ${codePoint(part.text)}`}>
-          {codePoint(part.text)}
-        </span>
-      ) : (
-        part.text
-      ),
-    );
-    return token.kind === "plain" ? (
-      <span key={i}>{parts}</span>
-    ) : (
-      <span key={i} className={`tk-${token.kind}`}>
-        {parts}
-      </span>
-    );
-  });
 
 type LineProps = {
   vkey: string;

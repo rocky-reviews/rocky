@@ -67,6 +67,8 @@ export type RawShellData = {
   analysis: unknown;
   /** Where the analysis stands (P6-2); optional, see `parseAnalysisRun`. */
   analysisRun?: unknown;
+  /** The analysis row's id (P6-4): the drafts API is keyed by it. Required with a document. */
+  analysisId?: unknown;
 };
 
 export type ShellData = {
@@ -76,6 +78,8 @@ export type ShellData = {
   analysis: AnalysisDocument | null;
   /** Why there is no document yet, or `done` (P6-2). */
   analysisRun: AnalysisRun;
+  /** The id of the analysis the document comes from; `null` exactly when there is no document. */
+  analysisId: string | null;
 };
 
 export type PullRef = Pick<PullSummary, "owner" | "repo" | "number">;
@@ -118,5 +122,11 @@ export const parseShellData = (input: RawShellData): ShellData => {
   }
   const analysisRun = parseAnalysisRun(input.analysisRun, analysis !== null);
   if (analysisRun === undefined) throw new ShellDataError("invalid analysis state");
-  return { pull: pull.data, myReview: myReview.data, analysis, analysisRun };
+  let analysisId: string | null = null;
+  if (analysis !== null) {
+    const id = z.uuid().safeParse(input.analysisId);
+    if (!id.success) throw new ShellDataError("invalid analysis id");
+    analysisId = id.data.toLowerCase();
+  }
+  return { pull: pull.data, myReview: myReview.data, analysis, analysisRun, analysisId };
 };

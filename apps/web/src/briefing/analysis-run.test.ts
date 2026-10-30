@@ -50,7 +50,12 @@ describe("parseAnalysisRun", () => {
 });
 
 describe("parseShellData with an analysis run", () => {
-  const valid = { pull: PR_847_PULL, myReview: null, analysis: pr847 };
+  const valid = {
+    pull: PR_847_PULL,
+    myReview: null,
+    analysis: pr847,
+    analysisId: "6f1c2a9e-1d4b-4c3e-9a7f-0b2d4e6f8a1c",
+  };
 
   it("carries the run state", () => {
     expect(parseShellData(valid).analysisRun).toEqual({ status: "done" });

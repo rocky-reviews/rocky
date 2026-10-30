@@ -112,7 +112,7 @@ export const seedOrg = async (
     const finding = first(
       await tx
         .insert(schema.findingsState)
-        .values({ analysisId: analysis.id, findingId: "f-1", state: "draft" })
+        .values({ analysisId: analysis.id, memberId: member.id, findingId: "f-1", state: "draft" })
         .returning({ id: schema.findingsState.id }),
     );
     const comment = first(
@@ -220,6 +220,25 @@ export const seedOrg = async (
 };
 
 export const newOrgId = (): OrgId => randomUUID() as OrgId;
+
+/**
+ * Replaces a seeded analysis's stand-in document with a real one (e.g. the pr-847 fixture), as
+ * the application role inside `withOrg`. The document is stored as given: tests of the drafts
+ * (P6-4) read findings and hunks from it.
+ */
+export const setAnalysisDocument = async (
+  db: Db,
+  orgId: OrgId,
+  analysisId: string,
+  document: unknown,
+): Promise<void> => {
+  await db.withOrg(orgId, (tx) =>
+    tx.query("update analyses set document = $2::jsonb where id = $1 and status = 'done'", [
+      analysisId,
+      JSON.stringify(document),
+    ]),
+  );
+};
 
 /**
  * Runs `fn` with a short-lived Db on the worker login (the only one allowed to create orgs,

@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/analysis/testing.ts",
-    "./diff": "./src/analysis/diff.ts"
+    "./diff": "./src/analysis/diff.ts",
+    "./drafts": "./src/drafts.ts"
   },
   "dependencies": {
     "@rocky-reviews/schema": "workspace:*",

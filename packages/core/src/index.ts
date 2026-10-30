@@ -14,6 +14,21 @@ export {
   type Role,
 } from "./roles.js";
 export {
+  applyDraftAction,
+  DISMISS_REASONS,
+  DRAFT,
+  isDismissReason,
+  MAX_COMMENT_BODY,
+  normaliseCommentBody,
+  parseDraftAction,
+  type DismissReason,
+  type DraftAction,
+  type DraftActionKind,
+  type DraftDecision,
+  type DraftState,
+  type DraftTransition,
+} from "./drafts.js";
+export {
   EXTERNAL_TENANT_STORES,
   nothingStoredYet,
   type ExternalTenantStore,

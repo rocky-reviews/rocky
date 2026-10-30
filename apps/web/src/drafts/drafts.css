@@ -1,0 +1,388 @@
+/*
+ * AI drafts (P6-4), after design-poc/index.html `.draft`, `.mine`, `.collapsed-draft`, the right
+ * panel's tally and list, and `.toast`. Where the POC sets small text in --ai, a severity colour
+ * or --faint (below WCAG AA), the text uses --text or --muted and the colour stays on a mark,
+ * a dot or a border (docs/design/poc-parity.md, "Intentional differences").
+ */
+
+/* ---------- draft card ---------- */
+.draft {
+  /* POC: the border mixes --ai into --border; colours come only from tokens here. */
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--ai);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.draft:focus,
+.mine.from-draft:focus,
+.collapsed-draft:focus {
+  outline: none;
+}
+.draft.focus,
+.mine.from-draft.focus,
+.collapsed-draft.focus,
+.draft:focus-visible,
+.mine.from-draft:focus-visible,
+.collapsed-draft:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+.draft-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px var(--space-3) 0;
+  font-size: var(--text-base);
+  flex-wrap: wrap;
+}
+.draft-head .spacer,
+.draft-actions .spacer {
+  flex: 1;
+}
+.sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+  font-size: var(--text-xs);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text);
+}
+.sev::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.sev.critical {
+  background: var(--crit-bg);
+}
+.sev.critical::before {
+  background: var(--crit);
+}
+.sev.high {
+  background: var(--high-bg);
+}
+.sev.high::before {
+  background: var(--high);
+}
+.sev.medium {
+  background: var(--med-bg);
+}
+.sev.medium::before {
+  background: var(--med);
+}
+.sev.low {
+  background: var(--low-bg);
+}
+.sev.low::before {
+  background: var(--low);
+}
+.conf {
+  color: var(--muted);
+}
+.private-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.draft-title {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) 0;
+  font-size: var(--text-md);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.mine .draft-title {
+  padding: 0;
+}
+.draft-body {
+  margin: 0;
+  padding: var(--space-1) var(--space-3) 0;
+  overflow-wrap: anywhere;
+}
+.draft-body code,
+.evidence code {
+  background: var(--panel-2);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-base);
+}
+.suggestion {
+  margin: var(--space-2) var(--space-3) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.mine .suggestion {
+  margin: var(--space-2) 0 0;
+}
+.suggestion-label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 3px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.suggestion-lines .ln {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+.evidence {
+  margin: var(--space-2) var(--space-3) 0;
+  font-size: var(--text-base);
+  display: flex;
+  gap: 6px;
+}
+.evidence .mark {
+  color: var(--ai);
+}
+.evidence .source {
+  color: var(--muted);
+}
+.draft-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn-ai {
+  border-color: var(--ai);
+}
+.btn-ai .mark {
+  color: var(--ai);
+}
+.copied-note {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.inline .btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.edit-area {
+  padding: var(--space-2) var(--space-3) 0;
+}
+.edit-area textarea {
+  display: block;
+  width: 100%;
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) 10px;
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+.edit-area .draft-actions {
+  padding: var(--space-2) 0 10px;
+}
+.dismiss-reasons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px var(--space-3);
+}
+.dismiss-reasons .lead {
+  width: 100%;
+  font-size: var(--text-base);
+  color: var(--muted);
+}
+
+/* ---------- accepted and dismissed ---------- */
+.from-ai {
+  color: var(--muted);
+}
+.collapsed-draft {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+  color: var(--muted);
+  padding: var(--space-1) 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.collapsed-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.collapsed-draft .reason {
+  white-space: nowrap;
+}
+
+/* ---------- right panel: Review ---------- */
+.panel-count {
+  font-weight: 600;
+}
+.panel-error {
+  margin: 0;
+  padding: 9px var(--space-3);
+  border-radius: 9px;
+  background: var(--crit-bg);
+  font-size: var(--text-code);
+}
+.tally {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+}
+.tally > div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  border: 1px solid var(--border);
+  border-top-width: 3px;
+  border-radius: 9px;
+  padding: var(--space-2) 10px;
+}
+.tally-ai {
+  border-top-color: var(--ai) !important;
+}
+.tally-you {
+  border-top-color: var(--you) !important;
+}
+.tally dt {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.tally dd {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+.sub-h {
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 14px 2px 6px;
+}
+.f-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.f-item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 9px;
+  padding: var(--space-2) 10px;
+  margin-bottom: 6px;
+  font: inherit;
+  cursor: pointer;
+}
+.f-item:hover {
+  border-color: var(--you);
+}
+.f-item.focus {
+  border-color: var(--you);
+  box-shadow: 0 0 0 2px var(--you-bg);
+}
+.f-item .dot {
+  margin-top: 5px;
+  flex: none;
+}
+.f-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.f-item .t {
+  font-weight: 600;
+  font-size: var(--text-code);
+  overflow-wrap: anywhere;
+}
+.f-item .loc {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.f-item.st-accepted {
+  border-left: 3px solid var(--you);
+}
+.f-item.st-dismissed .t {
+  text-decoration: line-through;
+  text-decoration-color: var(--faint);
+  color: var(--muted);
+}
+/* POC defect 2: the badge never shrinks, the title wraps beside it. */
+.st-badge {
+  flex: none;
+  font-size: var(--text-xs);
+  font-weight: 650;
+  white-space: nowrap;
+  color: var(--text);
+}
+.st-badge.is-accepted {
+  color: var(--you);
+}
+.st-badge.is-dismissed {
+  color: var(--muted);
+}
+.learn {
+  font-size: var(--text-base);
+  background: var(--ai-bg);
+  padding: var(--space-2) 10px;
+  border-radius: var(--radius-md);
+  margin: var(--space-2) 0 0;
+}
+.learn .mark {
+  color: var(--ai);
+}
+.good {
+  background: var(--ok-bg);
+  border-radius: 9px;
+  padding: 9px var(--space-3);
+  font-size: var(--text-code);
+  color: var(--ok);
+  margin: 0;
+}
+
+/* ---------- toast ---------- */
+.toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+.toast {
+  margin: 0;
+  background: var(--text);
+  color: var(--panel);
+  padding: 9px var(--space-4);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  animation: toast-pop 0.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}
+@keyframes toast-pop {
+  from {
+    transform: translateY(6px);
+    opacity: 0;
+  }
+}

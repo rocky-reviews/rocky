@@ -1,4 +1,5 @@
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import type { Locator } from "@playwright/test";
+import { expect, type Page, test } from "./test.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 
 /**

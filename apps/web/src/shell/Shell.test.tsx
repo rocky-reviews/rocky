@@ -2,11 +2,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
+import { memoryReviewSource } from "../drafts/testing.js";
 import { Shell } from "./Shell.js";
 
 const NOW = Date.parse("2026-10-25T12:12:00.000Z");
 const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
-const render = (d: ShellData = data): string => renderToStaticMarkup(<Shell data={d} now={NOW} />);
+const render = (d: ShellData = data): string =>
+  renderToStaticMarkup(<Shell data={d} now={NOW} review={memoryReviewSource([])} />);
 
 /** Text content without tags, whitespace collapsed. */
 const text = (html: string): string =>

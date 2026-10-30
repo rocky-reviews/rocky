@@ -30,10 +30,25 @@ describe("fixture source", () => {
 });
 
 describe("parseShellData", () => {
-  const valid = { pull: PR_847_PULL, myReview: null, analysis: pr847 };
+  const ID = "6f1c2a9e-1d4b-4c3e-9a7f-0b2d4e6f8a1c";
+  const valid = { pull: PR_847_PULL, myReview: null, analysis: pr847, analysisId: ID };
 
   it("accepts a PR without an analysis yet", () => {
     expect(parseShellData({ ...valid, analysis: null }).analysis).toBeNull();
+  });
+
+  it("carries the analysis id the drafts are keyed by (P6-4), and requires it with a document", () => {
+    expect(parseShellData(valid).analysisId).toBe(ID);
+    expect(parseShellData({ ...valid, analysisId: ID.toUpperCase() }).analysisId).toBe(ID);
+    expect(parseShellData({ ...valid, analysis: null }).analysisId).toBeNull();
+    for (const analysisId of [undefined, null, "", "../x", 7, `${ID} `]) {
+      expect(() => parseShellData({ ...valid, analysisId })).toThrow("invalid analysis id");
+    }
+  });
+
+  it("the fixture source gives each fixture PR with a document a stable analysis id", async () => {
+    const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
+    expect(data.analysisId).toBe("00000000-0000-4000-8000-000000000847");
   });
 
   it.each(["john--doe", "foo-", "-legacy", "a"])(

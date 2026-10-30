@@ -157,9 +157,14 @@ export const findingsState = pgTable("findings_state", {
   state: text("state", { enum: ["draft", "accepted", "dismissed"] })
     .notNull()
     .default("draft"),
+  /** A fixed code (migration 0015): not_an_issue, intentional, not_worth_it, handled_elsewhere. */
   reason: text("reason"),
   decidedBy: uuid("decided_by"),
   decidedAt: timestamp("decided_at", { withTimezone: true }),
+  /** Whose decision this is: drafts are per reviewer (P6-4, migration 0015). */
+  memberId: uuid("member_id").notNull(),
+  /** When the reviewer last copied the finding's fix prompt ("Send to agent"). */
+  agentPromptCopiedAt: timestamp("agent_prompt_copied_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -174,6 +179,14 @@ export const commentsPending = pgTable("comments_pending", {
   path: text("path"),
   line: integer("line"),
   body: text("body").notNull(),
+  /** P6-4 (migration 0015): the analysis the reviewer saw; set for every comment written since. */
+  analysisId: uuid("analysis_id"),
+  /** `own`, or an accepted draft: `ai` (the finding's body) or `ai_edited` (the reviewer's). */
+  source: text("source", { enum: ["own", "ai", "ai_edited"] })
+    .notNull()
+    .default("own"),
+  /** First line of a multi-line range (GitHub's `start_line`); `line` is the last. */
+  startLine: integer("start_line"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

@@ -1,8 +1,7 @@
 /**
- * The diff and the reviewer's own comments, for every file view of the page (P6-3). The diff is
- * loaded once, on the first file opened, through the `DiffDataSource` port and validated with
- * `parseDiffData`. Own comments live in memory until drafts are persisted (P6-4) and posted by
- * Finish review (P6-6): nothing here sends anything anywhere.
+ * The diff, for every file view of the page (P6-3). It is loaded once, on the first file opened,
+ * through the `DiffDataSource` port and validated with `parseDiffData`. The reviewer's own
+ * comments are kept on the server with the drafts (P6-4, `drafts/ReviewProvider.tsx`).
  */
 import {
   createContext,
@@ -16,7 +15,6 @@ import {
 } from "react";
 import { type DiffData, type DiffDataSource, parseDiffData } from "../data/diff-data.js";
 import type { PullRef } from "../data/shell-data.js";
-import type { OwnComment } from "./diff-model.js";
 
 export type DiffLoad =
   | { readonly kind: "idle" | "loading" | "failed" }
@@ -26,18 +24,12 @@ export type DiffContextValue = {
   readonly load: DiffLoad;
   /** Starts loading the diff if nothing has yet. */
   readonly request: () => void;
-  readonly comments: readonly OwnComment[];
-  readonly addComment: (path: string, line: number, body: string) => void;
-  readonly deleteComment: (id: string) => void;
 };
 
 /** Without a provider there is no diff to show. */
 export const DiffContext = createContext<DiffContextValue>({
   load: { kind: "failed" },
   request: () => {},
-  comments: [],
-  addComment: () => {},
-  deleteComment: () => {},
 });
 
 export const useDiff = (): DiffContextValue => useContext(DiffContext);
@@ -49,9 +41,7 @@ type Props = { source: DiffDataSource; pull: PullRef; children: ReactNode };
 
 export const DiffProvider = ({ source, pull, children }: Props) => {
   const [load, setLoad] = useState<DiffLoad>({ kind: "idle" });
-  const [comments, setComments] = useState<readonly OwnComment[]>([]);
   const started = useRef<AbortController | null>(null);
-  const nextId = useRef(1);
 
   const request = useCallback(() => {
     if (started.current !== null) return;
@@ -68,32 +58,16 @@ export const DiffProvider = ({ source, pull, children }: Props) => {
       );
   }, [source, pull]);
 
-  // A different PR or source starts over (comments belong to one PR).
+  // A different PR or source starts over.
   useEffect(
     () => () => {
       started.current?.abort();
       started.current = null;
       setLoad({ kind: "idle" });
-      setComments([]);
     },
     [source, pull],
   );
 
-  const addComment = useCallback((path: string, line: number, body: string) => {
-    const text = body.trim().slice(0, MAX_COMMENT_CHARS);
-    if (text === "") return;
-    const id = `c${nextId.current++}`;
-    setComments((current) => [...current, { id, path, line, body: text }]);
-  }, []);
-
-  const deleteComment = useCallback(
-    (id: string) => setComments((current) => current.filter((c) => c.id !== id)),
-    [],
-  );
-
-  const value = useMemo(
-    () => ({ load, request, comments, addComment, deleteComment }),
-    [load, request, comments, addComment, deleteComment],
-  );
+  const value = useMemo(() => ({ load, request }), [load, request]);
   return <DiffContext value={value}>{children}</DiffContext>;
 };

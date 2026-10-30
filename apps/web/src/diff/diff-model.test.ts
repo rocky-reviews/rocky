@@ -1,3 +1,4 @@
+import type { Finding } from "@rocky-reviews/schema";
 import { parseUnifiedDiff } from "@rocky-reviews/core/diff";
 import { pr847Diff } from "@rocky-reviews/evals/pr-847/diff";
 import { describe, expect, it } from "vitest";
@@ -116,6 +117,13 @@ describe("diffItems", () => {
     }
     const hot = items.find((i) => i.kind === "line" && i.row.newNo === 4);
     expect(hot?.kind === "line" && hot.hot).toBe("look");
+  });
+
+  it("puts an AI draft (P6-4) in the block under the last line of its range", () => {
+    const finding = { id: "F9", range: { start: 19, end: 20 } } as unknown as Finding;
+    const items = diffItems(rows, none, [], null, [finding]);
+    const inline = items.filter((i) => i.kind === "inline");
+    expect(inline.map((i) => [i.line, i.findings.map((f) => f.id)])).toEqual([[20, ["F9"]]]);
   });
 
   it("keeps line keys when a block is inserted, so measured heights stay with their rows", () => {
