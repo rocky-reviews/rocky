@@ -52,6 +52,7 @@ export {
   type DecideDraftResult,
   type DraftView,
   type OwnCommentView,
+  type PostedState,
   type ReviewDraftsView,
 } from "./drafts.js";
 export {

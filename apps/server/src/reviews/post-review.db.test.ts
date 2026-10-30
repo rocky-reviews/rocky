@@ -52,6 +52,7 @@ import type { FastifyInstance } from "fastify";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../app.js";
+import { previewOutcome, submitOutcome } from "../../../web/src/data/posting-data.js";
 import { csrfTokenFor, CSRF_HEADER, randomToken, sha256 } from "../auth/cookies.js";
 import { MEMBER_TOKEN_PURPOSE } from "../repository-access.js";
 
@@ -1099,5 +1100,65 @@ describe("input and hygiene", () => {
       reviewId: github.reviews[0]!.id,
     });
     expect(ForgeReadError.name).toBe("ForgeReadError");
+  });
+});
+
+/**
+ * P6-6 contract (review round 1, N7): the web app's parsers read the real routes' JSON, so the
+ * e2e mock (`apps/web/e2e/review-api.ts`) and the server cannot drift apart unnoticed.
+ */
+describe("the web app's parsers read these routes' answers (P6-6 contract)", () => {
+  it("GET: the preview parses with its items, digest and attempts; POST: posted, stale, invalid, post_failed, post_unknown", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const shown = previewOutcome({
+      status: (await preview(alice, A.pullRequestId)).statusCode,
+      body: (await preview(alice, A.pullRequestId)).json(),
+    });
+    expect(shown.kind).toBe("ok");
+    if (shown.kind !== "ok") throw new Error("preview did not parse");
+    expect(shown.preview.items.map((i) => i.kind)).toEqual(["draft", "draft", "comment"]);
+    expect(shown.preview.headSha).toBe(HEAD);
+    expect(shown.preview.inFlight).toBeNull();
+
+    const answer = async (body: unknown) => {
+      const res = await post(alice, A.pullRequestId, body);
+      return submitOutcome({ status: res.statusCode, body: res.json() });
+    };
+    const plan = shown.preview as unknown as Preview;
+    expect(await answer(click(plan, { contentSha256: "0".repeat(64) }))).toEqual({
+      kind: "refused",
+      reason: "stale",
+    });
+    expect(await answer({ ...click(plan), verdict: "merge" })).toEqual({
+      kind: "invalid",
+      reason: "invalid_request",
+    });
+    // Approving one's own pull request: GitHub refuses it (422 → `rejected`).
+    github.putPullRequest(REPO, { number: 847, headSha: HEAD, authorLogin: "alice" });
+    expect(await answer(click(plan, { verdict: "approve" }))).toEqual({
+      kind: "post_failed",
+      reason: "rejected",
+    });
+    network = "lose_answer";
+    const lost = randomUUID();
+    expect(await answer({ ...click(plan), idempotencyKey: lost })).toEqual({
+      kind: "post_unknown",
+    });
+    network = "ok";
+    // A new click on the list as shown: the lost attempt carries its items, so it is stale.
+    expect(await answer(click(plan))).toEqual({ kind: "refused", reason: "stale" });
+    // The same click again (the page's retry reuses the key): answered about that attempt.
+    expect(await answer({ ...click(plan), idempotencyKey: lost })).toEqual({
+      kind: "refused",
+      reason: "in_progress",
+    });
+    const again = previewOutcome({
+      status: (await preview(alice, A.pullRequestId)).statusCode,
+      body: (await preview(alice, A.pullRequestId)).json(),
+    });
+    expect(again.kind === "ok" && again.preview.inFlight?.status).toBe("posting");
+    expect(submitOutcome({ status: 503, body: { error: "posting_unavailable" } })).toEqual({
+      kind: "unavailable",
+    });
   });
 });

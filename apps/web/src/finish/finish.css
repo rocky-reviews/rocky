@@ -1,0 +1,315 @@
+/*
+ * Finish review (P6-6): the top bar's primary button with its count, and the modal, after
+ * design-poc/index.html (.btn-primary .count, .warn, .good, .post-list, .verdict-opts,
+ * .modal-foot). Colours only through tokens.css.
+ */
+
+.finish-btn {
+  gap: 6px;
+  white-space: nowrap;
+}
+/* POC: a 22% on-you tint (color-mix); colour functions live only in tokens.css. */
+.finish-btn .count {
+  background: var(--on-you);
+  color: var(--you);
+  border-radius: var(--radius-pill);
+  padding: 0 6px;
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.finish-modal {
+  width: min(600px, 100%);
+  /* The footer stays in view while the list scrolls (UI-verifier nit). */
+  display: flex;
+  flex-direction: column;
+}
+.finish-modal > .modal-head,
+.finish-modal > .modal-section {
+  flex: none;
+}
+.finish-modal > .modal-foot {
+  flex: none;
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.finish-modal:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: -2px;
+}
+.finish-modal .modal-section + .modal-section {
+  border-top: 1px solid var(--border);
+}
+.finish-modal p {
+  margin: 0;
+}
+.finish-warnings {
+  display: grid;
+  gap: var(--space-2);
+}
+.finish-warn,
+.finish-good,
+.finish-notice,
+.finish-problem {
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: var(--text-code);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+/* The notice sits in its own section: the same inset as the warning cards. */
+.finish-modal .finish-notice {
+  margin: var(--space-3) 18px;
+  padding: 9px 12px;
+}
+.finish-warn {
+  background: var(--med-bg);
+}
+/* POC: the lead in --med, 3.2:1 on its tint in light mode; here --text with the tint and a bar. */
+.finish-warn {
+  border-left: 3px solid var(--med);
+}
+.finish-warn b {
+  color: var(--text);
+}
+.finish-warn code {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+}
+.finish-good {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+.finish-notice,
+.finish-problem {
+  background: var(--crit-bg);
+  color: var(--text);
+}
+.finish-notice a {
+  color: var(--you);
+}
+.finish-notice:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+.finish-problem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.finish-invisible {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+}
+/* An invisible character, made visible: its code point in a small chip. */
+.invisible-char {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--high);
+  border-radius: var(--radius-xs);
+  background: var(--high-bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  vertical-align: baseline;
+}
+.finish-muted,
+.finish-fine {
+  color: var(--muted);
+  font-size: var(--text-code);
+}
+.finish-fine {
+  font-size: var(--text-sm);
+  margin-top: var(--space-2);
+}
+.finish-list h3 {
+  margin: 0 0 var(--space-2);
+}
+.finish-list > p + p,
+.finish-list > p + ol {
+  margin-top: var(--space-2);
+}
+
+/* The exact list: location, kind, then the Markdown source as GitHub will receive it. */
+.post-list {
+  margin: 0;
+  padding-left: 22px;
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--text-code);
+}
+.post-list li::marker {
+  color: var(--muted);
+}
+.post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.post-loc {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+}
+.post-kind {
+  color: var(--muted);
+}
+.post-raw:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 1px;
+}
+.post-raw {
+  margin: 0;
+  padding: var(--space-2) 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Long comments scroll inside their box; nothing is cut. */
+  max-height: 240px;
+  overflow: auto;
+}
+
+.finish-summary textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 1.45;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+}
+.finish-summary textarea:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 1px;
+}
+.finish-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: 6px;
+}
+.finish-summary-actions .finish-fine {
+  margin: 0;
+}
+
+.verdict-opts {
+  display: grid;
+  gap: 6px;
+  border: 0;
+  min-width: 0;
+}
+.verdict-opts label {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: var(--text-md);
+}
+.verdict-opts label:has(input:checked) {
+  border-color: var(--you);
+  background: var(--you-bg);
+}
+.verdict-opts label:has(input:focus-visible) {
+  outline: 2px solid var(--you);
+  outline-offset: 1px;
+}
+.verdict-opts input {
+  margin: 3px 0 0;
+  accent-color: var(--you);
+}
+.verdict-opts small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+/* --ai text is 3.7:1 on the panel in light mode: --text on the AI tint, with a cyan border. */
+.suggested-tag {
+  margin-left: var(--space-2);
+  padding: 0 5px;
+  border: 1px solid var(--ai);
+  border-radius: var(--radius-xs);
+  background: var(--ai-bg);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.finish-modal .modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 18px var(--space-4);
+}
+.finish-blocked {
+  flex: 1 1 100%;
+  margin: 0;
+  min-height: 1.3em;
+  text-align: right;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.finish-blocked:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+/* Disabled controls look it (the shell's .btn has no disabled style). */
+.finish-modal .btn:disabled,
+.finish-modal .btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+  filter: none;
+}
+.finish-modal .btn:disabled:hover {
+  background: var(--panel);
+}
+.finish-modal .btn-primary:disabled:hover,
+.finish-modal .btn-primary[aria-disabled="true"]:hover {
+  background: var(--you);
+}
+.finish-modal[aria-busy="true"] .btn-primary {
+  cursor: progress;
+}
+
+@media (max-width: 760px) {
+  /* The POC hid the label; it stays in the accessible name (visually hidden, not removed). */
+  .finish-btn .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .finish-btn {
+    position: relative;
+  }
+  .finish-modal .modal-section,
+  .finish-modal .modal-foot {
+    padding-inline: var(--space-3);
+  }
+  .finish-modal .finish-notice {
+    margin-inline: var(--space-3);
+  }
+}

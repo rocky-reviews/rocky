@@ -52,6 +52,10 @@ const matches = (fixture: RawShellData, ref: PullRef): boolean => {
 export const fixtureAnalysisId = (number: number): string =>
   `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
 
+/** A stable pull request id per fixture PR (P6-6: posting is keyed by it). */
+export const fixturePullRequestId = (number: number): string =>
+  `00000000-0000-4000-8001-${String(number).padStart(12, "0")}`;
+
 export const createFixtureSource = (
   fixtures: readonly RawShellData[] = FIXTURES,
 ): ShellDataSource => ({
@@ -59,7 +63,11 @@ export const createFixtureSource = (
     const fixture = fixtures.find((f) => matches(f, ref));
     if (fixture === undefined) throw new ShellDataError("no such pull request");
     if (fixture.analysis === null || fixture.analysisId !== undefined) return fixture;
-    return { ...fixture, analysisId: fixtureAnalysisId(ref.number) };
+    return {
+      ...fixture,
+      analysisId: fixtureAnalysisId(ref.number),
+      pullRequestId: fixturePullRequestId(ref.number),
+    };
   },
 });
 

@@ -25,11 +25,15 @@ export type DiffRow =
   | { readonly kind: "note"; readonly text: string };
 
 /** A comment the reviewer wrote on a new-side line. Pending until Finish review (P6-6). */
+/** Carried by a review attempt (P3-5): posted, or being posted. Read-only then (P6-6). */
+export type PostedState = "posting" | "posted" | null;
+
 export type OwnComment = {
   readonly id: string;
   readonly path: string;
   readonly line: number;
   readonly body: string;
+  readonly posted: PostedState;
 };
 
 export type DiffItem =

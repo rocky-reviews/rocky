@@ -52,7 +52,8 @@ export const ShortcutKeys = (props: Props) => {
         case "prevDraft": {
           if (!draftsShown(r)) return true;
           const ids = bySeverity(r.findings).map((f) => f.id);
-          const undecided = (id: string) => r.decisionOf(id).state === "draft";
+          const undecided = (id: string) =>
+            r.decisionOf(id).state === "draft" && r.postedOf(id) === null;
           const to = stepDraft(ids, undecided, r.focused, action === "nextDraft" ? 1 : -1);
           if (to !== undefined) r.jumpToFinding(to);
           return true;
@@ -66,7 +67,8 @@ export const ShortcutKeys = (props: Props) => {
           const card = document.querySelector(`[data-finding="${CSS.escape(finding.id)}"]`);
           if (card === null) {
             // Scrolled out of the (virtualised) diff: bring it back; the next press acts.
-            if (r.decisionOf(finding.id).state === "draft") r.jumpToFinding(finding.id);
+            if (r.decisionOf(finding.id).state === "draft" && r.postedOf(finding.id) === null)
+              r.jumpToFinding(finding.id);
             return true;
           }
           // No such button (the card is being edited or dismissed): the key does nothing.

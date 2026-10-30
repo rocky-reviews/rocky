@@ -5,6 +5,12 @@
  * same function) and reconciled with the server's answer: a refusal from a stale tab shows the
  * server's state, a failure puts the old state back. Nothing here posts to GitHub.
  *
+ * P6-6: a draft or comment carried by a review attempt (`posted`, P3-5) is read-only here: no
+ * action is sent for it, and a server refusal `already_posted` (the attempt happened in another
+ * tab, or the content was posted from a re-run) marks that one item posted and says so. After
+ * Finish review posts, it calls `refresh`, which reads the review again without dropping what
+ * the person is doing (an edit in progress, the focused draft).
+ *
  * Also the UI state the draft cards share with the right panel: which draft is being edited or
  * dismissed (the text survives the diff's virtualisation), which one has the focus ring, and
  * jump requests from the panel to a draft or a comment.
@@ -35,7 +41,7 @@ import {
   type ReviewSource,
   type ReviewState,
 } from "../data/review-data.js";
-import type { OwnComment } from "../diff/diff-model.js";
+import type { OwnComment, PostedState } from "../diff/diff-model.js";
 import { useDiff } from "../diff/DiffProvider.js";
 import { useToast } from "../shell/Toast.js";
 
@@ -59,6 +65,9 @@ export const TOAST = {
   conflict: "This draft was decided in another tab. It now shows that decision.",
   commentFailed: "Your comment could not be saved. Try again.",
   deleteFailed: "Your comment could not be deleted. Try again.",
+  posted: "This was already posted to GitHub, so it can no longer be changed.",
+  tooLong:
+    "This comment is longer than GitHub allows (65,536 characters with the title and suggestion), so it was not saved. Shorten it.",
 } as const;
 
 export type DraftMode =
@@ -83,6 +92,8 @@ export type ReviewContextValue = {
   readonly findings: readonly Finding[];
   readonly state: ReviewState;
   readonly decisionOf: (findingId: string) => DraftDecision;
+  /** Carried by a review attempt (posted, or being posted): read-only, even if undecided. */
+  readonly postedOf: (findingId: string) => PostedState;
   readonly saving: ReadonlySet<string>;
   readonly act: (finding: Finding, action: DraftAction) => Promise<void>;
   readonly sendToAgent: (finding: Finding) => Promise<void>;
@@ -97,6 +108,12 @@ export type ReviewContextValue = {
   readonly doneJump: (seq: number) => void;
   readonly jumpToFinding: (findingId: string) => void;
   readonly jumpToComment: (comment: OwnComment) => void;
+  /**
+   * Reads the review again from the server (after a post) and replaces the decisions and
+   * comments, keeping the page's own state: the draft being edited or dismissed, its text, the
+   * focused draft. Decisions still being saved are kept too (their answers land afterwards).
+   */
+  readonly refresh: () => void;
 };
 
 /** Without a provider: no analysis, nothing to decide. Tests spread it and override fields. */
@@ -106,6 +123,7 @@ export const NO_REVIEW: ReviewContextValue = {
   findings: [],
   state: EMPTY_REVIEW,
   decisionOf: () => DRAFT,
+  postedOf: () => null,
   saving: new Set(),
   act: async () => {},
   sendToAgent: async () => {},
@@ -119,6 +137,7 @@ export const NO_REVIEW: ReviewContextValue = {
   doneJump: () => {},
   jumpToFinding: () => {},
   jumpToComment: () => {},
+  refresh: () => {},
 };
 
 export const ReviewContext = createContext<ReviewContextValue>(NO_REVIEW);
@@ -202,8 +221,43 @@ export const ReviewProvider = ({
     return () => abort.abort();
   }, [source, analysisId]);
 
+  // A refresh (P6-6) reads the server's view again and merges it in: rows the page is still
+  // saving keep the page's version (the answer replaces it), everything else takes the
+  // server's. Mode, focus and jumps are untouched. A refresh that fails changes nothing.
+  const refresh = useCallback(() => {
+    const scope = session.current;
+    if (analysisId === null || !ready.current || scope.aborted) return;
+    untilAborted(source.load(analysisId, { signal: scope }), scope)
+      .then(parseReviewState)
+      .then(
+        (loaded) => {
+          const merged = new Map(loaded.drafts);
+          for (const id of savingNow.current) {
+            const mine = drafts.current.get(id);
+            if (mine === undefined) merged.delete(id);
+            else merged.set(id, mine);
+          }
+          drafts.current = merged;
+          setState((s) => ({
+            drafts: merged,
+            comments: [
+              ...loaded.comments,
+              ...s.comments.filter((c) => c.id.startsWith("pending-")),
+            ],
+          }));
+        },
+        () => {},
+      );
+  }, [analysisId, source]);
+  const savingNow = useRef<ReadonlySet<string>>(saving);
+  savingNow.current = saving;
+
   const decisionOf = useCallback(
     (findingId: string) => state.drafts.get(findingId)?.decision ?? DRAFT,
+    [state],
+  );
+  const postedOf = useCallback(
+    (findingId: string) => state.drafts.get(findingId)?.posted ?? null,
     [state],
   );
 
@@ -230,6 +284,11 @@ export const ReviewProvider = ({
       // the analysis this action was made on.
       if (analysisId === null || !ready.current || scope.aborted) return;
       const before = drafts.current.get(finding.id);
+      // Posted (or being posted) to GitHub: read-only, whatever the action (P6-6).
+      if (before !== undefined && before.posted !== null) {
+        toast(TOAST.posted);
+        return;
+      }
       const transition = applyDraftAction(before?.decision ?? DRAFT, action, finding);
       if (!transition.ok) return;
       putDraft(finding.id, {
@@ -238,6 +297,7 @@ export const ReviewProvider = ({
         agentPromptCopiedAt: transition.agentPromptCopied
           ? new Date().toISOString()
           : (before?.agentPromptCopiedAt ?? null),
+        posted: null,
       });
       setMode(null);
       setFocused(finding.id);
@@ -245,7 +305,15 @@ export const ReviewProvider = ({
       busy(finding.id, true);
       try {
         const answer = await untilAborted(source.decide(analysisId, finding.id, action), scope);
+        if (answer.kind === "too_long") {
+          putDraft(finding.id, before);
+          toast(TOAST.tooLong);
+          return;
+        }
+        // `posted`: this very draft, or its content from a re-run, is on GitHub: the server's
+        // row (marked posted) replaces the page's optimistic decision.
         putDraft(finding.id, parseDraftRecord(answer.draft));
+        if (answer.kind === "posted") toast(TOAST.posted);
         if (answer.kind === "conflict") toast(TOAST.conflict);
       } catch {
         if (scope.aborted) return;
@@ -288,7 +356,13 @@ export const ReviewProvider = ({
     async (path: string, line: number, body: string): Promise<boolean> => {
       const scope = session.current;
       if (analysisId === null || !ready.current || scope.aborted) return false;
-      const temp: OwnComment = { id: `pending-${++seq.current}`, path, line, body: body.trim() };
+      const temp: OwnComment = {
+        id: `pending-${++seq.current}`,
+        path,
+        line,
+        body: body.trim(),
+        posted: null,
+      };
       setState((s) => ({ ...s, comments: [...s.comments, temp] }));
       try {
         const saved = parseOwnComment(
@@ -315,9 +389,18 @@ export const ReviewProvider = ({
       if (analysisId === null || !ready.current || scope.aborted) return;
       const removed = current.current.comments.find((c) => c.id === id);
       if (removed === undefined || id.startsWith("pending-")) return;
+      if (removed.posted !== null) {
+        toast(TOAST.posted);
+        return;
+      }
       setState((s) => ({ ...s, comments: s.comments.filter((c) => c.id !== id) }));
       try {
-        await untilAborted(source.deleteComment(analysisId, id), scope);
+        const answer = await untilAborted(source.deleteComment(analysisId, id), scope);
+        if (answer === "posted") {
+          // It stays, now marked posted (the server's DELETE refusal carries no body).
+          setState((s) => ({ ...s, comments: [...s.comments, { ...removed, posted: "posted" }] }));
+          toast(TOAST.posted);
+        }
       } catch {
         if (scope.aborted) return;
         setState((s) => ({ ...s, comments: [...s.comments, removed] }));
@@ -355,6 +438,7 @@ export const ReviewProvider = ({
       findings,
       state,
       decisionOf,
+      postedOf,
       saving,
       act,
       sendToAgent,
@@ -368,6 +452,7 @@ export const ReviewProvider = ({
       doneJump,
       jumpToFinding,
       jumpToComment,
+      refresh,
     }),
     [
       status,
@@ -375,6 +460,7 @@ export const ReviewProvider = ({
       findings,
       state,
       decisionOf,
+      postedOf,
       saving,
       act,
       sendToAgent,
@@ -386,6 +472,7 @@ export const ReviewProvider = ({
       doneJump,
       jumpToFinding,
       jumpToComment,
+      refresh,
     ],
   );
   return <ReviewContext value={value}>{children}</ReviewContext>;

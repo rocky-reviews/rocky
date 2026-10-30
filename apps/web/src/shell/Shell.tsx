@@ -5,13 +5,24 @@
  * page is inert, Tab cycles inside it, and Escape or a click outside closes it and returns
  * focus to its toggle. If the width grows until the panel shows in place, focus moves to it.
  * P6-5: the keyboard shortcuts (ADR 0030) and their dialog, a modal in the same way.
+ * P6-6: Finish review (ADR 0031), a modal in the same way, opened from the top bar or
+ * ⌘/Ctrl+Enter; after it posts, the status pill shows the verdict and the posted items are
+ * read-only (the review state is loaded again).
  */
 import type { Finding } from "@rocky-reviews/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { focusMain } from "../briefing/focus.js";
+import {
+  previewOutcome,
+  type ReviewPostingSource,
+  type ReviewVerdict,
+} from "../data/posting-data.js";
 import type { ReviewSource } from "../data/review-data.js";
-import type { ShellData } from "../data/shell-data.js";
-import { ReviewProvider } from "../drafts/ReviewProvider.js";
+import type { MyReview, ShellData } from "../data/shell-data.js";
+import { ReviewProvider, useReview } from "../drafts/ReviewProvider.js";
+import { FinishReview } from "../finish/FinishReview.js";
+import { myReviewOf, pendingCount } from "../finish/finish-model.js";
+import { fetchSession } from "../session.js";
 import { MainContent } from "./MainArea.js";
 import { RightPanelContent } from "./RightPanel.js";
 import { ToastProvider, useToast } from "./Toast.js";
@@ -20,6 +31,7 @@ import { type Drawer, TopBar } from "./TopBar.js";
 import { coverage, noiseGroup, sidebarGroups } from "./triage-model.js";
 import { PANEL_HIDDEN, SIDEBAR_HIDDEN, useMediaQuery } from "./use-media-query.js";
 import { useTheme } from "./use-theme.js";
+import type { Mode } from "../theme.js";
 import { trapTab } from "./focus-trap.js";
 import { reviewOrder } from "../diff/annotations.js";
 import { KeyboardContext, type KeyboardContextValue } from "../keyboard/KeyboardContext.js";
@@ -32,6 +44,8 @@ type Props = {
   now: number;
   /** Where the reviewer's drafts and comments are kept (P6-4). */
   review: ReviewSource;
+  /** Where Finish review reads the exact list and posts it (P6-6). */
+  posting: ReviewPostingSource;
 };
 
 export const Shell = (props: Props) => (
@@ -42,15 +56,18 @@ export const Shell = (props: Props) => (
 
 const NO_FINDINGS: readonly Finding[] = [];
 
-/** P6-5: the entry points that later tasks fill (Ask: P9-2; Finish review: P6-6). */
+/** P6-5: the entry point a later task fills (Ask: P9-2). */
 export const NOT_YET = {
   ask: "Ask is not available yet.",
-  finish: "Finish review is not available yet. Your decisions and comments are saved.",
 } as const;
+
+/** P6-6: after the review is on GitHub (POC: "Review submitted to GitHub as @login"). */
+export const submittedToast = (login: string | null): string =>
+  `Review submitted to GitHub as ${login === null ? "you" : `@${login}`}.`;
 
 const storage = (): Storage => window.localStorage;
 
-const ShellLayout = ({ data, now, review }: Props) => {
+const ShellLayout = ({ data, now, review, posting }: Props) => {
   const { mode, toggle } = useTheme();
   const toast = useToast();
   const [selection, setSelection] = useState<Selection>({ kind: "briefing" });
@@ -106,7 +123,60 @@ const ShellLayout = ({ data, now, review }: Props) => {
     if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
     else document.getElementById("main")?.focus({ preventScroll: true });
   }, [help]);
-  const modal = overlay !== null || help;
+  // P6-6: the finish modal, opened from the top bar or ⌘/Ctrl+Enter, returns focus like the
+  // help does; the status pill shows the verdict once a review was posted (here, or earlier:
+  // the server's latest posted attempt, read once on load), and the person's login for
+  // "as @login" comes from the session.
+  const [finish, setFinish] = useState(false);
+  const finishReturn = useRef<Element | null>(null);
+  const [submitted, setSubmitted] = useState<MyReview | null>(null);
+  const [login, setLogin] = useState<string | null>(null);
+  const openFinish = useCallback(() => {
+    setFinish((open) => {
+      if (!open) finishReturn.current = document.activeElement;
+      return true;
+    });
+  }, []);
+  const closeFinish = useCallback(() => setFinish(false), []);
+  useEffect(() => {
+    if (finish || finishReturn.current === null) return;
+    const back = finishReturn.current;
+    finishReturn.current = null;
+    if (back instanceof HTMLElement && back !== document.body && back.isConnected) back.focus();
+    else document.getElementById("main")?.focus({ preventScroll: true });
+  }, [finish]);
+  useEffect(() => {
+    const abort = new AbortController();
+    fetchSession().then(
+      (session) => {
+        if (abort.signal.aborted || session === null) return;
+        const org = session.orgs.find((o) => o.id === session.activeOrgId);
+        setLogin(org?.memberLogin ?? null);
+      },
+      () => {},
+    );
+    if (data.pullRequestId !== null) {
+      posting.preview(data.pullRequestId, { signal: abort.signal }).then(
+        (answer) => {
+          if (abort.signal.aborted) return;
+          const outcome = previewOutcome(answer);
+          const latest = outcome.kind === "ok" ? outcome.preview.latestSubmission : null;
+          if (latest?.status === "posted") setSubmitted(myReviewOf(latest.verdict));
+        },
+        () => {},
+      );
+    }
+    return () => abort.abort();
+  }, [posting, data.pullRequestId]);
+  const onPosted = useCallback(
+    (verdict: ReviewVerdict) => {
+      setSubmitted(myReviewOf(verdict));
+      setFinish(false);
+      toast(submittedToast(login));
+    },
+    [toast, login],
+  );
+  const modal = overlay !== null || help || finish;
 
   // Focus moves into an opened drawer, and on close back to its toggle, or to the region
   // itself when a wider window now shows it in place (the toggle is hidden then).
@@ -203,21 +273,22 @@ const ShellLayout = ({ data, now, review }: Props) => {
           onToggleMode={toggle}
           onHelp={keyboard.openHelp}
           onAsk={() => toast(NOT_YET.ask)}
-          onFinish={() => toast(NOT_YET.finish)}
+          onFinish={openFinish}
         />
         <div className="app">
           <div className="topbar-wrap" inert={modal}>
             <a className="skip-link" href="#main">
               Skip to main content
             </a>
-            <TopBar
-              pull={data.pull}
-              myReview={data.myReview}
+            <FinishButtonBar
+              data={data}
+              myReview={submitted ?? data.myReview}
               now={now}
               mode={mode}
               onToggleMode={toggle}
               drawer={drawer}
               onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
+              onFinish={openFinish}
             />
           </div>
           <div className="body">
@@ -229,7 +300,7 @@ const ShellLayout = ({ data, now, review }: Props) => {
                 ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
                 : { "aria-label": "Files" })}
               data-open={drawer === "files"}
-              inert={(overlay !== null && overlay !== "files") || help}
+              inert={(overlay !== null && overlay !== "files") || help || finish}
             >
               {drawer === "files" && (
                 <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
@@ -268,7 +339,7 @@ const ShellLayout = ({ data, now, review }: Props) => {
                 ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
                 : { "aria-label": "Review panel" })}
               data-open={drawer === "panel"}
-              inert={(overlay !== null && overlay !== "panel") || help}
+              inert={(overlay !== null && overlay !== "panel") || help || finish}
             >
               {drawer === "panel" && (
                 <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
@@ -287,9 +358,58 @@ const ShellLayout = ({ data, now, review }: Props) => {
               onClose={closeHelp}
             />
           )}
+          {finish && (
+            <FinishReview
+              pullRequestId={data.pullRequestId}
+              pull={data.pull}
+              login={login}
+              posting={posting}
+              groups={groups}
+              viewed={viewed}
+              now={now}
+              onClose={closeFinish}
+              onPosted={onPosted}
+            />
+          )}
         </div>
       </ReviewProvider>
     </KeyboardContext>
+  );
+};
+
+/** The top bar with the Finish count from the review state (inside the provider). */
+const FinishButtonBar = ({
+  data,
+  myReview,
+  now,
+  mode,
+  onToggleMode,
+  drawer,
+  onToggleDrawer,
+  onFinish,
+}: {
+  data: ShellData;
+  myReview: MyReview | null;
+  now: number;
+  mode: Mode;
+  onToggleMode: () => void;
+  drawer: Drawer | null;
+  onToggleDrawer: (drawer: Drawer) => void;
+  onFinish: () => void;
+}) => {
+  const { state } = useReview();
+  return (
+    <TopBar
+      pull={data.pull}
+      myReview={myReview}
+      now={now}
+      mode={mode}
+      onToggleMode={onToggleMode}
+      drawer={drawer}
+      onToggleDrawer={onToggleDrawer}
+      pending={pendingCount(state)}
+      onFinish={onFinish}
+    />
   );
 };
 

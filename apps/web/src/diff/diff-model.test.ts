@@ -101,7 +101,7 @@ describe("diffItems", () => {
   it("puts flags, own comments and the composer in one block under their new line", () => {
     const flag = { range: { start: 4, end: 4 }, kind: "look" as const, text: "here" };
     const annotations = { hot: new Map([[4, "look" as const]]), flags: new Map([[4, [flag]]]) };
-    const comment = { id: "c1", path: "src/api/index.ts", line: 6, body: "mine" };
+    const comment = { id: "c1", path: "src/api/index.ts", line: 6, body: "mine", posted: null };
     const items = diffItems(rows, annotations, [comment], 20);
     const inline = items.filter((i) => i.kind === "inline");
     expect(inline.map((i) => [i.line, i.flags.length, i.comments.length, i.composing])).toEqual([

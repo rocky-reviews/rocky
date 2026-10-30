@@ -12,7 +12,13 @@ import {
 } from "@rocky-reviews/core";
 import { parseAnalysisDocument, type AnalysisDocument } from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
-import { carriedDraftContent, isCarried, lockReviewPlan, postedDraftContent } from "./reviews.js";
+import {
+  carriedDraftContent,
+  carriedStatusSql,
+  isCarried,
+  lockReviewPlan,
+  postedDraftContent,
+} from "./reviews.js";
 
 /**
  * Draft decisions and pending comments (P6-4, migration 0015, ADR 0027). Every function runs in
@@ -42,6 +48,13 @@ const uuid = (value: unknown, what: string): string => {
   return value.toLowerCase();
 };
 
+/**
+ * Carried by a review attempt (P3-5, ADR 0026): `posted` once the forge took it, `posting`
+ * while the attempt's answer is awaited or reconciled. Such an item is read-only for the page
+ * (P6-6): the review on GitHub stands, and the item is never offered for posting again.
+ */
+export type PostedState = "posting" | "posted" | null;
+
 /** One reviewer's decision about one draft, as the page shows it after a reload. */
 export interface DraftView {
   readonly findingId: string;
@@ -53,6 +66,7 @@ export interface DraftView {
   readonly body: string | null;
   readonly agentPromptCopiedAt: Date | null;
   readonly updatedAt: Date;
+  readonly posted: PostedState;
 }
 
 /** A comment the reviewer wrote on a line (not from a draft). */
@@ -62,6 +76,7 @@ export interface OwnCommentView {
   readonly line: number;
   readonly body: string;
   readonly createdAt: Date;
+  readonly posted: PostedState;
 }
 
 export interface ReviewDraftsView {
@@ -110,10 +125,14 @@ interface DraftRow {
   updated_at: Date;
   source: string | null;
   body: string | null;
+  posted: string | null;
 }
 
+const postedOf = (value: string | null): PostedState =>
+  value === "posting" || value === "posted" ? value : null;
+
 const DRAFT_COLUMNS = `f.finding_id, f.state, f.reason, f.agent_prompt_copied_at, f.updated_at,
-       c.source, c.body`;
+       c.source, c.body, ${carriedStatusSql("f.org_id", "'draft'", "f.id")} as posted`;
 const DRAFT_JOIN = `findings_state f
   left join comments_pending c
     on c.org_id = f.org_id and c.analysis_id = f.analysis_id
@@ -140,12 +159,19 @@ const viewOf = (row: DraftRow): DraftView => {
     body: accepted ? row.body : null,
     agentPromptCopiedAt: row.agent_prompt_copied_at,
     updatedAt: row.updated_at,
+    posted: postedOf(row.posted),
   };
 };
 
 /**
  * The reviewer's drafts and own comments for one analysis; `null` when the analysis is not this
  * org's or not done.
+ *
+ * `posted` on a draft: its own decision row is carried by an attempt (by id, with the attempt's
+ * status), or its content was posted by this member on this revision from another analysis (a
+ * re-run renumbers findings; #39 matches by content, so accepting it again is refused). The
+ * second case is reported as `posted` on the row, which may be an undecided draft: the page
+ * shows it read-only instead of offering a decision the server would refuse.
  */
 export const listReviewDrafts = async (
   tx: TenantTx,
@@ -153,40 +179,72 @@ export const listReviewDrafts = async (
 ): Promise<ReviewDraftsView | null> => {
   const analysisId = uuid(input.analysisId, "analysis id");
   const memberId = uuid(input.memberId, "member id");
-  const exists = await tx.query(
-    "select 1 from analyses where org_id = $1 and id = $2 and status = 'done'",
-    [tx.orgId, analysisId],
-  );
-  if (exists.rowCount === 0) return null;
-  const drafts = await tx.query<DraftRow>(
+  const target = await loadTarget(tx, analysisId);
+  if (target === null) return null;
+  const { rows } = await tx.query<DraftRow>(
     `select ${DRAFT_COLUMNS}
        from ${DRAFT_JOIN}
       where f.org_id = $1 and f.analysis_id = $2 and f.member_id = $3
-        and (f.state <> 'draft' or f.agent_prompt_copied_at is not null)
       order by f.finding_id`,
     [tx.orgId, analysisId, memberId],
   );
+  const byFinding = new Map(rows.map((row) => [row.finding_id, row]));
+  const carried = await carriedDraftContent(tx, memberId, target.revisionId);
+  const views: DraftView[] = [];
+  for (const finding of target.document.findings) {
+    const row = byFinding.get(finding.id);
+    const view = row === undefined ? null : viewOf(row);
+    if (view?.posted !== null && view !== null) {
+      views.push(view);
+      continue;
+    }
+    // Not carried by id: carried by content when this member posted the same comment on this
+    // revision (the accepted body, or the finding's own body for an undecided draft).
+    const body = view?.state === "accepted" && view.body !== null ? view.body : finding.body;
+    const elsewhere = view?.state !== "dismissed" && carried(postedDraftContent(finding, body));
+    if (elsewhere) {
+      views.push(
+        view === null
+          ? {
+              findingId: finding.id,
+              state: "draft",
+              reason: null,
+              edited: false,
+              body: null,
+              agentPromptCopiedAt: null,
+              updatedAt: new Date(0),
+              posted: "posted",
+            }
+          : { ...view, posted: "posted" },
+      );
+    } else if (view !== null && (view.state !== "draft" || view.agentPromptCopiedAt !== null)) {
+      views.push(view);
+    }
+  }
   const comments = await tx.query<{
     id: string;
     path: string;
     line: number;
     body: string;
     created_at: Date;
+    posted: string | null;
   }>(
-    `select id, path, line, body, created_at
-       from comments_pending
-      where org_id = $1 and analysis_id = $2 and author_id = $3 and source = 'own'
-      order by created_at, id`,
+    `select f.id, f.path, f.line, f.body, f.created_at,
+            ${carriedStatusSql("f.org_id", "'comment'", "f.id")} as posted
+       from comments_pending f
+      where f.org_id = $1 and f.analysis_id = $2 and f.author_id = $3 and f.source = 'own'
+      order by f.created_at, f.id`,
     [tx.orgId, analysisId, memberId],
   );
   return {
-    drafts: drafts.rows.map(viewOf),
+    drafts: views,
     comments: comments.rows.map((c) => ({
       id: c.id,
       path: c.path,
       line: c.line,
       body: c.body,
       createdAt: c.created_at,
+      posted: postedOf(c.posted),
     })),
   };
 };
@@ -391,7 +449,7 @@ export const addOwnComment = async (
   if (row === undefined) throw new DraftStoreError("drafts: comment not stored");
   return {
     outcome: "created",
-    comment: { id: row.id, path, line, body, createdAt: row.created_at },
+    comment: { id: row.id, path, line, body, createdAt: row.created_at, posted: null },
   };
 };
 

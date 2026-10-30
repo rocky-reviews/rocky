@@ -81,10 +81,17 @@ export const createHttpReviewSource = (
         `${base(analysisId)}/drafts/${encodeURIComponent(findingId)}`,
         actionBody(action),
       );
+      if (response.status === 400) {
+        const answer = (await response.json().catch(() => ({}))) as { error?: unknown };
+        if (answer.error === "comment_too_long") return { kind: "too_long" };
+        throw new ReviewRequestError("draft", response.status);
+      }
       if (response.status !== 200 && response.status !== 409)
         throw new ReviewRequestError("draft", response.status);
-      const answer = (await response.json()) as { draft?: unknown };
-      return { kind: response.status === 200 ? "ok" : "conflict", draft: answer.draft };
+      const answer = (await response.json()) as { error?: unknown; draft?: unknown };
+      const kind =
+        response.status === 200 ? "ok" : answer.error === "already_posted" ? "posted" : "conflict";
+      return { kind, draft: answer.draft };
     },
     addComment: async (analysisId, comment) => {
       const response = await send("POST", `${base(analysisId)}/comments`, comment);
@@ -97,8 +104,10 @@ export const createHttpReviewSource = (
         "DELETE",
         `${base(analysisId)}/comments/${encodeURIComponent(commentId)}`,
       );
+      if (response.status === 409) return "posted";
       if (response.status !== 204 && response.status !== 404)
         throw new ReviewRequestError("delete comment", response.status);
+      return "deleted";
     },
   };
 };

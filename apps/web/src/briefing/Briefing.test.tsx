@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { memoryReviewSource } from "../drafts/testing.js";
+import { memoryPostingSource } from "../finish/testing.js";
 import { Shell } from "../shell/Shell.js";
 import { BriefingView } from "./Briefing.js";
 import { BRIEFING_FIXTURE_PULLS, type BriefingFixture } from "./fixtures.js";
@@ -289,7 +290,12 @@ describe("untrusted model output", () => {
 describe("in the shell", () => {
   it("lists files the AI could not analyse in the sidebar, so they can be opened", async () => {
     const html = renderToStaticMarkup(
-      <Shell data={await fixture("graphUnavailable")} now={0} review={memoryReviewSource([])} />,
+      <Shell
+        data={await fixture("graphUnavailable")}
+        now={0}
+        review={memoryReviewSource([])}
+        posting={memoryPostingSource()}
+      />,
     );
     const side = html.slice(html.indexOf('<nav id="sidebar"'), html.indexOf("</nav>"));
     expect(text(side)).toContain("Not analysed 1");
@@ -299,7 +305,12 @@ describe("in the shell", () => {
 
   it("fills the main column with the briefing when it is selected", () => {
     const html = renderToStaticMarkup(
-      <Shell data={main} now={Date.now()} review={memoryReviewSource([])} />,
+      <Shell
+        data={main}
+        now={Date.now()}
+        review={memoryReviewSource([])}
+        posting={memoryPostingSource()}
+      />,
     );
     const mainColumn = html.slice(html.indexOf('<main id="main"'), html.indexOf("</main>"));
     expect(text(mainColumn)).toContain("Critical 3 files need your attention");

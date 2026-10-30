@@ -88,12 +88,41 @@ describe("http review source", () => {
     expect(await source.addComment(ID, { path: "a.ts", line: 3, body: "x" })).toMatchObject({
       id: COMMENT,
     });
-    await source.deleteComment(ID, COMMENT);
+    expect(await source.deleteComment(ID, COMMENT)).toBe("deleted");
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
       `POST /api/analyses/${ID}/comments`,
       `DELETE /api/analyses/${ID}/comments/${COMMENT}`,
     ]);
     expect(calls[0]?.body).toEqual({ path: "a.ts", line: 3, body: "x" });
+  });
+
+  it("reports a draft or comment posted meanwhile (P3-5 `already_posted`, 409) instead of a conflict", async () => {
+    const { fetch } = fakeFetch((call) =>
+      call.method === "DELETE"
+        ? { status: 409, body: { error: "already_posted" } }
+        : { status: 409, body: { error: "already_posted", draft: draft({ posted: "posted" }) } },
+    );
+    const source = createHttpReviewSource({ fetch, csrfToken: async () => "tok" });
+    expect(await source.decide(ID, "F1", { kind: "undo" })).toEqual({
+      kind: "posted",
+      draft: draft({ posted: "posted" }),
+    });
+    expect(await source.deleteComment(ID, COMMENT)).toBe("posted");
+  });
+
+  it("reports a comment GitHub would not take (#39 `comment_too_long`, 400) without throwing", async () => {
+    const { fetch } = fakeFetch(() => ({ status: 400, body: { error: "comment_too_long" } }));
+    const source = createHttpReviewSource({ fetch, csrfToken: async () => "tok" });
+    expect(await source.decide(ID, "F1", { kind: "edit", body: "x" })).toEqual({
+      kind: "too_long",
+    });
+    const other = createHttpReviewSource({
+      fetch: fakeFetch(() => ({ status: 400, body: { error: "invalid_body" } })).fetch,
+      csrfToken: async () => "tok",
+    });
+    await expect(other.decide(ID, "F1", { kind: "edit", body: "x" })).rejects.toBeInstanceOf(
+      ReviewRequestError,
+    );
   });
 
   it("throws on any other status, with the status only", async () => {
@@ -155,6 +184,7 @@ describe("parsing answers", () => {
     ).toEqual({
       findingId: "F1",
       decision: { state: "draft" },
+      posted: null,
       agentPromptCopiedAt: "2026-10-25T12:00:00.000Z",
     });
   });
@@ -175,11 +205,21 @@ describe("parsing answers", () => {
 
   it("reads comments and the whole review", () => {
     const comment = { id: COMMENT, path: "a.ts", line: 3, body: "x", createdAt: "z" };
-    expect(parseOwnComment(comment)).toEqual({ id: COMMENT, path: "a.ts", line: 3, body: "x" });
+    expect(parseOwnComment(comment)).toEqual({
+      id: COMMENT,
+      path: "a.ts",
+      line: 3,
+      body: "x",
+      posted: null,
+    });
+    expect(parseOwnComment({ ...comment, posted: "posting" }).posted).toBe("posting");
+    expect(() => parseOwnComment({ ...comment, posted: "yes" })).toThrow(ReviewDataError);
     expect(() => parseOwnComment({ ...comment, line: 0 })).toThrow(ReviewDataError);
     expect(() => parseOwnComment({ ...comment, id: "c1" })).toThrow(ReviewDataError);
     const review = parseReviewState({ analysisId: ID, drafts: [draft()], comments: [comment] });
     expect(review.drafts.get("F1")?.decision.state).toBe("accepted");
+    expect(review.drafts.get("F1")?.posted).toBeNull();
+    expect(parseDraftRecord(draft({ posted: "posted" })).posted).toBe("posted");
     expect(review.comments).toHaveLength(1);
     expect(() => parseReviewState({ drafts: "x", comments: [] })).toThrow(ReviewDataError);
   });

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { composePostedComment } from "@rocky-reviews/core";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "json" };
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -70,6 +72,11 @@ beforeEach(async () => {
       await tx.query("delete from findings_state where finding_id <> 'f-1'");
     });
   }
+  // The attempt tables grant no DELETE to the app role (ADR 0026): the superuser clears them.
+  await superuser.query("delete from review_submissions where org_id = $1 and id <> $2", [
+    A.orgId,
+    A.reviewSubmissionId,
+  ]);
 });
 
 const me = () => ({ analysisId: A.analysisId, memberId: A.memberId });
@@ -387,6 +394,131 @@ describe("own comments", () => {
     expect(
       await db.withOrg(A.orgId, (tx) => deleteOwnComment(tx, { ...me(), commentId: rows[0]!.id })),
     ).toBe("not_found");
+  });
+});
+
+describe("posted items are flagged (P6-6: read-only once carried by an attempt)", () => {
+  /** An attempt as P3-5 records it before the forge call, carrying the given items. */
+  const digestOf = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+  const attempt = async (
+    status: "posting" | "posted" | "failed",
+    items: readonly { kind: "draft" | "comment"; itemId: string; body?: string }[],
+  ) =>
+    db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into review_submissions
+           (pull_request_id, revision_id, submitted_by, idempotency_key, head_sha, verdict,
+            content_sha256, body_sha256, draft_count, comment_count, status, forge_review_id,
+            error_code, finished_at)
+         values ($1, $2, $3, gen_random_uuid(), repeat('a', 40), 'comment', decode(repeat('00', 32), 'hex'),
+                 decode(repeat('00', 32), 'hex'), 0, 0, $4, $5, $6, $7)
+         returning id`,
+        [
+          A.pullRequestId,
+          A.revisionId,
+          A.memberId,
+          status,
+          status === "posted" ? 77 : null,
+          status === "failed" ? "lost" : null,
+          status === "posting" ? null : new Date(),
+        ],
+      );
+      for (const [seq, item] of items.entries()) {
+        await tx.query(
+          `insert into review_submission_items (submission_id, seq, kind, item_id, body_sha256)
+           values ($1, $2, $3, $4, decode($5, 'hex'))`,
+          [rows[0]!.id, seq, item.kind, item.itemId, digestOf(item.body ?? "")],
+        );
+      }
+    });
+  const stateId = async (findingId: string) =>
+    (
+      await superuser.query<{ id: string }>(
+        "select id from findings_state where org_id = $1 and analysis_id = $2 and finding_id = $3",
+        [A.orgId, A.analysisId, findingId],
+      )
+    ).rows[0]!.id;
+
+  it("a draft whose content this member already posted from another analysis of the head (a re-run) is reported as posted, even undecided (#39 S1 → P6-6 S3)", async () => {
+    // alice accepts F1 on A1 and posts it; a re-run A2 of the same revision renumbers nothing
+    // here (same document), but its F1 row is new: by id it is not carried, by content it is.
+    await decide("F1", { kind: "accept" });
+    await attempt("posted", [
+      {
+        kind: "draft",
+        itemId: await stateId("F1"),
+        body: composePostedComment(F1, { body: F1.body }),
+      },
+    ]);
+    const a2 = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
+        [A.revisionId, JSON.stringify(pr847)],
+      );
+      return rows[0]!.id;
+    });
+    const view = await db.withOrg(A.orgId, (tx) =>
+      listReviewDrafts(tx, { analysisId: a2, memberId: A.memberId }),
+    );
+    expect(view?.drafts).toEqual([
+      expect.objectContaining({ findingId: "F1", state: "draft", body: null, posted: "posted" }),
+    ]);
+    // Accepting it there is what the server refuses (#39): the page shows it read-only instead.
+    const refused = await db.withOrg(A.orgId, (tx) =>
+      decideDraft(tx, {
+        analysisId: a2,
+        memberId: A.memberId,
+        findingId: "F1",
+        action: { kind: "accept" },
+      }),
+    );
+    expect(refused.outcome).toBe("already_posted");
+    // An edit with other words is new content: offered as an ordinary draft once decided.
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      decideDraft(tx, {
+        analysisId: a2,
+        memberId: A.memberId,
+        findingId: "F2",
+        action: { kind: "edit", body: "Other words." },
+      }),
+    );
+    expect(edited.outcome).toBe("ok");
+    const after = await db.withOrg(A.orgId, (tx) =>
+      listReviewDrafts(tx, { analysisId: a2, memberId: A.memberId }),
+    );
+    expect(after?.drafts.map((d) => [d.findingId, d.state, d.posted])).toEqual([
+      ["F1", "draft", "posted"],
+      ["F2", "accepted", null],
+    ]);
+    await superuser.query("delete from analyses where org_id = $1 and id = $2", [A.orgId, a2]);
+  });
+
+  it("an accepted draft and an own comment carried by a posting or posted attempt say so; a failed attempt releases them", async () => {
+    await decide("F1", { kind: "accept" });
+    await decide("F2", { kind: "accept" });
+    const created = await db.withOrg(A.orgId, (tx) =>
+      addOwnComment(tx, { ...me(), path: "src/api/index.ts", line: 21, body: "Nice." }),
+    );
+    if (created.outcome !== "created") throw new Error("not created");
+    const before = await reload();
+    expect(before?.drafts.map((d) => [d.findingId, d.posted])).toEqual([
+      ["F1", null],
+      ["F2", null],
+    ]);
+    expect(before?.comments[0]?.posted).toBeNull();
+
+    await attempt("posted", [{ kind: "draft", itemId: await stateId("F1") }]);
+    await attempt("posting", [{ kind: "comment", itemId: created.comment.id }]);
+    await attempt("failed", [{ kind: "draft", itemId: await stateId("F2") }]);
+    const after = await reload();
+    expect(after?.drafts.map((d) => [d.findingId, d.posted])).toEqual([
+      ["F1", "posted"],
+      ["F2", null],
+    ]);
+    expect(after?.comments[0]?.posted).toBe("posting");
+    // Another reviewer's view is untouched (their own rows are not carried).
+    expect((await reload(bob))?.drafts).toEqual([]);
   });
 });
 

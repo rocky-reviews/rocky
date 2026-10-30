@@ -29,6 +29,7 @@ const render = (
     copied?: boolean;
     saving?: boolean;
     status?: ReviewContextValue["status"];
+    posted?: "posting" | "posted";
   } = {},
 ) => {
   const value = reviewWith(
@@ -41,6 +42,7 @@ const render = (
       saving: new Set(options.saving === true ? [finding.id] : []),
       status: options.status ?? "ready",
     },
+    options.posted === undefined ? {} : { [finding.id]: options.posted },
   );
   if (options.copied === true) {
     const drafts = new Map(value.state.drafts);
@@ -48,6 +50,7 @@ const render = (
       findingId: finding.id,
       decision: { state: "draft" },
       agentPromptCopiedAt: "2026-10-25T12:00:00.000Z",
+      posted: null,
     });
     Object.assign(value, { state: { ...value.state, drafts } });
   }
@@ -204,6 +207,26 @@ describe("decided drafts", () => {
     expect(added).toEqual(parts.suggestion?.map((line) => line.trim()));
     // Nothing that is not posted: no severity, no confidence, no project-memory evidence.
     expect(text(html)).not.toMatch(/Critical|confident|Seen in/);
+  });
+
+  it("accepted and posted to GitHub (P6-6): says Posted, read-only, no Undo", () => {
+    const decision = { state: "accepted", edited: false, body: F1.body } as const;
+    const posted = render(F1, { decision, posted: "posted" });
+    expect(text(posted)).toMatch(/^Y You Posted to GitHub, read-only · from AI draft Invitee/);
+    expect(posted).not.toContain('data-role="undo"');
+    expect(posted).toContain('data-posted="posted"');
+    expect(posted).toContain('class="pending posted"');
+    const posting = render(F1, { decision, posted: "posting" });
+    expect(text(posting)).toContain("You Posting… , read-only");
+    expect(posting).not.toContain("<button");
+  });
+
+  it("undecided but already posted from a re-run (P6-6): one read-only line, no actions", () => {
+    const html = render(F1, { posted: "posted", decision: { state: "draft" } });
+    expect(text(html)).toBe(
+      "AI draft Invitee can choose their own role, e.g. admin (already posted to GitHub from an earlier analysis of this commit) Posted to GitHub, read-only",
+    );
+    expect(html).not.toContain("<button");
   });
 
   it("dismissed: one collapsed line with the reason and Undo", () => {

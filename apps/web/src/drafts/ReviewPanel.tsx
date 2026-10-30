@@ -32,28 +32,43 @@ export const bySeverity = (findings: readonly Finding[]): Finding[] =>
     .map((x) => x.finding);
 
 export const ReviewPanelContent = () => {
-  const { status, stale, findings, state, decisionOf, focused, jumpToFinding, jumpToComment } =
-    useReview();
+  const {
+    status,
+    stale,
+    findings,
+    state,
+    decisionOf,
+    postedOf,
+    focused,
+    jumpToFinding,
+    jumpToComment,
+  } = useReview();
   const sorted = bySeverity(findings);
-  const undecided = sorted.filter((f) => decisionOf(f.id).state === "draft");
-  const decided = sorted.filter((f) => decisionOf(f.id).state !== "draft");
+  // A draft whose content was already posted (from a re-run of this commit) is decided for
+  // every purpose here: nothing can be done with it (P6-6).
+  const open = (f: Finding) => decisionOf(f.id).state === "draft" && postedOf(f.id) === null;
+  const undecided = sorted.filter(open);
+  const decided = sorted.filter((f) => !open(f));
   const accepted = decided.filter((f) => decisionOf(f.id).state === "accepted").length;
   const dismissed = decided.length - accepted;
   const yours = accepted + state.comments.length;
 
   const item = (finding: Finding) => {
     const decision = decisionOf(finding.id);
+    const posted = postedOf(finding.id);
     const badge =
-      decision.state === "draft"
-        ? "✦ draft"
-        : decision.state === "accepted"
-          ? "yours"
-          : "dismissed";
+      posted !== null && decision.state !== "dismissed"
+        ? "posted"
+        : decision.state === "draft"
+          ? "✦ draft"
+          : decision.state === "accepted"
+            ? "yours"
+            : "dismissed";
     return (
       <li key={finding.id}>
         <button
           type="button"
-          className={`f-item st-${decision.state}${focused === finding.id ? " focus" : ""}`}
+          className={`f-item st-${posted !== null && decision.state === "draft" ? "accepted" : decision.state}${focused === finding.id ? " focus" : ""}`}
           disabled={stale}
           onClick={() => jumpToFinding(finding.id)}
         >
@@ -89,6 +104,7 @@ export const ReviewPanelContent = () => {
             <bdi>{baseName(c.path)}</bdi>:{c.line}
           </span>
         </span>
+        {c.posted !== null && <span className="st-badge is-accepted">posted</span>}
       </button>
     </li>
   );

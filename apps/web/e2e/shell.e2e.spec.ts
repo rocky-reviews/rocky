@@ -101,7 +101,7 @@ test.describe("keyboard", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openShell(page);
     const order: string[] = [];
-    for (let i = 0; i < 8; i += 1) {
+    for (let i = 0; i < 9; i += 1) {
       await page.keyboard.press("Tab");
       order.push(await focused(page));
       expect(await hasVisibleFocus(page), order.at(-1)).toBe(true);
@@ -112,6 +112,8 @@ test.describe("keyboard", () => {
       "View on GitHub ↗ (opens in a new tab)",
       "Switch to dark mode",
       "Keyboard shortcuts",
+      // P6-6: the Finish review button with its pending count.
+      "Finish review0, 0 comments to post",
       "Briefing & change map",
       "Viewed src/auth/invitations.ts",
       "src/auth/invitations.ts97, risk score 97, 3 findings, worst critical",
