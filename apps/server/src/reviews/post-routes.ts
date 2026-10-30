@@ -1,4 +1,5 @@
 import { isReviewVerdict, MAX_REVIEW_BODY_CHARS } from "@rocky-reviews/core";
+import type { ReviewSubmissionRecord } from "@rocky-reviews/db";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { requires } from "../auth/policy.js";
 import type { ActiveMember } from "../auth/routes.js";
@@ -9,8 +10,9 @@ import type { ReviewPostingService, ReviewSubmitInput } from "./post-review.js";
  * `pull_requests.review` (any active member; roles never widen GitHub access, so both also run
  * the P3-6 access check inside the service).
  *
- *   GET  /api/pull-requests/:pullRequestId/review   the exact list that would be posted now and
- *                                                   its digest (no side effects)
+ *   GET  /api/pull-requests/:pullRequestId/review   the exact list that would be posted now, its
+ *                                                   digest, the attempt in flight and the latest
+ *                                                   attempt (no side effects)
  *   POST /api/pull-requests/:pullRequestId/review   (CSRF) the person's click: posts that list,
  *        { idempotencyKey, contentSha256, headSha, verdict, body }
  *
@@ -60,6 +62,22 @@ const submitInputOf = (body: unknown): ReviewSubmitInput | null => {
   };
 };
 
+/** An attempt as the client sees it: ids, status, counts and times; never content. */
+const summary = (submission: ReviewSubmissionRecord | null) =>
+  submission === null
+    ? null
+    : {
+        submissionId: submission.submissionId,
+        status: submission.status,
+        verdict: submission.verdict,
+        draftCount: submission.draftCount,
+        commentCount: submission.commentCount,
+        reviewId: submission.forgeReviewId,
+        errorCode: submission.errorCode,
+        createdAt: submission.createdAt.toISOString(),
+        finishedAt: submission.finishedAt?.toISOString() ?? null,
+      };
+
 export const registerReviewPostingRoutes = (
   app: FastifyInstance,
   service: ReviewPostingService,
@@ -96,6 +114,8 @@ export const registerReviewPostingRoutes = (
               headSha: result.plan.headSha,
               revisionKnown: result.plan.revisionId !== null,
               contentSha256: result.plan.contentSha256.toString("hex"),
+              inFlight: summary(result.plan.inFlight),
+              latestSubmission: summary(result.plan.latest),
               items: result.plan.items.map((item) => ({
                 kind: item.kind,
                 id: item.id,

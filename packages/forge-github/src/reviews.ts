@@ -33,10 +33,15 @@ import { isRepositoryFullName } from "./repositories.js";
  * and nowhere else; a token that is not a plausible bearer value is refused without a request.
  */
 
-export const REVIEW_POST_TIMEOUT_MS = 30_000;
+/** Under the server's 30 s request timeout, so a slow forge answers the client, not Node. */
+export const REVIEW_POST_TIMEOUT_MS = 20_000;
 export const MAX_REVIEW_RESPONSE_BYTES = 1024 * 1024;
-/** Pages of 100 reviews read when reconciling; a pull request rarely has more than a page. */
-export const MAX_REVIEW_LIST_PAGES = 5;
+/**
+ * Pages of 100 read when reconciling. GitHub lists oldest first, so a pull request with more
+ * reviews than this could hide the newest, the one looked for: the listing then throws instead
+ * of answering a partial list (review round 1, S2).
+ */
+export const MAX_REVIEW_LIST_PAGES = 10;
 const PAGE_SIZE = 100;
 
 const EVENT: Readonly<Record<ReviewVerdict, string>> = {
@@ -50,10 +55,17 @@ const ReviewJson = z.object({
   id: ForgeId,
   user: z.object({ id: ForgeId }).nullable(),
   body: z.string().nullable(),
+  state: z.string().max(32).nullable().optional(),
   commit_id: z.string().nullable().optional(),
   submitted_at: z.string().nullable().optional(),
 });
 const ReviewListJson = z.array(ReviewJson);
+const CommentListJson = z.array(z.object({ id: ForgeId }));
+const STATE: Readonly<Record<string, ReviewVerdict>> = {
+  APPROVED: "approve",
+  CHANGES_REQUESTED: "request_changes",
+  COMMENTED: "comment",
+};
 const TOKEN = /^[\x21-\x7e]{16,512}$/;
 const JSON_TYPE = /^application\/(?:vnd\.github\+)?json\b/i;
 const HEAD_SHA = /^[0-9a-f]{40}$/;
@@ -95,6 +107,7 @@ const toPosted = (value: z.infer<typeof ReviewJson>): PostedReview => {
       : Date.parse(value.submitted_at);
   return {
     id: value.id,
+    state: typeof value.state === "string" ? (STATE[value.state] ?? null) : null,
     headSha:
       typeof value.commit_id === "string" && HEAD_SHA.test(value.commit_id)
         ? value.commit_id
@@ -229,10 +242,38 @@ export const createGitHubReviewPoster = (options: GitHubReviewPosterOptions): Re
       for (const item of parsed.data) {
         if (item.user?.id === credential.userId) own.push(toPosted(item));
       }
-      if (parsed.data.length < PAGE_SIZE) break;
+      if (parsed.data.length < PAGE_SIZE) return own.sort((a, b) => b.id - a.id);
     }
-    return own.sort((a, b) => b.id - a.id);
+    // Every page was full: there may be newer reviews unseen. Not a usable list.
+    throw new ForgeReadError("invalid_response");
   };
 
-  return { kind: "github", postReview, listOwnReviews };
+  const countReviewComments = async (
+    credential: ForgeUserCredential,
+    pullRequest: PullRequestLocator,
+    reviewId: number,
+  ): Promise<number> => {
+    checkInputs(credential, pullRequest);
+    if (!Number.isSafeInteger(reviewId) || reviewId < 1)
+      throw new Error("reviews: invalid review id");
+    if (typeof credential.token !== "string" || !TOKEN.test(credential.token)) {
+      throw new ForgeReadError("http_status", 401);
+    }
+    let count = 0;
+    for (let page = 1; page <= MAX_REVIEW_LIST_PAGES; page++) {
+      const answer = await send(
+        "GET",
+        `${reviewsPath(pullRequest)}/${reviewId}/comments?per_page=${PAGE_SIZE}&page=${page}`,
+        credential.token,
+      );
+      if (answer.status !== 200) throw new ForgeReadError("http_status", answer.status);
+      const parsed = CommentListJson.safeParse(answer.body);
+      if (!parsed.success) throw new ForgeReadError("invalid_response");
+      count += parsed.data.length;
+      if (parsed.data.length < PAGE_SIZE) return count;
+    }
+    throw new ForgeReadError("invalid_response");
+  };
+
+  return { kind: "github", postReview, listOwnReviews, countReviewComments };
 };

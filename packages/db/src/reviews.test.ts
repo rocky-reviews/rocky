@@ -54,15 +54,15 @@ const findingBy = (id: string) => {
 };
 
 /** The seeded analysis gets the real pr-847 document and accepted drafts F1 and F3 by alice. */
-const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]) =>
-  db.withOrg(org.orgId, async (tx) => {
+const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]) => {
+  // The application cannot delete attempts (N6): the superuser clears them between tests.
+  await superuser.query("delete from review_submissions where org_id = $1", [org.orgId]);
+  return db.withOrg(org.orgId, async (tx) => {
     await tx.query("update analyses set document = $2::jsonb where id = $1", [
       org.analysisId,
       JSON.stringify(DOCUMENT),
     ]);
     await tx.query("delete from findings_state where analysis_id = $1", [org.analysisId]);
-    await tx.query("delete from review_submission_items where org_id = $1", [org.orgId]);
-    await tx.query("delete from review_submissions where org_id = $1", [org.orgId]);
     await tx.query("delete from comments_pending where pull_request_id = $1", [org.pullRequestId]);
     const ids: Record<string, string> = {};
     for (const [i, id] of findings.entries()) {
@@ -75,6 +75,7 @@ const prepare = async (org: SeededOrg, memberId: string, findings = ["F1", "F3"]
     }
     return ids;
   });
+};
 
 const comment = (
   org: SeededOrg,
@@ -368,9 +369,10 @@ describe("beginReviewSubmission", () => {
     const first = await begin(A, input);
     expect(first.outcome).toBe("started");
     const replay = await begin(A, input);
+    // The age is measured at each read (S3), so it is the one field that differs.
     expect(replay).toEqual({
       outcome: "existing",
-      submission: (first as { submission: unknown }).submission,
+      submission: { ...(first as { submission: object }).submission, ageMs: expect.any(Number) },
     });
     expect(await begin(A, { ...input, body: "other" })).toEqual({ outcome: "key_reused" });
     expect(await begin(A, { ...input, verdict: "approve" })).toEqual({ outcome: "key_reused" });
@@ -393,7 +395,7 @@ describe("beginReviewSubmission", () => {
     expect(empty.items).toEqual([]);
     expect(await begin(A, inputFor(A, A.memberId, empty, { verdict: "approve" }))).toEqual({
       outcome: "in_progress",
-      submission: first.submission,
+      submission: { ...first.submission, ageMs: expect.any(Number) },
     });
     const failed = await db.withOrg(A.orgId, (tx) =>
       finishReviewSubmission(
@@ -523,7 +525,86 @@ describe("beginReviewSubmission", () => {
   });
 });
 
+describe("the plan reports the member's attempts (review round 1, S4)", () => {
+  it("carries the attempt in flight and the latest attempt, with their age by the database clock", async () => {
+    const before = (await planOf(A, A.memberId))!;
+    expect(before.inFlight).toBeNull();
+    expect(before.latest).toBeNull();
+    const started = await begin(A, inputFor(A, A.memberId, before));
+    if (started.outcome !== "started") throw new Error(started.outcome);
+    const during = (await planOf(A, A.memberId))!;
+    expect(during.items).toEqual([]);
+    expect(during.inFlight?.submissionId).toBe(started.submission.submissionId);
+    expect(during.latest?.submissionId).toBe(started.submission.submissionId);
+    expect(during.inFlight?.ageMs).toBeGreaterThanOrEqual(0);
+    expect(during.inFlight?.ageMs).toBeLessThan(60_000);
+    await db.withOrg(A.orgId, (tx) =>
+      finishReviewSubmission(
+        tx,
+        started.submission.submissionId,
+        { posted: false, errorCode: "rejected" },
+        { type: "user", id: A.memberId },
+      ),
+    );
+    const after = (await planOf(A, A.memberId))!;
+    expect(after.inFlight).toBeNull();
+    expect(after.latest).toMatchObject({
+      submissionId: started.submission.submissionId,
+      status: "failed",
+      errorCode: "rejected",
+    });
+    // Bob's plan knows nothing of alice's attempts.
+    const bobs = (await planOf(A, bob))!;
+    expect(bobs.inFlight).toBeNull();
+    expect(bobs.latest).toBeNull();
+  });
+});
+
 describe("finishReviewSubmission", () => {
+  it("a posted answer from the forge overwrites an attempt a reconciliation called lost; a failure never overwrites a posted one (review round 1, S3)", async () => {
+    const plan = (await planOf(A, A.memberId))!;
+    const started = await begin(A, inputFor(A, A.memberId, plan));
+    if (started.outcome !== "started") throw new Error(started.outcome);
+    const id = started.submission.submissionId;
+    const lost = await db.withOrg(A.orgId, (tx) =>
+      finishReviewSubmission(
+        tx,
+        id,
+        { posted: false, errorCode: "lost" },
+        { type: "system", id: "review_reconcile" },
+      ),
+    );
+    expect(lost?.status).toBe("failed");
+    // Released meanwhile; then the late answer lands: GitHub is authoritative.
+    expect((await planOf(A, A.memberId))!.items.map((i) => i.id)).toEqual(
+      plan.items.map((i) => i.id),
+    );
+    const late = await db.withOrg(A.orgId, (tx) =>
+      finishReviewSubmission(
+        tx,
+        id,
+        { posted: true, forgeReviewId: 880099 },
+        { type: "user", id: A.memberId },
+      ),
+    );
+    expect(late).toMatchObject({ status: "posted", forgeReviewId: 880099, errorCode: null });
+    expect((await planOf(A, A.memberId))!.items).toEqual([]);
+    expect(
+      await db.withOrg(A.orgId, (tx) =>
+        finishReviewSubmission(
+          tx,
+          id,
+          { posted: false, errorCode: "lost" },
+          { type: "system", id: "review_reconcile" },
+        ),
+      ),
+    ).toBeNull();
+    expect(await db.withOrg(A.orgId, (tx) => loadReviewSubmission(tx, id))).toMatchObject({
+      status: "posted",
+      forgeReviewId: 880099,
+    });
+  });
+
   it("records a posted review once, audits it, and ignores a second finish", async () => {
     const plan = (await planOf(A, A.memberId))!;
     const started = await begin(A, inputFor(A, A.memberId, plan));

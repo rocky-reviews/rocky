@@ -1,5 +1,6 @@
 import {
   ForgeReadError,
+  type ForgeUserCredential,
   type OrgId,
   type RepositoryAccessCheck,
   type ReviewPoster,
@@ -40,6 +41,11 @@ import { readMemberCredential } from "../member-token.js";
 
 /** An attempt older than this with no answer is reconciled with the forge before anything else. */
 export const REVIEW_POSTING_TIMEOUT_MS = 60_000;
+/**
+ * A review found on the forge counts as the attempt's only if the forge submitted it no earlier
+ * than this before the attempt was recorded (the two clocks differ: review round 1, S1/S3).
+ */
+export const RECONCILE_CLOCK_MARGIN_MS = 5 * 60_000;
 
 export interface ReviewPostingDeps {
   readonly db: Pick<Db, "withOrg">;
@@ -158,47 +164,56 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
   };
 
   /**
-   * An attempt whose answer was lost: once it is older than the timeout, ask the forge for the
-   * person's own reviews and look for this one (same head, same summary digest, not one Rocky
-   * already recorded). Found: it was posted. Not found: the forge never took it, so it failed and
-   * its items are free again. No usable answer from the forge: it stays as it is.
+   * An attempt whose answer was lost: once it is older than the timeout (by the database's
+   * clock), ask the forge for the person's own reviews and look for this one. A review is the
+   * attempt's only when all of these hold (review round 1, S1): its id is not one Rocky already
+   * recorded, its commit is the attempt's head, its state is the attempt's verdict, its summary
+   * digest is the attempt's, the forge submitted it no earlier than the margin before the attempt
+   * was recorded, and it carries as many inline comments as the attempt did (asked from the
+   * forge when the attempt carried any). Exactly one such review: it was posted. None: the forge
+   * never took it, so it failed and its items are free again. More than one, or no usable
+   * answer from the forge: it stays as it is (never decided on a guess).
    */
   const reconcile = async (
     actor: ReviewActor,
+    credential: ForgeUserCredential,
     submission: ReviewSubmissionRecord,
     pullRequest: { fullName: string; number: number },
   ): Promise<Reconciled> => {
-    if (submission.createdAt.getTime() + timeout > now()) return "pending";
-    const credential = await readMemberCredential(
-      deps,
-      actor.orgId,
-      actor.memberId,
-      new Date(now()),
-    );
-    if (!credential.ok) {
-      log("warn", "reconcile_no_credential", {
-        orgId: actor.orgId,
-        submissionId: submission.submissionId,
-        reason: credential.reason,
-      });
-      return "pending";
-    }
+    if (submission.ageMs < timeout) return "pending";
+    const fields = { orgId: actor.orgId, submissionId: submission.submissionId };
     let found: number | undefined;
     try {
       const recorded = new Set(
         await db.withOrg(actor.orgId, (tx) => recordedReviewIds(tx, submission.pullRequestId)),
       );
-      const own = await deps.poster.listOwnReviews(credential.credential, pullRequest);
-      found = own.find(
-        (r) =>
-          !recorded.has(r.id) &&
-          r.headSha === submission.headSha &&
-          reviewSha256(r.body).equals(submission.bodySha256),
-      )?.id;
+      const notBefore = submission.createdAt.getTime() - RECONCILE_CLOCK_MARGIN_MS;
+      const carried = submission.draftCount + submission.commentCount;
+      const own = await deps.poster.listOwnReviews(credential, pullRequest);
+      const candidates: number[] = [];
+      for (const r of own) {
+        if (
+          recorded.has(r.id) ||
+          r.headSha !== submission.headSha ||
+          r.state !== submission.verdict ||
+          r.submittedAt === null ||
+          r.submittedAt.getTime() < notBefore ||
+          !reviewSha256(r.body).equals(submission.bodySha256)
+        ) {
+          continue;
+        }
+        const count =
+          carried === 0 ? 0 : await deps.poster.countReviewComments(credential, pullRequest, r.id);
+        if (count === carried) candidates.push(r.id);
+      }
+      if (candidates.length > 1) {
+        log("warn", "reconcile_ambiguous", { ...fields, candidates: candidates.length });
+        return "pending";
+      }
+      found = candidates[0];
     } catch (error) {
       log("warn", "reconcile_failed", {
-        orgId: actor.orgId,
-        submissionId: submission.submissionId,
+        ...fields,
         errorCode: error instanceof ForgeReadError ? error.code : "error",
       });
       return "pending";
@@ -207,13 +222,15 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
       found === undefined
         ? ({ posted: false, errorCode: "lost" } as const)
         : ({ posted: true, forgeReviewId: found } as const);
-    await db.withOrg(actor.orgId, (tx) =>
+    const finished = await db.withOrg(actor.orgId, (tx) =>
       finishReviewSubmission(tx, submission.submissionId, result, RECONCILE_ACTOR),
     );
-    log("info", found === undefined ? "reconciled_lost" : "reconciled_posted", {
-      orgId: actor.orgId,
-      submissionId: submission.submissionId,
-    });
+    if (finished === null) {
+      // Finished meanwhile (a late answer landed): report what the row says now.
+      log("warn", "reconcile_already_finished", fields);
+      return "pending";
+    }
+    log("info", found === undefined ? "reconciled_lost" : "reconciled_posted", fields);
     return found === undefined ? "failed" : "posted";
   };
 
@@ -285,7 +302,7 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
           loadReviewPlan(tx, { pullRequestId, memberId: actor.memberId }),
         );
         if (plan === null) return { outcome: "not_found" };
-        const reconciled = await reconcile(actor, submission, {
+        const reconciled = await reconcile(actor, credential.credential, submission, {
           fullName: plan.repositoryFullName,
           number: plan.number,
         });
@@ -324,19 +341,31 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
         review,
       );
     } catch (error) {
-      // No usable answer: the review may exist. The attempt stays `posting` for reconciliation.
-      log("warn", "post_unknown", {
-        ...counts,
-        errorCode: error instanceof ForgeReadError ? error.code : "error",
-      });
-      return { outcome: "post_unknown", submissionId };
+      if (error instanceof ForgeReadError) {
+        // No usable answer: the review may exist. The attempt stays `posting` for reconciliation.
+        log("warn", "post_unknown", { ...counts, errorCode: error.code });
+        return { outcome: "post_unknown", submissionId };
+      }
+      // Refused before any request (a caller bug): definite, nothing reached the forge (N1).
+      await finish(actor, submissionId, { posted: false, errorCode: "invalid" });
+      log("warn", "post_failed", { ...counts, reason: "invalid" });
+      return { outcome: "post_failed", submissionId, reason: "invalid" };
     }
     if (!answer.posted) {
-      await finish(actor, submissionId, { posted: false, errorCode: answer.reason });
+      const finished = await finish(actor, submissionId, {
+        posted: false,
+        errorCode: answer.reason,
+      });
+      if (finished === null) log("warn", "finish_not_applied", counts);
       log("info", "post_failed", { ...counts, reason: answer.reason });
       return { outcome: "post_failed", submissionId, reason: answer.reason };
     }
-    await finish(actor, submissionId, { posted: true, forgeReviewId: answer.review.id });
+    // The forge took it: recorded even over a reconciliation that called it lost meanwhile.
+    const finished = await finish(actor, submissionId, {
+      posted: true,
+      forgeReviewId: answer.review.id,
+    });
+    if (finished === null) log("warn", "finish_not_applied", counts);
     log("info", "posted", { ...counts, reviewId: answer.review.id });
     return { outcome: "posted", submissionId, reviewId: answer.review.id, repeated: false };
   };

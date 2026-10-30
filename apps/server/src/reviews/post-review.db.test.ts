@@ -92,8 +92,11 @@ let app: FastifyInstance;
 let lines: string[] = [];
 let accessAsked: RepositoryAccessRequest[] = [];
 let accessAnswer: AccessDecision = { allowed: true, cached: false, expiresAt: new Date() };
-/** How the poster's fetch behaves: pass through, reach GitHub but lose the answer, or never reach it. */
-let network: "ok" | "lose_answer" | "down" = "ok";
+/**
+ * How the poster behaves: pass through, reach GitHub but lose the answer, never reach it, or
+ * throw a plain error before any request (a caller bug).
+ */
+let network: "ok" | "lose_answer" | "down" | "bug" = "ok";
 const clock = { ms: Date.now() };
 const tokens: Record<string, string> = {};
 
@@ -167,12 +170,31 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
           },
         }),
     reviewPosting: {
-      poster: createGitHubReviewPoster({ api, fetch: fetchThrough }),
+      poster: {
+        ...createGitHubReviewPoster({ api, fetch: fetchThrough }),
+        postReview: (...args) =>
+          network === "bug"
+            ? Promise.reject(new Error("reviews: invalid review (test)"))
+            : createGitHubReviewPoster({ api, fetch: fetchThrough }).postReview(...args),
+      },
       keys: KEYS,
       now: () => clock.ms,
       postingTimeoutMs: 60_000,
     },
   });
+};
+
+/**
+ * Ages the attempt in flight past the reconciliation timeout. The age is measured by the
+ * database's clock (review round 1, S3), so the row is backdated rather than the app's clock
+ * advanced.
+ */
+const age = async (org: SeededOrg) => {
+  await superuser.query(
+    `update review_submissions set created_at = created_at - interval '2 minutes'
+      where org_id = $1 and status = 'posting'`,
+    [org.orgId],
+  );
 };
 
 /** A live session for a member of `org` (ids as the login flow would store them). */
@@ -222,9 +244,23 @@ const post = (
     payload: JSON.stringify(body),
   });
 
+interface Attempt {
+  submissionId: string;
+  status: string;
+  verdict: string;
+  draftCount: number;
+  commentCount: number;
+  reviewId: number | null;
+  errorCode: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
 interface Preview {
   headSha: string;
   contentSha256: string;
+  inFlight: Attempt | null;
+  latestSubmission: Attempt | null;
   items: {
     kind: string;
     id: string;
@@ -247,12 +283,12 @@ const click = (shown: Preview, over: Record<string, unknown> = {}) => ({
 /** The seeded analysis gets the pr-847 document; alice accepts F1 and F3 and drafts a comment. */
 const reset = async () => {
   for (const org of [A, B]) {
+    await superuser.query("delete from review_submissions where org_id = $1", [org.orgId]);
     await db.withOrg(org.orgId, async (tx) => {
       await tx.query("update analyses set document = $2::jsonb where id = $1", [
         org.analysisId,
         JSON.stringify(DOCUMENT),
       ]);
-      await tx.query("delete from review_submissions where org_id = $1", [org.orgId]);
       await tx.query("delete from findings_state where analysis_id = $1", [org.analysisId]);
       await tx.query("delete from comments_pending where pull_request_id = $1", [
         org.pullRequestId,
@@ -689,7 +725,7 @@ describe("double-submit is impossible", () => {
     expect((await post(alice, A.pullRequestId, one)).json()).toEqual({ error: "in_progress" });
     expect(((await preview(alice, A.pullRequestId)).json() as Preview).items).toEqual([]);
     // After the timeout the person's own reviews are read and the one we sent is found.
-    clock.ms += 61_000;
+    await age(A);
     const settled = await post(alice, A.pullRequestId, one);
     expect(settled.statusCode).toBe(200);
     const reviewId = github.reviews[0]!.id;
@@ -717,7 +753,7 @@ describe("double-submit is impossible", () => {
     });
     expect(github.reviews).toHaveLength(0);
     network = "ok";
-    clock.ms += 61_000;
+    await age(A);
     // The lost click is final for its key (the person is told), and the items are free again.
     const settled = await post(alice, A.pullRequestId, one);
     expect(settled.statusCode, settled.body).toBe(502);
@@ -736,13 +772,157 @@ describe("double-submit is impossible", () => {
     ]);
   });
 
+  it("the preview reports the attempt in flight and the latest attempt (review round 1, S4)", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect(plan.inFlight).toBeNull();
+    expect(plan.latestSubmission).toBeNull();
+    const one = click(plan);
+    network = "down";
+    const lost = await post(alice, A.pullRequestId, one);
+    const { submissionId } = lost.json() as { submissionId: string };
+    const during = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect(during.items).toEqual([]);
+    expect(during.inFlight).toEqual({
+      submissionId,
+      status: "posting",
+      verdict: "request_changes",
+      draftCount: 2,
+      commentCount: 1,
+      reviewId: null,
+      errorCode: null,
+      createdAt: expect.any(String),
+      finishedAt: null,
+    });
+    expect(during.latestSubmission?.submissionId).toBe(submissionId);
+    // Settled as lost: no longer in flight, still the latest, with its code.
+    network = "ok";
+    await age(A);
+    await post(alice, A.pullRequestId, one);
+    const after = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect(after.inFlight).toBeNull();
+    expect(after.latestSubmission).toMatchObject({
+      submissionId,
+      status: "failed",
+      errorCode: "lost",
+    });
+    expect(after.latestSubmission?.finishedAt).toEqual(expect.any(String));
+    // Not content: no body text in the preview's attempt summaries.
+    expect(JSON.stringify([after.inFlight, after.latestSubmission])).not.toMatch(/invite|inviter/);
+  });
+
+  it("a poster that refuses before any request is a definite failure, not a stuck attempt (review round 1, N1)", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    network = "bug";
+    const res = await post(alice, A.pullRequestId, click(plan));
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: "post_failed", reason: "invalid" });
+    expect((await submissions(A)).rows[0]).toMatchObject({
+      status: "failed",
+      error_code: "invalid",
+    });
+    network = "ok";
+    // Released at once: the next click (new key) posts.
+    const again = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect(again.inFlight).toBeNull();
+    expect((await post(alice, A.pullRequestId, click(again))).statusCode).toBe(200);
+    expect(github.reviews).toHaveLength(1);
+  });
+
+  it("reconciliation never adopts a review the person made by hand: state, time, body and comment count must all match (review round 1, S1)", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const one = click(plan, { verdict: "approve", body: "" });
+    network = "down";
+    expect((await post(alice, A.pullRequestId, one)).json()).toMatchObject({
+      error: "post_unknown",
+    });
+    network = "ok";
+    const decoy = (payload: Record<string, unknown>, submittedAt = new Date().toISOString()) =>
+      github.putReview({
+        repositoryId: REPO,
+        number: 847,
+        userId: ALICE_GH,
+        userLogin: "alice",
+        payload,
+        submittedAt,
+      });
+    // An empty approval made by hand, with no inline comments (the attempt carried three).
+    decoy({ event: "APPROVE", body: "", commit_id: HEAD, comments: [] });
+    // A review with the right body and comments but the wrong state.
+    decoy({ event: "COMMENT", body: "", commit_id: HEAD, comments: [{}, {}, {}] });
+    // The right shape but submitted long before the attempt.
+    decoy(
+      { event: "APPROVE", body: "", commit_id: HEAD, comments: [{}, {}, {}] },
+      new Date(Date.now() - 3_600_000).toISOString(),
+    );
+    // The right shape on another commit.
+    decoy({ event: "APPROVE", body: "", commit_id: "f".repeat(40), comments: [{}, {}, {}] });
+    await age(A);
+    expect((await post(alice, A.pullRequestId, one)).json()).toMatchObject({
+      error: "post_failed",
+      reason: "lost",
+    });
+    expect((await submissions(A)).rows[0]).toMatchObject({ status: "failed", error_code: "lost" });
+    // The items were never posted, so they are offered again.
+    expect(((await preview(alice, A.pullRequestId)).json() as Preview).items).toHaveLength(3);
+  });
+
+  it("reconciliation adopts exactly the matching review among decoys, and stays in flight when two match", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const one = click(plan);
+    network = "lose_answer";
+    const lost = await post(alice, A.pullRequestId, one);
+    expect(lost.json()).toMatchObject({ error: "post_unknown" });
+    const ours = github.reviews[0]!.id;
+    network = "ok";
+    const twin = { ...github.reviews[0]!.payload };
+    github.putReview({
+      repositoryId: REPO,
+      number: 847,
+      userId: ALICE_GH,
+      userLogin: "alice",
+      payload: { ...twin, event: "APPROVE" },
+      submittedAt: new Date().toISOString(),
+    });
+    await age(A);
+    expect((await post(alice, A.pullRequestId, one)).json()).toMatchObject({
+      status: "posted",
+      reviewId: ours,
+      repeated: true,
+    });
+    expect(github.requests.filter((r) => r.path.endsWith("/comments"))).toHaveLength(1);
+
+    // A second attempt with a true twin on GitHub: ambiguous, so it stays in flight.
+    await reset();
+    const plan2 = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const two = click(plan2);
+    network = "lose_answer";
+    await post(alice, A.pullRequestId, two);
+    network = "ok";
+    github.putReview({
+      repositoryId: REPO,
+      number: 847,
+      userId: ALICE_GH,
+      userLogin: "alice",
+      payload: { ...github.reviews[0]!.payload },
+      submittedAt: new Date().toISOString(),
+    });
+    await age(A);
+    expect((await post(alice, A.pullRequestId, two)).json()).toEqual({ error: "in_progress" });
+    expect((await submissions(A)).rows[0]?.status).toBe("posting");
+    expect(lines.some((l) => l.includes('"reconcile_ambiguous"'))).toBe(true);
+  });
+
   it("while GitHub cannot be asked, a lost attempt stays in flight (fail closed)", async () => {
     const alice = await sessionFor(A, A.memberId, ALICE_GH);
     const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
     const one = click(plan);
     network = "down";
     await post(alice, A.pullRequestId, one);
-    clock.ms += 61_000;
+    await age(A);
     expect((await post(alice, A.pullRequestId, one)).json()).toEqual({ error: "in_progress" });
     expect((await submissions(A)).rows[0]?.status).toBe("posting");
     expect(github.reviews).toHaveLength(0);

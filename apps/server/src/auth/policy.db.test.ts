@@ -225,6 +225,7 @@ const UNREACHABLE_POSTER: ReviewPoster = {
   kind: "github",
   postReview: () => Promise.reject(new Error("the matrix must not post")),
   listOwnReviews: () => Promise.resolve([]),
+  countReviewComments: () => Promise.resolve(0),
 };
 
 const build = (options: { withoutAccessCheck?: boolean } = {}) => {

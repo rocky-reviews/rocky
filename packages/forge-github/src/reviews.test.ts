@@ -203,7 +203,9 @@ describe("postReview", () => {
         `${type} ${body.slice(0, 20)}`,
       ).rejects.toMatchObject({ reason: "invalid_response" });
     }
+    // Under the server's 30 s request timeout (review round 1, N2), long enough for GitHub.
     expect(REVIEW_POST_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
+    expect(REVIEW_POST_TIMEOUT_MS).toBeLessThan(30_000);
   });
 
   it("refuses to follow a redirect (a renamed repository is not followed with the user's token)", async () => {
@@ -273,6 +275,7 @@ describe("listOwnReviews", () => {
     await poster().postReview(credential(), PR, review({ body: "second", verdict: "approve" }));
     const own = await poster().listOwnReviews(credential(), PR);
     expect(own.map((r) => r.body)).toEqual(["second", "first"]);
+    expect(own.map((r) => r.state)).toEqual(["approve", "comment"]);
     expect(own[0]?.headSha).toBe(HEAD);
     expect(own[0]?.id).toBeGreaterThan(own[1]?.id ?? 0);
     expect(github.requests.at(-1)).toEqual({
@@ -282,8 +285,8 @@ describe("listOwnReviews", () => {
     });
   });
 
-  it("pages through up to MAX_REVIEW_LIST_PAGES pages of 100", async () => {
-    for (let i = 0; i < 150; i++) {
+  const plant = (count: number) => {
+    for (let i = 0; i < count; i++) {
       github.putReview({
         repositoryId: REPO,
         number: PR.number,
@@ -293,10 +296,46 @@ describe("listOwnReviews", () => {
         submittedAt: "2026-10-30T10:00:00Z",
       });
     }
+  };
+
+  it("pages through up to MAX_REVIEW_LIST_PAGES pages of 100", async () => {
+    plant(150);
     const own = await poster().listOwnReviews(credential(), PR);
     expect(own).toHaveLength(75);
     expect(github.requests.filter((r) => r.method === "GET")).toHaveLength(2);
     expect(MAX_REVIEW_LIST_PAGES).toBeGreaterThanOrEqual(2);
+  });
+
+  it("throws instead of answering a partial list when every page was full (GitHub lists oldest first: the newest could be unseen)", async () => {
+    plant(MAX_REVIEW_LIST_PAGES * 100);
+    await expect(poster().listOwnReviews(credential(), PR)).rejects.toMatchObject({
+      reason: "invalid_response",
+    });
+    // Exactly a multiple of the page size with one more page: still read to the short page.
+    github.reviews.length = 0;
+    plant(200);
+    expect(await poster().listOwnReviews(credential(), PR)).toHaveLength(100);
+    expect(github.requests.filter((r) => r.method === "GET")).toHaveLength(
+      MAX_REVIEW_LIST_PAGES + 3,
+    );
+  });
+
+  it("maps every state and answers null for one it does not know", async () => {
+    for (const [state, expected] of [
+      ["APPROVED", "approve"],
+      ["CHANGES_REQUESTED", "request_changes"],
+      ["COMMENTED", "comment"],
+      ["PENDING", null],
+      ["DISMISSED", null],
+    ] as const) {
+      const odd: typeof fetch = async () =>
+        new Response(
+          JSON.stringify([{ id: 5, user: { id: ALICE }, body: "", state, commit_id: HEAD }]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      const [own] = await poster({ fetch: odd }).listOwnReviews(credential(), PR);
+      expect(own?.state, state).toBe(expected);
+    }
   });
 
   it("answers an empty list only for GitHub's 404; refusals and failures throw", async () => {
@@ -317,6 +356,40 @@ describe("listOwnReviews", () => {
     await expect(poster({ fetch: odd }).listOwnReviews(credential(), PR)).rejects.toMatchObject({
       reason: "invalid_response",
     });
+  });
+});
+
+describe("countReviewComments", () => {
+  it("counts the inline comments of one review, paging, and throws for an unknown review or a failure", async () => {
+    await poster().postReview(credential(), PR, review());
+    const id = github.reviews[0]!.id;
+    expect(await poster().countReviewComments(credential(), PR, id)).toBe(2);
+    await poster().postReview(credential(), PR, review({ verdict: "approve", comments: [] }));
+    expect(await poster().countReviewComments(credential(), PR, github.reviews[1]!.id)).toBe(0);
+    const many = Array.from({ length: 100 }, (_, i) => ({
+      path: "a.ts",
+      line: i + 1,
+      startLine: null,
+      body: "x",
+    }));
+    await poster().postReview(credential(), PR, review({ comments: many }));
+    expect(await poster().countReviewComments(credential(), PR, github.reviews[2]!.id)).toBe(100);
+    expect(github.requests.filter((r) => r.path.endsWith("/comments"))).toHaveLength(4);
+    await expect(poster().countReviewComments(credential(), PR, 424242)).rejects.toMatchObject({
+      reason: "http_status",
+      status: 404,
+    });
+    github.failRoute("reviews", 500);
+    await expect(poster().countReviewComments(credential(), PR, id)).rejects.toMatchObject({
+      reason: "http_status",
+      status: 500,
+    });
+    await expect(poster().countReviewComments(credential(), PR, 0)).rejects.toThrow(
+      /invalid review id/,
+    );
+    await expect(
+      poster().countReviewComments({ token: "x", userId: ALICE }, PR, id),
+    ).rejects.toMatchObject({ status: 401 });
   });
 });
 

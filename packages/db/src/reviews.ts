@@ -66,6 +66,10 @@ export interface ReviewPlan {
   readonly items: readonly ReviewPlanItem[];
   /** sha256 of `canonicalReviewPlan(headSha, items)`. */
   readonly contentSha256: Buffer;
+  /** The member's attempt still being posted, if any (its items are not in `items`). */
+  readonly inFlight: ReviewSubmissionRecord | null;
+  /** The member's most recent attempt on this pull request, any status. */
+  readonly latest: ReviewSubmissionRecord | null;
 }
 
 interface PullRequestRow {
@@ -107,6 +111,17 @@ export const loadReviewPlan = async (
     items.push(...(await acceptedDrafts(tx, revisionId, memberId)));
     items.push(...(await ownComments(tx, pr.id, revisionId, memberId)));
   }
+  const { rows: latest } = await tx.query<SubmissionRow>(
+    `select ${SUBMISSION_COLUMNS} from review_submissions
+      where org_id = $1 and pull_request_id = $2 and submitted_by = $3
+      order by created_at desc, id desc limit 1`,
+    [tx.orgId, pr.id, memberId],
+  );
+  const { rows: inFlight } = await tx.query<SubmissionRow>(
+    `select ${SUBMISSION_COLUMNS} from review_submissions
+      where org_id = $1 and pull_request_id = $2 and submitted_by = $3 and status = 'posting'`,
+    [tx.orgId, pr.id, memberId],
+  );
   return {
     pullRequestId: pr.id,
     revisionId,
@@ -116,6 +131,8 @@ export const loadReviewPlan = async (
     forgeRepoId: Number(pr.forge_repo_id),
     items,
     contentSha256: sha256(canonicalReviewPlan(pr.head_sha, items)),
+    inFlight: inFlight[0] === undefined ? null : record(inFlight[0]),
+    latest: latest[0] === undefined ? null : record(latest[0]),
   };
 };
 
@@ -211,6 +228,11 @@ export interface ReviewSubmissionRecord {
   readonly errorCode: string | null;
   readonly createdAt: Date;
   readonly finishedAt: Date | null;
+  /**
+   * How old the attempt was when this row was read, by the database's clock (review round 1,
+   * S3): the server's clock is never compared with `createdAt`.
+   */
+  readonly ageMs: number;
 }
 
 interface SubmissionRow {
@@ -230,11 +252,13 @@ interface SubmissionRow {
   error_code: string | null;
   created_at: Date;
   finished_at: Date | null;
+  age_ms: number;
 }
 
 const SUBMISSION_COLUMNS = `id, pull_request_id, revision_id, submitted_by, idempotency_key, head_sha,
   verdict, content_sha256, body_sha256, draft_count, comment_count, status,
-  forge_review_id::text as forge_review_id, error_code, created_at, finished_at`;
+  forge_review_id::text as forge_review_id, error_code, created_at, finished_at,
+  (extract(epoch from (clock_timestamp() - created_at)) * 1000)::float8 as age_ms`;
 
 const record = (row: SubmissionRow): ReviewSubmissionRecord => {
   if (!isReviewVerdict(row.verdict))
@@ -259,6 +283,7 @@ const record = (row: SubmissionRow): ReviewSubmissionRecord => {
     errorCode: row.error_code,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
+    ageMs: Math.max(0, Number(row.age_ms)),
   };
 };
 
@@ -458,9 +483,12 @@ export type FinishReviewSubmissionInput =
   | { readonly posted: false; readonly errorCode: string };
 
 /**
- * Records the forge's answer for an attempt that is `posting`. `null` when the row is not in
- * that state any more (already finished by a concurrent reconciliation): nothing changes.
- * `actorId` is who finished it: the member, or `system` for a reconciliation.
+ * Records the forge's answer. A `posted` answer applies to an attempt that is `posting` **or**
+ * `failed` (review round 1, S3: the forge is authoritative; a late answer after a reconciliation
+ * called it lost marks the items carried again, so they are not offered twice). A `failed`
+ * answer applies to a `posting` attempt only. `null` when the row is not in an applicable state
+ * (already posted): nothing changes, and the caller must say so in its log. `actor` is who
+ * finished it: the member, or `system` for a reconciliation.
  */
 export const finishReviewSubmission = async (
   tx: TenantTx,
@@ -480,8 +508,8 @@ export const finishReviewSubmission = async (
   const { rows } = await tx.query<SubmissionRow>(
     result.posted
       ? `update review_submissions
-            set status = 'posted', forge_review_id = $3, finished_at = now()
-          where org_id = $1 and id = $2 and status = 'posting'
+            set status = 'posted', forge_review_id = $3, error_code = null, finished_at = now()
+          where org_id = $1 and id = $2 and status in ('posting', 'failed')
           returning ${SUBMISSION_COLUMNS}`
       : `update review_submissions
             set status = 'failed', error_code = $3, finished_at = now()

@@ -75,6 +75,8 @@ export interface PullRequestLocator {
 /** A review the forge holds, as the poster reports it. */
 export interface PostedReview {
   readonly id: ForgeNumericId;
+  /** The verdict the forge shows for it; `null` for a pending, dismissed or unknown state. */
+  readonly state: ReviewVerdict | null;
   /** The commit the review was made on; `null` when the forge reports none. */
   readonly headSha: string | null;
   /** The summary body as the forge holds it (PR content: never logged). */
@@ -112,13 +114,25 @@ export interface ReviewPoster {
   ): Promise<ReviewPostOutcome>;
   /**
    * The user's own reviews on the pull request, newest first (reconciliation after a lost
-   * answer). Throws `ForgeReadError` on any failure; a denial is an empty list only when the
-   * forge positively says there is no such pull request.
+   * answer). Throws `ForgeReadError` on any failure, and when the pull request has more reviews
+   * than the adapter reads (the newest could be unseen: never answer "not there" on a partial
+   * list); a denial is an empty list only when the forge positively says there is no such pull
+   * request.
    */
   listOwnReviews(
     credential: ForgeUserCredential,
     pullRequest: PullRequestLocator,
   ): Promise<readonly PostedReview[]>;
+  /**
+   * How many inline comments one review of the pull request carries (reconciliation confirms
+   * the attempt's count). Throws `ForgeReadError` on any failure, including a review that the
+   * forge says does not exist.
+   */
+  countReviewComments(
+    credential: ForgeUserCredential,
+    pullRequest: PullRequestLocator,
+    reviewId: ForgeNumericId,
+  ): Promise<number>;
 }
 
 /**

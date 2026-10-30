@@ -249,7 +249,11 @@ Task log for the project plan. Agents append a row when a task is merged.
 - P6-6: render `GET …/review` as the exact list; send `contentSha256`, `headSha` and a fresh `idempotencyKey` per click; reload on `stale`/`head_moved`; show `post_failed` reasons; `post_unknown` means "check GitHub, the attempt is being reconciled".
 - P6-4: an edited draft body goes through `loadReviewPlan` (one place), so the preview and the post stay identical; nothing else in posting needs to change.
 - Pre-validate comment lines against the revision's hunks before posting (today a line outside the diff is GitHub's 422, `rejected`).
-- Reconciliation reads up to 500 of the person's reviews on the pull request; revisit if that is ever too few.
+- Review round 1 applied (S1–S4, N1–N7): reconciliation matches id/head/state/body digest/time margin/comment count and stays `posting` when ambiguous; a full 10-page listing throws (fail closed); ages by the database clock; a late `posted` overrides `lost`; `GET …/review` returns `inFlight` and `latestSubmission`; no DELETE on the attempt tables; ESLint keeps the poster out of `apps/worker` and `packages/llm`; a non-`ForgeReadError` from the poster is a definite `failed`; poster timeout 20 s.
+- Product decisions to veto (N3): comments on an earlier revision drop out of the plan after a push; a `post_failed` answer is final for its key.
+- N4: wiring `repositoryAccess` in `startServer` is a prerequisite for P6-6 and the H4 gate (the routes answer 503 until then).
+- N7: P6-6 must render the exact markdown GitHub will show for each item (mentions, links, images in LLM text are posted under the person's name).
+- Reconciliation reads up to 1000 of the person's reviews on the pull request and fails closed beyond that; a pull request with more is an operator case.
 - Revoke nothing, store nothing new: the refresh-token question (P7-1 follow-up) is unchanged; posting uses the same 8 h token as the access check.
 
 ### P7-2 follow-ups

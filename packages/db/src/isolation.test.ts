@@ -107,9 +107,10 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.pr_revisions": DML,
   "public.pull_requests": DML,
   "public.repos": DML,
-  // P3-5 (migration 0016): attempts to post a review and what they carried (digests only).
-  "public.review_submission_items": DML,
-  "public.review_submissions": DML,
+  // P3-5 (migration 0016): attempts to post a review and what they carried (digests only). No
+  // DELETE: an attempt is a record; rows go with their pull request or org.
+  "public.review_submission_items": ["INSERT", "SELECT", "UPDATE"],
+  "public.review_submissions": ["INSERT", "SELECT", "UPDATE"],
 };
 
 /**
@@ -506,6 +507,17 @@ describe("org A against org B's rows, per table", () => {
   it("delete of foreign rows affects nothing", async () => {
     for (const t of tables) {
       if (t.name === "audit_events" || t.name === "llm_usage") continue;
+      if (t.name === "review_submissions" || t.name === "review_submission_items") {
+        // No DELETE privilege at all (P3-5 review round 1, N6).
+        const error = await pgError(
+          db.withOrg(a.orgId, (tx) =>
+            tx.query(`delete from ${t.qualified} where "${t.tenantColumn}" = $1`, [b.orgId]),
+          ),
+        );
+        expect(error.code, t.name).toBe(INSUFFICIENT_PRIVILEGE);
+        expect(await countAs(b.orgId, t), t.name).toBe(1);
+        continue;
+      }
       if (t.name === "orgs") {
         // No DELETE privilege at all on the tenant root (final review #2; deletion.test.ts).
         const error = await pgError(

@@ -360,6 +360,7 @@ const INSTALLATION_ROUTE = /^app\/installations\/(\d+)$/;
 const REPO_INSTALLATION_ROUTE = /^repos\/([^/]+)\/([^/]+)\/installation$/;
 const PULL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)$/;
 const REVIEWS_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews$/;
+const REVIEW_COMMENTS_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews\/(\d+)\/comments$/;
 const LIST_ROUTE = /^repos\/([^/]+)\/([^/]+)\/pulls$/;
 const REPOSITORY_ROUTE = /^repos\/([^/]+)\/([^/]+)$/;
 const COLLABORATOR_ROUTE = /^repos\/([^/]+)\/([^/]+)\/collaborators\/([^/]+)\/permission$/;
@@ -520,6 +521,7 @@ export const fakeGitHubApi = (options: {
     user: { id: number; login: string },
     url: URL,
     rawBody: RequestInit["body"],
+    reviewId?: number,
   ): Response => {
     const failure = takeRouteFailure(method === "POST" ? "review" : "reviews");
     if (failure !== undefined) return json(failure, { message: "Injected failure" });
@@ -531,9 +533,24 @@ export const fakeGitHubApi = (options: {
     const ofPr = reviews.filter(
       (r) => r.repositoryId === seen.entry.repo.id && r.number === number,
     );
+    const perPage = Math.min(Number(url.searchParams.get("per_page") ?? "30"), 100);
+    const page = Number(url.searchParams.get("page") ?? "1");
+    if (method === "GET" && reviewId !== undefined) {
+      // `GET …/reviews/{id}/comments`: the inline comments the review carried.
+      const review = ofPr.find((r) => r.id === reviewId);
+      if (review === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const comments = Array.isArray(review.payload["comments"])
+        ? (review.payload["comments"] as Record<string, unknown>[])
+        : [];
+      return json(
+        200,
+        comments
+          .slice((page - 1) * perPage, page * perPage)
+          .map((c, i) => ({ id: review.id * 1000 + (page - 1) * perPage + i + 1, ...c })),
+      );
+    }
     if (method === "GET") {
-      const perPage = Math.min(Number(url.searchParams.get("per_page") ?? "30"), 100);
-      const page = Number(url.searchParams.get("page") ?? "1");
+      // GitHub lists reviews oldest first.
       return json(200, ofPr.slice((page - 1) * perPage, page * perPage).map(reviewJson));
     }
     if (method !== "POST") return json(404, githubFixture("get-installation.not-found"));
@@ -970,6 +987,19 @@ export const fakeGitHubApi = (options: {
         total_count: all.length,
         installations: all.slice((page - 1) * perPage, page * perPage),
       });
+    }
+    const reviewCommentsMatch = REVIEW_COMMENTS_ROUTE.exec(path);
+    if (reviewCommentsMatch !== null && user !== undefined) {
+      return reviewsAsUser(
+        method,
+        group(reviewCommentsMatch, 1),
+        group(reviewCommentsMatch, 2),
+        Number(reviewCommentsMatch[3]),
+        user,
+        url,
+        init?.body,
+        Number(reviewCommentsMatch[4]),
+      );
     }
     const reviewsMatch = REVIEWS_ROUTE.exec(path);
     if (reviewsMatch !== null && user !== undefined) {

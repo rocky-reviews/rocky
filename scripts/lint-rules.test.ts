@@ -236,3 +236,36 @@ describe("the web app renders PR content as text, never as HTML (P6-1)", () => {
     expect(await ruleIds("apps/web/src/planted.tsx", code)).toEqual([]);
   });
 });
+
+describe("only the server can build the review poster (P3-5 review round 1, N5)", () => {
+  const rule = "@typescript-eslint/no-restricted-imports";
+  const poster =
+    'import { createGitHubReviewPoster } from "@rocky-reviews/forge-github";\nexport const p = createGitHubReviewPoster;\n';
+  const service =
+    'import { createReviewPostingService } from "../../server/src/reviews/post-review.js";\nexport const s = createReviewPostingService;\n';
+
+  it.each(["apps/worker/src/planted.ts", "packages/llm/src/planted.ts"])(
+    "fails on the poster or the posting service in %s",
+    async (file) => {
+      expect(await ruleIds(file, poster)).toContain(rule);
+      expect(await ruleIds(file, service)).toContain(rule);
+      // The testing-fake restriction still applies there (same rule id, repeated).
+      expect(
+        await ruleIds(
+          file,
+          'import { fakeGitHubApi } from "@rocky-reviews/forge-github/testing";\nexport const f = fakeGitHubApi;\n',
+        ),
+      ).toContain(rule);
+    },
+  );
+
+  it("allows the poster in the server, and other forge-github imports in the worker", async () => {
+    expect(await ruleIds("apps/server/src/planted.ts", poster)).not.toContain(rule);
+    expect(
+      await ruleIds(
+        "apps/worker/src/planted.ts",
+        'import { createGitHubForge } from "@rocky-reviews/forge-github";\nexport const f = createGitHubForge;\n',
+      ),
+    ).not.toContain(rule);
+  });
+});

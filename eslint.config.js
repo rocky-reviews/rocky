@@ -40,6 +40,8 @@ const rockyInstructionsRules = (allowDefinition = false) => [
   },
 ];
 const TESTING_MESSAGE = "Test fakes (@rocky-reviews/*/testing) are for tests only (P4-3).";
+const POSTER_MESSAGE =
+  "Only the server posts reviews, as the user (P3-5, ADR 0026): never the worker or the LLM package.";
 /** `import("@rocky-reviews/<pkg>/testing")` outside tests (test files turn the rule off). */
 const TESTING_DYNAMIC = {
   selector: "ImportExpression[source.value=/^@rocky-reviews\\/[^/]+\\/testing$/]",
@@ -143,6 +145,43 @@ export default tseslint.config(
               group: ["@rocky-reviews/*/testing"],
               message: TESTING_MESSAGE,
               allowTypeImports: true,
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Only the server posts to the forge, as the user (P3-5, ADR 0026): the worker and the LLM
+    // package must not even be able to construct the review poster or import the posting
+    // service (the source-scan test in post-review.db.test.ts is the other half). Same rule id
+    // as the block above, so its testing-fake restriction is repeated here.
+    files: ["apps/worker/**/*.{ts,tsx,mts,cts}", "packages/llm/**/*.{ts,tsx,mts,cts}"],
+    ignores: ["**/*.test.ts", "**/test-support.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@rocky-reviews/forge-github",
+              importNames: ["createGitHubReviewPoster"],
+              message: POSTER_MESSAGE,
+            },
+          ],
+          patterns: [
+            {
+              group: ["@rocky-reviews/*/testing"],
+              message: TESTING_MESSAGE,
+              allowTypeImports: true,
+            },
+            {
+              group: [
+                "**/reviews/post-review*",
+                "**/forge-github/src/reviews*",
+                "@rocky-reviews/server/**",
+              ],
+              message: POSTER_MESSAGE,
             },
           ],
         },

@@ -3,6 +3,11 @@
 - **Status:** Accepted
 - **Date:** 2026-10-30
 - **Task:** P3-5
+- **Revised:** review round 1 (S1–S4, N1–N7): reconciliation matches state, time, body and
+  comment count and never decides when ambiguous; a full review listing throws instead of
+  answering a partial list; ages by the database clock; a late posted answer overrides a
+  `lost` row; the preview reports the attempt in flight and the latest attempt; no DELETE on
+  the attempt tables; an ESLint rule keeps the poster out of the worker and the LLM package.
 - **Amends:** [ADR 0007](0007-webhook-inbox.md) §1 (the outbound forge port gains
   `ReviewPoster`, held by the server only), [ADR 0011](0011-repository-access-check.md) §6
   (the P3-5 rule made concrete), [ADR 0024](0024-org-roles-and-access-policy.md) §5 (two
@@ -52,10 +57,13 @@ and one pull request, the list of:
   `findingCommentBody` (title, body, a `suggestion` block; never severity, confidence or the
   agent prompt);
 - the member's own pending comments (`comments_pending`, `author_id` = the member) on the head
-  revision that have a path and a line;
+  revision that have a path and a line (a comment on an earlier revision drops out of the plan
+  after a push: its line may no longer exist; product decision, veto at review);
 
-minus every item carried by a submission that is `posting` or `posted`. The plan's canonical
-JSON (`canonicalReviewPlan`: head, every field of every item, in order) is hashed; `GET` returns
+minus every item carried by a submission that is `posting` or `posted`. The plan also reports
+the member's attempt in flight and their latest attempt (ids, status, counts, times; never
+content), so the finish modal can block or explain instead of offering a second verdict. The
+plan's canonical JSON (`canonicalReviewPlan`: head, every field of every item, in order) is hashed; `GET` returns
 the items with their final bodies and the hex digest. `POST` carries the digest and the head
 back; `beginReviewSubmission` rebuilds the plan under a per (pull request, member) advisory lock
 and refuses with `stale` or `head_moved` when they differ. The forge is called with exactly the
@@ -76,11 +84,23 @@ did not accept (product decision; veto at review).
   plan excludes carried items from then on. Two clicks with different keys on the same list
   resolve as one `posted` and one `stale`.
 - A lost answer (timeout, network, a malformed body: the review may exist) leaves the attempt
-  `posting` and answers `post_unknown`. The next click after `REVIEW_POSTING_TIMEOUT_MS` (60 s)
-  reconciles it from the person's own reviews on GitHub (same head, same summary digest, not an
-  id Rocky already recorded): found → `posted` (audited as `system`), not found → `failed`
-  (`lost`, items released). While GitHub cannot be asked it stays in flight (fail closed). Nothing
-  is ever re-posted on a guess.
+  `posting` and answers `post_unknown`. The next click after `REVIEW_POSTING_TIMEOUT_MS` (60 s,
+  measured by the **database's** clock: `ageMs` is read with the row, so server and database
+  clocks are never compared) reconciles it from the person's own reviews on GitHub. A review
+  is the attempt's only when all of these hold: its id is not one Rocky already recorded, its
+  commit is the attempt's head, its state is the attempt's verdict, its summary digest is the
+  attempt's, GitHub submitted it no earlier than `RECONCILE_CLOCK_MARGIN_MS` (5 min) before the
+  attempt was recorded, and `GET …/reviews/{id}/comments` counts as many inline comments as the
+  attempt carried (asked only when it carried any). Exactly one such review → `posted` (audited
+  as `system`); none → `failed` (`lost`, items released); two or more, or no usable answer from
+  GitHub (including a listing with more reviews than the adapter reads) → it stays `posting`.
+  A hand-made empty approval therefore never stands in for an attempt that carried comments.
+- A `posted` answer applies to a `posting` **or** `failed` attempt (GitHub is authoritative: a
+  late answer after a reconciliation called it lost marks the items carried again); a `failed`
+  answer applies to a `posting` attempt only. A finish that applies to nothing is logged
+  (`finish_not_applied`); the client is still told what GitHub did.
+- A poster that refuses before any request (a caller bug, not a `ForgeReadError`) is a definite
+  `failed` (`invalid`), never a stuck attempt.
 - A refusal GitHub documents (401, 403, 404, 422) fails the attempt with that code and releases
   its items; the client is told (`post_failed`) and retries with a fresh key once the cause is
   fixed. A `post_failed` answer is final for its key.
@@ -115,7 +135,7 @@ content is on GitHub, the source of truth. Logs carry ids, counts, digests and f
 
 | Route                                           | Policy                 | Answers                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/pull-requests/:pullRequestId/review`  | `pull_requests.review` | 200 `{ pullRequestId, number, headSha, revisionKnown, contentSha256, items[] }`; 404; 503 without the access check                                                                                                                                                                                                           |
+| `GET /api/pull-requests/:pullRequestId/review`  | `pull_requests.review` | 200 `{ pullRequestId, number, headSha, revisionKnown, contentSha256, items[], inFlight, latestSubmission }` (the last two: `{ submissionId, status, verdict, draftCount, commentCount, reviewId, errorCode, createdAt, finishedAt }` or null); 404; 503 without the access check                                             |
 | `POST /api/pull-requests/:pullRequestId/review` | `pull_requests.review` | body `{ idempotencyKey, contentSha256, headSha, verdict, body }`; 200 `{ status: "posted", submissionId, reviewId, repeated }`; 400 `invalid_request` (+`reason`); 404; 409 `stale` / `head_moved` / `in_progress` / `key_reused` / `no_revision` / `token_unavailable`; 502 `post_failed` (+`reason`) / `post_unknown`; 503 |
 
 Verdicts: `approve`, `request_changes`, `comment` (GitHub `APPROVE`, `REQUEST_CHANGES`,
@@ -149,8 +169,17 @@ browser tab, a double click or retry or a crash mid-call, a forge outage, the lo
 
 ## Consequences
 
-- Two new tenant tables (`review_submissions`, `review_submission_items`), RLS forced, usual
-  DML grants (the isolation matrix pins them); one fixture row each in `seedOrg`.
+- Two new tenant tables (`review_submissions`, `review_submission_items`), RLS forced, grants
+  SELECT/INSERT/UPDATE and **no DELETE** for the app role (an attempt is a record; the isolation
+  matrix pins it); one fixture row each in `seedOrg`.
+- ESLint: `apps/worker` and `packages/llm` cannot import `createGitHubReviewPoster`, the posting
+  service or `@rocky-reviews/server` (`scripts/lint-rules.test.ts`), alongside the source-scan
+  test.
+- P6-6 must show the **exact markdown** GitHub will render for every item, as the preview
+  returns it: LLM text can carry mentions, links and images, and GitHub renders them under the
+  person's name.
+- Wiring `repositoryAccess` in `startServer` is a prerequisite for P6-6 and the H4 gate: until
+  then these routes answer 503.
 - Three audit actions: `review.submission_started`, `review.posted`, `review.post_failed`.
 - The web app (P6-6) renders `GET …/review` as the exact list, and sends back `contentSha256`,
   `headSha` and a fresh `idempotencyKey` per click; on `stale` or `head_moved` it reloads the
@@ -166,8 +195,13 @@ browser tab, a double click or retry or a crash mid-call, a forge outage, the lo
 - The mirror's head may lag GitHub's: a review is posted against the mirrored `commit_id`;
   GitHub accepts it (comments show as outdated when the head moved). A line not in the diff is a
   GitHub 422 (`rejected`), not pre-checked here (follow-up: validate lines against the hunks).
-- Reconciliation matches on head and summary digest; two legitimate identical reviews by the
-  same person on the same commit would be told apart only by the recorded ids.
+- Reconciliation compares GitHub's `submitted_at` with the database's `created_at` with a 5 min
+  margin: a clock skew larger than that between GitHub and the database would make a real
+  review look too early (then `lost`, and the person sees the duplicate on GitHub). The 60 s age
+  itself uses one clock (the database's).
+- `listOwnReviews` reads up to 1000 reviews (10 pages, oldest first) and throws when every page
+  is full, so a pull request with more reviews keeps its lost attempts `posting` (fail closed)
+  instead of guessing; such a pull request is an operator case.
 - Comments without a line (`comments_pending.path`/`line` null) are not posted; the schema
   allows them but the UI does not create them. A product decision is needed if it ever does.
 - `listOwnReviews` reads up to 500 reviews; a pull request with more has its older ones unseen

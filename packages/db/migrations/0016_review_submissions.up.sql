@@ -14,9 +14,9 @@
 --     and the sha256 of the body as posted), in order. An item in a `posting` or `posted`
 --     submission is never offered for posting again; a `failed` one releases its items.
 --
--- Both are tenant tables: RLS forced, the app's policy (as 0003), the usual DML grants (the
--- application never deletes a submission; the isolation matrix pins the grants). No new roles,
--- no new functions. Retention: a submission lives with its pull request (cascade).
+-- Both are tenant tables: RLS forced, the app's policy (as 0003), SELECT/INSERT/UPDATE and no
+-- DELETE (the isolation matrix pins the grants). No new roles, no new functions. Retention: a
+-- submission lives with its pull request (cascade).
 
 CREATE TABLE review_submissions (
   id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -85,4 +85,5 @@ CREATE POLICY review_submission_items_tenant ON review_submission_items FOR ALL 
   USING (org_id = app.current_org_id())
   WITH CHECK (org_id = app.current_org_id());
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON review_submissions, review_submission_items TO rocky_app;
+-- No DELETE: an attempt is a record (review round 1, N6). Rows go with their pull request or org.
+GRANT SELECT, INSERT, UPDATE ON review_submissions, review_submission_items TO rocky_app;
