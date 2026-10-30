@@ -4,7 +4,7 @@ import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { memoryReviewSource } from "../drafts/testing.js";
 import { memoryPostingSource } from "../finish/testing.js";
-import { Shell } from "./Shell.js";
+import { Shell, sidebarPlaceholder } from "./Shell.js";
 
 const NOW = Date.parse("2026-10-25T12:12:00.000Z");
 const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
@@ -25,7 +25,7 @@ describe("app shell layout", () => {
   const html = render();
 
   it("has the POC's regions as landmarks: top bar, sidebar, main and right panel", () => {
-    expect(html).toMatch(/<header class="topbar"/);
+    expect(html).toMatch(/<header class="topbar pr-bar"/);
     expect(html).toMatch(/<nav id="sidebar"[^>]*aria-label="Files"/);
     expect(html).toMatch(/<main id="main"/);
     expect(html).toMatch(/<aside id="review-panel"[^>]*aria-label="Review panel"/);
@@ -80,7 +80,7 @@ describe("top bar", () => {
 
   it("offers the light/dark toggle", () => {
     expect(render()).toMatch(
-      /<button type="button" class="mode-btn" aria-label="Switch to dark mode"/,
+      /<button type="button" class="mode-btn hide-sm" aria-label="Switch to dark mode"/,
     );
   });
 
@@ -189,6 +189,18 @@ describe("sidebar", () => {
     });
     expect(html).toContain("0/0");
     expect(html).not.toContain('role="progressbar"');
+  });
+
+  it("P6-9: promises files only while a run can still produce them", () => {
+    expect(sidebarPlaceholder({ status: "running" })).toBe(
+      "Files appear here once the analysis is ready.",
+    );
+    expect(sidebarPlaceholder({ status: "failed", code: "repository_inaccessible" })).toBe(
+      "No file list: the analysis failed.",
+    );
+    expect(sidebarPlaceholder({ status: "failed", code: "superseded" })).toBe(
+      "No file list: the analysis is out of date.",
+    );
   });
 
   it("says when there is no analysis yet", () => {

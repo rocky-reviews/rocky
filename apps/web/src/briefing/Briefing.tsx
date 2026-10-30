@@ -25,6 +25,7 @@ import { reviewOrder } from "../diff/annotations.js";
 import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import { ChangeMapSlot } from "./ChangeMap.js";
 import { InlineText } from "./inline-text.js";
+import { PathText } from "../lib/path-text.js";
 
 type Props = {
   analysis: AnalysisDocument | null;
@@ -171,7 +172,7 @@ const Briefing = ({
                   >
                     <span className="path-text">
                       <code>
-                        <bdi>{step.path}</bdi>
+                        <PathText path={step.path} />
                       </code>
                       <span className="why">
                         <InlineText text={step.why} />

@@ -59,7 +59,10 @@ letters must type.
    name is unchanged) and carry `aria-keyshortcuts`, which names physical keys as ARIA requires:
    the dialog button's is `Shift+/` (US layout), not `?`. Closing the dialog returns focus to
    its opener, or to the main column when nothing had focus. If the browser cannot save the
-   switch, the dialog says the choice lasts until a reload instead of "Remembered".
+   switch, the dialog says the choice lasts until a reload instead of "Remembered". P6-9: at
+   ≤ 760 px the dialog also holds the light/dark toggle, which the top bar has no room for;
+   between 761 and 1180 px the top-bar button shows "?" without the word "Shortcuts" (its name
+   stays "Keyboard shortcuts"), giving the Review panel toggle its room.
 6. **Entry points that later tasks fill.** `/` (Ask, P9-2) and ⌘/Ctrl+Enter (Finish review,
    P6-6) show a "not available yet" toast through `onAsk` / `onFinish` in the shell; those tasks
    replace the handlers.

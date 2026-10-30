@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "./test.js";
 import { openFile } from "./diff-support.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
+import { ME } from "./review-api.js";
 import pr847 from "../../../packages/schema/fixtures/pr-847.json" with { type: "json" };
 
 /**
@@ -62,6 +63,8 @@ test.describe("every transition, and a refresh keeps it", () => {
     await card(page).getByRole("button", { name: "Accept", exact: true }).click();
     await expect(toast(page)).toHaveText("Added to your pending review. Not posted yet.");
     await expect(card(page)).toContainText(/Pending\s*· from AI draft/);
+    // P6-9 (D10): under the reviewer's login, as GitHub will show it (POC "@you · Pending").
+    await expect(card(page).locator(".mine-head")).toContainText(`@${ME.login}`);
     await expect.poll(() => reviewApi.decision("F1").state).toBe("accepted");
 
     await reload(page);
@@ -177,6 +180,7 @@ test.describe("every transition, and a refresh keeps it", () => {
     // reload() scrolls to F1 (line 28); line 10 may be outside the virtualised window there.
     await page.locator("#main").evaluate((main) => main.scrollTo({ top: 0 }));
     await expect(page.locator(".diff .mine-body", { hasText: "TTL from config?" })).toBeVisible();
+    await expect(page.locator(".diff .mine .mine-head").first()).toContainText(`@${ME.login}`);
     await expect(page.locator("#review-panel #own-comments")).toBeAttached();
     await page.getByRole("button", { name: "Delete your comment on line 10" }).click();
     await expect.poll(() => reviewApi.comments().length).toBe(0);

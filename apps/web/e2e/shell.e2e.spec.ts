@@ -94,6 +94,77 @@ test.describe("layout", () => {
   });
 });
 
+/** P6-9 (parity audit D1, D2, D6): the top bar fits the PR like the POC at every width. */
+test.describe("top bar fit", () => {
+  const finishButton = (page: Page) => page.getByRole("button", { name: /^Finish review/ });
+  const titleIsWhole = (page: Page) =>
+    page
+      .locator(".topbar .pr-title-text")
+      .evaluate((el) => el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight);
+
+  test("phone: the title is whole, Finish review keeps its label, and the bar stays compact", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await openShell(page);
+    expect(await titleIsWhole(page)).toBe(true);
+    await expect(finishButton(page).locator(".label")).toBeVisible();
+    await expect(finishButton(page).locator(".label")).toHaveText("Finish review");
+    // The theme toggle left the bar (it is in the shortcuts dialog, and on m).
+    await expect(page.locator(".topbar .mode-btn")).toBeHidden();
+    await expect(page.getByRole("button", { name: "Keyboard shortcuts" })).toBeVisible();
+    const bar = await boxOf(page, "header.topbar");
+    expect(bar.height).toBeLessThanOrEqual(124);
+    // Every control inside the bar and the viewport.
+    for (const name of ["Files", "Keyboard shortcuts", "Review panel"]) {
+      const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+      expect(box, name).not.toBeNull();
+      expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(375);
+      expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(bar.height);
+    }
+  });
+
+  test("phone: the theme toggle is in the shortcuts dialog, and m still works", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.emulateMedia({ colorScheme: "light" });
+    await openShell(page);
+    const html = page.locator("html");
+    await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+    const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await dialog.getByRole("button", { name: "Switch to dark mode" }).click();
+    await expect(html).toHaveAttribute("data-mode", "dark");
+    await expect(dialog.getByRole("button", { name: "Switch to light mode" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("m");
+    await expect(html).toHaveAttribute("data-mode", "light");
+  });
+
+  test("wider: the toggle stays in the bar, not in the dialog", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await openShell(page);
+    await expect(page.locator(".topbar .mode-btn")).toBeVisible();
+    await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
+    const dialog = page.getByRole("dialog", { name: "Keyboard shortcuts" });
+    await expect(dialog.getByRole("button", { name: /^Switch to/ })).toBeHidden();
+  });
+
+  test("1024 and 1440: the details wrap item by item, as in the POC", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await openShell(page);
+    expect(await titleIsWhole(page)).toBe(true);
+    // Two lines of details under the title, like the POC's 93 px bar.
+    expect((await boxOf(page, "header.topbar")).height).toBeLessThanOrEqual(93);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // The approvals and comments stay on the first line; only the GitHub link wraps.
+    const pill = await boxOf(page, ".topbar .status-pill");
+    const stats = await boxOf(page, ".topbar .gh-stats");
+    expect(Math.abs(stats.y + stats.height / 2 - (pill.y + pill.height / 2))).toBeLessThan(4);
+  });
+});
+
 test.describe("keyboard", () => {
   test("tabs through the top bar into the sidebar with a visible focus ring (1440 px)", async ({
     page,

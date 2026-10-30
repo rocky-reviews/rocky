@@ -182,7 +182,7 @@ code,
   background: var(--low-bg);
   color: var(--text);
 }
-/* Approvals and comments wrap together, never one per line. */
+/* Approvals and comments wrap together, never one per line; the link wraps on its own (POC). */
 .gh-stats {
   display: inline-flex;
   gap: 10px;
@@ -606,6 +606,10 @@ code,
   .toggle-panel {
     display: inline-grid;
   }
+  /* The panel toggle takes the room of the "Shortcuts" word; "?" and its name stay. */
+  .shortcuts-label {
+    display: none;
+  }
   .panel[data-open="true"] {
     display: flex;
     position: fixed;
@@ -646,9 +650,47 @@ code,
   .main {
     padding: var(--space-3) var(--space-4) 60px;
   }
+  /*
+   * P6-9: the Files toggle beside the PR, the actions on a row of their own below it, so the
+   * title gets the width and Finish review keeps its label. The order on screen is the DOM
+   * order (Files, the PR, ?, Finish review, Review panel). The theme toggle moves into the
+   * shortcuts dialog (still on m).
+   */
   .topbar {
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
+  }
+  .pr-bar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas:
+      "files meta meta meta meta"
+      ". . help finish panel";
+    row-gap: 6px;
+  }
+  .pr-bar .toggle-files {
+    grid-area: files;
+    align-self: start;
+  }
+  .pr-bar .pr-meta {
+    grid-area: meta;
+  }
+  .pr-bar .shortcuts-btn {
+    grid-area: help;
+  }
+  .pr-bar .finish-btn {
+    grid-area: finish;
+  }
+  .pr-bar .toggle-panel {
+    grid-area: panel;
+  }
+  /* A long title wraps to a second line instead of losing its words. */
+  .pr-title-text {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
   .topbar .hide-sm {
     display: none;

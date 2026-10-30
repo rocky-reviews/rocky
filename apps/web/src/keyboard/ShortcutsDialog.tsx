@@ -2,10 +2,12 @@
  * The shortcuts dialog (P6-5, POC `openHelp`): every key and what it does, and the switch that
  * turns single-key shortcuts off (WCAG 2.1.4, ADR 0030). A modal: the shell makes the rest of
  * the page inert, focus starts on Close, Tab stays inside, and Escape or a click outside closes
- * it; the shell then returns focus to where it was.
+ * it; the shell then returns focus to where it was. P6-9: below 760 px the top bar has no room
+ * for the theme toggle, so it is here (CSS shows it only at that width); `m` still toggles it.
  */
 import { Fragment, useEffect, useRef } from "react";
 import { trapTab } from "../shell/focus-trap.js";
+import type { Mode } from "../theme.js";
 import { finishKeys, HELP_ROWS, isMac } from "./keymap.js";
 
 const MAC = typeof navigator !== "undefined" && isMac(navigator.userAgent);
@@ -15,10 +17,20 @@ type Props = {
   /** False once saving the choice failed (storage blocked): it then lasts until a reload. */
   remembered: boolean;
   onSingleKeys: (on: boolean) => void;
+  mode: Mode;
+  onToggleMode: () => void;
   onClose: () => void;
 };
 
-export const ShortcutsDialog = ({ singleKeys, remembered, onSingleKeys, onClose }: Props) => {
+export const ShortcutsDialog = ({
+  singleKeys,
+  remembered,
+  onSingleKeys,
+  mode,
+  onToggleMode,
+  onClose,
+}: Props) => {
+  const nextMode = mode === "dark" ? "light" : "dark";
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
 
@@ -71,6 +83,11 @@ export const ShortcutsDialog = ({ singleKeys, remembered, onSingleKeys, onClose 
             </div>
           ))}
         </dl>
+        <div className="modal-section shortcuts-theme">
+          <button type="button" className="btn btn-sm" onClick={onToggleMode}>
+            <span aria-hidden="true">{mode === "dark" ? "☀" : "☾"}</span> Switch to {nextMode} mode
+          </button>
+        </div>
         <div className="modal-section shortcuts-setting">
           <label className="switch">
             <input

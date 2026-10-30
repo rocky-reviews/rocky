@@ -30,7 +30,10 @@ export const ChangeMapSlot = ({ doc, onOpenFile }: Props) => {
         Change map
         {state.kind === "drawn" && (
           <span className="eyebrow-hint">
-            · click a card to open its file, a badge to open its finding
+            <span className="eyebrow-sep" aria-hidden="true">
+              ·{" "}
+            </span>
+            click a card to open its file, a badge to open its finding
           </span>
         )}
       </h3>

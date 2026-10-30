@@ -17,6 +17,15 @@
   text-transform: none;
   letter-spacing: 0;
 }
+/* P6-9: on a phone the hint takes its own line, so it does not start with the separator. */
+@media (max-width: 760px) {
+  .eyebrow-hint {
+    flex-basis: 100%;
+  }
+  .eyebrow-sep {
+    display: none;
+  }
+}
 .brief-summary {
   font-size: var(--text-lg);
   line-height: 1.55;

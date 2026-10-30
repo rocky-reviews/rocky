@@ -339,6 +339,12 @@
   color: var(--muted);
   margin-bottom: 3px;
 }
+/* P6-9: the login never breaks ("@dana-" / "k"); on a phone "· from AI draft" wraps instead. */
+.mine-head .avatar,
+.mine-head b {
+  flex: none;
+  white-space: nowrap;
+}
 .mine-head b {
   color: var(--text);
 }
@@ -346,8 +352,8 @@
   flex: 1;
 }
 .avatar {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   background: var(--you);
   color: var(--on-you);

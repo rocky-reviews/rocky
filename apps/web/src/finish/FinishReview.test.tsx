@@ -53,6 +53,7 @@ const render = (
 
 const text = (html: string): string =>
   html
+    .replace(/<wbr\/>/g, "")
     .replace(/<[^>]+>/g, " ")
     .replace(/&#x27;/g, "'")
     .replace(/&amp;/g, "&")
@@ -79,7 +80,10 @@ describe("finish review modal", () => {
     expect(text(html)).toContain(
       "3 high-risk files not marked viewed: src/api/routes/invitations.ts , db/migrations/20261020_add_invitations.sql , src/jobs/sendInviteEmail.ts",
     );
-    expect(html).toContain("<code><bdi>src/api/routes/invitations.ts</bdi></code>");
+    // P6-9: the path may wrap after each slash, never inside a name.
+    expect(html).toContain(
+      "<code><bdi>src/<wbr/>api/<wbr/>routes/<wbr/>invitations.ts</bdi></code>",
+    );
     expect(text(html)).toContain(
       "10 AI drafts still undecided. They won't be posted. Only what you accepted goes out.",
     );
@@ -114,7 +118,7 @@ describe("finish review modal", () => {
       '<label class="sr-only" for="finish-summary">Overall comment (optional)</label>',
     );
     expect(html).toMatch(
-      /<textarea id="finish-summary" rows="3" placeholder="Overall comment \(optional\)" maxLength="65536"/,
+      /<textarea id="finish-summary" rows="2" placeholder="Overall comment \(optional\)" maxLength="65536"/,
     );
     // The dialog itself is focusable (while sending every control is disabled).
     expect(html).toMatch(/id="finish-dialog"[^>]*tabindex="-1"/);

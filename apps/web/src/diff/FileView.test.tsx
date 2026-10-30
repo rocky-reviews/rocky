@@ -126,7 +126,7 @@ describe("file view", () => {
         },
       ],
     });
-    expect(text(withComment)).toContain("Y You Pending Delete Why <b>this</b>?");
+    expect(text(withComment)).toContain("Y you Pending Delete Why <b>this</b>?");
     expect(withComment).toContain("Why &lt;b&gt;this&lt;/b&gt;?");
     expect(withComment).toContain('aria-label="Delete your comment on line 3"');
   });
@@ -137,7 +137,7 @@ describe("file view", () => {
         { id: "c1", path: "src/auth/invitations.ts", line: 3, body: "Why?", posted: "posted" },
       ],
     });
-    expect(text(html)).toContain("Y You Posted to GitHub, read-only Why?");
+    expect(text(html)).toContain("Y you Posted to GitHub, read-only Why?");
     expect(html).not.toContain("Delete your comment");
   });
 
@@ -182,7 +182,7 @@ describe("file view", () => {
     expect(text(stale)).not.toContain("Mine");
     expect(stale).toMatch(/<button[^>]*data-line="3"[^>]*aria-disabled="true"/);
     expect(stale).not.toContain('aria-label="Comment on line 3"');
-    expect(text(stale)).not.toContain("Select a new-side line number to add your own comment");
+    expect(text(stale)).not.toContain("Click a line number to add your own comment");
   });
 
   it("takes no comments until the reviewer's review has loaded", () => {

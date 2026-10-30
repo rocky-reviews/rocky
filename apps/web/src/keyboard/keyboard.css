@@ -50,6 +50,11 @@ kbd {
   place-items: center;
   padding: var(--space-4);
 }
+@media (max-width: 760px) {
+  .modal-layer {
+    padding: var(--space-2);
+  }
+}
 .modal-layer .scrim {
   z-index: 0;
 }
@@ -108,6 +113,16 @@ kbd {
 .shortcuts-setting {
   border-top: 1px solid var(--border);
   padding-bottom: var(--space-4);
+}
+/* P6-9: the theme toggle, here only where the top bar has no room for it. */
+.shortcuts-theme {
+  display: none;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 760px) {
+  .shortcuts-theme {
+    display: block;
+  }
 }
 .switch {
   display: inline-flex;
