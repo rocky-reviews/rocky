@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "./test.js";
+import type { ReviewApi } from "./review-api.js";
 import { seriousViolations } from "./axe.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 import { openFile } from "./diff-support.js";
@@ -37,7 +38,7 @@ const showCard = async (page: Page, id: string) => {
 const toastShown = (page: Page) =>
   toast(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
 
-const GROUPS: Record<string, (page: Page, found: Found) => Promise<void>> = {
+const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) => Promise<void>> = {
   "PR page: briefing, change map, drawers, keyboard help": async (page, found) => {
     await openShell(page);
     await page.locator("#main .map-scroll svg").waitFor();
@@ -101,6 +102,32 @@ const GROUPS: Record<string, (page: Page, found: Found) => Promise<void>> = {
     await check(page, found, "5,000-line diff");
   },
 
+  "PR page: Finish review": async (page, found, reviewApi) => {
+    // An accepted draft with a body long enough to scroll its box, and an own comment.
+    reviewApi.set("F1", {
+      state: "accepted",
+      edited: true,
+      body: Array.from({ length: 40 }, (_, i) => `line ${i + 1} of a long comment`).join("\n"),
+    });
+    await openShell(page);
+    await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+    const dialog = page.getByRole("dialog", { name: "Finish your review" });
+    await page.getByRole("button", { name: /^Finish review/ }).click();
+    await expect(dialog.getByRole("heading", { name: /Will be posted to GitHub/ })).toBeVisible();
+    await expect(dialog).not.toContainText("Loading what will be posted");
+    await check(page, found, "finish review modal");
+    const submit = dialog.getByRole("button", { name: /Submit review|Submitting/ });
+    await expect(submit).toHaveAttribute("data-armed", "true");
+    const release = reviewApi.holdSubmits();
+    await submit.click();
+    await expect(submit).toHaveText("Submitting…");
+    await check(page, found, "finish review, submitting");
+    release();
+    await expect(dialog).toHaveCount(0);
+    await toastShown(page);
+    await check(page, found, "review submitted, toast and status");
+  },
+
   "inbox: list, approve dialog, no match": async (page, found) => {
     await openInbox(page);
     await check(page, found, "inbox");
@@ -119,12 +146,12 @@ for (const [group, sweep] of Object.entries(GROUPS)) {
   test.describe(group, () => {
     for (const size of WIDTHS) {
       for (const mode of MODES) {
-        test(`axe: no serious issues at ${size.width} px ${mode}`, async ({ page }) => {
+        test(`axe: no serious issues at ${size.width} px ${mode}`, async ({ page, reviewApi }) => {
           test.setTimeout(120_000);
           await page.setViewportSize(size);
           await page.emulateMedia({ colorScheme: mode });
           const found: Found = {};
-          await sweep(page, found);
+          await sweep(page, found, reviewApi);
           expect(found).toEqual({});
         });
       }

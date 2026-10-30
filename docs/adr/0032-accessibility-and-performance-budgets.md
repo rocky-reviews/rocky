@@ -31,12 +31,13 @@ Each budget is a test that fails, not a number measured once.
    the keyboard help), every briefing state (no analysis, running, awaiting approval, failed,
    superseded, re-analysing, out of date, map or briefing unavailable), the diff (own comment and
    composer, accepted draft and toast, dismiss form, editor, noise file and its raw diff, the
-   5,000-line fixture) and the inbox (list, selection, approve dialog, nothing matching). The rule
+   5,000-line fixture), Finish review (open, submitting, submitted with the status pill) and the
+   inbox (list, selection, approve dialog, nothing matching). The rule
    set is axe's default (WCAG 2.0/2.1/2.2 A and AA, best practices) plus `target-size` (WCAG 2.2
    2.5.8), which axe ships switched off; any "serious" or "critical" finding fails and is
    reported with its state. axe skips SVG targets, so the map badges' 24 px target is measured
    in the same file. The feature suites keep their own axe checks next to their behaviour. New
-   pages and states (the Finish review modal, Ask) join the sweep.
+   pages and states (Ask, settings) join the sweep.
 3. **LCP (`apps/web/e2e/lcp.perf.spec.ts`, `pnpm test:lcp`, part of `pnpm test:e2e`).** On the
    production build, in the `perf` project (one worker, after the other projects, so nothing
    shares the CPU), the PR page for pr-847 is loaded once to fill the cache, then five times
@@ -62,7 +63,9 @@ rate does, and the CI runner's numbers are unknown. It runs with `pnpm test:e2e`
   is the briefing summary.
 - axe: 0 serious or critical issues in every state above; the cheap follow-ups from earlier tasks
   were fixed with it (badge target size and digit contrast, coverage bar without a range, key
-  hints on touch screens, a hint that the map scrolls sideways).
+  hints on touch screens, a hint that the map scrolls sideways), and the sweep found one issue
+  once the Finish review modal landed: the "Changes requested" pill (`--crit` on `--crit-bg`,
+  3.9:1), now `--text` on the tint.
 
 ## Consequences
 

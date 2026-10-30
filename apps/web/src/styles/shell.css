@@ -172,9 +172,10 @@ code,
   background: var(--ok-bg);
   color: var(--ok);
 }
+/* P6-8: --crit on --crit-bg is 3.9:1 in light mode; the tint carries the tone, as for low. */
 .status-pill.tone-crit {
   background: var(--crit-bg);
-  color: var(--crit);
+  color: var(--text);
 }
 /* POC: --low text on --low-bg, below 4.5:1 contrast. */
 .status-pill.tone-low {

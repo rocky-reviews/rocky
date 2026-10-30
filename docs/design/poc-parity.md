@@ -197,13 +197,17 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
 - **Accessibility budget (P6-8).** On the change map, digits on a high or medium badge use
   `--text` in light mode (`--on-high`/`--on-med`; white on orange/amber was 3.6:1), a clickable
   badge takes clicks from an invisible 32-unit square around it (24 CSS px when the map is drawn
-  at 3/4 size, WCAG 2.2 2.5.8) and its focus ring outlines that square
+  at 3/4 size, WCAG 2.2 2.5.8; it overlaps the card's top-right corner, where a click now opens
+  the finding, in the same file) and its keyboard focus is a thick `--you` ring on the badge
+  itself
   ([map-focus-badge-1440-light](../../apps/web/e2e/__screenshots__/map-focus-badge-1440-light.png),
   [map-focus-badge-375-dark](../../apps/web/e2e/__screenshots__/map-focus-badge-375-dark.png)); when
   the map scrolls sideways (phones) a line under it says so
   ([brief-375-light](../../apps/web/e2e/__screenshots__/brief-375-light.png)). On touch screens
   without hover, buttons drop their key hints (the "?" shortcuts button keeps its own). The
   sidebar's coverage bar is not announced as a progressbar when there are no high-risk files.
+  The "Changes requested" status pill sets its text in `--text` on `--crit-bg` (POC `--crit`,
+  3.9:1), like "Commented".
 - **Rocky's own briefing (P6-2, not in the POC).** When `provenance.briefingUnavailable` is set,
   the eyebrow reads "Briefing by Rocky" without the AI mark and a note says why.
 - **Drafts (P6-4).** As elsewhere, small AI and severity text is set in `--text`/`--muted` with

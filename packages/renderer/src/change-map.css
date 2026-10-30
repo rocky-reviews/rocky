@@ -248,16 +248,28 @@
   stroke-width: 2.2;
 }
 
-.cm-node[role="button"]:focus-visible,
-.cm-badge[role="button"]:focus-visible {
+.cm-node[role="button"]:focus-visible {
   outline: 2px solid var(--you);
   outline-offset: 2px;
 }
 
-.cm-node[role="button"]:focus-visible .cm-card,
-.cm-badge[role="button"]:focus-visible .cm-badge-bg {
+.cm-node[role="button"]:focus-visible .cm-card {
   stroke: var(--you);
   stroke-width: 2.5;
+}
+
+/*
+ * P6-8: a badge's group box includes its invisible hit square (.cm-badge-hit), so an outline
+ * would draw a square across the card and under edge labels. The ring is the badge's own
+ * outline instead, thicker, in --you.
+ */
+.cm-badge[role="button"]:focus-visible {
+  outline: none;
+}
+
+.cm-badge[role="button"]:focus-visible .cm-badge-bg {
+  stroke: var(--you);
+  stroke-width: 3.5;
 }
 
 .cm-node[role="button"]:focus:not(:focus-visible),
