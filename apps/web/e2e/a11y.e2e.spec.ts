@@ -196,6 +196,18 @@ test.describe("follow-ups from earlier tasks (P6-8)", () => {
     });
   }
 
+  test("the scroll hint follows the width when the window is resized", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openShell(page);
+    await page.locator("#main .map-scroll svg").waitFor();
+    const hint = page.locator(".map-scroll-hint");
+    await expect(hint).toHaveCount(0);
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(hint).toBeVisible();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(hint).toHaveCount(0);
+  });
+
   test.describe("on a touch screen", () => {
     test.use({ hasTouch: true, isMobile: true, viewport: { width: 375, height: 812 } });
 

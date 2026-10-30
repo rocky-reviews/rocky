@@ -58,7 +58,8 @@ describe("the production build", () => {
         build: { outDir, emptyOutDir: true, manifest: "manifest.json" },
       });
     } finally {
-      process.env["NODE_ENV"] = nodeEnv;
+      if (nodeEnv === undefined) delete process.env["NODE_ENV"];
+      else process.env["NODE_ENV"] = nodeEnv;
     }
     const manifest = JSON.parse(readFileSync(join(outDir, "manifest.json"), "utf8")) as Manifest;
     const html = readFileSync(join(outDir, "index.html"), "utf8");
@@ -70,20 +71,23 @@ describe("the production build", () => {
     const files = [...classic, ...initialChunks(manifest, "index.html")];
     const sizes = files.map((file) => {
       const raw = readFileSync(join(outDir, file));
-      return { file, kb: kb(raw.length), gzKb: kb(gzipSync(raw, { level: 9 }).length) };
+      return { file, bytes: raw.length, gzBytes: gzipSync(raw, { level: 9 }).length };
     });
-    const totalGz = sizes.reduce(
-      (sum, s) => sum + gzipSync(readFileSync(join(outDir, s.file)), { level: 9 }).length,
-      0,
-    );
+    const totalGz = sizes.reduce((sum, s) => sum + s.gzBytes, 0);
     const out = join(REPO, "artifacts/perf/P6-8");
     mkdirSync(out, { recursive: true });
     writeFileSync(
       join(out, "bundle.json"),
-      `${JSON.stringify({ budgetGzKb: INITIAL_JS_BUDGET_GZ / 1024, initialGzKb: kb(totalGz), files: sizes }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          budgetGzKb: INITIAL_JS_BUDGET_GZ / 1024,
+          initialGzKb: kb(totalGz),
+          files: sizes.map((s) => ({ file: s.file, kb: kb(s.bytes), gzKb: kb(s.gzBytes) })),
+        },
+        null,
+        2,
+      )}\n`,
     );
-    expect(kb(totalGz), "initial JavaScript, KB gzipped").toBeLessThanOrEqual(
-      INITIAL_JS_BUDGET_GZ / 1024,
-    );
+    expect(totalGz, "initial JavaScript, bytes gzipped").toBeLessThanOrEqual(INITIAL_JS_BUDGET_GZ);
   }, 120_000);
 });

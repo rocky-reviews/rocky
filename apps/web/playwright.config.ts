@@ -14,6 +14,23 @@ const PORT = Number(process.env.E2E_PORT ?? 5199);
 const PERF_PORT = Number(process.env.E2E_PERF_PORT ?? 5198);
 const PERF_DIST = "../../test-results/web-dist";
 
+/**
+ * P6-8: the projects named on the command line (`--project x`, `--project=x`); none means all.
+ * Each web server starts only for the projects that use it, so `pnpm test:a11y` (CI) does not
+ * build the app and `pnpm test:lcp` does not start the dev server.
+ */
+const requested = process.argv.flatMap((arg, i, all) => {
+  if (arg === "--project") return [all[i + 1] ?? ""];
+  if (arg.startsWith("--project=")) return [arg.slice("--project=".length)];
+  return [];
+});
+// `perf` depends on `visual` and `e2e`, which use the dev server, unless run with --no-deps.
+const needsDev =
+  requested.length === 0 ||
+  requested.some((name) => name !== "perf") ||
+  !process.argv.includes("--no-deps");
+const needsPerf = requested.length === 0 || requested.includes("perf");
+
 export default defineConfig({
   testDir: "e2e",
   snapshotPathTemplate: "{testDir}/__screenshots__/{arg}{ext}",
@@ -48,17 +65,25 @@ export default defineConfig({
     },
   ],
   webServer: [
-    {
-      command: `pnpm exec vite --port ${PORT} --strictPort --host 127.0.0.1`,
-      url: `http://127.0.0.1:${PORT}`,
-      reuseExistingServer: false,
-      timeout: 60_000,
-    },
-    {
-      command: `pnpm exec vite build --outDir ${PERF_DIST} --emptyOutDir && pnpm exec vite preview --outDir ${PERF_DIST} --port ${PERF_PORT} --strictPort --host 127.0.0.1`,
-      url: `http://127.0.0.1:${PERF_PORT}`,
-      reuseExistingServer: false,
-      timeout: 120_000,
-    },
+    ...(needsDev
+      ? [
+          {
+            command: `pnpm exec vite --port ${PORT} --strictPort --host 127.0.0.1`,
+            url: `http://127.0.0.1:${PORT}`,
+            reuseExistingServer: false,
+            timeout: 60_000,
+          },
+        ]
+      : []),
+    ...(needsPerf
+      ? [
+          {
+            command: `pnpm exec vite build --outDir ${PERF_DIST} --emptyOutDir && pnpm exec vite preview --outDir ${PERF_DIST} --port ${PERF_PORT} --strictPort --host 127.0.0.1`,
+            url: `http://127.0.0.1:${PERF_PORT}`,
+            reuseExistingServer: false,
+            timeout: 120_000,
+          },
+        ]
+      : []),
   ],
 });

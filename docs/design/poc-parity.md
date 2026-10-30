@@ -206,8 +206,8 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   ([brief-375-light](../../apps/web/e2e/__screenshots__/brief-375-light.png)). On touch screens
   without hover, buttons drop their key hints (the "?" shortcuts button keeps its own). The
   sidebar's coverage bar is not announced as a progressbar when there are no high-risk files.
-  The "Changes requested" status pill sets its text in `--text` on `--crit-bg` (POC `--crit`,
-  3.9:1), like "Commented".
+  In light mode the "Changes requested" status pill sets its text in `--text` on `--crit-bg`
+  (POC `--crit`, 3.9:1), like "Commented"; dark mode keeps `--crit`.
 - **Rocky's own briefing (P6-2, not in the POC).** When `provenance.briefingUnavailable` is set,
   the eyebrow reads "Briefing by Rocky" without the AI mark and a note says why.
 - **Drafts (P6-4).** As elsewhere, small AI and severity text is set in `--text`/`--muted` with

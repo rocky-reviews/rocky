@@ -19,17 +19,29 @@ import { join, resolve } from "node:path";
  * The drafts API and the headers are handled through the DevTools protocol, not `page.route`:
  * Playwright turns the HTTP cache off while any route is set, which would make this a cold load.
  *
- * Asserted: the median LCP of the runs at 1440 px and at 375 px is below 1.5 s, and no run is
- * above it by more than 20 % (a single slow sample on a busy machine is noise, a pattern is not).
- * Evidence: artifacts/perf/P6-8/lcp.json.
+ * Asserted: the LCP element is in the briefing (not the loading line), and the median LCP of
+ * the runs at 1440 px and at 375 px is below the budget, 1.5 s, and no run is above it by more
+ * than 20 % (a single slow sample on a busy machine is noise, a pattern is not).
+ * CI (ADR 0032) runs it unthrottled (`PERF_CPU_THROTTLE=1`) to catch gross regressions on a
+ * runner whose speed is unknown; `LCP_BUDGET_MS` can move the budget. Evidence:
+ * artifacts/perf/P6-8/lcp.json.
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const OUT = join(ROOT, "artifacts/perf/P6-8");
 
-const BUDGET_MS = 1500;
+/** A positive number from the environment, or the default; anything else stops the run. */
+const envNumber = (name: string, fallback: number): number => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
+  return value;
+};
+
+const BUDGET_MS = envNumber("LCP_BUDGET_MS", 1500);
 const RUNS = 5;
-const THROTTLE = Number(process.env.PERF_CPU_THROTTLE ?? 4);
+const THROTTLE = envNumber("PERF_CPU_THROTTLE", 4);
 const NETWORK = {
   offline: false,
   latency: 40,
@@ -37,15 +49,16 @@ const NETWORK = {
   uploadThroughput: (5 * 1000 * 1000) / 8,
 };
 
-const SESSION = {
+/** A live session: expiry dates in the future of whenever the test runs. */
+const session = () => ({
   authenticated: true,
   user: { id: "u1", forgeUserId: 1 },
   orgs: [],
   activeOrgId: null,
   csrfToken: "lcp-csrf-token",
-  expiresAt: "2026-10-26T12:00:00.000Z",
-  idleExpiresAt: "2026-10-25T20:00:00.000Z",
-};
+  expiresAt: new Date(Date.now() + 24 * 3600_000).toISOString(),
+  idleExpiresAt: new Date(Date.now() + 8 * 3600_000).toISOString(),
+});
 
 /** The production server's cache header for hashed files (apps/server/src/web-app.ts). */
 const IMMUTABLE = "public, max-age=31536000, immutable";
@@ -75,7 +88,7 @@ const serveLikeProduction = async (cdp: CDPSession): Promise<void> => {
     const review = /^\/api\/analyses\/([0-9a-f-]{36})\/review$/.exec(pathname);
     const [status, body] =
       pathname === "/api/session"
-        ? [200, SESSION]
+        ? [200, session()]
         : review !== null && event.request.method === "GET"
           ? [200, { analysisId: review[1], drafts: [], comments: [] }]
           : [404, { error: "not_found" }];
@@ -99,10 +112,15 @@ const serveLikeProduction = async (cdp: CDPSession): Promise<void> => {
   });
 };
 
+/** What the page's observer keeps per LCP entry: tag, id and class, never the text. */
+type LcpEntry = { startTime: number; element: string; inBriefing: boolean };
+
 type Sample = {
   lcpMs: number;
   fcpMs: number;
   lcpElement: string;
+  /** The LCP element is inside the briefing card. */
+  lcpInBriefing: boolean;
   /** Scripts and stylesheets whose body came over the network on this load. */
   downloaded: string[];
 };
@@ -115,7 +133,7 @@ const measure = async (page: Page): Promise<Sample> => {
   // LCP is final once nothing larger paints; at 4x CPU everything has painted well before this.
   await page.waitForTimeout(1500);
   return page.evaluate(() => {
-    const w = window as unknown as { __lcp: { startTime: number; element: string }[] };
+    const w = window as unknown as { __lcp: LcpEntry[] };
     const last = w.__lcp.at(-1);
     const fcp = performance.getEntriesByName("first-contentful-paint")[0];
     const downloaded = performance
@@ -129,6 +147,7 @@ const measure = async (page: Page): Promise<Sample> => {
       lcpMs: Math.round(last?.startTime ?? Number.POSITIVE_INFINITY),
       fcpMs: Math.round(fcp?.startTime ?? Number.POSITIVE_INFINITY),
       lcpElement: last?.element ?? "none",
+      lcpInBriefing: last?.inBriefing ?? false,
       downloaded,
     };
   });
@@ -151,19 +170,25 @@ for (const size of [
   { width: 1440, height: 900 },
   { width: 375, height: 812 },
 ]) {
-  test(`PR page LCP with cached data is under 1.5 s at ${size.width} px`, async ({ page }) => {
+  test(`PR page LCP with cached data is under ${BUDGET_MS} ms at ${size.width} px`, async ({
+    page,
+  }) => {
     test.setTimeout(120_000);
     await page.setViewportSize(size);
     await page.emulateMedia({ colorScheme: "light" });
     await page.addInitScript(() => {
-      const w = window as unknown as { __lcp: { startTime: number; element: string }[] };
+      const w = window as unknown as { __lcp: LcpEntry[] };
       w.__lcp = [];
       new PerformanceObserver((list) => {
         for (const entry of list.getEntries() as (PerformanceEntry & { element?: Element })[]) {
           const el = entry.element;
           // Tag, id and class only: never the element's text.
           const name = el ? `${el.tagName.toLowerCase()}#${el.id}.${el.getAttribute("class")}` : "";
-          w.__lcp.push({ startTime: entry.startTime, element: name });
+          w.__lcp.push({
+            startTime: entry.startTime,
+            element: name,
+            inBriefing: el?.closest("#main .brief") != null,
+          });
         }
       }).observe({ type: "largest-contentful-paint", buffered: true });
     });
@@ -183,7 +208,11 @@ for (const size of [
     const lcp = samples.map((s) => s.lcpMs);
     results[`${size.width}px`] = { medianLcpMs: median(lcp), samples };
 
-    for (const sample of samples) expect(sample.downloaded, "warm cache").toEqual([]);
+    for (const sample of samples) {
+      expect(sample.downloaded, "warm cache").toEqual([]);
+      // The paint measured is the briefing's content, not the "Loading…" line or an error.
+      expect(sample.lcpInBriefing, `LCP element ${sample.lcpElement}`).toBe(true);
+    }
     expect(median(lcp), `median LCP of ${lcp.join(", ")} ms`).toBeLessThan(BUDGET_MS);
     expect(Math.max(...lcp), "slowest run").toBeLessThan(BUDGET_MS * 1.2);
   });

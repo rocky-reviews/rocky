@@ -47,33 +47,48 @@ Each budget is a test that fails, not a number measured once.
    server's headers (`/assets/` immutable, the page revalidated), applied over `vite preview`'s
    `no-cache` through the DevTools protocol; the drafts API is answered the same way, because
    `page.route` turns Chrome's HTTP cache off. The test asserts that no script or stylesheet body
-   is downloaded on a measured load. "Cached data": the PR's analysis is in the page (fixture
+   is downloaded on a measured load, and that the LCP element is inside the briefing card (not
+   the "Loading…" line or an error). "Cached data": the PR's analysis is in the page (fixture
    source) and the drafts API answers at once; when the PR page reads its data from the server,
    that request is answered here as the drafts one is. Fails if the median of the five runs is
    1.5 s or more, or any run is above 1.8 s. Numbers: `artifacts/perf/P6-8/lcp.json`.
 
-The LCP test does not run in CI yet: its threshold depends on the runner's CPU, as P6-3's frame
-rate does, and the CI runner's numbers are unknown. It runs with `pnpm test:e2e` locally.
+4. **Where they run.** Each Playwright web server starts only for the projects that use it
+   (`apps/web/playwright.config.ts` reads `--project`), so the CI axe step does not build the
+   app and `pnpm test:lcp` does not start the dev server.
+
+### LCP in CI, and the plan to tighten it
+
+The 4x-throttled profile describes a laptop, and its threshold depends on the CPU it runs on,
+as P6-3's frame rate does. The CI job "axe sweep and LCP" therefore runs `pnpm test:lcp` with
+the CPU unthrottled (`PERF_CPU_THROTTLE=1`) and the same 1.5 s budget (`LCP_BUDGET_MS`), the same
+network and warm cache: on the runner that is a gross-regression check (today's page paints in
+a few hundred milliseconds even on slow machines), not the acceptance profile. `lcp.json` is
+uploaded as a build artifact on every run, pass or fail. Once a few weeks of runner numbers
+exist, CI moves to a throttled profile (2x, then 4x if the median leaves room) with the 1.5 s
+budget; the acceptance profile (4x) keeps running locally with `pnpm test:e2e` and
+`pnpm test:lcp`.
 
 ## Measured (2026-10-30, Apple Silicon, Chromium 1248)
 
-- Initial JS: 158 KB gzipped (one 513 KB chunk plus the 0.8 KB theme script); no split was
-  needed. React DOM and Zod are most of it.
-- LCP: median about 200 ms at 1440 px and 190 ms at 375 px, slowest run 224 ms; the LCP element
+- Initial JS: 164.7 KB gzipped (one 536.8 KB chunk, with P6-6's Finish review, plus the 0.8 KB
+  theme script); no split was needed. React DOM and Zod are most of it.
+- LCP: median 192 ms at 1440 px and 188 ms at 375 px (4x CPU), slowest run 216 ms; unthrottled
+  (the CI profile) 148 and 144 ms on this machine; the LCP element
   is the briefing summary.
 - axe: 0 serious or critical issues in every state above; the cheap follow-ups from earlier tasks
   were fixed with it (badge target size and digit contrast, coverage bar without a range, key
   hints on touch screens, a hint that the map scrolls sideways), and the sweep found one issue
   once the Finish review modal landed: the "Changes requested" pill (`--crit` on `--crit-bg`,
-  3.9:1), now `--text` on the tint.
+  3.9:1 in light mode), now `--text` there (`--crit-tint-text`; dark keeps `--crit`).
 
 ## Consequences
 
 - A change that adds a heavy dependency to the first render, an inaccessible state, or a slow
   first paint fails before review. The bundle budget runs on every `pnpm verify`; the build adds
   about a second.
-- The CI axe job installs Chromium on Linux; the screenshot baselines stay macOS-only and do not
+- The CI job installs Chromium on Linux; the screenshot baselines stay macOS-only and do not
   run there (P6-1 follow-up).
 - Text on a solid severity fill has its own tokens (`--on-crit|high|med|low`), each one of the
   POC's text or surface colours per mode; `scripts/design-tokens.test.ts` checks they reach
-  4.5:1 on their fill in both modes.
+  4.5:1 on their fill in both modes; `--crit-tint-text` likewise on `--crit-bg`.

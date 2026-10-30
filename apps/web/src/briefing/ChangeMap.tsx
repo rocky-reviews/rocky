@@ -104,7 +104,7 @@ const MapView = ({ doc, onOpenFile }: CanvasProps) => {
     if (open(event.currentTarget, event.target)) event.preventDefault();
   };
   const box = useRef<HTMLDivElement>(null);
-  const overflows = useOverflow(box);
+  const overflows = useOverflow(box, map);
   return (
     <>
       {/* The listeners only delegate: the focusable controls are the SVG buttons inside. */}
@@ -122,19 +122,22 @@ const MapView = ({ doc, onOpenFile }: CanvasProps) => {
 
 /**
  * P6-8: whether the box is narrower than its content (the map scrolls sideways on phones), so
- * the page can say so; nothing else shows that part of the map is out of view.
+ * the page can say so; nothing else shows that part of the map is out of view. Both the box and
+ * the map inside it are watched, and a new map (`content`) checks again.
  */
-const useOverflow = (ref: RefObject<HTMLElement | null>): boolean => {
+const useOverflow = (ref: RefObject<HTMLElement | null>, content: unknown): boolean => {
   const [overflows, setOverflows] = useState(false);
   useEffect(() => {
     const el = ref.current;
     if (el === null) return;
     const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
     check();
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(check);
     observer.observe(el);
+    for (const child of el.children) observer.observe(child);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [ref, content]);
   return overflows;
 };
 

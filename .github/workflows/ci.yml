@@ -41,11 +41,13 @@ jobs:
       - name: Verify (typecheck, lint, format:check, test:coverage)
         run: pnpm verify
 
-  a11y:
+  web-budgets:
     # P6-8 (ADR 0032): the axe sweep over every page and state of the web app at
-    # 375/1024/1440 px x light/dark, failing on any serious or critical issue. The screenshot
-    # baselines are macOS-only, so the visual project does not run here.
-    name: axe sweep
+    # 375/1024/1440 px x light/dark, failing on any serious or critical issue; then the PR page's
+    # LCP with a warm cache. The runner's CPU speed is unknown, so LCP runs unthrottled here
+    # against the 1.5 s budget (gross regressions); the 4x-throttled profile runs locally.
+    # The screenshot baselines are macOS-only, so the visual project does not run here.
+    name: axe sweep and LCP
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -71,6 +73,22 @@ jobs:
 
       - name: axe sweep
         run: pnpm test:a11y
+
+      - name: LCP on the PR page (warm cache, CPU unthrottled)
+        if: ${{ !cancelled() }}
+        env:
+          PERF_CPU_THROTTLE: "1"
+          LCP_BUDGET_MS: "1500"
+        run: pnpm test:lcp
+
+      - name: Upload the LCP numbers
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lcp
+          path: artifacts/perf/P6-8/lcp.json
+          if-no-files-found: ignore
+          retention-days: 30
 
   actionlint:
     name: actionlint

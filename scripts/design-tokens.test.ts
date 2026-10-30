@@ -34,7 +34,7 @@ const DERIVED = /^--(font|text|radius|space)-|^--shadow-modal$|^--overlay$/;
  * P6-8: text on a solid severity fill. Not colours of their own: each is one of the POC's
  * surface or text tokens, chosen per mode for contrast.
  */
-const ON_SEVERITY = /^--on-(crit|high|med|low)$/;
+const ON_SEVERITY = /^--on-(crit|high|med|low)$|^--crit-tint-text$/;
 
 /**
  * P6-3 syntax colours: each `--syn-*` is a POC `--tk-*` token or one of these reviewed AA
@@ -67,7 +67,7 @@ describe("design tokens match the POC", () => {
       );
       for (const [name, value] of actual) {
         if (!ON_SEVERITY.test(name)) continue;
-        expect(value, name).toMatch(/^var\(--(panel|text)\)$/);
+        expect(value, name).toMatch(/^var\(--(panel|text|crit)\)$/);
       }
       for (const [name, value] of actual) {
         if (!SYNTAX.test(name)) continue;
@@ -111,6 +111,9 @@ describe("text on a severity fill (P6-8)", () => {
           4.5,
         );
       }
+      const tint = resolve(merged.get("--crit-bg") ?? "");
+      const onTint = resolve(merged.get("--crit-tint-text") ?? "");
+      expect(contrast(onTint, tint), "--crit-tint-text on --crit-bg").toBeGreaterThanOrEqual(4.5);
     });
   }
 });

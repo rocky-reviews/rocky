@@ -73,6 +73,8 @@
   --on-high: var(--text);
   --on-med: var(--text);
   --on-low: var(--panel);
+  /* Text on the critical tint (status pill): --crit on --crit-bg is 3.9:1 in light mode only. */
+  --crit-tint-text: var(--text);
   /* Diff */
   --add-bg: #e7f6ec;
   --add-sign: #1a7f37;
@@ -128,6 +130,7 @@
   --on-high: var(--panel);
   --on-med: var(--panel);
   --on-low: var(--panel);
+  --crit-tint-text: var(--crit);
   /* Diff */
   --add-bg: #0f2a1c;
   --add-sign: #4ade80;
