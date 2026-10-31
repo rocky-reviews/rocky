@@ -535,6 +535,11 @@ Task log for the project plan. Agents append a row when a task is merged.
   - N6: the lane registers a run in its slot map only after `deps.run` has been called synchronously; take the slot before starting the run so a throwing `run` can never leave the counts off.
   - N7: migration 0012 creates the partial unique index without first collapsing duplicate live rows of one revision. None can exist in a deployment (nothing enqueued before 0012), but a dev database with planted rows would fail the migration; dedupe first if that ever happens.
   - Dev databases that applied the `0011_reserved_p4_5` placeholder get a checksum mismatch once it is replaced by P4-5's real 0011: run `pnpm db:migrate down 2` before rebasing (or recreate the dev database).
+- Fairness-test flake fix (2026-10-30, review notes, not fixed):
+  - The "B's forge reads last" reproduction relies on a 50 ms timer in the fake forge; a deterministic hold (B's `openRepository` waits until A's have run) would not depend on timing.
+  - `steppedForge`'s `current.getStore() ?? newGate()` fallback is unused by the lane path; it could throw instead, so a run outside `claimed` cannot silently fall back to forge-call order.
+  - Gates that are never reached (a run that ends before its diff read) are never removed from `gates`.
+  - Pre-existing, cause unknown: load cases with cap 1 and `finish: 1` (not in the suite) end the step loop early with `expected length 50 but got 3/4`.
 
 ### P4-4 follow-ups
 
