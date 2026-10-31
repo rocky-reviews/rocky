@@ -18,7 +18,13 @@
  */
 import { formatPath } from "@rocky-reviews/schema";
 import type { LlmUntrustedText } from "../llm.js";
-import { FINAL_INSTRUCTION, PROMPT_CANARY, UNTRUSTED_PREAMBLE } from "../prompt.js";
+import {
+  FINAL_INSTRUCTION,
+  FINAL_INSTRUCTION_PROMPT_SCHEMA,
+  PROMPT_CANARY,
+  SCHEMA_PREAMBLE,
+  UNTRUSTED_PREAMBLE,
+} from "../prompt.js";
 import {
   BRIEFING_INSTRUCTIONS,
   GRAPH_INSTRUCTIONS,
@@ -36,6 +42,10 @@ const MIN_CANARY_CHARS = 6;
 export const PROMPT_TEXTS: readonly string[] = Object.freeze([
   UNTRUSTED_PREAMBLE,
   FINAL_INSTRUCTION,
+  // A prompt-mode output's fixed lines (H4-4); the schema JSON after them is not instruction
+  // text, and an answer legitimately repeats its field names.
+  SCHEMA_PREAMBLE,
+  FINAL_INSTRUCTION_PROMPT_SCHEMA,
   ...[
     TRIAGE_INSTRUCTIONS,
     REVIEW_INSTRUCTIONS,

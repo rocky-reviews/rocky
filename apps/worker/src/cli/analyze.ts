@@ -179,7 +179,12 @@ export const runAnalyzeCommand = async (
     return EXIT.capReached;
   }
   if (outcome.status === "failed") {
-    deps.err(`rocky: analysis failed: ${outcome.code}\n${usage()}`);
+    // The diagnostic is a fixed origin tag and a class name (H4-4), never an error's text.
+    const where =
+      outcome.diagnostic === undefined
+        ? ""
+        : ` (${[outcome.diagnostic.origin, outcome.diagnostic.errorClass].filter(Boolean).join(", ")})`;
+    deps.err(`rocky: analysis failed: ${outcome.code}${where}\n${usage()}`);
     return EXIT.failed;
   }
 

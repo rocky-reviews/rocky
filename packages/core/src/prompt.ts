@@ -29,8 +29,24 @@ export const UNTRUSTED_PREAMBLE = [
 
 export const FINAL_INSTRUCTION = "Answer with one JSON document that matches the output schema.";
 
+/**
+ * A prompt-mode output (`LlmOutputSchema.mode: "prompt"`, ADR 0013 amendment H4-4): the provider
+ * is not asked to enforce the schema, so the schema itself follows Rocky's instructions in the
+ * system slot, behind this line, and the final line names it. Only Rocky's validator checks the
+ * answer, as for every output.
+ */
+export const SCHEMA_PREAMBLE = "The output schema, as JSON Schema. Your answer must match it:";
+export const FINAL_INSTRUCTION_PROMPT_SCHEMA =
+  "Answer with only one JSON document that matches the output schema in your instructions: no prose before or after it, no code fences.";
+
 /** The system slot for one call: the preamble, then Rocky's instructions. */
 export const systemPrompt = (instructions: RockyInstructions): string => {
   if (!isRockyInstructions(instructions)) throw new TypeError("not Rocky-authored instructions");
   return `${UNTRUSTED_PREAMBLE}\n\n${instructions.text}`;
 };
+
+/** The system slot for a prompt-mode output: the schema (serialised JSON) after the instructions. */
+export const systemPromptWithSchema = (
+  instructions: RockyInstructions,
+  schemaJson: string,
+): string => `${systemPrompt(instructions)}\n\n${SCHEMA_PREAMBLE}\n${schemaJson}`;

@@ -153,6 +153,17 @@ export interface AnalysisStats {
   graph: "drawn" | "unavailable" | "none";
 }
 
+/**
+ * Where a failure was raised, for the log (H4-4). Content-free by construction: `origin` is a
+ * fixed tag written in Rocky's source (an adapter's `LlmCallError.origin`, or `pipeline` for a
+ * failure nothing classified) and `errorClass` is the thrown value's class name, checked
+ * against an identifier shape; a message, a body or a value never gets in.
+ */
+export interface AnalysisDiagnostic {
+  readonly origin: string;
+  readonly errorClass?: string;
+}
+
 export type AnalysisOutcome =
   | {
       readonly status: "done";
@@ -165,6 +176,7 @@ export type AnalysisOutcome =
       readonly status: "failed";
       readonly code: AnalysisFailureCode;
       readonly stats: AnalysisStats;
+      readonly diagnostic?: AnalysisDiagnostic;
     };
 
 // ---------------------------------------------------------------------------------------------
@@ -792,6 +804,23 @@ const newStats = (): AnalysisStats => ({
   graph: "none",
 });
 
+const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
+
+/**
+ * The class name of a thrown value, or `unknown`: a name is code, not content, and the shape
+ * check keeps anything that is not an identifier (a value planted on `constructor.name`, a
+ * primitive, a trapping proxy) out of the log (H4-4).
+ */
+export const errorClassOf = (error: unknown): string => {
+  if (typeof error !== "object" || error === null) return "unknown";
+  try {
+    const name = (error as { constructor?: { name?: unknown } }).constructor?.name;
+    return typeof name === "string" && CLASS_NAME.test(name) ? name : "unknown";
+  } catch {
+    return "unknown";
+  }
+};
+
 export const analyzePullRequest = async (
   request: AnalysisRequest,
   deps: AnalysisDeps,
@@ -803,9 +832,20 @@ export const analyzePullRequest = async (
     if (error instanceof Failed) return { status: "failed", code: error.code, stats };
     if (isLlmCallError(error)) {
       if (error.retryable || error.kind === "cancelled") throw error;
-      return { status: "failed", code: `llm_${error.kind as LlmFatalErrorKind}`, stats };
+      return {
+        status: "failed",
+        code: `llm_${error.kind as LlmFatalErrorKind}`,
+        stats,
+        ...(error.origin === undefined ? {} : { diagnostic: { origin: error.origin } }),
+      };
     }
-    // Anything else is a bug or a broken port; it carries no detail out (it could quote content).
-    return { status: "failed", code: "internal_error", stats };
+    // Anything else is a bug or a broken port; only its class name goes out (its message could
+    // quote content).
+    return {
+      status: "failed",
+      code: "internal_error",
+      stats,
+      diagnostic: { origin: "pipeline", errorClass: errorClassOf(error) },
+    };
   }
 };

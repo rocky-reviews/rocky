@@ -49,6 +49,14 @@ export type LlmParseResult<T> =
 export interface LlmOutputSchema<T> {
   readonly name: string;
   readonly jsonSchema: Readonly<Record<string, unknown>>;
+  /**
+   * How the provider gets the schema (ADR 0013 amendment H4-4). `structured` (the default when
+   * absent): the provider enforces it (Anthropic structured outputs, OpenAI `json_schema`).
+   * `prompt`: the schema is sent as text after Rocky's instructions and nothing constrains the
+   * answer but `parse`; for a schema a provider cannot compile (the graph). Validation is the
+   * same either way.
+   */
+  readonly mode?: "structured" | "prompt";
   parse(value: unknown): LlmParseResult<T>;
 }
 
@@ -269,6 +277,12 @@ const ERROR_MESSAGES: Readonly<Record<LlmErrorKind, string>> = {
 export const isLlmErrorKind = (value: unknown): value is LlmErrorKind =>
   typeof value === "string" && (LLM_ERROR_KINDS as readonly string[]).includes(value);
 
+/**
+ * An origin tag is a fixed identifier written in Rocky's source (`sdk_schema_transform`), never
+ * built from a message, a body or PR content: this shape leaves no room for either (H4-4).
+ */
+const ORIGIN_TAG = /^[a-z][a-z0-9_]{0,31}$/;
+
 export class LlmCallError extends Error {
   override readonly name = "LlmCallError";
   readonly kind: LlmErrorKind;
@@ -281,18 +295,32 @@ export class LlmCallError extends Error {
    * reported.
    */
   readonly partialUsage: LlmUsage | undefined;
+  /**
+   * Where an adapter raised the error itself, before or after the provider was involved (H4-4):
+   * a fixed tag such as `sdk_schema_transform`, so a local refusal can be told from a provider's
+   * answer of the same kind in the logs. Undefined for an error mapped from the provider.
+   */
+  readonly origin: string | undefined;
   constructor(
     kind: LlmErrorKind,
-    options: { readonly retryAfterMs?: number; readonly partialUsage?: LlmUsage } = {},
+    options: {
+      readonly retryAfterMs?: number;
+      readonly partialUsage?: LlmUsage;
+      readonly origin?: string;
+    } = {},
   ) {
     super(ERROR_MESSAGES[kind]);
-    const { retryAfterMs, partialUsage } = options;
+    const { retryAfterMs, partialUsage, origin } = options;
     if (retryAfterMs !== undefined && !(Number.isFinite(retryAfterMs) && retryAfterMs >= 0)) {
       throw new RangeError("retryAfterMs must be a finite, non-negative number");
+    }
+    if (origin !== undefined && !ORIGIN_TAG.test(origin)) {
+      throw new RangeError("origin must be a fixed tag: [a-z][a-z0-9_]{0,31}");
     }
     this.kind = kind;
     this.retryable = (LLM_RETRYABLE_ERROR_KINDS as readonly string[]).includes(kind);
     this.retryAfterMs = retryAfterMs;
+    this.origin = origin;
     this.partialUsage =
       partialUsage === undefined
         ? undefined

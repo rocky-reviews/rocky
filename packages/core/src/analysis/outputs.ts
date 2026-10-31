@@ -12,6 +12,7 @@
 import { z } from "zod";
 import { Briefing, Finding, formatPath, Graph, limits, TriagedFile } from "@rocky-reviews/schema";
 import type { LlmOutputSchema, LlmParseResult } from "../llm.js";
+import { providerJsonSchema } from "./provider-schema.js";
 
 /** At most this many findings for one file; the document caps the PR at `MAX_FINDINGS`. */
 export const MAX_FINDINGS_PER_FILE = 25;
@@ -50,18 +51,24 @@ export const issueLine = (path: readonly PropertyKey[], code: string): string =>
 
 /**
  * The port's output contract for a stage schema: JSON Schema for the provider (input side, so
- * defaulted fields are optional) and a validator that never throws.
+ * defaulted fields are optional; `providerJsonSchema` folds the hand-written constraints a
+ * provider transform cannot take, H4-4) and a validator that never throws. The validator is the
+ * Zod schema itself, so nothing the sent schema leaves out is left unchecked.
  */
 export const outputSchema = <S extends z.ZodType>(
   name: string,
   schema: S,
+  options: { readonly mode?: LlmOutputSchema<unknown>["mode"] } = {},
 ): LlmOutputSchema<z.output<S>> => {
   const jsonSchema = Object.freeze(
-    z.toJSONSchema(schema, { target: "draft-2020-12", io: "input" }) as Record<string, unknown>,
+    providerJsonSchema(
+      z.toJSONSchema(schema, { target: "draft-2020-12", io: "input" }) as Record<string, unknown>,
+    ),
   );
   return Object.freeze({
     name,
     jsonSchema,
+    mode: options.mode ?? "structured",
     parse(value: unknown): LlmParseResult<z.output<S>> {
       try {
         const result = schema.safeParse(value);
@@ -82,7 +89,15 @@ export const outputSchema = <S extends z.ZodType>(
 
 export const TRIAGE_OUTPUT = outputSchema("rocky_triage", TriageAnswer);
 export const REVIEW_OUTPUT = outputSchema("rocky_review", ReviewAnswer);
-export const GRAPH_OUTPUT = outputSchema("rocky_graph", GraphAnswer);
+/**
+ * The graph is sent as a prompt schema, not a provider-enforced one (H4-4, ADR 0013 amendment):
+ * the Anthropic API compiles an enforced schema into a grammar and refuses this one three ways
+ * (recursive `View` and `JsonValue` definitions, more than 24 optional fields, and a grammar
+ * too large for lanes + nodes + edges + flows + views + walkthrough together). The validator is
+ * the same either way; an answer that misses the schema is `invalid_output` and gets a repair
+ * round.
+ */
+export const GRAPH_OUTPUT = outputSchema("rocky_graph", GraphAnswer, { mode: "prompt" });
 export const BRIEFING_OUTPUT = outputSchema("rocky_briefing", BriefingAnswer);
 
 /** Output caps per call. Thinking counts against them (ADR 0012 N9). P4-6 owns token budgets. */

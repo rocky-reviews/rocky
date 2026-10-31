@@ -5,6 +5,7 @@ import {
   estimateAnalysisTokens,
   ForgeReadError,
   isLlmCallError,
+  type AnalysisDiagnostic,
   type Clock,
   type Forge,
   type ForgeDiff,
@@ -178,9 +179,20 @@ export const runAnalysis = async (
     log.warn({ analysisId, attempt: claim.attempts }, "analysis lease lost");
     return { outcome: "lease_lost" };
   };
-  const fail = async (code: string): Promise<AnalysisRun> => {
+  const fail = async (code: string, diagnostic?: AnalysisDiagnostic): Promise<AnalysisRun> => {
     if (!(await db.withOrg(orgId, (tx) => failAnalysis(tx, claim, code)))) return lost();
-    log.warn({ analysisId, code, attempt: claim.attempts }, "analysis failed");
+    // `errorCode`, not `code`: the log scrubber redacts `code` (docs/logging.md). The diagnostic
+    // is a fixed origin tag and a class name (H4-4), never a message.
+    log.warn(
+      {
+        analysisId,
+        errorCode: code,
+        attempt: claim.attempts,
+        ...(diagnostic === undefined ? {} : { errorOrigin: diagnostic.origin }),
+        ...(diagnostic?.errorClass === undefined ? {} : { errorClass: diagnostic.errorClass }),
+      },
+      "analysis failed",
+    );
     return { outcome: "failed", code };
   };
   const stopping = (): boolean =>
@@ -197,7 +209,10 @@ export const runAnalysis = async (
     if (!(await db.withOrg(orgId, (tx) => requeueAnalysis(tx, claim, code, retryAfterMs)))) {
       return lost();
     }
-    log.warn({ analysisId, code, attempt: claim.attempts, retryAfterMs }, "analysis requeued");
+    log.warn(
+      { analysisId, errorCode: code, attempt: claim.attempts, retryAfterMs },
+      "analysis requeued",
+    );
     return { outcome: "retry", code, retryAfterMs };
   };
 
@@ -307,7 +322,7 @@ export const runAnalysis = async (
       "analysis ran",
     );
     if (llm.failed) return await fail("metering_failed");
-    if (outcome.status === "failed") return await fail(outcome.code);
+    if (outcome.status === "failed") return await fail(outcome.code, outcome.diagnostic);
     const stored = await db.withOrg(orgId, (tx) =>
       completeAnalysis(tx, claim, outcome.document, outcome.units),
     );

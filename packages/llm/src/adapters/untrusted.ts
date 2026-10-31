@@ -1,9 +1,11 @@
 import { randomBytes } from "node:crypto";
 import {
   FINAL_INSTRUCTION,
+  FINAL_INSTRUCTION_PROMPT_SCHEMA,
   isRockyInstructions,
   LlmCallError,
   systemPrompt,
+  systemPromptWithSchema,
   UNTRUSTED_PREAMBLE,
   type StructuredCompletionRequest,
 } from "@rocky-reviews/core";
@@ -52,7 +54,18 @@ export interface Prompt {
 export interface PromptOptions {
   /** Break chat-template tokens in PR content (OpenAI-compatible servers). */
   readonly neutraliseChatTokens?: boolean;
+  /**
+   * A prompt-mode output (ADR 0013 amendment H4-4): the serialised JSON Schema goes after
+   * Rocky's instructions in the system slot (it is Rocky-authored and static, so it is cached
+   * with them) and the final line names it.
+   */
+  readonly schema?: string;
 }
+
+/** The serialised schema of a prompt-mode output, or undefined when the provider enforces it. */
+export const promptSchema = (
+  output: Pick<StructuredCompletionRequest<unknown>["output"], "mode" | "jsonSchema">,
+): string | undefined => (output.mode === "prompt" ? JSON.stringify(output.jsonSchema) : undefined);
 
 export const buildPrompt = (
   request: Pick<StructuredCompletionRequest<unknown>, "instructions" | "untrusted">,
@@ -74,12 +87,15 @@ export const buildPrompt = (
     const id = nonce();
     if (parts.some((part) => part.text.includes(id))) continue;
     return {
-      system: systemPrompt(request.instructions),
+      system:
+        options.schema === undefined
+          ? systemPrompt(request.instructions)
+          : systemPromptWithSchema(request.instructions, options.schema),
       parts: parts.map(
         (part) =>
           `<pr_content id="${id}" label="${part.label}">\n${part.text}\n</pr_content id="${id}">`,
       ),
-      final: FINAL_INSTRUCTION,
+      final: options.schema === undefined ? FINAL_INSTRUCTION : FINAL_INSTRUCTION_PROMPT_SCHEMA,
     };
   }
   // Only reachable with a broken nonce source: fail closed rather than reuse a known id.
