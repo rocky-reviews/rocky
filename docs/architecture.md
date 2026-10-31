@@ -272,6 +272,14 @@ packages/schema (analysis document; shared contract)
   web app opens it at `/:owner/:repo/pull/:number`; logs carry ids and fixed outcomes only. In
   development Vite proxies `/api` and `/auth` to the server so the browser sees one origin
   (`ROCKY_PUBLIC_URL=http://127.0.0.1:5173`; runbook `docs/runbooks/review-a-real-pr.md`).
+- PR diff (H4-3, ADR 0034): `GET /api/repos/:owner/:repo/pulls/:number/diff` (same policy and
+  P3-6 check, a per-member rate limit) reads the mirrored head's diff from GitHub on demand
+  through the mirror's own repository session (`apps/server/src/pulls/diff-reader.ts`: a token
+  for that one repository with `contents`/`pull_requests: read`, revoked after; GitHub's head
+  verified against the mirror's first, else 409 `head_moved`; the mirror's 1 MiB cap, trimmed to
+  whole files and flagged), kept in memory for a minute per org + repository + revision and
+  never stored. The web's `createHttpDiffSource` feeds the file view, so drafts, own comments
+  and Finish review work on a real PR; every refusal has fixed text.
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,

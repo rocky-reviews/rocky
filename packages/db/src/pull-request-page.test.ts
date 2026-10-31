@@ -4,7 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db, type TenantTx } from "./client.js";
 import { insertInstallationOrg } from "./installations.js";
 import { recordRevision, upsertPullRequest, upsertRepository } from "./mirror.js";
-import { loadPullRequestPage, PullRequestPageError } from "./pull-request-page.js";
+import {
+  loadPullRequestDiffTarget,
+  loadPullRequestPage,
+  PullRequestPageError,
+} from "./pull-request-page.js";
 import { upsertLoginMember } from "./sessions.js";
 import {
   CONTAINER_TIMEOUT_MS,
@@ -389,5 +393,88 @@ describe("loadPullRequestPage", () => {
       await upsertPullRequest(tx, repo, forgePr(7040, 5));
     });
     expect(await load(b, "shared", "name", 5, meB)).toBeNull();
+  });
+});
+
+describe("loadPullRequestDiffTarget (H4-3)", () => {
+  it("resolves what the diff endpoint needs: ids, the head and its recorded base, the installation", async () => {
+    const org = await newOrg();
+    const installationId = nextInstallation - 1;
+    const { pullRequestId } = await worker.withOrg(org, async (tx) => {
+      const repo = await upsertRepository(tx, {
+        id: 7100,
+        fullName: "Acme/Diff-App",
+        private: true,
+        defaultBranch: "main",
+      });
+      const created = await upsertPullRequest(tx, repo, forgePr(7100, 12));
+      await recordRevision(tx, created.id, forgePr(7100, 12), DIFF);
+      return { pullRequestId: created.id };
+    });
+    const target = await app.withOrg(org, (tx) =>
+      loadPullRequestDiffTarget(tx, { owner: "acme", repo: "diff-app", number: 12 }),
+    );
+    expect(target).toEqual({
+      pullRequestId,
+      forgeRepoId: 7100,
+      installationId,
+      headSha: sha("a"),
+      baseSha: sha("b"),
+    });
+  });
+
+  it("a PR without a recorded head revision takes the pull request's own base, never GitHub's", async () => {
+    const org = await newOrg();
+    await worker.withOrg(org, async (tx) => {
+      const repo = await upsertRepository(tx, {
+        id: 7101,
+        fullName: "acme/no-revision",
+        private: true,
+        defaultBranch: "main",
+      });
+      await upsertPullRequest(tx, repo, forgePr(7101, 3, { headSha: sha("c"), baseSha: sha("e") }));
+    });
+    const target = await app.withOrg(org, (tx) =>
+      loadPullRequestDiffTarget(tx, { owner: "acme", repo: "no-revision", number: 3 }),
+    );
+    expect(target).toMatchObject({ forgeRepoId: 7101, headSha: sha("c"), baseSha: sha("e") });
+  });
+
+  it("answers null for an unknown PR, a disabled repository, impossible names and another org's PR (RLS)", async () => {
+    const org = await newOrg();
+    const other = await newOrg();
+    const repoId = await worker.withOrg(org, async (tx) => {
+      const repo = await upsertRepository(tx, {
+        id: 7102,
+        fullName: "acme/gated",
+        private: true,
+        defaultBranch: "main",
+      });
+      await upsertPullRequest(tx, repo, forgePr(7102, 4));
+      return repo;
+    });
+    const target = (o: OrgId, owner: string, repo: string, number: number) =>
+      app.withOrg(o, (tx) => loadPullRequestDiffTarget(tx, { owner, repo, number }));
+    expect(await target(org, "acme", "gated", 4)).not.toBeNull();
+    expect(await target(org, "acme", "gated", 5)).toBeNull();
+    expect(await target(org, "acme", "other", 4)).toBeNull();
+    expect(await target(org, "acme", "..", 4)).toBeNull();
+    expect(await target(org, "a c", "gated", 4)).toBeNull();
+    expect(await target(other, "acme", "gated", 4)).toBeNull();
+    await worker.withOrg(org, (tx) =>
+      tx.query("update repos set enabled = false where id = $1", [repoId]),
+    );
+    expect(await target(org, "acme", "gated", 4)).toBeNull();
+  });
+
+  it("refuses a malformed number before querying", async () => {
+    const org = await newOrg();
+    for (const number of [0, -1, 1.5, Number.NaN, 2 ** 31]) {
+      await expect(
+        app.withOrg(org, (tx) =>
+          loadPullRequestDiffTarget(tx, { owner: "acme", repo: "gated", number }),
+        ),
+      ).rejects.toThrow(PullRequestPageError);
+    }
   });
 });

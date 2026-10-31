@@ -5,7 +5,8 @@
 - **Task:** P6-1
 - **Amended by:** [ADR 0025](0025-security-headers-and-rate-limits.md) (P7-3: the server serves
   the build from `ROCKY_WEB_DIR` under a CSP without inline content; the build is checked);
-  H4-2 (the server-backed source, addresses and the dev proxy; "Amendment (H4-2)" below)
+  H4-2 (the server-backed source, addresses and the dev proxy; "Amendment (H4-2)" below);
+  [ADR 0034](0034-pull-request-diff-endpoint.md) (H4-3: the diff is served)
 
 ## Context
 
@@ -116,7 +117,11 @@ implements exactly these rules.
 - **Logs:** Fastify's request lines carry the matched route's pattern, never the raw path, and
   `(unmatched)` for a 404 or the SPA fallback, so repository names in addresses stay out of the
   logs (`packages/log/src/fastify.ts`, `docs/logging.md`).
-- **The diff** is not served yet: a real PR's file view says it could not be loaded.
+- **The diff** (H4-3, [ADR 0034](0034-pull-request-diff-endpoint.md)):
+  `GET /api/repos/:owner/:repo/pulls/:number/diff`, the same policy and access check, read from
+  GitHub on demand for the mirror's head; `createHttpDiffSource` implements the P6-3
+  `DiffDataSource` against it, and the file view explains each refusal (not found, head moved,
+  too large, access unavailable, GitHub failed, rate limited, signed out) with fixed text.
 - **Dev proxy** (`apps/web/vite.config.ts`, `src/dev-proxy.ts`): Vite forwards `/api` and `/auth`
   (whole path segments) to `ROCKY_DEV_SERVER_URL` (default `http://127.0.0.1:4310`, http only on
   loopback; `off` disables it, as the Playwright suites do) with Host and Origin unchanged and

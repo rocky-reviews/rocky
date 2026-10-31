@@ -142,6 +142,74 @@ const sizeOf = (stats: Raw["stats"]): PullRequestPageRow["size"] => {
 };
 
 /**
+ * What the diff endpoint needs before it asks GitHub (H4-3, ADR 0034): the pull request's id,
+ * its repository's forge id (for the access check and the token), the org's installation (on
+ * whose behalf the token is minted), the mirror's head and the base the mirror diffed it
+ * against: the head revision's (the analysis read that same diff), else the pull request's own
+ * `base_sha` (the mirror writes both from one GitHub read, so they differ only when a revision
+ * has not been recorded yet). Never GitHub's live base (ADR 0034 review, SF1). No content:
+ * titles and names stay in the row.
+ */
+export interface PullRequestDiffTargetRow {
+  readonly pullRequestId: string;
+  readonly forgeRepoId: number;
+  /** `null` when the org row holds no installation (nothing can be read on its behalf). */
+  readonly installationId: number | null;
+  readonly headSha: string;
+  readonly baseSha: string;
+}
+
+const SELECT_DIFF_TARGET = `
+  select p.id, r.forge_repo_id::text as forge_repo_id, o.installation_id::text as installation_id,
+         p.head_sha, coalesce(v.base_sha, p.base_sha) as base_sha
+    from pull_requests p
+    join repos r on r.org_id = p.org_id and r.id = p.repo_id
+    join orgs o on o.id = p.org_id
+    left join pr_revisions v
+      on v.org_id = p.org_id and v.pull_request_id = p.id and v.head_sha = p.head_sha
+   where p.org_id = $1 and lower(r.full_name) = lower($2) and p.number = $3 and r.enabled
+   order by r.updated_at desc, r.id
+   limit 1`;
+
+const forgeId = (value: string | null): number | null => {
+  const id = value === null ? NaN : Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+
+/**
+ * The diff target of `owner/repo#number` in this org, or `null` as `loadPullRequestPage`
+ * answers it (unknown, disabled, another org's, impossible names).
+ */
+export const loadPullRequestDiffTarget = async (
+  tx: TenantTx,
+  target: { readonly owner: string; readonly repo: string; readonly number: number },
+): Promise<PullRequestDiffTargetRow | null> => {
+  const { owner, repo, number } = target;
+  if (!Number.isInteger(number) || number < 1 || number > MAX_INT) invalid("number");
+  if (typeof owner !== "string" || typeof repo !== "string") invalid("repository");
+  const fullName = `${owner}/${repo}`;
+  if (!FULL_NAME.test(fullName)) return null;
+  const { rows } = await tx.query<{
+    id: string;
+    forge_repo_id: string;
+    installation_id: string | null;
+    head_sha: string;
+    base_sha: string;
+  }>(SELECT_DIFF_TARGET, [tx.orgId, fullName, number]);
+  const row = rows[0];
+  if (row === undefined) return null;
+  const repoId = forgeId(row.forge_repo_id);
+  if (repoId === null) return invalid("repository id");
+  return {
+    pullRequestId: row.id,
+    forgeRepoId: repoId,
+    installationId: forgeId(row.installation_id),
+    headSha: row.head_sha,
+    baseSha: row.base_sha,
+  };
+};
+
+/**
  * The pull request `owner/repo#number` of this org, or `null` when the org has none (RLS hides
  * other orgs'), its repository is disabled, or the names cannot be a repository's.
  */

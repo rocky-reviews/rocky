@@ -12,10 +12,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Selection } from "../shell/Sidebar.js";
 import { LEVEL_LABEL } from "../shell/triage-model.js";
 import { fileAnnotations, fileTriage, NO_ANNOTATIONS, reviewOrder } from "./annotations.js";
+import type { PullRef } from "../data/shell-data.js";
 import { useReview } from "../drafts/ReviewProvider.js";
 import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
+import { pullRequestUrl } from "../lib/github-url.js";
+import { signInHref } from "../session.js";
 import { DiffBody } from "./DiffBody.js";
-import { useDiff } from "./DiffProvider.js";
+import { type DiffLoadReason, useDiff } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
 
 export type FileActions = {
@@ -218,11 +221,11 @@ const DiffArea = ({
   findings: readonly Finding[];
   commentable: boolean;
 }) => {
-  const { load } = useDiff();
+  const { load, pull, returnTo } = useDiff();
   if (load.kind === "failed")
     return (
       <p className="diff-status" role="alert">
-        The diff could not be loaded.
+        <DiffProblem reason={load.reason} pull={pull} returnTo={returnTo} />
       </p>
     );
   if (load.kind !== "ready")
@@ -232,12 +235,25 @@ const DiffArea = ({
       </p>
     );
   const file = load.data.files.get(path);
-  if (file === undefined) return <p className="diff-status">This file is not in the diff.</p>;
+  if (file === undefined)
+    return load.data.truncated ? (
+      <p className="diff-status">
+        This file is past the part of the diff Rocky read. <WholeDiffLink pull={pull} />
+      </p>
+    ) : (
+      <p className="diff-status">This file is not in the diff.</p>
+    );
   if (file.binary) return <p className="diff-status">Binary file, not shown.</p>;
   if (file.hunks.length === 0)
     return <p className="diff-status">No line changes (renamed or mode changed).</p>;
   return (
     <>
+      {load.data.truncated && (
+        <p className="diff-status" role="note">
+          This diff is longer than Rocky reads (1 MiB), so only its first part is shown; files past
+          that point aren&rsquo;t here. <WholeDiffLink pull={pull} />
+        </p>
+      )}
       {stale && (
         <p className="diff-status" role="note">
           The AI notes, drafts and your comments are for an earlier push, so they are hidden on this
@@ -256,4 +272,98 @@ const DiffArea = ({
       />
     </>
   );
+};
+
+/** "The whole diff is on GitHub", as a link when the PR's names are known (validated). */
+const WholeDiffLink = ({ pull }: { pull: PullRef | null }) => {
+  const url = pull === null ? undefined : pullRequestUrl(pull);
+  if (url === undefined) return <>The whole diff is on GitHub.</>;
+  return (
+    <>
+      The whole diff is{" "}
+      <a href={`${url}/files`} target="_blank" rel="noopener noreferrer">
+        on GitHub
+      </a>
+      .
+    </>
+  );
+};
+
+/**
+ * Why the diff could not be loaded (H4-3): fixed text per reason, nothing from the answer. The
+ * way out is GitHub (the whole diff, built from validated names) or signing in again.
+ */
+const DiffProblem = ({
+  reason,
+  pull,
+  returnTo,
+}: {
+  reason: DiffLoadReason;
+  pull: PullRef | null;
+  returnTo: string | undefined;
+}) => {
+  const url = pull === null ? undefined : pullRequestUrl(pull);
+  switch (reason) {
+    case "not_found":
+      return (
+        <>
+          This diff isn&rsquo;t available: the pull request isn&rsquo;t in Rocky, or you can&rsquo;t
+          read its repository on GitHub.
+        </>
+      );
+    case "head_moved":
+      return (
+        <>
+          This pull request changed on GitHub since Rocky last saw it. Rocky shows the new push once
+          it has mirrored it; reload in a moment.
+        </>
+      );
+    case "commits_unavailable":
+      return (
+        <>
+          GitHub no longer has the commits Rocky mirrored for this pull request (a force-push,
+          perhaps). Rocky shows the new push once it has mirrored it; until then,{" "}
+          {url === undefined ? (
+            "see it on GitHub."
+          ) : (
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              see it on GitHub
+            </a>
+          )}
+        </>
+      );
+    case "too_large":
+      return (
+        <>
+          GitHub won&rsquo;t render a diff this large, so Rocky can&rsquo;t show it.{" "}
+          {url === undefined ? (
+            "Read it on GitHub."
+          ) : (
+            <a href={`${url}/files`} target="_blank" rel="noopener noreferrer">
+              Read it on GitHub
+            </a>
+          )}
+        </>
+      );
+    case "unavailable":
+      return (
+        <>
+          Repository access isn&rsquo;t available yet, so Rocky can&rsquo;t load the diff. Try again
+          later.
+        </>
+      );
+    case "forge_failed":
+      return <>GitHub didn&rsquo;t answer when Rocky asked for the diff. Reload to try again.</>;
+    case "rate_limited":
+      return <>Too many diff requests in a row. Wait a minute, then reload.</>;
+    case "signed_out":
+      return (
+        <>
+          Your session ended. <a href={signInHref(returnTo)}>Sign in with GitHub</a> again to see
+          the diff.
+        </>
+      );
+    case "failed":
+      return <>The diff could not be loaded.</>;
+  }
 };

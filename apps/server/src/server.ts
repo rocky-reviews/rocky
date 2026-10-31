@@ -25,6 +25,7 @@ import {
   webhookSecretFromEnv,
 } from "./config.js";
 import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { createPullRequestDiffReader, type PullRequestDiffReader } from "./pulls/diff-reader.js";
 import { cacheMembershipDenials, createRepositoryAccess } from "./repository-access.js";
 import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
 import { createRateLimits, rateLimitRulesFromEnv } from "./security/rate-limit.js";
@@ -211,6 +212,7 @@ export const startServer = async (
   let auth: AuthDeps | undefined;
   let reviewPosting: ReviewPostingDeps | undefined;
   let repositoryAccess: RepositoryAccessCheck | undefined;
+  let pullRequestDiffs: PullRequestDiffReader | undefined;
   if (authSetup.enabled && keys !== undefined) {
     const { config } = authSetup;
     const db = createDb({ pool });
@@ -236,19 +238,20 @@ export const startServer = async (
       );
     } else {
       const clock = { now: () => new Date() };
+      const forge = createGitHubForge({ auth: appAuth, api: config.endpoints.api, clock });
       repositoryAccess = createRepositoryAccess({
         db,
         keys,
         reader: createGitHubUserAccessReader({
           api: config.endpoints.api,
           // "Not a collaborator" answers are kept 30 s below the member's own cache (W11).
-          collaborators: cacheMembershipDenials(
-            createGitHubForge({ auth: appAuth, api: config.endpoints.api, clock }),
-            { clock },
-          ),
+          collaborators: cacheMembershipDenials(forge, { clock }),
         }),
         log,
       });
+      // H4-3 (ADR 0034): the PR page's diff, read from GitHub on a read-only token for that one
+      // repository (the mirror's session), after the access check above, cached for a minute.
+      pullRequestDiffs = createPullRequestDiffReader({ forge, clock });
     }
     // A const, so the closure below keeps the narrowing.
     const access = repositoryAccess;
@@ -294,6 +297,7 @@ export const startServer = async (
     ...(auth === undefined ? {} : { auth }),
     ...(reviewPosting === undefined ? {} : { reviewPosting }),
     ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
+    ...(pullRequestDiffs === undefined ? {} : { pullRequestDiffs }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.

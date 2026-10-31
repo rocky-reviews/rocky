@@ -149,6 +149,9 @@
   padding: var(--space-3) var(--space-4);
   color: var(--muted);
 }
+.diff-status a {
+  color: var(--you);
+}
 .hunk-head {
   background: var(--panel-2);
   color: var(--muted);

@@ -10,7 +10,8 @@ import "./finish/finish.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
-import { unavailableDiffSource, type DiffDataSource } from "./data/diff-data.js";
+import type { DiffDataSource } from "./data/diff-data.js";
+import { createHttpDiffSource } from "./data/diff-http-source.js";
 import { createHttpPostingSource } from "./data/posting-http-source.js";
 import { createHttpReviewSource } from "./data/review-http-source.js";
 import type { PullRef, ShellDataSource } from "./data/shell-data.js";
@@ -51,7 +52,7 @@ const renderPull = (
   const posting = createHttpPostingSource();
   createRoot(element).render(
     <StrictMode>
-      <DiffProvider source={diffSource} pull={pull}>
+      <DiffProvider source={diffSource} pull={pull} returnTo={window.location.pathname}>
         <App
           source={source}
           pull={pull}
@@ -91,8 +92,8 @@ if (page.kind === "home") {
     ),
   );
 } else if (page.kind === "pull" && page.source === "server") {
-  // The server does not serve a diff yet (H4-2 follow-up): a file view says it could not load.
-  renderPull(root, page.ref, createHttpShellSource(), unavailableDiffSource);
+  // H4-3: the diff comes from the server too, read from GitHub when the first file is opened.
+  renderPull(root, page.ref, createHttpShellSource(), createHttpDiffSource());
 } else {
   createRoot(root).render(
     <StrictMode>
