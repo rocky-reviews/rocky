@@ -50,7 +50,8 @@ export const toResult = <T>(
     case "complete": {
       let value: unknown;
       try {
-        value = JSON.parse(unfenced(answer.text));
+        // Only a prompt-mode answer may be fenced; an enforced one is JSON or it is invalid.
+        value = JSON.parse(output.mode === "prompt" ? unfenced(answer.text) : answer.text);
       } catch {
         return { status: "invalid_output", ...base, issues: ["(root): invalid_json"] };
       }

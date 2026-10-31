@@ -425,11 +425,32 @@ describe("A4 failures are fixed codes, and LLM errors are routed", () => {
       [null, "unknown"],
       [{ constructor: { name: "+ if (user.isAdmin) skipAuth()" } }, "unknown"],
       [{ constructor: { name: "A".repeat(65) } }, "unknown"],
+      // An identifier-shaped value planted on a plain object, an Error's own property, or a
+      // proxy's trap is not a class name (review round 1, S1).
+      [{ constructor: { name: "ghp_PlantedTokenLookingLikeAnIdentifier" } }, "unknown"],
+      [Object.assign(new Error("x"), { constructor: { name: "ghp_OwnProperty" } }), "Error"],
+      [
+        new Proxy(
+          {},
+          {
+            get: (_target, key) => (key === "constructor" ? { name: "ghp_ProxyName" } : undefined),
+          },
+        ),
+        "unknown",
+      ],
+      // A proxy over a real Error whose get trap throws: the name comes from the real prototype,
+      // never through the trap, so it is the true class and nothing from the trap.
       [
         new Proxy(new Error("x"), {
           get: () => {
             throw new Error("trap with secret");
           },
+        }),
+        "Error",
+      ],
+      [
+        new Proxy(new Error("x"), {
+          getPrototypeOf: () => ({ constructor: { name: "ghp_ProtoName" } }),
         }),
         "unknown",
       ],
@@ -442,7 +463,7 @@ describe("A4 failures are fixed codes, and LLM errors are routed", () => {
         code: "internal_error",
         diagnostic: { origin: "pipeline", errorClass },
       });
-      expect(JSON.stringify(outcome)).not.toMatch(/secret|skipAuth|AAAA/);
+      expect(JSON.stringify(outcome)).not.toMatch(/secret|skipAuth|AAAA|ghp_/);
     }
   });
 

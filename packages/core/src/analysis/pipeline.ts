@@ -807,14 +807,17 @@ const newStats = (): AnalysisStats => ({
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 
 /**
- * The class name of a thrown value, or `unknown`: a name is code, not content, and the shape
- * check keeps anything that is not an identifier (a value planted on `constructor.name`, a
- * primitive, a trapping proxy) out of the log (H4-4).
+ * The class name of a thrown `Error`, or `unknown`. The name is read from the prototype's
+ * constructor (a function: code, not content), never from an own property, and only on a real
+ * `Error`: a plain object or a proxy with a planted, identifier-shaped `constructor.name` is
+ * `unknown`, as are primitives and anything whose lookup throws (H4-4, review round 1 S1).
  */
 export const errorClassOf = (error: unknown): string => {
-  if (typeof error !== "object" || error === null) return "unknown";
+  if (!(error instanceof Error)) return "unknown";
   try {
-    const name = (error as { constructor?: { name?: unknown } }).constructor?.name;
+    const constructor: unknown = (Object.getPrototypeOf(error) as object | null)?.constructor;
+    if (typeof constructor !== "function") return "unknown";
+    const name: unknown = constructor.name;
     return typeof name === "string" && CLASS_NAME.test(name) ? name : "unknown";
   } catch {
     return "unknown";

@@ -50,11 +50,13 @@ export interface LlmOutputSchema<T> {
   readonly name: string;
   readonly jsonSchema: Readonly<Record<string, unknown>>;
   /**
-   * How the provider gets the schema (ADR 0013 amendment H4-4). `structured` (the default when
-   * absent): the provider enforces it (Anthropic structured outputs, OpenAI `json_schema`).
-   * `prompt`: the schema is sent as text after Rocky's instructions and nothing constrains the
-   * answer but `parse`; for a schema a provider cannot compile (the graph). Validation is the
-   * same either way.
+   * How the schema is meant to reach the provider (ADR 0013 amendment H4-4). `structured` (the
+   * default when absent): the provider enforces it. `prompt`: the schema is sent as text after
+   * Rocky's instructions and nothing constrains the answer but `parse`; for a schema a provider
+   * cannot compile (the graph). Each adapter decides how to honour the mode: today the Claude
+   * adapter sends a prompt-mode schema in the system slot without `output_config.format`, and
+   * the OpenAI-compatible adapter still sends every output as a strict `response_format`.
+   * Validation is the same either way.
    */
   readonly mode?: "structured" | "prompt";
   parse(value: unknown): LlmParseResult<T>;

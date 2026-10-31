@@ -37,18 +37,31 @@ describe("unfenced (H4-4)", () => {
 });
 
 describe("toResult with a fenced answer (H4-4)", () => {
-  it("parses the JSON inside the fence and validates it as usual", () => {
-    expect(toResult(answer("```json\n" + JSON_TEXT + "\n```"), verdictSchema)).toMatchObject({
+  const prompted = { ...verdictSchema, mode: "prompt" as const };
+
+  it("parses the JSON inside the fence of a prompt-mode answer and validates it as usual", () => {
+    expect(toResult(answer("```json\n" + JSON_TEXT + "\n```"), prompted)).toMatchObject({
       status: "ok",
       value: { verdict: "comment" },
     });
-    expect(toResult(answer('```json\n{"verdict":"nope"}\n```'), verdictSchema)).toMatchObject({
+    expect(toResult(answer('```json\n{"verdict":"nope"}\n```'), prompted)).toMatchObject({
       status: "invalid_output",
     });
   });
 
+  it("a fenced answer from an enforced output is still invalid JSON (review round 1, S2)", () => {
+    for (const output of [verdictSchema, { ...verdictSchema, mode: "structured" as const }]) {
+      expect(toResult(answer("```json\n" + JSON_TEXT + "\n```"), output)).toEqual({
+        status: "invalid_output",
+        model: "m",
+        usage: undefined,
+        issues: ["(root): invalid_json"],
+      });
+    }
+  });
+
   it("an answer with prose around the fence is still invalid JSON", () => {
-    expect(toResult(answer("Sure!\n```json\n" + JSON_TEXT + "\n```"), verdictSchema)).toEqual({
+    expect(toResult(answer("Sure!\n```json\n" + JSON_TEXT + "\n```"), prompted)).toEqual({
       status: "invalid_output",
       model: "m",
       usage: undefined,
