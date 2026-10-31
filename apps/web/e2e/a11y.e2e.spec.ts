@@ -199,6 +199,7 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
     for (const [status, error, state] of [
       [404, "not_found", "diff not found"],
       [409, "head_moved", "diff head moved"],
+      [409, "commits_unavailable", "diff commits unavailable"],
       [413, "diff_too_large", "diff too large"],
       [503, "access_check_unavailable", "diff access unavailable"],
       [502, "forge_unavailable", "diff GitHub failed"],

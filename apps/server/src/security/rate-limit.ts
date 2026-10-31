@@ -22,6 +22,7 @@ export const RATE_LIMIT_SCOPES = [
   "webhook.installation",
   "ask",
   "diff",
+  "diff.org",
 ] as const;
 export type RateLimitScope = (typeof RATE_LIMIT_SCOPES)[number];
 
@@ -38,8 +39,9 @@ const MINUTE = 60_000;
  * the web app. Webhooks: GitHub delivers from a shared pool of addresses, so the per-address
  * limit is generous and only stops floods; per installation it bounds what one installation
  * (or a leaked webhook secret) can push into the inbox. Ask is per member (P9). The PR diff
- * (H4-3) is per member: a page loads it once, and each uncached read mints and revokes an
- * installation token (ADR 0034 D8).
+ * (H4-3): `diff` counts every request per member (a page loads a diff once); `diff.org` counts
+ * only the reads that go to GitHub, per org, since each costs the installation about four
+ * calls of its shared hourly quota (ADR 0034 §4, D14: 15 × 4 × 60 = 3,600 calls/h at most).
  */
 export const DEFAULT_RATE_LIMITS: Readonly<Record<RateLimitScope, RateLimitRule>> = {
   "auth.login": { max: 30, windowMs: 10 * MINUTE },
@@ -49,7 +51,8 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<RateLimitScope, RateLimitRule>
   "webhook.ip": { max: 600, windowMs: MINUTE },
   "webhook.installation": { max: 600, windowMs: MINUTE },
   ask: { max: 20, windowMs: MINUTE },
-  diff: { max: 30, windowMs: MINUTE },
+  diff: { max: 10, windowMs: MINUTE },
+  "diff.org": { max: 15, windowMs: MINUTE },
 };
 
 type Env = Readonly<Record<string, string | undefined>>;

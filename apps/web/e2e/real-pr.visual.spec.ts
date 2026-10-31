@@ -16,7 +16,8 @@ import { expect, type Page, test } from "./test.js";
  * the mirror lacks left out), and the states before it can be shown: loading, signed out, not
  * found, repository access not available yet; plus the inbox's 503 and an address that names no
  * page. H4-3: the file view with the diff from the server, truncated, and each state the diff
- * endpoint can answer (not found, head moved, too large, access unavailable, GitHub failed).
+ * endpoint can answer (not found, head moved, commits unavailable, too large, access
+ * unavailable, GitHub failed, rate limited, signed out).
  * 375/1024/1440 px x light/dark. Baselines in e2e/__screenshots__/, copies for the PR in
  * artifacts/screenshots/H4-2/ and artifacts/screenshots/H4-3/.
  */
@@ -96,12 +97,18 @@ const STATES: State[] = [
   }),
   diffState("real-pr-diff-not-found", { status: 404, body: { error: "not_found" } }),
   diffState("real-pr-diff-head-moved", { status: 409, body: { error: "head_moved" } }),
+  diffState("real-pr-diff-commits-unavailable", {
+    status: 409,
+    body: { error: "commits_unavailable" },
+  }),
   diffState("real-pr-diff-too-large", { status: 413, body: { error: "diff_too_large" } }),
   diffState("real-pr-diff-unavailable", {
     status: 503,
     body: { error: "access_check_unavailable" },
   }),
   diffState("real-pr-diff-failed", { status: 502, body: { error: "forge_unavailable" } }),
+  diffState("real-pr-diff-rate-limited", { status: 429, body: { error: "rate_limited" } }),
+  diffState("real-pr-diff-signed-out", { status: 401, body: { error: "unauthenticated" } }),
 ];
 
 for (const state of STATES) {

@@ -144,9 +144,11 @@ const sizeOf = (stats: Raw["stats"]): PullRequestPageRow["size"] => {
 /**
  * What the diff endpoint needs before it asks GitHub (H4-3, ADR 0034): the pull request's id,
  * its repository's forge id (for the access check and the token), the org's installation (on
- * whose behalf the token is minted), the mirror's head and, when the head's revision is
- * recorded, the base the mirror diffed it against (the analysis read that same diff). No
- * content: titles and names stay in the row.
+ * whose behalf the token is minted), the mirror's head and the base the mirror diffed it
+ * against: the head revision's (the analysis read that same diff), else the pull request's own
+ * `base_sha` (the mirror writes both from one GitHub read, so they differ only when a revision
+ * has not been recorded yet). Never GitHub's live base (ADR 0034 review, SF1). No content:
+ * titles and names stay in the row.
  */
 export interface PullRequestDiffTargetRow {
   readonly pullRequestId: string;
@@ -154,12 +156,12 @@ export interface PullRequestDiffTargetRow {
   /** `null` when the org row holds no installation (nothing can be read on its behalf). */
   readonly installationId: number | null;
   readonly headSha: string;
-  readonly baseSha: string | null;
+  readonly baseSha: string;
 }
 
 const SELECT_DIFF_TARGET = `
   select p.id, r.forge_repo_id::text as forge_repo_id, o.installation_id::text as installation_id,
-         p.head_sha, v.base_sha
+         p.head_sha, coalesce(v.base_sha, p.base_sha) as base_sha
     from pull_requests p
     join repos r on r.org_id = p.org_id and r.id = p.repo_id
     join orgs o on o.id = p.org_id
@@ -192,7 +194,7 @@ export const loadPullRequestDiffTarget = async (
     forge_repo_id: string;
     installation_id: string | null;
     head_sha: string;
-    base_sha: string | null;
+    base_sha: string;
   }>(SELECT_DIFF_TARGET, [tx.orgId, fullName, number]);
   const row = rows[0];
   if (row === undefined) return null;

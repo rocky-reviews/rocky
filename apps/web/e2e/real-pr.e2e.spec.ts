@@ -267,6 +267,12 @@ test.describe("H4-3: reviewing a real PR end to end", () => {
     const states: [Answer, string][] = [
       [{ status: 404, body: { error: "not_found" } }, "This diff isn’t available"],
       [{ status: 409, body: { error: "head_moved" } }, "changed on GitHub since Rocky last saw it"],
+      [
+        { status: 409, body: { error: "commits_unavailable" } },
+        "GitHub no longer has the commits Rocky mirrored",
+      ],
+      // A 409 whose code is neither: a plain failure, showing none of it.
+      [{ status: 409, body: { error: "Zebra" } }, "The diff could not be loaded."],
       [{ status: 413, body: { error: "diff_too_large" } }, "GitHub won’t render a diff this large"],
       [
         { status: 503, body: { error: "access_check_unavailable" } },

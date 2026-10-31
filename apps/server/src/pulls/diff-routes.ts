@@ -24,14 +24,17 @@ import type { PullRequestDiffReader } from "./diff-reader.js";
  *                                       served; the mirror catches up on its own)
  *   409 commits_unavailable             GitHub has no diff for the mirror's commits
  *   413 diff_too_large                  GitHub refuses to render a diff this large
- *   429 rate_limited                    more than the `diff` limit per member and minute
+ *   429 rate_limited                    more than the `diff` limit per member and minute, or
+ *                                       more uncached reads than the `diff.org` limit per org
  *   502 forge_unavailable               GitHub did not answer, or not as asked
  *   503 access_check_unavailable        no repository access check (fail closed)
  *   503 diffs_unavailable               no diff reader (no app key; fail closed)
  *
  * Order: policy (session, role), the per-member rate limit, the address, the two checks that
  * must exist, the mirror's row inside `withOrg` (ids only), the P3-6 access check (ADR 0011
- * §6), then the reader (which may answer from its short cache; the check ran either way).
+ * §6), then the reader (which may answer from its short cache; the check ran either way). The
+ * org's aggregate limit is spent only when the reader is about to ask GitHub (`beforeForge`):
+ * it bounds the installation's quota, not the reviewers' reloads (ADR 0034 §4).
  * Nothing is stored; every answer is `Cache-Control: no-store`. Logs carry ids, sizes, a digest
  * and fixed outcomes; never diff text, names or tokens.
  */
@@ -139,15 +142,28 @@ export const registerPullRequestDiffRoutes = (
           log(request, "no_installation", ids);
           return json(reply, 404, { error: "not_found" });
         }
-        const result = await deps.diffs.read({
-          orgId: me.orgId,
-          installationId: row.installationId,
-          repositoryId: row.forgeRepoId,
-          number: target.number,
-          headSha: row.headSha,
-          baseSha: row.baseSha,
-        });
+        const limits = app.rateLimits;
+        const result = await deps.diffs.read(
+          {
+            orgId: me.orgId,
+            installationId: row.installationId,
+            repositoryId: row.forgeRepoId,
+            number: target.number,
+            headSha: row.headSha,
+            baseSha: row.baseSha,
+          },
+          {
+            beforeForge: () =>
+              limits === undefined
+                ? Promise.resolve(true)
+                : limits.consume(request, reply, "diff.org", me.orgId),
+          },
+        );
         switch (result.kind) {
+          case "refused":
+            // The org's budget of uncached reads is spent; `consume` answered 429 already.
+            log(request, "org_rate_limited", ids);
+            return reply;
           case "diff":
             log(request, "served", {
               ...ids,

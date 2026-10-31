@@ -318,6 +318,20 @@ const DiffProblem = ({
           it has mirrored it; reload in a moment.
         </>
       );
+    case "commits_unavailable":
+      return (
+        <>
+          GitHub no longer has the commits Rocky mirrored for this pull request (a force-push,
+          perhaps). Rocky shows the new push once it has mirrored it; until then,{" "}
+          {url === undefined ? (
+            "see it on GitHub."
+          ) : (
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              see it on GitHub
+            </a>
+          )}
+        </>
+      );
     case "too_large":
       return (
         <>

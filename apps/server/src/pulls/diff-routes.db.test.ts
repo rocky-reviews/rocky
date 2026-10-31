@@ -102,6 +102,18 @@ type BuildOptions = {
   withoutDiffs?: boolean;
   /** The `diff` rate limit (per member, per minute). */
   diffLimit?: number;
+  /** The `diff.org` rate limit (reads that reach GitHub, per org, per minute). */
+  diffOrgLimit?: number;
+};
+
+/** Runs `fn` with the clocks (the server's and GitHub's) moved `ms` ahead, then back. */
+const later = async <T>(ms: number, fn: () => Promise<T>): Promise<T> => {
+  now += ms;
+  try {
+    return await fn();
+  } finally {
+    now -= ms;
+  }
 };
 
 const build = (options: BuildOptions = {}) => {
@@ -123,6 +135,10 @@ const build = (options: BuildOptions = {}) => {
       rules: {
         ...DEFAULT_RATE_LIMITS,
         diff: { max: options.diffLimit ?? DEFAULT_RATE_LIMITS.diff.max, windowMs: 60_000 },
+        "diff.org": {
+          max: options.diffOrgLimit ?? DEFAULT_RATE_LIMITS["diff.org"].max,
+          windowMs: 60_000,
+        },
       },
       trustProxy: { kind: "none" },
     }),
@@ -348,11 +364,13 @@ describe("GET /api/repos/:owner/:repo/pulls/:number/diff: the diff of the mirror
     now -= 60_001;
   });
 
-  it("takes GitHub's base when the mirror has no revision of the head yet", async () => {
+  it("SF1: reads the mirror's base, never GitHub's live one, even without a head revision", async () => {
     await mirrored(848, {}, { revision: false });
-    github.putPullRequest(FORGE_REPO, { number: 848, headSha: HEAD, baseSha: BASE });
+    // GitHub says the PR now targets another base (a retarget): the mirror's base still wins.
+    github.putPullRequest(FORGE_REPO, { number: 848, headSha: HEAD, baseSha: "c".repeat(40) });
     expect((await served(848)).headSha).toBe(HEAD);
     expect(githubCalls(0)).toContain(`GET repos/acme/rocky-app/compare/${BASE}...${HEAD}`);
+    expect(githubCalls(0).some((c) => c.includes(`/compare/${"c".repeat(40)}`))).toBe(false);
   });
 
   it("GitHub's head moved since the mirror's: 409 head_moved, no diff read, token revoked", async () => {
@@ -362,9 +380,12 @@ describe("GET /api/repos/:owner/:repo/pulls/:number/diff: the diff of the mirror
     expect(res.json()).toEqual({ error: "head_moved" });
     expect(githubCalls(0).some((c) => c.includes("/compare/"))).toBe(false);
     expect(github.tokens.revoked).toBe(1);
-    // Nothing was cached: once the mirror catches up (here: GitHub again), the diff is read.
+    // Remembered 30 s (SF2): a page that keeps asking costs one read per lifetime, not per request.
     github.putPullRequest(FORGE_REPO, { number: 847, headSha: HEAD, baseSha: BASE });
-    expect((await served(847)).headSha).toBe(HEAD);
+    expect((await get(dana, diffPath(847))).statusCode).toBe(409);
+    expect(github.tokens.mints).toHaveLength(1);
+    // After it, once the mirror caught up (here: GitHub again), the diff is read.
+    expect((await later(30_001, () => served(847))).headSha).toBe(HEAD);
   });
 
   it("GitHub has no diff for the mirrored commits (force-pushed away): 409 commits_unavailable", async () => {
@@ -469,21 +490,55 @@ describe("GET /api/repos/:owner/:repo/pulls/:number/diff: refusals", () => {
     }
   });
 
-  it("a GitHub outage: 502 forge_unavailable, nothing cached, the token revoked when one was minted", async () => {
+  it("a GitHub outage: 502 forge_unavailable, remembered 5 s, the token revoked when one was minted", async () => {
     github.failRoute("compare", 502);
     let res = await get(dana, diffPath(847));
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: "forge_unavailable" });
     expect(github.tokens.revoked).toBe(1);
+    // Within 5 s the same answer costs GitHub nothing.
+    expect((await get(dana, diffPath(847))).statusCode).toBe(502);
+    expect(github.tokens.mints).toHaveLength(1);
     github.failRoute("pull", 500);
-    res = await get(dana, diffPath(847));
+    res = await later(5_001, () => get(dana, diffPath(847)));
     expect(res.statusCode).toBe(502);
     expect(github.tokens.revoked).toBe(2);
     github.failRoute("token", 503);
-    res = await get(dana, diffPath(847));
+    res = await later(10_002, () => get(dana, diffPath(847)));
     expect(res.statusCode).toBe(502);
     // The outage over, the next request reads the diff.
-    expect((await served(847)).headSha).toBe(HEAD);
+    expect((await later(15_003, () => served(847))).headSha).toBe(HEAD);
+  });
+
+  it("SF2: the org's budget counts reads that reach GitHub only, and stops every member at once", async () => {
+    const prev = app;
+    app = build({ diffOrgLimit: 2 });
+    try {
+      await mirrored(851);
+      await mirrored(852);
+      github.putPullRequest(FORGE_REPO, { number: 851, headSha: HEAD, baseSha: BASE });
+      github.putPullRequest(FORGE_REPO, { number: 852, headSha: HEAD, baseSha: BASE });
+      await served(847); // reaches GitHub: 1
+      await served(847, eve); // a hit: free
+      await served(851); // reaches GitHub: 2
+      const res = await get(eve, diffPath(852)); // would reach GitHub: refused for the whole org
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: "rate_limited" });
+      expect(res.headers["retry-after"]).toMatch(/^[1-9][0-9]*$/);
+      expect(github.tokens.mints).toHaveLength(2);
+      // Hits still answer: the budget bounds the installation's quota, not the reviewers.
+      await served(847, eve);
+      await served(851);
+      // Org B is its own bucket (and has nothing of A's to read).
+      expect((await get(danaB, diffPath(847))).statusCode).toBe(404);
+      const entries = lines
+        .map((l) => JSON.parse(l) as { pull_diff_route?: { outcome?: string } })
+        .map((l) => l.pull_diff_route?.outcome);
+      expect(entries).toContain("org_rate_limited");
+    } finally {
+      await app.close();
+      app = prev;
+    }
   });
 
   it("without the repository access check: 503, before reading anything", async () => {
@@ -556,11 +611,12 @@ describe("GET /api/repos/:owner/:repo/pulls/:number/diff: refusals", () => {
   });
 
   it("logs carry ids, sizes, digests and outcomes: never diff content, a token or a name", async () => {
-    // Head moved first (a cached diff would otherwise answer before GitHub is asked).
+    // Head moved first (a cached diff would otherwise answer before GitHub is asked), and the
+    // diff after its 30 s memory.
     github.putPullRequest(FORGE_REPO, { number: 847, headSha: "f".repeat(40), baseSha: BASE });
     await get(dana, diffPath(847));
     github.putPullRequest(FORGE_REPO, { number: 847, headSha: HEAD, baseSha: BASE });
-    await served(847);
+    await later(30_001, () => served(847));
     await get(dana, diffPath(999_997));
     const all = lines.map((l) => JSON.parse(l) as { req?: { url?: string } });
     expect(all.filter((l) => l.req !== undefined).map((l) => l.req?.url)).toEqual(

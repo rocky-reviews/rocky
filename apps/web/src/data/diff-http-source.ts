@@ -16,8 +16,10 @@ export type DiffLoadReason =
   | "signed_out"
   /** 404 (and 400): no such PR in Rocky, or no GitHub read access to its repository. */
   | "not_found"
-  /** 409: GitHub's head moved since the mirror's, or GitHub has no diff for its commits. */
+  /** 409 `head_moved`: GitHub's head moved since the mirror's. */
   | "head_moved"
+  /** 409 `commits_unavailable`: GitHub no longer has the mirror's commits. */
+  | "commits_unavailable"
   /** 413: GitHub refuses to render a diff this large. */
   | "too_large"
   /** 429: more requests than the per-member limit. */
@@ -42,6 +44,18 @@ type Fetch = typeof fetch;
 export const diffDataPath = (ref: PullRef): string =>
   `/api/repos/${encodeURIComponent(ref.owner)}/${encodeURIComponent(ref.repo)}/pulls/${ref.number}/diff`;
 
+/**
+ * Which 409 it was, from the body's fixed `error` code. The code is matched against the two the
+ * server sends and nothing else: never displayed, logged or put in an error.
+ */
+const conflictReason = (body: unknown): DiffLoadReason => {
+  const error =
+    typeof body === "object" && body !== null ? (body as Record<string, unknown>)["error"] : null;
+  if (error === "head_moved") return "head_moved";
+  if (error === "commits_unavailable") return "commits_unavailable";
+  return "failed";
+};
+
 const reasonOf = (status: number): DiffLoadReason => {
   switch (status) {
     case 401:
@@ -49,8 +63,6 @@ const reasonOf = (status: number): DiffLoadReason => {
     case 400:
     case 404:
       return "not_found";
-    case 409:
-      return "head_moved";
     case 413:
       return "too_large";
     case 429:
@@ -73,6 +85,10 @@ export const createHttpDiffSource = (options: { fetch?: Fetch } = {}): DiffDataS
         headers: { accept: "application/json" },
         ...(signal === undefined ? {} : { signal }),
       });
+      if (response.status === 409) {
+        const conflict: unknown = await response.json().catch(() => null);
+        throw new DiffLoadError(conflictReason(conflict));
+      }
       if (!response.ok) throw new DiffLoadError(reasonOf(response.status));
       const body: unknown = await response.json().catch(() => null);
       if (typeof body !== "object" || body === null || Array.isArray(body))

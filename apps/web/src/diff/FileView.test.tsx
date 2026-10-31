@@ -228,6 +228,7 @@ describe("file view", () => {
         "This diff isn’t available: the pull request isn’t in Rocky, or you can’t read",
       ],
       ["head_moved", "This pull request changed on GitHub since Rocky last saw it."],
+      ["commits_unavailable", "GitHub no longer has the commits Rocky mirrored"],
       ["too_large", "GitHub won’t render a diff this large, so Rocky can’t show it."],
       ["unavailable", "Repository access isn’t available yet, so Rocky can’t load the diff."],
       ["forge_failed", "GitHub didn’t answer when Rocky asked for the diff."],
@@ -248,6 +249,13 @@ describe("file view", () => {
     const large = render("src/auth/invitations.ts", { kind: "failed", reason: "too_large" });
     expect(large).toContain(
       '<a href="https://github.com/acme/rocky-app/pull/847/files" target="_blank" rel="noopener noreferrer">Read it on GitHub</a>',
+    );
+    const gone = render("src/auth/invitations.ts", {
+      kind: "failed",
+      reason: "commits_unavailable",
+    });
+    expect(gone).toContain(
+      '<a href="https://github.com/acme/rocky-app/pull/847" target="_blank" rel="noopener noreferrer">see it on GitHub</a>',
     );
     // Without a validated PR there is no link, only the text.
     const noPull = render(

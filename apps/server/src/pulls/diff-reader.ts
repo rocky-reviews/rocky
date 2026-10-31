@@ -11,19 +11,23 @@ import { createHash } from "node:crypto";
  *    token is revoked and refused; the token never leaves the adapter's closure);
  * 2. `GET /repos/{owner}/{repo}/pulls/{number}` must still name the mirror's head: a head that
  *    moved is `head_moved`, and no diff is read (a diff of another head is never served);
- * 3. `compare/{base}...{head}`, pinned to the mirror's revision (the base the analysis read; or
- *    GitHub's base when the mirror has no revision of the head yet), capped at the mirror's
- *    1 MiB (`max_bytes`: the prefix is then trimmed to whole files, `wholeFiles`); GitHub's
- *    refusal is `too_large`; commits it no longer has are `commits_unavailable`;
+ * 3. `compare/{base}...{head}`, pinned to the mirror's revision (the base the analysis read,
+ *    `loadPullRequestDiffTarget`), capped at the mirror's 1 MiB (`max_bytes`: the prefix is
+ *    then trimmed to whole files, `wholeFiles`); GitHub's refusal is `too_large`; commits it no
+ *    longer has are `commits_unavailable`;
  * 4. the session is closed (the token revoked) in `finally`, whatever happened.
  *
- * **Cache.** A whole or cut diff is kept in memory for `DIFF_CACHE_TTL_MS` (one minute), keyed
- * by org, repository id, base and head, bounded by entries and bytes (oldest out), so a reload
- * or a second reviewer of the same revision costs no token. The route runs the member's
- * repository access check before every read, cache hit or not: the cache only saves the
- * GitHub calls, never a decision. Nothing but a diff is cached: a moved head, a refusal, a
- * missing diff and every failure are asked again. Concurrent reads of one key share one
- * session.
+ * **Cache.** Results are kept in memory, keyed by org, repository id, pull request number, base
+ * and head (every part of what was asked, so two pull requests, or a retargeted one, never
+ * share an entry), bounded by entries and bytes (oldest out). A whole or cut diff is kept for
+ * `DIFF_CACHE_TTL_MS` (one minute), so a reload or a second reviewer of the same revision costs
+ * no token. A failure is a fixed, content-free result and is kept briefly too
+ * (`FAILURE_CACHE_TTL_MS`: 30 s for a moved head, missing commits and GitHub's refusal, 10 s
+ * for "not found", 5 s for an outage), so a page that keeps asking does not mint a token per
+ * request (ADR 0034 D14). The route runs the member's repository access check before every
+ * read, cache hit or not: the cache only saves the GitHub calls, never a decision. Concurrent
+ * reads of one key share one session. `beforeForge` (the org's aggregate rate limit) is asked
+ * only when a session is about to be opened: hits and joined reads cost nothing.
  *
  * The bytes are decoded as UTF-8 for display (lossy: a non-UTF-8 diff shows replacement
  * characters; the analysis refuses such a diff, so no drafts exist for it). Diff content is
@@ -43,8 +47,8 @@ export interface PullRequestDiffTarget {
   readonly number: number;
   /** The mirror's head: the diff served is this commit's, or nothing. */
   readonly headSha: string;
-  /** The mirror's base for that head, or `null` before the revision is recorded. */
-  readonly baseSha: string | null;
+  /** The mirror's base for that head (the head revision's, else the pull request's). */
+  readonly baseSha: string;
 }
 
 export type PullRequestDiffResult =
@@ -67,10 +71,37 @@ export type PullRequestDiffResult =
   /** The installation cannot read the repository, or GitHub has no such pull request. */
   | { readonly kind: "not_found" }
   /** An outage or an answer that is not what was asked (`ForgeReadError.code`). */
-  | { readonly kind: "forge_failed"; readonly code: string };
+  | { readonly kind: "forge_failed"; readonly code: string }
+  /** `beforeForge` said no (the caller has already answered); nothing was read or cached. */
+  | { readonly kind: "refused" };
+
+export type PullRequestDiffFailure = Exclude<
+  PullRequestDiffResult,
+  { kind: "diff" } | { kind: "refused" }
+>;
+
+/** How long a fixed failure is remembered under its key (ADR 0034 §4). */
+export const FAILURE_CACHE_TTL_MS: Readonly<Record<PullRequestDiffFailure["kind"], number>> = {
+  head_moved: 30_000,
+  commits_unavailable: 30_000,
+  too_large: 30_000,
+  not_found: 10_000,
+  forge_failed: 5_000,
+};
+
+export interface PullRequestDiffReadOptions {
+  /**
+   * Asked once, right before a repository session is opened (never for a cache hit or a joined
+   * read). `false` refuses the read: the result is `refused`, nothing is read or cached.
+   */
+  readonly beforeForge?: () => Promise<boolean>;
+}
 
 export interface PullRequestDiffReader {
-  read(target: PullRequestDiffTarget): Promise<PullRequestDiffResult>;
+  read(
+    target: PullRequestDiffTarget,
+    options?: PullRequestDiffReadOptions,
+  ): Promise<PullRequestDiffResult>;
 }
 
 export interface PullRequestDiffReaderOptions {
@@ -98,8 +129,7 @@ const checkTarget = (target: PullRequestDiffTarget): void => {
   if (!isId(target.installationId) || !isId(target.repositoryId)) invalidTarget();
   if (!isId(target.number) || target.number > MAX_NUMBER) invalidTarget();
   if (typeof target.headSha !== "string" || !SHA.test(target.headSha)) invalidTarget();
-  if (target.baseSha !== null && (typeof target.baseSha !== "string" || !SHA.test(target.baseSha)))
-    invalidTarget();
+  if (typeof target.baseSha !== "string" || !SHA.test(target.baseSha)) invalidTarget();
 };
 
 const bounded = (value: number | undefined, fallback: number, max: number, name: string) => {
@@ -110,8 +140,11 @@ const bounded = (value: number | undefined, fallback: number, max: number, name:
   return chosen;
 };
 
-type Cached = Extract<PullRequestDiffResult, { kind: "diff" }>;
-type Entry = { readonly result: Cached; readonly expiresAt: number; readonly size: number };
+type Entry = {
+  readonly result: Exclude<PullRequestDiffResult, { kind: "refused" }>;
+  readonly expiresAt: number;
+  readonly size: number;
+};
 
 /** The diff bytes are decoded lossily: display only (see the module comment). */
 const utf8 = new TextDecoder("utf-8");
@@ -179,7 +212,7 @@ export const createPullRequestDiffReader = (
   const inFlight = new Map<string, Promise<PullRequestDiffResult>>();
 
   const keyOf = (t: PullRequestDiffTarget): string =>
-    `${t.orgId.toLowerCase()}|${t.repositoryId}|${t.baseSha ?? "-"}|${t.headSha}`;
+    `${t.orgId.toLowerCase()}|${t.repositoryId}|${t.number}|${t.baseSha}|${t.headSha}`;
 
   const drop = (key: string): void => {
     const entry = cache.get(key);
@@ -188,7 +221,7 @@ export const createPullRequestDiffReader = (
     cacheBytes -= entry.size;
   };
 
-  const lookup = (key: string, now: number): Cached | undefined => {
+  const lookup = (key: string, now: number): Entry["result"] | undefined => {
     const entry = cache.get(key);
     if (entry === undefined) return undefined;
     if (now >= entry.expiresAt) {
@@ -198,10 +231,13 @@ export const createPullRequestDiffReader = (
     return entry.result;
   };
 
-  const store = (key: string, result: Cached, now: number): void => {
+  const store = (key: string, result: Entry["result"], now: number): void => {
     if (cacheOptions === undefined) return;
-    const size = result.diff.length;
+    const size = result.kind === "diff" ? result.diff.length : 0;
     if (size > cacheMaxBytes) return;
+    // A failure is remembered for its own, shorter, lifetime (never longer than a diff).
+    const lifetime =
+      result.kind === "diff" ? ttlMs : Math.min(ttlMs, FAILURE_CACHE_TTL_MS[result.kind]);
     drop(key);
     // Make room: the oldest entries go first, whether the bound hit is bytes or count.
     while (cache.size > 0 && (cache.size >= cacheMaxEntries || cacheBytes + size > cacheMaxBytes)) {
@@ -209,11 +245,11 @@ export const createPullRequestDiffReader = (
       if (oldest === undefined) break;
       drop(oldest);
     }
-    cache.set(key, { result, expiresAt: now + ttlMs, size });
+    cache.set(key, { result, expiresAt: now + lifetime, size });
     cacheBytes += size;
   };
 
-  const readFromForge = async (target: PullRequestDiffTarget): Promise<PullRequestDiffResult> => {
+  const readFromForge = async (target: PullRequestDiffTarget): Promise<Entry["result"]> => {
     try {
       const session = await options.forge.openRepository({
         installationId: target.installationId,
@@ -227,7 +263,7 @@ export const createPullRequestDiffReader = (
         // served; the page says the PR changed and the mirror catches up on its own.
         if (pull.headSha !== target.headSha) return { kind: "head_moved" };
         const diff = await session.getDiff(
-          { baseSha: target.baseSha ?? pull.baseSha, headSha: target.headSha },
+          { baseSha: target.baseSha, headSha: target.headSha },
           { maxBytes },
         );
         if (diff.truncation === "forge_limit") return { kind: "too_large" };
@@ -253,20 +289,28 @@ export const createPullRequestDiffReader = (
   };
 
   return {
-    read: async (target) => {
+    read: async (target, readOptions = {}) => {
       checkTarget(target);
       const key = keyOf(target);
-      const now = clock.now().getTime();
-      const hit = lookup(key, now);
-      if (hit !== undefined) return { ...hit, cached: true };
-      const pending = inFlight.get(key);
-      if (pending !== undefined) return pending;
-      const read = readFromForge(target)
-        .then((result) => {
-          if (result.kind === "diff") store(key, result, clock.now().getTime());
-          return result;
-        })
-        .finally(() => inFlight.delete(key));
+      for (;;) {
+        const hit = lookup(key, clock.now().getTime());
+        if (hit !== undefined) return hit.kind === "diff" ? { ...hit, cached: true } : hit;
+        const pending = inFlight.get(key);
+        if (pending === undefined) break;
+        const shared = await pending;
+        // The leader was refused (its budget, its 429): ask on this caller's own behalf.
+        if (shared.kind !== "refused") return shared;
+      }
+      // Registered before `beforeForge` is awaited, so concurrent reads join this one and the
+      // question (the org's budget) is asked once per session, never once per caller.
+      const read = (async (): Promise<PullRequestDiffResult> => {
+        if (readOptions.beforeForge !== undefined && !(await readOptions.beforeForge())) {
+          return { kind: "refused" };
+        }
+        const result = await readFromForge(target);
+        store(key, result, clock.now().getTime());
+        return result;
+      })().finally(() => inFlight.delete(key));
       inFlight.set(key, read);
       return read;
     },

@@ -127,6 +127,8 @@ number in flight):
 | `webhook.ip`           | client address + own/other app claim                 | 600 / 1 min | checked in `onRequest` before the precheck and the body; spent only by rejections |
 | `webhook.installation` | `<forge>:<installation>`                             | 600 / 1 min | checked after the signature holds; spent only when the inbox queued the delivery  |
 | `ask`                  | member id                                            | 20 / 1 min  | P9: `app.rateLimits.consume(request, reply, "ask", memberId)`                     |
+| `diff`                 | member id                                            | 10 / 1 min  | H4-3 (ADR 0034): `GET …/pulls/:number/diff`, every request                        |
+| `diff.org`             | org id                                               | 15 / 1 min  | H4-3: the same route, spent only by reads that go to GitHub (`beforeForge`)       |
 
 - Auth uses the P7-1 seam `AuthDeps.rateLimit(scope)` (`authRateLimit`, an `onRequest` hook on
   the auth scope, mapped by route path). Webhooks take `WebhookDeps.rateLimit` (`sourceAllowed`,

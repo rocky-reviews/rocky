@@ -423,7 +423,7 @@ describe("loadPullRequestDiffTarget (H4-3)", () => {
     });
   });
 
-  it("a PR without a recorded head revision has no base; the head is still the mirror's", async () => {
+  it("a PR without a recorded head revision takes the pull request's own base, never GitHub's", async () => {
     const org = await newOrg();
     await worker.withOrg(org, async (tx) => {
       const repo = await upsertRepository(tx, {
@@ -432,12 +432,12 @@ describe("loadPullRequestDiffTarget (H4-3)", () => {
         private: true,
         defaultBranch: "main",
       });
-      await upsertPullRequest(tx, repo, forgePr(7101, 3, { headSha: sha("c") }));
+      await upsertPullRequest(tx, repo, forgePr(7101, 3, { headSha: sha("c"), baseSha: sha("e") }));
     });
     const target = await app.withOrg(org, (tx) =>
       loadPullRequestDiffTarget(tx, { owner: "acme", repo: "no-revision", number: 3 }),
     );
-    expect(target).toMatchObject({ forgeRepoId: 7101, headSha: sha("c"), baseSha: null });
+    expect(target).toMatchObject({ forgeRepoId: 7101, headSha: sha("c"), baseSha: sha("e") });
   });
 
   it("answers null for an unknown PR, a disabled repository, impossible names and another org's PR (RLS)", async () => {

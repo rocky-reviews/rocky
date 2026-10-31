@@ -77,6 +77,29 @@ Task log for the project plan. Agents append a row when a task is merged.
   sign-in state does. Pass the page's path into the diff context, or reload the page on 401.
 - Token reuse per (installation, repository) for a few minutes (ADR 0011 A14) would now spare the
   mint for the diff as well as for the membership step; both share one forge instance.
+- Review round 1 (fixed): SF1 the cache key held no base for a PR without a revision (two PRs
+  from one head against different bases shared an entry; GitHub's live base was read); now the
+  base is always the mirror's (`coalesce(v.base_sha, p.base_sha)`) and the key carries the PR
+  number too. SF2 failures are remembered briefly (30 s / 10 s / 5 s), an org-wide `diff.org`
+  limit (15 uncached reads a minute) sits next to the per-member one (now 10 a minute). SF3 the
+  web tells `commits_unavailable` from `head_moved` by the 409's fixed code.
+- Review round 1 nits (not done):
+  - The cache's byte bound counts UTF-16 code units of the decoded text (`diff.length`), not the
+    bytes read; a diff of mostly ASCII is counted about right, one of mostly non-ASCII under.
+  - Eviction is first-in-first-out (insertion order), not least-recently-used: a hit does not
+    move its entry to the end.
+  - The truncated-diff e2e takes decisions on a combination production refuses: the analysis
+    does not run on a truncated diff, so no drafts exist for one.
+  - No test joins the real route to the web app (the db test checks the answer with the web's
+    `parseDiffData`; the e2e answers from a mock); a boot-and-browse test is a follow-up.
+  - `wholeFiles` on a prefix without any header at a line start (content before the first
+    `diff --git`) returns the content before it; the adapter never produces such a prefix.
+  - A `HEAD` request runs the full handler and mints a token (Fastify derives HEAD from GET).
+- ui-verifier nits (not done): "Read it on GitHub" has no full stop and no ↗ hint; the file's
+  AI summary still says "Accept, edit or dismiss each one inline" when no diff is shown; error
+  lines (`role="alert"`) look the same as neutral notes; "Mark viewed" stays available when the
+  diff could not be shown. Fixed: `.diff-status a` links use `--you` (were the browser default);
+  baselines for the signed-out, rate-limited and commits-unavailable states.
 
 ### H4-1 follow-ups
 

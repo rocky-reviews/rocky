@@ -55,7 +55,6 @@ describe("server-backed diff source (H4-3)", () => {
       [401, "signed_out"],
       [404, "not_found"],
       [400, "not_found"],
-      [409, "head_moved"],
       [413, "too_large"],
       [429, "rate_limited"],
       [502, "forge_failed"],
@@ -70,6 +69,26 @@ describe("server-backed diff source (H4-3)", () => {
         .catch((e: unknown) => e);
       expect(error, String(status)).toBeInstanceOf(DiffLoadError);
       expect((error as DiffLoadError).reason, String(status)).toBe(reason);
+      expect((error as Error).message).not.toContain("Zebra");
+    }
+  });
+
+  it("tells the two 409s apart by the body's fixed code, and nothing else", async () => {
+    const cases: [unknown, string][] = [
+      [{ error: "head_moved" }, "head_moved"],
+      [{ error: "commits_unavailable" }, "commits_unavailable"],
+      [{ error: "Zebra-quartz" }, "failed"],
+      [{ error: 1 }, "failed"],
+      ["not json", "failed"],
+      [[], "failed"],
+    ];
+    for (const [body, reason] of cases) {
+      const { fetch } = answering(409, body);
+      const error = await createHttpDiffSource({ fetch })
+        .load(REF)
+        .catch((e: unknown) => e);
+      expect(error, JSON.stringify(body)).toBeInstanceOf(DiffLoadError);
+      expect((error as DiffLoadError).reason, JSON.stringify(body)).toBe(reason);
       expect((error as Error).message).not.toContain("Zebra");
     }
   });

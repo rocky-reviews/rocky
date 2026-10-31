@@ -13,6 +13,7 @@ import {
   DIFF_CACHE_MAX_BYTES,
   DIFF_CACHE_MAX_ENTRIES,
   DIFF_CACHE_TTL_MS,
+  FAILURE_CACHE_TTL_MS,
   PULL_REQUEST_DIFF_MAX_BYTES,
   type PullRequestDiffResult,
   type PullRequestDiffTarget,
@@ -156,12 +157,11 @@ describe("createPullRequestDiffReader", () => {
     expect(calls.closed).toBe(1);
   });
 
-  it("takes GitHub's base when the mirror has no revision of the head yet", async () => {
-    const other = "c".repeat(40);
-    const { forge, calls } = fakeForge({ pull: { baseSha: other } });
+  it("reads the mirror's base even when GitHub's live base differs (a retarget, SF1)", async () => {
+    const { forge, calls } = fakeForge({ pull: { baseSha: "c".repeat(40) } });
     const reader = createPullRequestDiffReader({ forge, ...clockAt() });
-    expect((await reader.read(target({ baseSha: null }))).kind).toBe("diff");
-    expect(calls.diffs[0]?.revision).toEqual({ baseSha: other, headSha: HEAD });
+    expect((await reader.read(target())).kind).toBe("diff");
+    expect(calls.diffs[0]?.revision).toEqual({ baseSha: BASE, headSha: HEAD });
   });
 
   it("a head that moved on GitHub: head_moved, no diff read, the session closed", async () => {
@@ -215,12 +215,16 @@ describe("createPullRequestDiffReader", () => {
     });
   });
 
-  it("a forge failure is a fixed code, the session is still closed, and nothing is cached", async () => {
+  it("a forge failure is a fixed code, the session is still closed, and a retry asks again after 5 s", async () => {
     const failing = fakeForge({ diff: new ForgeReadError("http_status", 502) });
-    const reader = createPullRequestDiffReader({ forge: failing.forge, ...clockAt() });
+    const time = clockAt();
+    const reader = createPullRequestDiffReader({ forge: failing.forge, clock: time.clock });
     expect(await reader.read(target())).toEqual({ kind: "forge_failed", code: "forge_http_502" });
     expect(failing.calls.closed).toBe(1);
-    // The next read asks again (a retry after an outage must not find a cached failure).
+    // Remembered for a few seconds only, so a retry after an outage asks GitHub again soon.
+    expect(await reader.read(target())).toEqual({ kind: "forge_failed", code: "forge_http_502" });
+    expect(failing.calls.opened).toHaveLength(1);
+    time.advance(FAILURE_CACHE_TTL_MS.forge_failed);
     expect(await reader.read(target())).toEqual({ kind: "forge_failed", code: "forge_http_502" });
     expect(failing.calls.opened).toHaveLength(2);
     const minting = fakeForge({ open: new ForgeReadError("timeout") });
@@ -265,6 +269,7 @@ describe("createPullRequestDiffReader", () => {
       { number: 0 },
       { headSha: "xyz" },
       { baseSha: "short" },
+      { baseSha: null as unknown as string },
     ] as Partial<PullRequestDiffTarget>[]) {
       await expect(reader.read(target(bad)), JSON.stringify(bad)).rejects.toThrow("invalid target");
     }
@@ -287,19 +292,70 @@ describe("createPullRequestDiffReader", () => {
       expect(calls.opened).toHaveLength(2);
     });
 
-    it("keys by org, repository, base and head: none of them shares an entry", async () => {
+    it("keys by org, repository, number, base and head: none of them shares an entry", async () => {
       const { forge, calls } = fakeForge({ heads: { 848: "d".repeat(40) } });
       const reader = createPullRequestDiffReader({ forge, ...clockAt() });
       await reader.read(target());
       for (const other of [
         { orgId: "0f1c2a9e-1d4b-4c3e-9a7f-0b2d4e6f8a1c" },
         { repositoryId: 5002 },
+        { number: 849 },
         { baseSha: "c".repeat(40) },
         { number: 848, headSha: "d".repeat(40) },
       ]) {
         expect(cachedOf(await reader.read(target(other))), JSON.stringify(other)).toBe(false);
       }
-      expect(calls.opened).toHaveLength(5);
+      expect(calls.opened).toHaveLength(6);
+    });
+
+    it("SF1: two pull requests from one head against different bases never share a diff", async () => {
+      const { forge, calls } = fakeForge();
+      const reader = createPullRequestDiffReader({ forge, ...clockAt() });
+      const toMain = target({ number: 10, baseSha: "1".repeat(40) });
+      const toRelease = target({ number: 11, baseSha: "2".repeat(40) });
+      await Promise.all([reader.read(toMain), reader.read(toRelease)]);
+      expect(calls.diffs.map((d) => d.revision.baseSha)).toEqual(["1".repeat(40), "2".repeat(40)]);
+      expect(cachedOf(await reader.read(toMain))).toBe(true);
+      expect(cachedOf(await reader.read(toRelease))).toBe(true);
+      expect(calls.opened).toHaveLength(2);
+    });
+
+    it("SF2: asks beforeForge only when a session is about to open; a refusal reads and caches nothing", async () => {
+      const { forge, calls } = fakeForge();
+      const reader = createPullRequestDiffReader({ forge, ...clockAt() });
+      let asked = 0;
+      const refuse = async () => {
+        asked += 1;
+        return false;
+      };
+      const allow = async () => {
+        asked += 1;
+        return true;
+      };
+      expect(await reader.read(target(), { beforeForge: refuse })).toEqual({ kind: "refused" });
+      expect(calls.opened).toEqual([]);
+      // Nothing was cached: the next read, allowed, asks GitHub.
+      expect(cachedOf(await reader.read(target(), { beforeForge: allow }))).toBe(false);
+      // A hit never asks.
+      expect(cachedOf(await reader.read(target(), { beforeForge: refuse }))).toBe(true);
+      expect(asked).toBe(2);
+      // Joined reads never ask either: one session, one question.
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const slow = fakeForge({ gate: () => gate });
+      const shared = createPullRequestDiffReader({ forge: slow.forge, ...clockAt() });
+      let questions = 0;
+      const count = async () => {
+        questions += 1;
+        return true;
+      };
+      const reads = [1, 2, 3].map(() => shared.read(target(), { beforeForge: count }));
+      release();
+      await Promise.all(reads);
+      expect(questions).toBe(1);
+      expect(slow.calls.opened).toHaveLength(1);
     });
 
     it("concurrent reads of one revision share one session", async () => {
@@ -316,20 +372,45 @@ describe("createPullRequestDiffReader", () => {
       expect(calls.opened).toHaveLength(1);
     });
 
-    it("caches diffs only: head_moved, too_large, missing commits and failures are asked again", async () => {
-      for (const options of [
-        { pull: { headSha: "f".repeat(40) } },
-        { diff: reading(Buffer.alloc(0), "forge_limit") },
-        { diff: reading(Buffer.alloc(0), "unavailable") },
-        { pull: null },
-        { open: "null" as const },
-      ]) {
+    it("SF2: remembers a fixed failure for its own short lifetime, then asks again", async () => {
+      const cases: [Parameters<typeof fakeForge>[0], keyof typeof FAILURE_CACHE_TTL_MS][] = [
+        [{ pull: { headSha: "f".repeat(40) } }, "head_moved"],
+        [{ diff: reading(Buffer.alloc(0), "forge_limit") }, "too_large"],
+        [{ diff: reading(Buffer.alloc(0), "unavailable") }, "commits_unavailable"],
+        [{ pull: null }, "not_found"],
+        [{ open: "null" as const }, "not_found"],
+        [{ diff: new ForgeReadError("timeout") }, "forge_failed"],
+      ];
+      for (const [options, kind] of cases) {
         const { forge, calls } = fakeForge(options);
-        const reader = createPullRequestDiffReader({ forge, ...clockAt() });
+        const time = clockAt();
+        const reader = createPullRequestDiffReader({ forge, clock: time.clock });
+        expect((await reader.read(target())).kind, kind).toBe(kind);
+        expect((await reader.read(target())).kind, kind).toBe(kind);
+        time.advance(FAILURE_CACHE_TTL_MS[kind] - 1);
         await reader.read(target());
+        expect(calls.opened, `${kind} within its lifetime`).toHaveLength(1);
+        time.advance(1);
         await reader.read(target());
-        expect(calls.opened, JSON.stringify(options)).toHaveLength(2);
+        expect(calls.opened, `${kind} after its lifetime`).toHaveLength(2);
       }
+      // Never longer than a diff, and the lifetimes are the documented ones (ADR 0034 §4).
+      expect(FAILURE_CACHE_TTL_MS).toEqual({
+        head_moved: 30_000,
+        commits_unavailable: 30_000,
+        too_large: 30_000,
+        not_found: 10_000,
+        forge_failed: 5_000,
+      });
+      expect(Math.max(...Object.values(FAILURE_CACHE_TTL_MS))).toBeLessThan(DIFF_CACHE_TTL_MS);
+    });
+
+    it("a remembered failure counts as an entry and is dropped when the cache is turned off", async () => {
+      const { forge, calls } = fakeForge({ pull: null });
+      const reader = createPullRequestDiffReader({ forge, ...clockAt(), cache: false });
+      await reader.read(target());
+      await reader.read(target());
+      expect(calls.opened).toHaveLength(2);
     });
 
     it("is bounded by bytes and entries, evicting the oldest, and a diff over the byte bound is not kept", async () => {
