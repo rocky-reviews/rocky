@@ -116,30 +116,64 @@ export const checkReview = (
   );
 };
 
+/** The new-side lines a mapped file's hunks cover: from the first hunk's start to the last's end. */
+export interface MappedSpan {
+  readonly start: number;
+  readonly end: number;
+}
+export type MappedFiles = ReadonlyMap<string, MappedSpan | undefined>;
+
+export interface StrippedGraph<T> {
+  readonly answer: T;
+  /** References to files outside the mapped set, dropped. */
+  readonly files: number;
+  /** Ranges outside the file's changed lines, dropped (the reference stays). */
+  readonly ranges: number;
+}
+
 /**
  * H4-5: a card or an edge may be backed only by a file the graph call was given (the mapped
- * set, `map-scope.ts`). The published schema lets a file reference name any well-formed path
- * (context nodes, other producers); the pipeline is stricter, so a model can neither map a file
- * Rocky left out nor one it never saw. A stray reference is dropped, deterministically, and the
- * map is kept (review round 1, S6): `files` is a list that may be empty, so the document stays
- * valid, and one stray path is not worth a repair call or a lost map. Exact string match, like
- * every path check in the schema. Only `files[]` is checked: a label, subtitle or summary can
- * still name any file, as any model text can.
+ * set, `map-scope.ts`), and a range only where the diff put the component. The published schema
+ * lets a file reference name any well-formed path (context nodes, other producers); the pipeline
+ * is stricter, so a model can neither map a file Rocky left out nor one it never saw. A stray
+ * reference or range is dropped, deterministically, and the map is kept (review round 1, S6):
+ * `files` is a list that may be empty and `range` is optional, so the document stays valid, and
+ * one stray path is not worth a repair call or a lost map. Paths match exactly, like every path
+ * check in the schema. A range is kept when it lies inside the span of the file's new-side hunks
+ * (first hunk start to last hunk end): the model only saw the hunks, so it cannot place a
+ * component outside them; a file with no new-side lines keeps no range. Only `files[]` is
+ * checked: a label, subtitle or summary can still name any file, as any model text can.
  */
-export const stripGraphFiles = <T extends GraphAnswer>(
+export const stripGraphRefs = <T extends GraphAnswer>(
   answer: T,
-  allowed: ReadonlySet<string>,
-): { readonly answer: T; readonly stripped: number } => {
-  let stripped = 0;
-  const keep = <F extends { readonly path: string }>(files: readonly F[]): F[] =>
-    files.filter((file) => {
-      if (allowed.has(file.path)) return true;
-      stripped++;
-      return false;
+  mapped: MappedFiles,
+): StrippedGraph<T> => {
+  let files = 0;
+  let ranges = 0;
+  const keep = <F extends { readonly path: string; readonly range?: MappedSpan | undefined }>(
+    refs: readonly F[],
+  ): F[] =>
+    refs.flatMap((ref) => {
+      if (!mapped.has(ref.path)) {
+        files++;
+        return [];
+      }
+      if (ref.range === undefined) return [ref];
+      const span = mapped.get(ref.path);
+      if (span !== undefined && ref.range.start >= span.start && ref.range.end <= span.end)
+        return [ref];
+      ranges++;
+      const rest: { range?: MappedSpan | undefined } = { ...ref };
+      delete rest.range;
+      return [rest as F];
     });
   const nodes = answer.nodes.map((node) => ({ ...node, files: keep(node.files) }));
   const edges = answer.edges.map((edge) => ({ ...edge, files: keep(edge.files) }));
-  return { answer: stripped === 0 ? answer : { ...answer, nodes, edges }, stripped };
+  return {
+    answer: files === 0 && ranges === 0 ? answer : { ...answer, nodes, edges },
+    files,
+    ranges,
+  };
 };
 
 export type DocumentPart = "graph" | "briefing";

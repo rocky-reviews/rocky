@@ -92,7 +92,7 @@ const MapView = ({ doc, onOpenFile }: CanvasProps) => {
   const open = (root: Element, target: EventTarget | null): boolean => {
     const hit = targetAt(root, target, targets);
     if (hit === undefined) return false;
-    if (hit.kind === "file") onOpenFile(hit.path);
+    if (hit.line === undefined) onOpenFile(hit.path);
     else onOpenFile(hit.path, hit.line);
     return true;
   };

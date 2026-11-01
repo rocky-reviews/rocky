@@ -88,7 +88,8 @@ import {
   checkReview,
   checkTriage,
   partitionIssues,
-  stripGraphFiles,
+  stripGraphRefs,
+  type MappedFiles,
   type ProvenanceBase,
   type UnitCheck,
 } from "./validate.js";
@@ -158,6 +159,8 @@ export interface AnalysisStats {
   graph: "drawn" | "unavailable" | "none";
   /** Graph file references outside the mapped set, dropped from the stored map (H4-5). */
   graphFilesStripped: number;
+  /** Graph line ranges outside the file's changed lines, dropped from the stored map (H4-5). */
+  graphRangesStripped: number;
 }
 
 /**
@@ -611,8 +614,9 @@ const run = async (
   // nothing else, so an excluded file's path or diff never reaches it. The scope is decided over
   // every file the rules left to the AI (S5): logic that could not be sent (binary, too large,
   // triage failed or refused) makes the map unavailable, never a map drawn from the tests. A
-  // card may be backed only by a file the call carried: a stray reference is dropped and counted
-  // (`stripGraphFiles`, S6). A PR with nothing to map gets the fixed reason `no-logic`, no call.
+  // card may be backed only by a file the call carried, with a range inside that file's changed
+  // lines: a stray reference or range is dropped and counted (`stripGraphRefs`, S6). A PR with
+  // nothing to map gets the fixed reason `no-logic`, no call.
   let graph: GraphAnswer | undefined;
   let graphUnavailable: GraphUnavailable | undefined;
   const triagedPaths = new Set(triageFiles.map((file) => file.path));
@@ -634,6 +638,19 @@ const run = async (
   } else {
     const inScope = new Set(scope.paths);
     const mapped = files.filter((file) => inScope.has(file.path));
+    const spans: MappedFiles = new Map(
+      mapped.map((file) => {
+        const hunks = file.hunks.filter((hunk) => hunk.newLines > 0);
+        const first = hunks[0];
+        const last = hunks.at(-1);
+        return [
+          file.path,
+          first === undefined || last === undefined
+            ? undefined
+            : { start: first.newStart, end: last.newStart + last.newLines - 1 },
+        ];
+      }),
+    );
     const parts: LlmUntrustedText[] = [
       { label: "pr_title", text: request.pullRequest.title },
       ...mapped.flatMap((file, index) => [
@@ -653,17 +670,18 @@ const run = async (
           untrusted: parts,
           output: GRAPH_OUTPUT,
           maxOutputTokens: MAX_OUTPUT_TOKENS.graph,
-          // Checked as it will be stored: with stray file references already dropped.
+          // Checked as it will be stored: with stray references and ranges already dropped.
           check: (answer) =>
-            checkPart("graph", STUB_BRIEFING, stripGraphFiles(answer, inScope).answer, undefined),
+            checkPart("graph", STUB_BRIEFING, stripGraphRefs(answer, spans).answer, undefined),
         },
         observe("graph"),
         signal,
       );
       if (drawn.ok) {
-        const kept = stripGraphFiles(drawn.value, inScope);
+        const kept = stripGraphRefs(drawn.value, spans);
         graph = kept.answer;
-        stats.graphFilesStripped = kept.stripped;
+        stats.graphFilesStripped = kept.files;
+        stats.graphRangesStripped = kept.ranges;
       } else
         graphUnavailable = {
           reason:
@@ -840,6 +858,7 @@ const newStats = (): AnalysisStats => ({
   repairs: 0,
   graph: "none",
   graphFilesStripped: 0,
+  graphRangesStripped: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

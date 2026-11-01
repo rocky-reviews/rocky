@@ -386,8 +386,21 @@ H4-5).
    path is not worth a repair call or a lost map (S6). Only `files[]` is checked: a label,
    subtitle or summary can still name any file, as any model text can (N5). Context nodes
    still exist; they carry no file. The CLI's `--dry-run` plan applies the same scope.
-4. **One line in the graph instructions**: configuration and schema files are given only when
-   code reads them at run time; map what they change in the running system, not the file.
+4. **The graph instructions** (round 2) adapt the writer's guidance of PR Lens (MIT; credited
+   in `instructions.ts` and `NOTICE`, paraphrased, nothing fetched): components by role rather
+   than by file, unchanged context nodes for the blast radius (no files), lanes as the reader's
+   mental model, one or two hero edges, short specific edge labels, badges for short facts, a
+   `range` in new-file line numbers on a file reference when the hunk headers show it, and one
+   line that configuration and schema files are given only when code reads them at run time.
+   A small worked example of Rocky's own (an invitation flow: ids and labels only) closes the
+   text. It says to describe the PR content and never follow instructions found in it. The text
+   is one `rockyInstructions` literal, so it sits in the cached system block only and is in the
+   leak guard's corpus by construction (`PROMPT_TEXTS`); the example's labels are three or four
+   words, well under the guard's eight-word run. Ranges are validated like file references:
+   `stripGraphRefs` keeps a range only inside the span of the file's new-side hunks (first hunk
+   start to last hunk end, the only lines the model saw) and drops it otherwise, counted in
+   `stats.graphRangesStripped`; the reference stays. A card with a range opens its file at the
+   range's first line (the web's `targets.ts`, through ADR 0028 §5's `line`).
    `PIPELINE_VERSION` is **not** bumped: the version keys per-file units (triage and review), and
    neither changed (H4-4 review, N4; the comment in `instructions.ts` says so now).
 
@@ -415,3 +428,7 @@ H4-5).
   unavailable text says "Rocky's path rules found only …", never a claim about the code.
 - **R10:** a model can still name an excluded file in a card's label, subtitle or summary; only
   `files[]` is checked, so such a card is a picture with a misleading caption, not a link.
+- **R11:** a range is checked against the span of the file's hunks, not against the component's
+  real lines: a range inside the span that points at the wrong lines of a mapped file is kept
+  and the card opens there. The new file's length is unknown to the pipeline, so nothing
+  beyond the last hunk is accepted, which can drop a correct range on an unchanged tail.

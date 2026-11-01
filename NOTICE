@@ -46,7 +46,11 @@ the MIT License. The original copyright and permission notice is reproduced
 below and is kept in the adapted source files, as the MIT License requires.
 The renderer was adapted from upstream commit
 918ffe82cb1dd71d20ce70b27917aeb80a7a4b49; packages/renderer/README.md lists
-which files were adapted and what changed.
+which files were adapted and what changed. The change-map instructions in
+packages/core/src/analysis/instructions.ts (GRAPH_INSTRUCTIONS) paraphrase
+the writer's guidance of the PR Lens skill (granularity, context nodes,
+lanes, hero edges, edge labels, badges); the worked example there is Rocky's
+own.
 
     MIT License
 
