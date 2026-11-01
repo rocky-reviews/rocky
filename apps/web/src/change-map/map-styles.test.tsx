@@ -77,10 +77,25 @@ describe("Guided walkthrough", () => {
     expect(html).toContain("Stop 1 of 3");
     expect(html).toContain("A new way in");
     expect(html).toMatch(/data-node="page"[^>]*>|class="cm-node cm-added cm-wave-0 cm-focus"/);
-    expect(html).toMatch(/<button type="button" class="map-btn" disabled="">Back<\/button>/);
+    expect(html).toMatch(
+      /<button type="button" class="map-btn" aria-disabled="true">Back<\/button>/,
+    );
     expect(html).toContain(">Play tour</button>");
     expect(html).toMatch(/aria-label="Stop 1: A new way in" aria-current="step"/);
     expect(html).toMatch(/class="walk-pan" style="width:\d+px;transform:translate\(/);
+  });
+
+  it("offers no Play for a one-stop tour", () => {
+    const html = renderToStaticMarkup(
+      <WalkthroughMap
+        doc={pr847Doc()}
+        stops={stops().slice(0, 1)}
+        onOpenFile={noop}
+        reducedMotion={false}
+      />,
+    );
+    expect(html).not.toContain("Play tour");
+    expect(html).toContain("Stop 1 of 1");
   });
 
   it("still steps by hand with reduced motion, without Play", () => {
@@ -116,7 +131,7 @@ describe("Flow playback", () => {
     expect(html).not.toContain("seq-token");
     expect(html).not.toContain(">Play</button>");
     expect(html).toMatch(
-      /<button type="button" class="map-btn map-btn-primary" disabled="">Next<\/button>/,
+      /<button type="button" class="map-btn map-btn-primary" aria-disabled="true">Next<\/button>/,
     );
   });
 

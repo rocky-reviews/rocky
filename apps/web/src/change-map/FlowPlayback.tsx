@@ -9,7 +9,7 @@
  * React escapes, inside a <bdi>. A column head whose node backs a PR file opens it, like a card.
  */
 import type { AnalysisDocument, Flow } from "@rocky-reviews/schema";
-import { type CSSProperties, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import {
   activeColumns,
   clampStep,
@@ -41,6 +41,11 @@ export const FlowPlayback = ({ doc, flows, onOpenFile, reducedMotion }: Props) =
   const [step, setStep] = useState(() => openingStep(count, reducedMotion));
   const [playing, setPlaying] = useState(false);
   const current = clampStep(step, count);
+
+  // Reduced motion switched on mid-play: the Play button goes, so playback stops with it.
+  useEffect(() => {
+    if (reducedMotion) setPlaying(false);
+  }, [reducedMotion]);
 
   useStepTimer(playing && !reducedMotion, current, MESSAGE_MS, () => {
     const next = clampStep(current + 1, count);
@@ -197,16 +202,17 @@ export const FlowPlayback = ({ doc, flows, onOpenFile, reducedMotion }: Props) =
           </li>
         ))}
       </ol>
+      {/* aria-disabled, not disabled: the button keeps focus at either end of the flow. */}
       <div className="map-controls">
         <button
           type="button"
           className="map-btn"
-          disabled={current === 0}
+          aria-disabled={current === 0}
           onClick={() => setStep(clampStep(current - 1, count))}
         >
           Back
         </button>
-        {!reducedMotion && (
+        {!reducedMotion && count > 0 && (
           <button
             type="button"
             className="map-btn"
@@ -222,7 +228,7 @@ export const FlowPlayback = ({ doc, flows, onOpenFile, reducedMotion }: Props) =
         <button
           type="button"
           className="map-btn map-btn-primary"
-          disabled={current >= count}
+          aria-disabled={current >= count}
           onClick={() => setStep(clampStep(current + 1, count))}
         >
           Next

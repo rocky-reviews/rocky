@@ -38,7 +38,7 @@
   font-weight: 600;
   cursor: pointer;
 }
-.map-btn:hover:not(:disabled) {
+.map-btn:hover:not([aria-disabled="true"]) {
   background: var(--panel-2);
 }
 .map-btn[aria-pressed="true"] {
@@ -51,13 +51,13 @@
   background: var(--you);
   color: var(--on-you);
 }
-.map-btn-primary:hover:not(:disabled) {
+.map-btn-primary:hover:not([aria-disabled="true"]) {
   background: var(--you);
 }
 .map-btn-quiet {
   color: var(--muted);
 }
-.map-btn:disabled {
+.map-btn[aria-disabled="true"] {
   opacity: 0.45;
   cursor: default;
 }

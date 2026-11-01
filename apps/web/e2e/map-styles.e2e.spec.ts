@@ -137,7 +137,7 @@ test.describe("Guided walkthrough", () => {
     const back = page.getByRole("button", { name: "Back", exact: true });
     const next = page.getByRole("button", { name: "Next stop" });
     await expect(section(page)).toContainText("Stop 1 of 3");
-    await expect(back).toBeDisabled();
+    await expect(back).toHaveAttribute("aria-disabled", "true");
     const first = await pan(page);
     await next.click();
     await expect(section(page)).toContainText("Stop 2 of 3");
@@ -149,7 +149,7 @@ test.describe("Guided walkthrough", () => {
     await expect(section(page).locator('.cm-edge[data-edge="auth-mem"]')).toHaveClass(/cm-focus/);
     await page.getByRole("button", { name: "Stop 3: The email side" }).click();
     await expect(section(page)).toContainText("Stop 3 of 3");
-    await expect(next).toBeDisabled();
+    await expect(next).toHaveAttribute("aria-disabled", "true");
     await expect(page.getByRole("button", { name: "Stop 3: The email side" })).toHaveAttribute(
       "aria-current",
       "step",
@@ -182,6 +182,41 @@ test.describe("Guided walkthrough", () => {
         }),
       );
     expect(faded).toEqual([]);
+  });
+
+  test("the keyboard keeps its place at either end of the tour", async ({ page }) => {
+    await open(page, "walkthrough");
+    const next = page.getByRole("button", { name: "Next stop" });
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    await next.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(section(page)).toContainText("Stop 3 of 3");
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await expect(next).toBeFocused();
+    // A further Enter does nothing.
+    await page.keyboard.press("Enter");
+    await expect(section(page)).toContainText("Stop 3 of 3");
+    await back.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(section(page)).toContainText("Stop 1 of 3");
+    await expect(back).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Play tour" })).toBeFocused();
+  });
+
+  test("reduced motion switched on mid-tour stops it for good", async ({ page }) => {
+    await page.clock.install({ time: FIXTURE_NOW });
+    await open(page, "walkthrough");
+    await page.getByRole("button", { name: "Play tour" }).click();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(page.getByRole("button", { name: "Play tour" })).toHaveCount(0);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const play = page.getByRole("button", { name: "Play tour" });
+    await expect(play).toHaveAttribute("aria-pressed", "false");
+    await page.clock.runFor(13_000);
+    await expect(section(page)).toContainText("Stop 1 of 3");
   });
 
   test("Play tour moves on by itself and stops at the end", async ({ page }) => {
@@ -226,9 +261,42 @@ test.describe("Flow playback", () => {
     await expect(section(page).locator(".seq-now")).toContainText("see finding F1");
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(section(page).locator(".seq-now")).toHaveText("All 4 steps played.");
-    await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Next", exact: true })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(section(page).locator(".seq-now")).toContainText("Step 4 of 4");
+  });
+
+  test("the keyboard keeps its place at either end of the flow", async ({ page }) => {
+    await open(page, "flows");
+    const next = page.getByRole("button", { name: "Next", exact: true });
+    const back = page.getByRole("button", { name: "Back", exact: true });
+    await next.focus();
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Enter");
+    await expect(section(page).locator(".seq-now")).toHaveText("All 4 steps played.");
+    await expect(next).toBeFocused();
+    await back.focus();
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Enter");
+    await expect(section(page).locator(".seq-now")).toContainText("Step 1 of 4");
+    await expect(back).toHaveAttribute("aria-disabled", "true");
+    await expect(back).toBeFocused();
+  });
+
+  test("reduced motion switched on mid-play stops it for good", async ({ page }) => {
+    await page.clock.install({ time: FIXTURE_NOW });
+    await open(page, "flows");
+    await page.getByRole("button", { name: "Play", exact: true }).click();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect(page.getByRole("button", { name: "Play", exact: true })).toHaveCount(0);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    await expect(page.getByRole("button", { name: "Play", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    await page.clock.runFor(8_000);
+    await expect(section(page).locator(".seq-now")).toContainText("Step 1 of 4");
   });
 
   test("Play runs to the end", async ({ page }) => {

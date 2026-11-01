@@ -48,7 +48,13 @@ export const ChangeMapSlot = ({ doc, onOpenFile }: Props) => {
       </div>
       {doc.graph !== undefined ? (
         <>
-          <ChangeMapCanvas doc={doc} onOpenFile={onOpenFile} mode={mode} />
+          {/* Keyed by the analysed head: a re-analysis starts the tour and playback afresh. */}
+          <ChangeMapCanvas
+            key={doc.provenance.head.sha}
+            doc={doc}
+            onOpenFile={onOpenFile}
+            mode={mode}
+          />
           {mode.kind !== "flows" && (
             <ul className="legend" aria-label="Legend">
               <li className="lg-add">New in this PR</li>

@@ -58,6 +58,10 @@ export const WalkthroughMap = ({ doc, stops, onOpenFile, reducedMotion }: Props)
   }, [current]);
 
   const go = (next: number) => setIndex(clampStop(next, count));
+  // Reduced motion switched on mid-tour: the Play button goes, so the tour stops with it.
+  useEffect(() => {
+    if (reducedMotion) setPlaying(false);
+  }, [reducedMotion]);
   useStepTimer(playing && !reducedMotion, current, STOP_MS, () => {
     if (current >= count - 1) setPlaying(false);
     else {
@@ -91,7 +95,7 @@ export const WalkthroughMap = ({ doc, stops, onOpenFile, reducedMotion }: Props)
           <p className="walk-count">
             Stop {current + 1} of {count}
           </p>
-          <div className="walk-say" aria-live="polite">
+          <div className="walk-say" key={stop.id} aria-live="polite">
             <h4 className="walk-heading">
               <bdi>{stop.heading}</bdi>
             </h4>
@@ -115,15 +119,16 @@ export const WalkthroughMap = ({ doc, stops, onOpenFile, reducedMotion }: Props)
             ))}
           </ol>
           <div className="map-controls walk-buttons">
+            {/* aria-disabled, not disabled: the button keeps focus when it runs out of stops. */}
             <button
               type="button"
               className="map-btn"
-              disabled={current === 0}
+              aria-disabled={current === 0}
               onClick={() => go(current - 1)}
             >
               Back
             </button>
-            {!reducedMotion && (
+            {!reducedMotion && count > 1 && (
               <button
                 type="button"
                 className="map-btn"
@@ -139,7 +144,7 @@ export const WalkthroughMap = ({ doc, stops, onOpenFile, reducedMotion }: Props)
             <button
               type="button"
               className="map-btn map-btn-primary"
-              disabled={current >= count - 1}
+              aria-disabled={current >= count - 1}
               onClick={() => go(current + 1)}
             >
               Next stop

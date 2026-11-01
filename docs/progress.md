@@ -150,6 +150,18 @@ in-memory store behind a port, plus its tests.
   375; inactive walkthrough stop dots are `--faint`; edge labels near acceptInvitation() overlap
   the hero edge in pr-847 (pre-H4-6); the P5-3 focus ring on a card at the scroll box's left edge
   is clipped at 375 (pre-H4-6).
+- Review round 1 (fixed): SF1 Back and Next at either end now use `aria-disabled` and stay
+  focused (keyboard no longer drops to `<body>`); SF2 reduced motion turning on mid-play stops
+  the tour and playback. Nits fixed in place: N3 the map is keyed by the analysed head sha, so a
+  re-analysis starts afresh; N5 `.walk-say` is keyed by the stop, so its entrance replays; N6 no
+  Play for a one-stop tour or an empty flow.
+- Review round 1 nits (recorded, not fixed):
+  - N4: a stage scrolled by Tab to an off-stage card is only reset on the next stop, not when
+    focus leaves the card.
+  - N7: `hasTraffic` reads `doc.graph.edges`, the renderer the routed edges; they agree while
+    integrity guarantees both ends of every edge, but one source would be safer.
+  - N8: `useStepTimer` has no fake-timer unit test (no DOM test environment); the e2e Play tests
+    with Playwright's clock cover it.
 
 ### H4-5 follow-ups
 
