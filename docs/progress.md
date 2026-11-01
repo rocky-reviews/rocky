@@ -92,6 +92,37 @@ Task log for the project plan. Agents append a row when a task is merged.
   reservation (`apps/worker/src/cli/budget.ts`: schema bytes plus `MAX_OUTPUT_TOKENS.graph`) so
   the default cap fits a small PR. Budgets unchanged here.
 
+### Dogfooding follow-ups (2026-11-01)
+
+From the first review of a mid-size private dogfooding pull request: a money ledger with an
+in-memory store behind a port, plus its tests.
+
+- **Triage under-rates money and concurrency code.** Haiku rated the in-memory ledger store
+  "normal" (42) as "test-only code". In fact it sits in `src/`, is exported, and is the reference
+  behaviour a production adapter must copy. The tests that should prove its lock were also
+  "normal". Neither reached the review stage. The independent reviewer's top finding lived
+  there: the concurrency test passed with the lock removed. Rocky missed it. Add rules
+  pre-triage floors (P4-3) like the existing auth-path rule:
+  - paths matching `billing/`, `payments/`, `ledger`, `credit`, `invoice` or `money` are at
+    least important;
+  - so are files that implement a port or adapter for those;
+  - tests of locking or concurrency are not auto-downgraded.
+
+  Measure with an eval case built from this pull request's shape: a store whose lock the tests
+  don't prove.
+
+- **The change map should show logic only.** Today the graph call gets every file that
+  triage didn't mark as noise. That includes docs (ADRs, READMEs) and config (CI workflows,
+  lint, tsconfig, package manifests), so they can appear as cards. Product rule: the map shows
+  code with behaviour. Config or docs appear only when they change behaviour the code reads, for
+  example a feature flag, a runtime setting, a migration or a schema. Do it in two places:
+  - a deterministic filter on the graph's input (file category from the pre-triage rules);
+  - a line in the graph instructions about config that feeds code.
+
+  Pair this with the change-map scope decision (H4-4 follow-up): ask the model only for what the
+  page draws today (lanes, nodes, edges), in enforced structured output. Flows, views and the
+  walkthrough come back with their UI.
+
 ### H4-3 follow-ups
 
 - **Needs human (dogfooding):** open a real PR's file on `rocky-reviews/rocky` with the server's
