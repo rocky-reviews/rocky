@@ -59,5 +59,6 @@ export const BEYOND_JSON_SCHEMA = [
   "ranges inside one new-side hunk; triage covers every PR file once; score bands; verdict floor (critical finding → critical verdict)",
   "briefing.estimatedReviewMinutes is at least the sum of triage.files[].reviewMinutes",
   "graph and provenance.graphUnavailable are never both present",
+  "provenance.flowsUnavailable only beside a graph without flows; provenance.walkthroughUnavailable only beside a graph without a walkthrough",
   `serialised document at most ${MAX_DOCUMENT_BYTES} bytes`,
 ] as const;

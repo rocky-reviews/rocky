@@ -35,5 +35,13 @@ export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unkno
   result.provenance = structuredClone(facts);
   result.schemaVersion = requiredSchemaVersion({ provenance: facts });
   if (facts.graphUnavailable !== undefined) delete result.graph;
+  // The sections drawn by their own calls (schema 1.3, H4-7) follow the same rule: when the
+  // pipeline recorded that one failed, whatever the model returned for it is dropped.
+  if (isRecord(result.graph)) {
+    const graph = { ...result.graph };
+    if (facts.flowsUnavailable !== undefined) graph.flows = [];
+    if (facts.walkthroughUnavailable !== undefined) delete graph.walkthrough;
+    result.graph = graph;
+  }
   return result;
 };

@@ -198,6 +198,24 @@ export const BriefingUnavailableReason = z.enum(["analysis-failed", "too-large",
 export type BriefingUnavailableReason = z.infer<typeof BriefingUnavailableReason>;
 
 /**
+ * Schema 1.3 (H4-7): why a section of the change map that is drawn by its own model call (the
+ * flows, the walkthrough) is missing although the map itself was drawn. Written by the pipeline,
+ * never by a model: `analysis-failed` is the call's output failing validation after the repair
+ * round (a refusal included), `too-large` an input the provider could not take, `timeout` the
+ * role not answering in time. A section that was never attempted (no map) has no reason: the
+ * map's own reason covers it.
+ */
+export const MapSectionUnavailableReason = z.enum(["analysis-failed", "too-large", "timeout"]);
+export type MapSectionUnavailableReason = z.infer<typeof MapSectionUnavailableReason>;
+
+export const MapSectionUnavailable = z
+  .strictObject({ reason: MapSectionUnavailableReason })
+  .describe(
+    "Why a section of a drawn change map is missing. Written by the pipeline, never by a model.",
+  );
+export type MapSectionUnavailable = z.infer<typeof MapSectionUnavailable>;
+
+/**
  * The change map is optional (gate H2, #2): when the graph role fails, the rest of the review
  * still ships and the UI shows "Change map unavailable", this reason and a Retry button. The
  * reason lives in the facts, like `unanalysed`, so `applyKnownFields` overwrites whatever a
@@ -259,6 +277,12 @@ export const Provenance = z
     ),
     briefingUnavailable: BriefingUnavailable.optional().describe(
       "Present only when the pipeline wrote the briefing itself (schema 1.1).",
+    ),
+    flowsUnavailable: MapSectionUnavailable.optional().describe(
+      "Present only when the map was drawn but its flows call failed (schema 1.3); the graph then has no flows.",
+    ),
+    walkthroughUnavailable: MapSectionUnavailable.optional().describe(
+      "Present only when the map was drawn but its walkthrough call failed (schema 1.3); the graph then has no walkthrough.",
     ),
     readByHand: z
       .array(ReadByHandFile)
