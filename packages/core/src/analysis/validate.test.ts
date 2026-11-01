@@ -175,6 +175,8 @@ import type { FlowsAnswer, WalkthroughAnswer } from "./outputs.js";
 import {
   graphIds,
   partitionIssues,
+  rebaseFlowIssues,
+  rebaseStepIssues,
   stripFlowRefs,
   stripWalkthroughRefs,
   toWalkthrough,
@@ -218,7 +220,13 @@ describe("stripFlowRefs", () => {
       flows: [flowOf("f", ["a", "b"], [message("m1", "a", "b", [{ path: "src/a.ts" }])])],
     };
     const result = stripFlowRefs(answer, ids, mapped);
-    expect(result).toEqual({ answer, refs: 0, files: 0, ranges: 0 });
+    expect(result).toEqual({
+      answer,
+      refs: 0,
+      files: 0,
+      ranges: 0,
+      index: { flows: [{ flow: 0, participants: [0, 1], messages: [0] }] },
+    });
     expect(result.answer).toBe(answer);
   });
 
@@ -240,6 +248,37 @@ describe("stripFlowRefs", () => {
     expect(result.answer.flows[0]?.messages.map((m) => m.id)).toEqual(["m3"]);
     // f: ghost, m1, m2; g: ghost, m1, the flow; h: m1, the flow.
     expect(result.refs).toBe(8);
+    // Where the kept elements sat in the answer, for repair paths (SF2).
+    expect(result.index).toEqual({ flows: [{ flow: 0, participants: [0, 2], messages: [2] }] });
+    expect(
+      rebaseFlowIssues(
+        [
+          "flows[0].messages[0].id: DUPLICATE_ID",
+          "flows[0].participants[1].node: DUPLICATE_ID",
+          "flows[0].title: INVALID_SHAPE",
+          "flows[0]: INVALID_SHAPE",
+          "flows: too_small",
+          "flows[9].messages[0].id: DUPLICATE_ID",
+        ],
+        result.index,
+      ),
+    ).toEqual([
+      "flows[0].messages[2].id: DUPLICATE_ID",
+      "flows[0].participants[2].node: DUPLICATE_ID",
+      "flows[0].title: INVALID_SHAPE",
+      "flows[0]: INVALID_SHAPE",
+      "flows: too_small",
+      "flows[9].messages[0].id: DUPLICATE_ID",
+    ]);
+    const second = stripFlowRefs(
+      { flows: [flowOf("x", ["ghost"], [message("m", "ghost", "ghost")]), ...answer.flows] },
+      ids,
+      mapped,
+    );
+    expect(second.index.flows.map((entry) => entry.flow)).toEqual([1]);
+    expect(rebaseFlowIssues(["flows[0].messages[0].kind: INVALID_SHAPE"], second.index)).toEqual([
+      "flows[1].messages[2].kind: INVALID_SHAPE",
+    ]);
   });
 
   it("strips a step's file references and ranges by the graph's rules, counting them apart", () => {
@@ -279,6 +318,7 @@ describe("stripFlowRefs", () => {
       refs: 0,
       files: 0,
       ranges: 0,
+      index: { flows: [] },
     });
   });
 });
@@ -308,9 +348,28 @@ describe("stripWalkthroughRefs and toWalkthrough", () => {
     expect(result.answer.steps[0]?.focus).toEqual({ nodes: ["a"], edges: ["ab"] });
     expect(result.answer.steps[2]).toBe(answer.steps[3]);
     expect(result.refs).toBe(4);
+    expect(result.index).toEqual([0, 2, 3]);
     const clean = stripWalkthroughRefs(result.answer, ids);
     expect(clean.answer).toBe(result.answer);
     expect(clean.refs).toBe(0);
+    expect(clean.index).toEqual([0, 1, 2]);
+    // Repair paths under the model's own indices (SF2); a path past the list is left alone.
+    expect(
+      rebaseStepIssues(
+        [
+          "steps[1].id: DUPLICATE_ID",
+          "steps[2].focus: INVALID_SHAPE",
+          "steps: INVALID_SHAPE",
+          "steps[7].id: X",
+        ],
+        result.index,
+      ),
+    ).toEqual([
+      "steps[2].id: DUPLICATE_ID",
+      "steps[3].focus: INVALID_SHAPE",
+      "steps: INVALID_SHAPE",
+      "steps[7].id: X",
+    ]);
   });
 
   it("writes the document's focus shape: a selection, or the whole map for an empty focus", () => {

@@ -327,6 +327,17 @@ describe("runAnalysis (P4-3)", () => {
       unknown
     >;
     expect(ran).toMatchObject({ analysed: 1, reused: 6 });
+    // H4-7 (review round 1, SF1): the per-stage counts and the sections' fixed codes reach the
+    // log as numbers and enum values, not as `[redacted]`.
+    const usage = ran["usageByStage"] as Record<string, Record<string, unknown>>;
+    for (const stage of ["triage", "review", "graph", "flows", "walkthrough", "briefing"]) {
+      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"])
+        expect(typeof usage[stage]?.[key], `${stage}.${key}`).toBe("number");
+    }
+    expect(ran["flows"]).toBe("drawn");
+    expect(ran["walkthrough"]).toBe("drawn");
+    expect(ran["calls"]).toMatchObject({ graph: 1, flows: 1, walkthrough: 1 });
+    expect(JSON.stringify({ u: ran["usageByStage"], c: ran["calls"] })).not.toContain("redacted");
   });
 
   it("another org's analysis is not loaded, even with its lease, and its row is untouched", async () => {

@@ -199,9 +199,22 @@ export const graphIds = (graph: GraphAnswer): GraphIds => ({
   edges: new Set(graph.edges.map((edge) => edge.id)),
 });
 
+/**
+ * Where each kept element sat in the model's answer, so a repair issue found on the stripped
+ * list can be sent back under the path the model knows (review round 1, SF2).
+ */
+export interface FlowIndexMap {
+  readonly flows: readonly {
+    readonly flow: number;
+    readonly participants: readonly number[];
+    readonly messages: readonly number[];
+  }[];
+}
+
 export interface StrippedFlows extends StrippedGraph<FlowsAnswer> {
   /** Participants naming an unknown node, messages left without a participant, flows left too small. */
   readonly refs: number;
+  readonly index: FlowIndexMap;
 }
 
 /**
@@ -221,18 +234,25 @@ export const stripFlowRefs = (
 ): StrippedFlows => {
   const { keep, counts } = fileKeeper(mapped);
   let refs = 0;
-  const flows = answer.flows.flatMap((flow) => {
-    const participants = flow.participants.filter((participant) => {
-      if (ids.nodes.has(participant.node)) return true;
+  const index: FlowIndexMap["flows"][number][] = [];
+  const flows = answer.flows.flatMap((flow, flowIndex) => {
+    const participantIndices: number[] = [];
+    const participants = flow.participants.filter((participant, i) => {
+      if (ids.nodes.has(participant.node)) {
+        participantIndices.push(i);
+        return true;
+      }
       refs++;
       return false;
     });
     const present = new Set(participants.map((participant) => participant.node));
-    const messages = flow.messages.flatMap((message) => {
+    const messageIndices: number[] = [];
+    const messages = flow.messages.flatMap((message, i) => {
       if (!present.has(message.from) || !present.has(message.to)) {
         refs++;
         return [];
       }
+      messageIndices.push(i);
       return [{ ...message, files: keep(message.files) }];
     });
     if (
@@ -242,6 +262,7 @@ export const stripFlowRefs = (
       refs++;
       return [];
     }
+    index.push({ flow: flowIndex, participants: participantIndices, messages: messageIndices });
     return [{ ...flow, participants, messages }];
   });
   return {
@@ -249,13 +270,36 @@ export const stripFlowRefs = (
     refs,
     files: counts.files,
     ranges: counts.ranges,
+    index: { flows: index },
   };
 };
+
+const FLOW_PATH = /^flows\[(\d+)\](?:\.(participants|messages)\[(\d+)\])?/;
+
+/** Issue lines found on a stripped flows answer, under the paths of the model's own answer. */
+export const rebaseFlowIssues = (issues: readonly string[], index: FlowIndexMap): string[] =>
+  issues.map((line) =>
+    line.replace(
+      FLOW_PATH,
+      (whole: string, flow: string, kind: string | undefined, member: string | undefined) => {
+        const entry = index.flows[Number(flow)];
+        if (entry === undefined) return whole;
+        const head = `flows[${entry.flow}]`;
+        if (kind === undefined || member === undefined) return head;
+        const original = (kind === "messages" ? entry.messages : entry.participants)[
+          Number(member)
+        ];
+        return `${head}.${kind}[${original ?? member}]`;
+      },
+    ),
+  );
 
 export interface StrippedWalkthrough {
   readonly answer: WalkthroughAnswer;
   /** Focus ids naming no declared node or edge, and steps left with none of their ids. */
   readonly refs: number;
+  /** For each kept step, its index in the model's answer (SF2). */
+  readonly index: readonly number[];
 }
 
 /**
@@ -270,7 +314,8 @@ export const stripWalkthroughRefs = (
   ids: GraphIds,
 ): StrippedWalkthrough => {
   let refs = 0;
-  const steps = answer.steps.flatMap((step) => {
+  const index: number[] = [];
+  const steps = answer.steps.flatMap((step, stepIndex) => {
     const nodes = step.focus.nodes.filter((id) => ids.nodes.has(id));
     const edges = step.focus.edges.filter((id) => ids.edges.has(id));
     const dropped = step.focus.nodes.length - nodes.length + step.focus.edges.length - edges.length;
@@ -280,10 +325,22 @@ export const stripWalkthroughRefs = (
       refs++;
       return [];
     }
+    index.push(stepIndex);
     return [dropped === 0 ? step : { ...step, focus: { nodes, edges } }];
   });
-  return { answer: refs === 0 ? answer : { steps }, refs };
+  return { answer: refs === 0 ? answer : { steps }, refs, index };
 };
+
+const STEP_PATH = /^steps\[(\d+)\]/;
+
+/** Issue lines found on a stripped walkthrough, under the paths of the model's own answer. */
+export const rebaseStepIssues = (issues: readonly string[], index: readonly number[]): string[] =>
+  issues.map((line) =>
+    line.replace(STEP_PATH, (whole: string, step: string) => {
+      const original = index[Number(step)];
+      return original === undefined ? whole : `steps[${original}]`;
+    }),
+  );
 
 /** The document's shape for a walkthrough answer: an empty focus is the whole map. */
 export const toWalkthrough = (answer: WalkthroughAnswer): Walkthrough => ({

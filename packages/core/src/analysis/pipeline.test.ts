@@ -2273,19 +2273,141 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       { usage },
     );
     const { stats } = done(outcome);
-    expect(stats.tokens.flows).toEqual({ input: 700, output: 20, cacheRead: 5, cacheWrite: 3 });
-    expect(stats.tokens.walkthrough).toEqual({
-      input: 200,
-      output: 40,
+    expect(stats.usageByStage.flows).toEqual({
+      inputTokens: 700,
+      outputTokens: 20,
+      cacheRead: 5,
+      cacheWrite: 3,
+    });
+    expect(stats.usageByStage.walkthrough).toEqual({
+      inputTokens: 200,
+      outputTokens: 40,
       cacheRead: 10,
       cacheWrite: 6,
     });
-    expect(stats.tokens.graph).toEqual({ input: 100, output: 20, cacheRead: 5, cacheWrite: 3 });
-    expect(stats.tokens.triage.input).toBe(400);
+    expect(stats.usageByStage.graph).toEqual({
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheRead: 5,
+      cacheWrite: 3,
+    });
+    expect(stats.usageByStage.triage.inputTokens).toBe(400);
     expect(stats.calls.walkthrough).toBe(2);
     // Counts and fixed codes only: nothing a log line could leak.
-    for (const value of Object.values(stats.tokens))
+    for (const value of Object.values(stats.usageByStage))
       for (const n of Object.values(value)) expect(Number.isSafeInteger(n)).toBe(true);
     expect(["drawn", "skipped", "analysis-failed", "too-large", "timeout"]).toContain(stats.flows);
+  });
+
+  it("a repair issue found after stripping is sent back under the path of the model's own answer (round 1, SF2)", async () => {
+    // Steps: s1 kept, s2 dropped (its whole focus is unknown), s3 kept, s4 a duplicate of s3.
+    // The duplicate is steps[2] of the stripped list and steps[3] of the answer.
+    const { outcome, calls } = await run(
+      mapped((call) =>
+        stageOf(call) === "walkthrough" && !call.repair
+          ? {
+              value: {
+                steps: [
+                  { id: "s1", heading: "One", body: "a", focus: { nodes: ["ledger"] } },
+                  { id: "s2", heading: "Two", body: "b", focus: { nodes: ["ghost"] } },
+                  { id: "s3", heading: "Three", body: "c", focus: { nodes: ["store"] } },
+                  { id: "s3", heading: "Four", body: "d", focus: { nodes: ["port"] } },
+                ],
+              },
+            }
+          : undefined,
+      ),
+    );
+    const [, repair] = stageCalls(calls, "walkthrough");
+    expect(repair!.part("validation_issues")).toBe("steps[3].id: DUPLICATE_ID");
+    expect(done(outcome).document.graph?.walkthrough?.steps).toHaveLength(3);
+
+    // Flows: the first flow is dropped whole, the kept flow's first message is dropped; the
+    // duplicate message id is messages[2] of the stripped flow and flows[1].messages[2] of the
+    // answer; the duplicate participant is participants[2] after a dropped participants[1].
+    const flowsRun = await run(
+      mapped((call) =>
+        stageOf(call) === "flows" && !call.repair
+          ? {
+              value: {
+                flows: [
+                  { ...flow(["nobody", "noone"], [msg("x", "nobody", "noone")]), id: "phantom" },
+                  flow(
+                    ["ledger", "ghost", "store", "store"],
+                    [
+                      msg("m0", "ledger", "ghost"),
+                      msg("m1", "ledger", "store"),
+                      msg("m1", "store", "ledger", { kind: "return" }),
+                    ],
+                  ),
+                ],
+              },
+            }
+          : undefined,
+      ),
+    );
+    const [, flowsRepair] = stageCalls(flowsRun.calls, "flows");
+    expect(flowsRepair!.part("validation_issues")!.split("\n")).toEqual([
+      "flows[1].participants[3].node: DUPLICATE_ID",
+      "flows[1].messages[2].id: DUPLICATE_ID",
+    ]);
+    expect(done(flowsRun.outcome).document.graph?.flows[0]?.messages).toHaveLength(2);
+  });
+
+  it("a prompt copy spread over the graph, the flows and the walkthrough is caught by the final whole-document check", async () => {
+    // Each answer holds a fifth of the review instructions with a filler word every seven
+    // words: no answer alone reaches the guard's thresholds (and the flows and walkthrough
+    // calls are even given the earlier answers' outline as allowed content), all of them
+    // together do, and only the title and the diffs are allowed at the end (A25).
+    const words = REVIEW_INSTRUCTIONS.text.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+    const slice = (index: number) => {
+      const part = words.slice(
+        Math.floor((index * words.length) / 5),
+        Math.floor(((index + 1) * words.length) / 5),
+      );
+      return Array.from({ length: Math.ceil(part.length / 7) }, (_, i) =>
+        part.slice(i * 7, i * 7 + 7).join(" "),
+      ).join(" plum ");
+    };
+    const bodies = (text: string) => {
+      const list = text.split(" ");
+      const out: string[] = [];
+      for (let i = 0; i < list.length; i += 12) out.push(list.slice(i, i + 12).join(" "));
+      return out.slice(0, 7);
+    };
+    const { outcome, calls } = await run(
+      mapped((call) => {
+        const stage = stageOf(call);
+        if (stage === "graph")
+          return {
+            value: {
+              ...MAP,
+              nodes: [{ ...MAP.nodes[0], summary: slice(0) }, ...MAP.nodes.slice(1)],
+            },
+          };
+        if (stage === "flows")
+          return {
+            value: {
+              flows: [
+                flow(["ledger", "store"], [msg("m1", "ledger", "store", { note: slice(1) })]),
+              ],
+            },
+          };
+        if (stage === "walkthrough")
+          return {
+            value: {
+              steps: bodies(slice(2)).map((body, i) => ({
+                id: `s${i}`,
+                heading: `Stop ${i}`,
+                body,
+                focus: { nodes: ["ledger"] },
+              })),
+            },
+          };
+        return undefined;
+      }),
+    );
+    expect(calls.filter((c) => c.role === "graph" && c.repair)).toHaveLength(0);
+    expect(outcome).toMatchObject({ status: "failed", code: "document_invalid" });
   });
 });

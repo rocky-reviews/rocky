@@ -7,8 +7,13 @@ import {
   DEFAULT_ANALYSIS_TOKEN_LIMIT,
   estimateAnalysisTokens,
   FILE_CALL_OVERHEAD_TOKENS,
+  GRAPH_ROLE_CALLS,
+  MAP_STAGES,
+  patchTokens,
   STAGE_OVERHEAD_TOKENS,
+  UNIT_STAGES,
 } from "./estimate.js";
+import { GRAPH_MAX_INPUT_CHARS } from "./map-scope.js";
 import { unitKey, type PreviousAnalysis } from "./units.js";
 
 /** P4-6: the per-PR token estimate made before any model call (ADR 0017 §5). */
@@ -35,20 +40,62 @@ const fileOf = (path: string, chars: number): string =>
 const FIXED = ANALYSIS_STAGES * STAGE_OVERHEAD_TOKENS;
 
 describe("estimateAnalysisTokens (P4-6)", () => {
-  it("counts the patch of every file sent to a model, plus a fixed overhead per call and stage", () => {
+  it("counts the patch of every file sent to a model, the mapped diffs once per graph-role call, plus a fixed overhead per call and stage", () => {
     const diff = [fileOf("src/a.ts", 3_000), fileOf("src/b.ts", 6_000)].join("\n");
     const parsed = parseUnifiedDiff(diff);
     if (!parsed.ok) throw new Error("fixture");
-    const chars = parsed.files.reduce((sum, file) => sum + file.patch.length, 0);
+    const patch = parsed.files.reduce((sum, file) => sum + patchTokens(file.patch), 0);
+    expect(patch).toBe(
+      Math.ceil(parsed.files.reduce((sum, file) => sum + file.patch.length, 0) / CHARS_PER_TOKEN),
+    );
     const estimate = estimateAnalysisTokens(diff);
+    expect(ANALYSIS_STAGES).toBe(UNIT_STAGES + MAP_STAGES);
+    expect(GRAPH_ROLE_CALLS).toBe(3);
     expect(estimate).toEqual({
-      tokens: Math.ceil(chars / CHARS_PER_TOKEN) + 2 * FILE_CALL_OVERHEAD_TOKENS + FIXED,
+      // Both files are logic: triage reads them once, the three graph-role calls again (H4-7).
+      tokens: patch * (1 + GRAPH_ROLE_CALLS) + 2 * FILE_CALL_OVERHEAD_TOKENS + FIXED,
       files: 2,
       sent: 2,
       noise: 0,
       skipped: 0,
       reused: 0,
+      mapped: 2,
     });
+  });
+
+  it("H4-7: a PR with nothing to map has no re-reads and no map stages; one over the map's budget has no re-reads either", () => {
+    const docs = fileOf("docs/guide.md", 3_000);
+    const parsed = parseUnifiedDiff(docs);
+    if (!parsed.ok) throw new Error("fixture");
+    expect(estimateAnalysisTokens(docs)).toEqual({
+      tokens:
+        patchTokens(parsed.files[0]!.patch) +
+        FILE_CALL_OVERHEAD_TOKENS +
+        UNIT_STAGES * STAGE_OVERHEAD_TOKENS,
+      files: 1,
+      sent: 1,
+      noise: 0,
+      skipped: 0,
+      reused: 0,
+      mapped: 0,
+    });
+    // Three logic files, each under the per-file cap, together over the map's input budget: the
+    // graph role gets nothing, so nothing is read again and the map's stages are not charged.
+    const big = ["a", "b", "c"].map((n) => fileOf(`src/${n}.ts`, 150_000)).join("\n");
+    const over = parseUnifiedDiff(big);
+    if (!over.ok) throw new Error("fixture");
+    expect(over.files.reduce((sum, f) => sum + f.patch.length, 0)).toBeGreaterThan(
+      GRAPH_MAX_INPUT_CHARS,
+    );
+    const estimate = estimateAnalysisTokens(big)!;
+    expect(estimate.mapped).toBe(0);
+    expect(estimate.tokens).toBe(
+      over.files.reduce((sum, f) => sum + patchTokens(f.patch), 0) +
+        3 * FILE_CALL_OVERHEAD_TOKENS +
+        UNIT_STAGES * STAGE_OVERHEAD_TOKENS,
+    );
+    // A test-only PR is mapped from its tests, like the pipeline does.
+    expect(estimateAnalysisTokens(fileOf("src/a.test.ts", 1_000))!.mapped).toBe(1);
   });
 
   it("is deterministic and leaves out noise (rules pre-triage), binary and too-large files", () => {
@@ -81,12 +128,14 @@ describe("estimateAnalysisTokens (P4-6)", () => {
   it("review round 1, SF2: non-ASCII text counts one token per UTF-8 byte (CJK, emoji)", () => {
     const line = (text: string) => addedFile("src/t.ts", [text]);
     const base = estimateAnalysisTokens(line(""))!.tokens;
+    // The file is logic, so its patch is read by triage and by the three graph-role calls.
+    const reads = 1 + GRAPH_ROLE_CALLS;
     // 300 CJK characters: 3 UTF-8 bytes each, so 900 tokens on top of the ASCII part.
-    expect(estimateAnalysisTokens(line("漢".repeat(300)))!.tokens).toBe(base + 900);
+    expect(estimateAnalysisTokens(line("漢".repeat(300)))!.tokens).toBe(base + 900 * reads);
     // 100 emoji: 4 UTF-8 bytes each (a surrogate pair is one character, not two halves).
-    expect(estimateAnalysisTokens(line("😀".repeat(100)))!.tokens).toBe(base + 400);
+    expect(estimateAnalysisTokens(line("😀".repeat(100)))!.tokens).toBe(base + 400 * reads);
     // Accented Latin: 2 bytes each.
-    expect(estimateAnalysisTokens(line("é".repeat(30)))!.tokens).toBe(base + 60);
+    expect(estimateAnalysisTokens(line("é".repeat(30)))!.tokens).toBe(base + 60 * reads);
   });
 
   it("review round 1, SF2: a 1 MiB CJK diff is far over the default limit", () => {
@@ -123,7 +172,11 @@ describe("estimateAnalysisTokens (P4-6)", () => {
     })!;
     expect(pushed.reused).toBe(1);
     expect(pushed.sent).toBe(1);
-    expect(pushed.tokens).toBe(estimateAnalysisTokens(b)!.tokens);
+    // The reused unit is not triaged again, but the map's calls still read it (H4-7).
+    expect(pushed.mapped).toBe(2);
+    expect(pushed.tokens).toBe(
+      estimateAnalysisTokens(b)!.tokens + GRAPH_ROLE_CALLS * patchTokens(parsed.files[0]!.patch),
+    );
     expect(pushed.tokens).toBeLessThan(fresh.tokens);
     // Another salt (a model change) reuses nothing.
     expect(
