@@ -83,14 +83,20 @@ const AUTH_WORD = /(?:^|[/._-])(?:sso|saml|oidc|jwt|acls?|rbac|iam|keys?)(?:[/._
 const TEST_SEGMENTS = new Set(["__tests__", "test", "tests", "spec", "specs", "e2e"]);
 const TEST_INFIXES = [".test.", ".spec.", "_test.", "_spec."] as const;
 
+/** A test by its file name (`ledger.test.ts`, `ledger_spec.rb`); `name` is lower-cased. */
+export const hasTestName = (name: string): boolean => hasInfix(name, TEST_INFIXES);
+
 /** A test by its directory or its name; `lower` is the lower-cased path. */
 export const isTestPath = (lower: string): boolean => {
   const segments = lower.split("/");
-  const name = segments.at(-1) ?? "";
   return (
-    segments.slice(0, -1).some((dir) => TEST_SEGMENTS.has(dir)) || hasInfix(name, TEST_INFIXES)
+    segments.slice(0, -1).some((dir) => TEST_SEGMENTS.has(dir)) ||
+    hasTestName(segments.at(-1) ?? "")
   );
 };
+
+/** A lockfile by its (lower-cased) basename. */
+export const isLockfileName = (name: string): boolean => LOCKFILES.has(name);
 
 export const preTriage = (path: string): PreTriage => {
   const lower = path.toLowerCase();

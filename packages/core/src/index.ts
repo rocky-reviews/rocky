@@ -225,6 +225,7 @@ export {
   type DiffParse,
   type MapCategory,
   type PreTriage,
+  type ScopedFile,
   type PreviousAnalysis,
   type Sha256Hex,
 } from "./analysis/index.js";

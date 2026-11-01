@@ -16,7 +16,13 @@ export {
   type EstimateOptions,
   type TokenEstimate,
 } from "./estimate.js";
-export { changeMapScope, mapCategory, type ChangeMapScope, type MapCategory } from "./map-scope.js";
+export {
+  changeMapScope,
+  mapCategory,
+  type ChangeMapScope,
+  type MapCategory,
+  type ScopedFile,
+} from "./map-scope.js";
 export { MAX_REPAIR_ROUNDS } from "./repair.js";
 export { preTriage, type PreTriage } from "./rules.js";
 export {
