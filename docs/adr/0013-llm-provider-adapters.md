@@ -456,3 +456,9 @@ to it); S2's "looser sent schema" case now concerns only a role that opts into p
 **Residual risk.** The grammar-size limit remains the provider's and has no offline oracle: the
 evidence is a completed real run on the private dogfooding pull request after this change
 (`docs/progress.md`). A rejection would surface as `llm_invalid_request`.
+
+**H4-7.** The flows and the walkthrough are back as two more enforced outputs of the graph role
+(`FLOWS_OUTPUT`, `WALKTHROUGH_OUTPUT`: the document's `Flow` without the message `payload`, and a
+step with a flat node/edge focus), each a projection with no recursion and far below the
+optional-field limit (9 and 2); `wire-schema.test.ts` runs the transform and the counts on them
+([ADR 0014](0014-analysis-pipeline.md) amendment H4-7). S1–S6 hold as for the graph.
