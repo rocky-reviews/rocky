@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BASE_SCHEMA_VERSION, SCHEMA_VERSION } from "./document.js";
+import { BASE_SCHEMA_VERSION, NO_LOGIC_SCHEMA_VERSION, SCHEMA_VERSION } from "./document.js";
 import { applyKnownFields, type KnownFacts } from "./known-fields.js";
 import { parseAnalysisDocument } from "./parse.js";
 import type { Provenance } from "./provenance.js";
@@ -51,14 +51,56 @@ describe("applyKnownFields", () => {
     expectAccepted(result);
   });
 
-  it("stamps the current version only when the facts use a 1.2 value (no-logic)", () => {
+  it("stamps 1.3.0 only when the facts carry a 1.3 field (a map section's reason), and drops that section", () => {
+    // A map as Rocky's pipeline draws it: no views and no step staged on a flow, so dropping the
+    // flows leaves nothing dangling.
+    const full = modelOutput();
+    const output = {
+      ...full,
+      graph: {
+        ...full.graph!,
+        views: [],
+        walkthrough: {
+          steps: full.graph!.walkthrough!.steps.filter((step) => step.stage === undefined),
+        },
+      },
+    };
+    const flows = applyKnownFields(output, {
+      ...facts(),
+      flowsUnavailable: { reason: "timeout" },
+    }) as Record<string, unknown>;
+    expect(flows.schemaVersion).toBe(SCHEMA_VERSION);
+    const kept = expectAccepted(flows);
+    expect(kept.graph?.flows).toEqual([]);
+    expect(kept.graph?.walkthrough).toBeDefined();
+    const walkthrough = applyKnownFields(output, {
+      ...facts(),
+      walkthroughUnavailable: { reason: "analysis-failed" },
+    }) as Record<string, unknown>;
+    expect(walkthrough.schemaVersion).toBe(SCHEMA_VERSION);
+    const value = expectAccepted(walkthrough);
+    expect(value.graph?.walkthrough).toBeUndefined();
+    expect(value.graph?.flows.length).toBeGreaterThan(0);
+    // Nothing of the model output is mutated, and a facts object without a graph is untouched.
+    expect(output.graph?.flows?.length).toBeGreaterThan(0);
+    expect(output.graph?.walkthrough).toBeDefined();
+    const noGraph = modelOutput() as Record<string, unknown>;
+    delete noGraph["graph"];
+    const absent = applyKnownFields(noGraph, {
+      ...facts(),
+      graphUnavailable: { reason: "timeout" },
+    }) as Record<string, unknown>;
+    expect(Object.hasOwn(absent, "graph")).toBe(false);
+  });
+
+  it("stamps the 1.2 version only when the facts use a 1.2 value (no-logic)", () => {
     const output = modelOutput() as Record<string, unknown>;
     delete output["graph"];
     const result = applyKnownFields(output, {
       ...facts(),
       graphUnavailable: { reason: "no-logic" },
     }) as Record<string, unknown>;
-    expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(result.schemaVersion).toBe(NO_LOGIC_SCHEMA_VERSION);
     expectAccepted(result);
     const older = applyKnownFields(output, {
       ...facts(),

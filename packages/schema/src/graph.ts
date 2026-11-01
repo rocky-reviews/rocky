@@ -266,8 +266,13 @@ export const Payload = z
   .describe("Sample traffic for one flow step.");
 export type Payload = z.infer<typeof Payload>;
 
-/** Order is the array position: an explicit step number could disagree with the list. */
-export const FlowMessage = z
+/**
+ * The fields of a flow message, before the self-consistency rule. Exported for a producer that
+ * needs a projection (Rocky's flows call drops `payload`, whose recursive sample value no
+ * enforced output grammar takes, H4-7): Zod refuses `.omit()` on a refined object, so the
+ * projection is built from this base and re-applies `flowMessageConsistent`.
+ */
+export const FlowMessageBase = z
   .strictObject({
     id: Id,
     from: Id.describe("Participant node id the message originates from."),
@@ -286,11 +291,21 @@ export const FlowMessage = z
     files: z.array(FileRef).max(MAX_FILES_PER_EDGE).default([]),
     payload: Payload.optional().describe("Sample traffic, for a step that moves data."),
   })
-  .refine((message) => (message.kind === "self") === (message.from === message.to), {
-    message: "kind 'self' and from === to must agree",
-    path: ["kind"],
-  })
   .describe("One ordered step in a flow.");
+
+/** `self` means the message never leaves its participant, and only then. */
+export const flowMessageConsistent = (message: {
+  readonly kind: MessageKind;
+  readonly from: string;
+  readonly to: string;
+}): boolean => (message.kind === "self") === (message.from === message.to);
+export const FLOW_MESSAGE_RULE: { readonly message: string; readonly path: PropertyKey[] } = {
+  message: "kind 'self' and from === to must agree",
+  path: ["kind"],
+};
+
+/** Order is the array position: an explicit step number could disagree with the list. */
+export const FlowMessage = FlowMessageBase.refine(flowMessageConsistent, FLOW_MESSAGE_RULE);
 export type FlowMessage = z.infer<typeof FlowMessage>;
 
 export const FlowParticipant = z

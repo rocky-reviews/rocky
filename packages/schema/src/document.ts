@@ -17,22 +17,40 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.2.0" as const;
+export const SCHEMA_VERSION = "1.3.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 /**
  * The version a document is stamped with: the lowest minor whose contract it uses (H4-5, review
  * round 1, S7), so a reader that only knows 1.1 still reads every document that needs nothing
- * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; a document without it is a
- * 1.1 document.
+ * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; 1.3 (H4-7) added the
+ * pipeline-owned `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`. A
+ * document that uses none of them is a 1.1 document.
  */
 export const BASE_SCHEMA_VERSION = "1.1.0" as const;
-export type StampedSchemaVersion = typeof BASE_SCHEMA_VERSION | SchemaVersion;
+export const NO_LOGIC_SCHEMA_VERSION = "1.2.0" as const;
+export type StampedSchemaVersion =
+  typeof BASE_SCHEMA_VERSION | typeof NO_LOGIC_SCHEMA_VERSION | SchemaVersion;
 
 export const requiredSchemaVersion = (doc: {
-  readonly provenance?: { readonly graphUnavailable?: { readonly reason?: unknown } | undefined };
-}): StampedSchemaVersion =>
-  doc.provenance?.graphUnavailable?.reason === "no-logic" ? SCHEMA_VERSION : BASE_SCHEMA_VERSION;
+  readonly provenance?:
+    | {
+        readonly graphUnavailable?: { readonly reason?: unknown } | undefined;
+        readonly flowsUnavailable?: unknown;
+        readonly walkthroughUnavailable?: unknown;
+      }
+    | undefined;
+}): StampedSchemaVersion => {
+  const provenance = doc.provenance;
+  if (
+    provenance?.flowsUnavailable !== undefined ||
+    provenance?.walkthroughUnavailable !== undefined
+  )
+    return SCHEMA_VERSION;
+  return provenance?.graphUnavailable?.reason === "no-logic"
+    ? NO_LOGIC_SCHEMA_VERSION
+    : BASE_SCHEMA_VERSION;
+};
 
 const [currentMajor = "1", currentMinor = "0"] = SCHEMA_VERSION.split(".");
 
@@ -78,6 +96,26 @@ export const AnalysisDocument = AnalysisModelOutput.safeExtend({
     message: "a document with a graph cannot also say the change map is unavailable",
     path: ["provenance", "graphUnavailable"],
   })
+  // The same rule for the sections drawn by their own calls (schema 1.3, H4-7): a reason is only
+  // ever written next to a drawn map that lacks the section.
+  .refine(
+    (doc) =>
+      doc.provenance.flowsUnavailable === undefined ||
+      (doc.graph !== undefined && doc.graph.flows.length === 0),
+    {
+      message: "flowsUnavailable needs a graph without flows",
+      path: ["provenance", "flowsUnavailable"],
+    },
+  )
+  .refine(
+    (doc) =>
+      doc.provenance.walkthroughUnavailable === undefined ||
+      (doc.graph !== undefined && doc.graph.walkthrough === undefined),
+    {
+      message: "walkthroughUnavailable needs a graph without a walkthrough",
+      path: ["provenance", "walkthroughUnavailable"],
+    },
+  )
   .describe("A Rocky Reviews analysis document: one PR revision, fully analysed.");
 export type AnalysisDocument = z.infer<typeof AnalysisDocument>;
 export type AnalysisDocumentInput = z.input<typeof AnalysisDocument>;

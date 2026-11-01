@@ -10,12 +10,11 @@ import { expectAccepted, expectRejected, pr847 } from "./test-helpers.js";
  */
 
 describe("schema 1.2: version policy", () => {
-  it("is 1.2.0 and still reads 1.0 and 1.1 documents, but no newer minor", () => {
-    expect(SCHEMA_VERSION).toBe("1.2.0");
+  it("reads 1.0, 1.1 and 1.2 documents (the current version is 1.3, v1-3.test.ts)", () => {
+    expect(SCHEMA_VERSION).toMatch(/^1\.\d+\.0$/);
     expect(isSupportedVersion("1.0.0")).toBe(true);
     expect(isSupportedVersion("1.1.3")).toBe(true);
     expect(isSupportedVersion("1.2.0")).toBe(true);
-    expect(isSupportedVersion("1.3.0")).toBe(false);
     expect(isSupportedVersion("1.10.0")).toBe(false);
     expect(isSupportedVersion("2.0.0")).toBe(false);
     for (const version of ["1.0.0", "1.1.0"]) {
