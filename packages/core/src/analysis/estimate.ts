@@ -51,9 +51,13 @@ export const patchTokens = (text: string): number => {
 };
 /** One triage call's instructions, labels and answer, on top of the file's patch. */
 export const FILE_CALL_OVERHEAD_TOKENS = 2_000;
-/** Per stage (triage, review, graph, briefing): instructions, preamble and the stage's answer. */
+/**
+ * Per stage (triage, review, graph, flows, walkthrough, briefing): instructions, preamble and
+ * the stage's answer. The flows and walkthrough calls (H4-7) read the mapped diffs again, like
+ * the graph call: that is part of the multiple below, not of this count.
+ */
 export const STAGE_OVERHEAD_TOKENS = 4_000;
-export const ANALYSIS_STAGES = 4;
+export const ANALYSIS_STAGES = 6;
 /**
  * The default per-PR limit (`ROCKY_ANALYSIS_TOKEN_LIMIT`): about 450 KB of code sent, far beyond
  * a reviewable pull request, well below a 200k-token one.

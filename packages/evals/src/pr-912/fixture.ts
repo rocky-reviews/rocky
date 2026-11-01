@@ -7,6 +7,7 @@
  *
  * Like pr-847's script, the answers are keyed by role and path only, so they ignore any payload.
  */
+import { stageOf } from "@rocky-reviews/core";
 import type { ScriptedAnswer, ScriptedCall } from "@rocky-reviews/core/testing";
 
 export const PR912_TITLE = "One-off charges";
@@ -176,5 +177,7 @@ export const pr912Script = (call: ScriptedCall): ScriptedAnswer => {
       },
     };
   }
+  // A one-node map has no sequence to draw: the flows and walkthrough calls (H4-7) are refused.
+  if (stageOf(call) !== "graph") return { status: "refused" };
   return { value: GRAPH };
 };

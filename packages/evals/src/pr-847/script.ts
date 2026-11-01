@@ -10,6 +10,7 @@
  *
  * This measures the pipeline, not a model: real model quality is P4-7 and P4-8.
  */
+import { stageOf } from "@rocky-reviews/core";
 import type { ScriptedAnswer, ScriptedCall } from "@rocky-reviews/core/testing";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import fixture from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "json" };
@@ -82,6 +83,42 @@ const graphAnswer = (call: ScriptedCall) => {
   };
 };
 
+/**
+ * What a good model answers the flows call (H4-7): the fixture's flow without its payloads (the
+ * answer schema has none), and the walkthrough call: the fixture's steps as a focus of node and
+ * edge ids (the answer takes no stage, lanes or message ids). The map's ids are the fixture's.
+ */
+const flowsAnswer = () => {
+  const graph = PR847.graph;
+  if (graph === undefined) throw new Error("the pr-847 fixture has a graph");
+  return {
+    flows: graph.flows.map((flow) => ({
+      ...flow,
+      messages: flow.messages.map((message) => {
+        const rest: Record<string, unknown> = { ...message };
+        delete rest["payload"];
+        return rest;
+      }),
+    })),
+  };
+};
+
+const walkthroughAnswer = () => {
+  const steps = PR847.graph?.walkthrough?.steps;
+  if (steps === undefined) throw new Error("the pr-847 fixture has a walkthrough");
+  return {
+    steps: steps.map((step) => ({
+      id: step.id,
+      heading: step.heading,
+      body: step.body,
+      focus:
+        step.focus.kind === "selection"
+          ? { nodes: step.focus.nodes, edges: step.focus.edges }
+          : { nodes: [], edges: [] },
+    })),
+  };
+};
+
 export const pr847Script = (call: ScriptedCall): ScriptedAnswer => {
   const path = call.part("file_path");
   if (call.role === "triage") {
@@ -96,6 +133,11 @@ export const pr847Script = (call: ScriptedCall): ScriptedAnswer => {
     const { summary, verdict, reviewPath, checkedOk } = PR847.briefing;
     return { value: { summary, verdict, reviewPath, checkedOk } };
   }
-  if (call.role === "graph") return { value: graphAnswer(call) };
+  if (call.role === "graph") {
+    const stage = stageOf(call);
+    if (stage === "flows") return { value: flowsAnswer() };
+    if (stage === "walkthrough") return { value: walkthroughAnswer() };
+    return { value: graphAnswer(call) };
+  }
   return { status: "refused" };
 };

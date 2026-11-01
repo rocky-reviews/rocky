@@ -20,6 +20,7 @@ import {
   type StructuredCompletionRequest,
   type StructuredCompletionResult,
 } from "../llm.js";
+import { stageOf } from "./stages.js";
 
 export type ScriptedAnswer =
   | { readonly value: unknown }
@@ -47,6 +48,9 @@ export interface ScriptedRoles {
   readonly calls: ScriptedCall[];
 }
 
+/** Re-exported for scripts that answer by stage (the pipeline's own, `stages.ts`). */
+export { stageOf };
+
 const LABEL = /^[a-z][a-z0-9_.:-]{0,63}$/;
 const ZERO: LlmUsage = {
   inputTokens: 0,
@@ -61,11 +65,14 @@ export const scriptedRoles = (
   options: {
     readonly provider?: string;
     readonly model?: (role: LlmCompletionRole) => string;
+    /** Usage to report per call; zero by default. */
+    readonly usage?: (call: ScriptedCall) => LlmUsage;
   } = {},
 ): ScriptedRoles => {
   const calls: ScriptedCall[] = [];
   const provider = options.provider ?? "scripted";
   const model = options.model ?? ((role) => `scripted-${role}`);
+  const usage = options.usage ?? (() => ZERO);
 
   const client = (role: LlmCompletionRole): CompletionRoleClient => ({
     role,
@@ -89,7 +96,7 @@ export const scriptedRoles = (
       };
       calls.push(call);
       const answer = await script(call);
-      const base = { model: model(role), usage: ZERO, provider };
+      const base = { model: model(role), usage: usage(call), provider };
       if ("error" in answer) throw answer.error;
       if ("status" in answer) {
         return answer.status === "invalid_output"

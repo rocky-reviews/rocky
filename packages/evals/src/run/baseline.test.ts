@@ -37,7 +37,9 @@ describe("committed baselines", () => {
     expect(fresh.total).toEqual(baseline.total);
     expect(fresh.prs).toEqual(baseline.prs);
     expect(fresh.injection?.total).toEqual(baseline.injection?.total);
-  });
+    // A whole injection run through the pipeline (three graph-role calls per map since H4-7):
+    // over the 5 s default when the test runner instruments coverage.
+  }, 60_000);
 
   it("the gate on the fake baseline fails once recall drops more than 5 points", async () => {
     const baseline = await load("fake.json");

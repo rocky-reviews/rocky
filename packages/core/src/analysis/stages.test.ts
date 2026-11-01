@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_OUTPUT_TOKENS } from "./outputs.js";
 import { analyzePullRequest } from "./pipeline.js";
 import { STAGE_CALLS } from "./stages.js";
-import { scriptedRoles, type ScriptedCall } from "./testing.js";
+import { scriptedRoles, stageOf, type ScriptedCall } from "./testing.js";
 
 /** P4-8: the stage table the CLI estimates from matches what the pipeline really sends. */
 
@@ -56,10 +56,31 @@ const answer = (call: ScriptedCall) => {
       },
     };
   }
+  if (stageOf(call) === "flows") {
+    return {
+      value: {
+        flows: [
+          {
+            id: "f",
+            title: "A to B",
+            participants: [{ node: "n1" }, { node: "n2" }],
+            messages: [{ id: "m1", from: "n1", to: "n2", label: "write", delta: "added" }],
+          },
+        ],
+      },
+    };
+  }
+  if (stageOf(call) === "walkthrough") {
+    const step = (id: string) => ({ id, heading: "Stop", body: "Here.", focus: { nodes: ["n1"] } });
+    return { value: { steps: [step("s1"), step("s2"), step("s3")] } };
+  }
   return {
     value: {
       lanes: [{ id: "api", label: "API", order: 0 }],
-      nodes: [{ id: "n1", lane: "api", kind: "ui", delta: "added", label: "A" }],
+      nodes: [
+        { id: "n1", lane: "api", kind: "ui", delta: "added", label: "A" },
+        { id: "n2", lane: "api", kind: "datastore", delta: "unchanged", label: "B" },
+      ],
     },
   };
 };
@@ -84,7 +105,16 @@ describe("STAGE_CALLS", () => {
       },
     );
     expect(outcome.status).toBe("done");
-    expect(llm.calls).toHaveLength(4);
+    // triage, review, graph, flows, walkthrough, briefing (H4-7).
+    expect(llm.calls).toHaveLength(6);
+    expect(llm.calls.map(stageOf)).toEqual([
+      "triage",
+      "review",
+      "graph",
+      "flows",
+      "walkthrough",
+      "briefing",
+    ]);
     const stages = Object.values(STAGE_CALLS);
     for (const call of llm.calls) {
       const stage = stages.find((s) => s.instructions === call.instructions);
@@ -94,5 +124,7 @@ describe("STAGE_CALLS", () => {
     }
     expect(STAGE_CALLS.triage.maxOutputTokens).toBe(MAX_OUTPUT_TOKENS.triage);
     expect(STAGE_CALLS.briefing.role).toBe("review");
+    expect(STAGE_CALLS.flows.role).toBe("graph");
+    expect(STAGE_CALLS.walkthrough.role).toBe("graph");
   });
 });
