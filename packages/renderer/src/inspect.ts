@@ -90,6 +90,7 @@ const FIXED: Readonly<Record<string, ReadonlySet<string>>> = {
   "aria-hidden": new Set(["true"]),
   "text-anchor": new Set(["middle"]),
   orient: new Set(["auto-start-reverse"]),
+  pathLength: new Set(["100"]),
 };
 const DELTA = "(?:added|modified|removed|unchanged)";
 const SEVERITY = "(?:critical|high|medium|low)";
@@ -97,15 +98,16 @@ const SEVERITY = "(?:critical|high|medium|low)";
  * The exact class lists the renderer writes, per element, in the order it writes them. A token
  * on the wrong element (`cm-hero` on a card, `cm-critical` on a lane) fails the walk.
  */
+const FOCUS = "(?: cm-focus| cm-dim)?";
 const CLASSES: Readonly<Record<string, RegExp>> = {
-  svg: /^cm(?: cm-unavailable)?$/,
+  svg: /^cm(?: cm-unavailable| cm-motion)?$/,
   rect: /^(?:cm-unavailable-bg|cm-lane-bg|cm-card|cm-badge-bg|cm-badge-hit|cm-pill)$/,
   text: /^(?:cm-unavailable-title|cm-unavailable-reason|cm-lane-label|cm-node-title|cm-node-sub|cm-badge-count|cm-pill-text)$/,
   g: new RegExp(
-    `^(?:cm-lanes|cm-lane|cm-edges|cm-nodes|cm-labels|cm-label|cm-node cm-${DELTA}|cm-badge cm-${SEVERITY})$`,
+    `^(?:cm-lanes|cm-lane${FOCUS}|cm-edges|cm-pulses|cm-nodes|cm-labels|cm-label(?: cm-traffic)?${FOCUS}|cm-node cm-${DELTA}(?: cm-wave-[0-5])?(?: cm-traffic-end)?${FOCUS}|cm-badge cm-${SEVERITY}(?: cm-dim)?)$`,
   ),
   path: new RegExp(
-    `^(?:cm-edge cm-${DELTA}(?: cm-hero)?(?: cm-muted)?(?: cm-animated)?|cm-arrow cm-arrow-(?:added|modified|removed|unchanged|hero))$`,
+    `^(?:cm-edge cm-${DELTA}(?: cm-hero)?(?: cm-muted)?(?: cm-animated)?(?: cm-traffic)?${FOCUS}|cm-pulse|cm-arrow cm-arrow-(?:added|modified|removed|unchanged|hero))$`,
   ),
 };
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;

@@ -22,6 +22,7 @@ import {
   Severity,
   type Finding,
   type Graph,
+  type GraphEdge,
   type GraphUnavailable,
   type GraphUnavailableReason,
 } from "@rocky-reviews/schema";
@@ -99,10 +100,42 @@ export type ChangeMapOptions = {
    * Without it the map is a picture, as before.
    */
   interactive?: { files: readonly string[] };
+  /**
+   * H4-6 (ADR 0035): the animated styles. The root gets `cm-motion`, cards a `cm-wave-<lane>`
+   * class (capped) so they rise in lane by lane, and each traffic edge a copy of its route in
+   * `cm-pulses` (`cm-pulse`, `pathLength="100"`) the stylesheet turns into travelling dots. The
+   * traffic edges are the ones marked `hero`; when none is, the ones marked `animated`
+   * (`cm-traffic`). With `focus`, the focused edges carry the dots instead. The cards the dots
+   * arrive at are `cm-traffic-end`. Nothing moves without the stylesheet, and nothing here changes the layout.
+   */
+  motion?: boolean;
+  /**
+   * H4-6: a walkthrough step. Focused lanes, cards (and the cards in a focused lane) and edges
+   * get `cm-focus`, everything else `cm-dim`, and the result's `focusBox` is the area they
+   * cover, for the page to pan and zoom to. Ids the graph does not have are ignored; a focus
+   * that names nothing the graph has is no focus.
+   */
+  focus?: MapFocus;
 };
 
+export type MapFocus = {
+  lanes: readonly string[];
+  nodes: readonly string[];
+  edges: readonly string[];
+};
+
+export type { Box } from "./geometry.js";
+
 export type ChangeMap =
-  | { status: "rendered"; svg: string; tree: SafeSvg; width: number; height: number }
+  | {
+      status: "rendered";
+      svg: string;
+      tree: SafeSvg;
+      width: number;
+      height: number;
+      /** With `focus`: the area the focused elements cover (absent when nothing matched). */
+      focusBox?: Box;
+    }
   | {
       status: "unavailable";
       svg: string;
@@ -310,13 +343,14 @@ const paintBadge = (
   placed: PlacedNode,
   badge: NodeFindings,
   finding: Finding | undefined,
+  dim: boolean,
 ): SvgElement => {
   const b = badgeBox(placed.box, badge.findings.length);
   const count = badge.findings.length;
   return wrap(
     "g",
     {
-      class: `cm-badge cm-${badge.worst}`,
+      class: `cm-badge cm-${badge.worst}${dim ? " cm-dim" : ""}`,
       "data-findings": badge.findings.map((item) => item.id).join(" "),
       ...(finding === undefined
         ? {}
@@ -368,6 +402,7 @@ const paintNode = (
   placed: PlacedNode,
   badge: NodeFindings | undefined,
   targets: Targets,
+  look: Look,
 ): SvgElement[] => {
   const { node, box } = placed;
   const textX = box.x + CARD_PADDING_X;
@@ -383,7 +418,7 @@ const paintNode = (
   const card = wrap(
     "g",
     {
-      class: `cm-node cm-${node.delta}`,
+      class: [`cm-node cm-${node.delta}`, ...look.node(placed)].join(" "),
       "data-node": node.id,
       ...(targets.file === undefined ? {} : button(`${drawn}, opens ${targets.file}`)),
     },
@@ -411,19 +446,22 @@ const paintNode = (
           ),
     ]),
   );
-  return badge === undefined ? [card] : [card, paintBadge(placed, badge, targets.finding)];
+  return badge === undefined
+    ? [card]
+    : [card, paintBadge(placed, badge, targets.finding, look.dims(node.id))];
 };
 
-const edgeClass = (route: Route): string => {
+const edgeClass = (route: Route, look: Look): string => {
   const { edge } = route.plan;
   const classes = ["cm-edge", `cm-${edge.delta}`];
   if (edge.emphasis === "hero") classes.push("cm-hero");
   if (edge.emphasis === "muted") classes.push("cm-muted");
   if (edge.animated) classes.push("cm-animated");
+  classes.push(...look.edge(edge.id));
   return classes.join(" ");
 };
 
-const paintEdge = (route: Route, prefix: string): SvgElement => {
+const paintEdge = (route: Route, prefix: string, look: Look): SvgElement => {
   const { edge, from, to } = route.plan;
   const arrow = edge.emphasis === "hero" ? "hero" : edge.delta;
   const tooltip = [`${from.node.label} → ${to.node.label}`, edge.label]
@@ -432,7 +470,7 @@ const paintEdge = (route: Route, prefix: string): SvgElement => {
   return wrap(
     "path",
     {
-      class: edgeClass(route),
+      class: edgeClass(route, look),
       "data-edge": edge.id,
       d: route.d,
       "marker-end": `url(#${prefix}-arrow-${arrow})`,
@@ -441,27 +479,142 @@ const paintEdge = (route: Route, prefix: string): SvgElement => {
   );
 };
 
-const paintPill = (id: string, pill: Pill): SvgElement =>
-  wrap("g", { class: "cm-label", "data-edge": id, "aria-hidden": "true" }, [
-    tag("rect", {
-      class: "cm-pill",
-      x: coord(pill.box.x),
-      y: coord(pill.box.y),
-      width: coord(pill.box.width),
-      height: coord(pill.box.height),
-      rx: PILL_HEIGHT / 2,
+const paintPill = (id: string, pill: Pill, look: Look): SvgElement =>
+  wrap(
+    "g",
+    { class: ["cm-label", ...look.edge(id)].join(" "), "data-edge": id, "aria-hidden": "true" },
+    [
+      tag("rect", {
+        class: "cm-pill",
+        x: coord(pill.box.x),
+        y: coord(pill.box.y),
+        width: coord(pill.box.width),
+        height: coord(pill.box.height),
+        rx: PILL_HEIGHT / 2,
+      }),
+      textElement(
+        "text",
+        {
+          class: "cm-pill-text",
+          x: coord(pill.box.x + pill.box.width / 2),
+          y: coord(pill.box.y + PILL_HEIGHT / 2 + 3.3),
+          "text-anchor": "middle",
+        },
+        pill.text,
+      ),
+    ],
+  );
+
+/** The class a focused or dimmed element adds; nothing without a focus. */
+const focusClass = (focused: boolean | undefined): string[] =>
+  focused === undefined ? [] : [focused ? "cm-focus" : "cm-dim"];
+
+/** Lanes past this one rise with it: the stagger stays short on a wide map. */
+const MAX_WAVE = 5;
+
+/**
+ * H4-6: the extra classes motion and focus add to each element, decided once per render. Every
+ * id is compared against the graph's own ids in Sets; none is ever written into a class.
+ */
+type Look = {
+  lane: (index: number) => string[];
+  node: (placed: PlacedNode) => string[];
+  /** Whether a card's badge dims with it. */
+  dims: (id: string) => boolean;
+  edge: (id: string) => string[];
+  /** The edges that carry travelling dots. */
+  pulsed: (id: string) => boolean;
+};
+
+type ResolvedFocus = { lanes: Set<number>; nodes: Set<string>; edges: Set<string> };
+
+const resolveFocus = (
+  focus: MapFocus | undefined,
+  placement: { lanes: readonly PlacedLane[]; nodes: readonly PlacedNode[] },
+  routes: readonly Route[],
+): ResolvedFocus | undefined => {
+  if (focus === undefined) return undefined;
+  const laneIds = new Set(focus.lanes);
+  const lanes = new Set(
+    placement.lanes.filter(({ lane }) => laneIds.has(lane.id)).map(({ index }) => index),
+  );
+  const nodeIds = new Set(focus.nodes);
+  const nodes = new Set(
+    placement.nodes
+      .filter(({ node, lane }) => nodeIds.has(node.id) || lanes.has(lane))
+      .map(({ node }) => node.id),
+  );
+  const edgeIds = new Set(focus.edges);
+  const edges = new Set(
+    routes.filter(({ plan }) => edgeIds.has(plan.edge.id)).map(({ plan }) => plan.edge.id),
+  );
+  return lanes.size + nodes.size + edges.size === 0 ? undefined : { lanes, nodes, edges };
+};
+
+/**
+ * H4-6 (ADR 0035): the edges the Live traffic style moves dots along. The schema's `hero`
+ * emphasis is "the connection the change is really about"; when the graph marks none, the
+ * edges it marks `animated` stand in. Exported so the page can tell whether there is traffic.
+ */
+export const trafficEdgeIds = (edges: readonly GraphEdge[]): ReadonlySet<string> => {
+  const hero = edges.filter((edge) => edge.emphasis === "hero");
+  return new Set((hero.length > 0 ? hero : edges.filter((edge) => edge.animated)).map((e) => e.id));
+};
+
+const lookOf = (
+  motion: boolean,
+  focus: ResolvedFocus | undefined,
+  routes: readonly Route[],
+): Look => {
+  const traffic = motion ? trafficEdgeIds(routes.map(({ plan }) => plan.edge)) : new Set<string>();
+  const pulsed = (id: string): boolean =>
+    motion && (focus === undefined ? traffic.has(id) : focus.edges.has(id));
+  // The cards the dots arrive at: the walkthrough's own edges when it has a focus.
+  const ends = new Set(
+    routes.filter(({ plan }) => pulsed(plan.edge.id)).map(({ plan }) => plan.to.node.id),
+  );
+  return {
+    lane: (index) => focusClass(focus?.lanes.has(index)),
+    node: ({ node, lane }) => [
+      ...(motion ? [`cm-wave-${Math.min(lane, MAX_WAVE)}`] : []),
+      ...(ends.has(node.id) ? ["cm-traffic-end"] : []),
+      ...focusClass(focus?.nodes.has(node.id)),
+    ],
+    dims: (id) => focus !== undefined && !focus.nodes.has(id),
+    edge: (id) => [...(traffic.has(id) ? ["cm-traffic"] : []), ...focusClass(focus?.edges.has(id))],
+    pulsed,
+  };
+};
+
+/** The area a focus covers: its lanes, its cards, and both ends of its edges. */
+const focusArea = (
+  focus: ResolvedFocus,
+  placement: { lanes: readonly PlacedLane[]; byId: ReadonlyMap<string, PlacedNode> },
+  routes: readonly Route[],
+): Box => {
+  const cards = [
+    ...focus.nodes,
+    ...routes
+      .filter(({ plan }) => focus.edges.has(plan.edge.id))
+      .flatMap(({ plan }) => [plan.from.node.id, plan.to.node.id]),
+  ];
+  const boxes: Box[] = [
+    ...placement.lanes.filter(({ index }) => focus.lanes.has(index)).map(({ box }) => box),
+    ...cards.flatMap((id) => {
+      const placed = placement.byId.get(id);
+      return placed === undefined ? [] : [placed.box];
     }),
-    textElement(
-      "text",
-      {
-        class: "cm-pill-text",
-        x: coord(pill.box.x + pill.box.width / 2),
-        y: coord(pill.box.y + PILL_HEIGHT / 2 + 3.3),
-        "text-anchor": "middle",
-      },
-      pill.text,
-    ),
-  ]);
+  ];
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+};
+
+/** A copy of an edge's route for the travelling dots: decorative, never a target. */
+const paintPulse = (route: Route): SvgElement =>
+  tag("path", { class: "cm-pulse", d: route.d, pathLength: 100, "aria-hidden": "true" });
 
 const markers = (prefix: string): SvgElement =>
   wrap(
@@ -545,6 +698,8 @@ export const renderChangeMap = (
     }),
     ...headers.map(({ box }) => box),
   ];
+  const focus = resolveFocus(options.focus, placement, routes);
+  const look = lookOf(options.motion === true, focus, routes);
   const pills = placePills(routes, obstacles, {
     x: 0,
     y: 0,
@@ -571,7 +726,7 @@ export const renderChangeMap = (
           const header = headers[index] ?? laneHeader(placed);
           return wrap(
             "g",
-            { class: "cm-lane" },
+            { class: ["cm-lane", ...look.lane(placed.index)].join(" ") },
             lines([
               header.text === header.full ? undefined : textElement("title", {}, header.full),
               tag("rect", {
@@ -596,14 +751,21 @@ export const renderChangeMap = (
         }),
       ),
     ),
-    wrap("g", { class: "cm-edges" }, lines(routes.map((route) => paintEdge(route, prefix)))),
+    wrap("g", { class: "cm-edges" }, lines(routes.map((route) => paintEdge(route, prefix, look)))),
+    options.motion === true
+      ? wrap(
+          "g",
+          { class: "cm-pulses" },
+          lines(routes.filter(({ plan }) => look.pulsed(plan.edge.id)).map(paintPulse)),
+        )
+      : undefined,
     wrap(
       "g",
       { class: "cm-nodes" },
       lines(
         placement.nodes.flatMap((placed) => {
           const badge = badges.get(placed.node.id);
-          return paintNode(placed, badge, targetsOf(placed, badge, files));
+          return paintNode(placed, badge, targetsOf(placed, badge, files), look);
         }),
       ),
     ),
@@ -613,7 +775,7 @@ export const renderChangeMap = (
       lines(
         routes.flatMap(({ plan }, index) => {
           const pill = pills.get(index);
-          return pill === undefined ? [] : [paintPill(plan.edge.id, pill)];
+          return pill === undefined ? [] : [paintPill(plan.edge.id, pill, look)];
         }),
       ),
     ),
@@ -624,7 +786,7 @@ export const renderChangeMap = (
     ...svgRoot(
       width,
       height,
-      "cm",
+      options.motion === true ? "cm cm-motion" : "cm",
       "Change map",
       body,
       prefix,
@@ -632,5 +794,6 @@ export const renderChangeMap = (
     ),
     width,
     height,
+    ...(focus === undefined ? {} : { focusBox: focusArea(focus, placement, routes) }),
   };
 };
