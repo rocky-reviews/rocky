@@ -35,8 +35,8 @@ The command reads `.env` when it exists, or the environment.
    token minted read-only (`contents: read`, `pull_requests: read`) for that one repository.
 2. Reads the pull request (title, base and head) and the diff of that revision, then closes the
    session, which revokes the token.
-3. Runs the pipeline: rules pre-triage, triage, review, change map, briefing, validate and
-   repair.
+3. Runs the pipeline: rules pre-triage, triage, review, change map (over the files that carry
+   behaviour, ADR 0014 amendment H4-5), briefing, validate and repair.
 4. Validates the whole document against the schema again, then prints it.
 
 The only non-`GET` requests it makes to GitHub mint and revoke its own read-only tokens. The

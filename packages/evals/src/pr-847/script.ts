@@ -61,6 +61,27 @@ const reviewAnswer = (path: string, repair: boolean): ScriptedAnswer => {
   return { value: { findings } };
 };
 
+/**
+ * What a good model answers the graph call (H4-5): lanes, nodes and edges, with each card backed
+ * only by files the call carries (the `mem` context node drops its reference to a file outside
+ * the PR). Flows, views and the walkthrough stay in the fixture for the renderer and the web.
+ */
+const graphAnswer = (call: ScriptedCall) => {
+  const given = new Set(
+    call.labels.filter((label) => label.endsWith(".path")).map((label) => call.part(label)),
+  );
+  const graph = PR847.graph;
+  if (graph === undefined) throw new Error("the pr-847 fixture has a graph");
+  return {
+    lanes: graph.lanes,
+    nodes: graph.nodes.map((node) => ({
+      ...node,
+      files: node.files.filter((file) => given.has(file.path)),
+    })),
+    edges: graph.edges,
+  };
+};
+
 export const pr847Script = (call: ScriptedCall): ScriptedAnswer => {
   const path = call.part("file_path");
   if (call.role === "triage") {
@@ -75,6 +96,6 @@ export const pr847Script = (call: ScriptedCall): ScriptedAnswer => {
     const { summary, verdict, reviewPath, checkedOk } = PR847.briefing;
     return { value: { summary, verdict, reviewPath, checkedOk } };
   }
-  if (call.role === "graph") return { value: PR847.graph };
+  if (call.role === "graph") return { value: graphAnswer(call) };
   return { status: "refused" };
 };

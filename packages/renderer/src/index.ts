@@ -124,6 +124,7 @@ export const UNAVAILABLE_REASON_TEXT: Readonly<Record<GraphUnavailableReason, st
   "analysis-failed": "The change map could not be built for this revision.",
   "too-large": "The pull request is too large to map.",
   timeout: "The change map took too long to build.",
+  "no-logic": "Nothing to map: this pull request changes no code with behaviour.",
 };
 
 const ID_PREFIX = /^[a-z][a-z0-9-]{0,31}$/;

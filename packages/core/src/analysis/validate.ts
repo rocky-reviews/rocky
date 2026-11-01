@@ -19,7 +19,7 @@ import {
   type SchemaIssue,
   type TriagedFile,
 } from "@rocky-reviews/schema";
-import type { ReviewFinding, TriageAnswer } from "./outputs.js";
+import type { GraphAnswer, ReviewFinding, TriageAnswer } from "./outputs.js";
 import { MAX_REPAIR_ISSUES } from "./outputs.js";
 
 /** The facts every unit document shares: the PR and the generator, never a model's word. */
@@ -114,6 +114,31 @@ export const checkReview = (
   return rebase(parsed.error.issues, (path) =>
     path === "findings" || path.startsWith("findings[") ? path : undefined,
   );
+};
+
+/**
+ * H4-5: a card or an edge may be backed only by a file the graph call was given (the mapped
+ * set, `map-scope.ts`). The published schema lets a file reference name any well-formed path
+ * (context nodes, other producers); the pipeline is stricter, so a model can neither map a file
+ * Rocky left out nor one it never saw. Exact string match, like every path check in the schema.
+ * Issue lines carry the answer's own path and a code, never the value.
+ */
+export const checkGraphFiles = (answer: GraphAnswer, allowed: ReadonlySet<string>): string[] => {
+  const issues: string[] = [];
+  const check = (
+    collection: "nodes" | "edges",
+    items: readonly { files: readonly { path: string }[] }[],
+  ) => {
+    items.forEach((item, index) => {
+      item.files.forEach((file, at) => {
+        if (!allowed.has(file.path))
+          issues.push(`${collection}[${index}].files[${at}].path: UNKNOWN_FILE`);
+      });
+    });
+  };
+  check("nodes", answer.nodes);
+  check("edges", answer.edges);
+  return issues.slice(0, MAX_REPAIR_ISSUES);
 };
 
 export type DocumentPart = "graph" | "briefing";

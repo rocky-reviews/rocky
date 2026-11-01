@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P4-3
+- **Amended by:** H4-5 (the change map shows logic only: a deterministic scope on the graph
+  call's input, cards reference mapped files only; "Amendment (H4-5)" below)
 - **Revised:** review round 2: files with no hunks stay triaged (SF1); unanalysed files of unknown
   risk floor the verdict at medium, also at the write (SF2); fixed reasons for a raised verdict;
   every `@rocky-reviews/*/testing` subpath banned from production code, dynamic imports included.
@@ -312,3 +314,80 @@ erasure.
   a second copy of model output.
 - Per-file triage is cheap to cache, but it cannot rank files against each other: scores are
   per file. The briefing orders the review path.
+
+## Amendment (H4-5): the change map shows logic only
+
+**Context.** Dogfooding on a private pull request (a money ledger plus repository scaffold): the
+map had ten cards, of which five were logic modules, one the tests, three configuration (the CI
+workflow, ESLint, the toolchain) and one documentation. The graph call got every triaged file.
+Product rule (decided by the maintainer, `docs/progress.md` "Dogfooding follow-ups"): the map
+shows **code with behaviour**; configuration or documentation appears only when it changes
+behaviour the code reads at run time. H4-4's follow-up is paired with it: the model is asked only
+for what the page draws (lanes, nodes, edges), as an enforced output again
+([ADR 0013](0013-llm-provider-adapters.md), [ADR 0021](0021-change-map-renderer.md), amendments
+H4-5).
+
+**Decision.**
+
+1. **A deterministic scope on the graph call's input** (`packages/core/src/analysis/map-scope.ts`,
+   `mapCategory` and `changeMapScope`), from the path alone, like the rules pre-triage it extends
+   (§3). It narrows only the graph call: every file is still triaged and reviewed. The first rule
+   that matches wins:
+
+   | #   | Category  | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+   | --- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | 1   | `test`    | the pre-triage test rule (§3: `test/`, `tests/`, `spec/`, `specs/`, `e2e/`, `__tests__/`; `*.test.*`, `*.spec.*`, `*_test.*`, `*_spec.*`), plus `fixtures/`, `__fixtures__/`, `__mocks__/`, `__snapshots__/`, `testdata/`, `test-data/`, `cypress/`, `*.snap`, `*.cy.*`, `test_*`, `*Test.java`-style names, `conftest.py`                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+   | 2   | `ci`      | anything under `.github/`, `.gitlab/`, `.circleci/`, `.buildkite/`, `.ci/` or `ci/` (a `ci/` segment anywhere), and the well-known pipeline files (`.gitlab-ci.yml`, `.travis.yml`, `azure-pipelines.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.drone.yml`, `appveyor.yml`, `cloudbuild.yaml`, ...)                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+   | 3   | `logic`   | **kept configuration**: migrations and `.sql` (as §3); API and schema definitions (`.proto`, `.graphql`/`.gql`, `.prisma`, `.avsc`, `.thrift`, `.fbs`, `.wsdl`, `openapi.*`, `swagger.*`, `*.schema.*`); deploy configuration (`Dockerfile*`, `docker-compose*`, `compose.*`, `*.dockerfile`, `fly.toml`, `Procfile`, `app.yaml`, `serverless.yml`, `vercel.json`, `*.tf`, a `k8s/`, `kubernetes/`, `helm/`, `terraform/`, `deploy/` or `deployment/` directory); `.env*` files the application reads (not the samples, row 5)                                                                                                                                                                                                                                                    |
+   | 4   | `tooling` | by name: package manifests and lockfiles (`package.json`, `pnpm-workspace.yaml`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile`, `requirements*.txt`, `pom.xml`, `*.csproj`, `*.sln`, `*.lock`, ...); build, lint, format, type-check and test-runner configuration (`eslint*`, `prettier*`, `tsconfig*`, `vite*`, `vitest*`, `jest*`, `babel*`, `rollup*`, `webpack*`, `esbuild*`, `tsup*`, `playwright*`, `cypress*`, `tailwind*`, `postcss*`, `biome*`, `turbo.json`, `Makefile`, `justfile`, ...); scanner configuration (`.gitleaks.toml`, `.semgrep.yml`, `.trivyignore`, `.snyk`, `.hadolint.yaml`, `.markdownlint.json`, `.yamllint`, `cspell.json`, ...); editor and repository dotfiles (`.editorconfig`, `.gitignore`, `.npmrc`, `.nvmrc`, `.tool-versions`, ...) |
+   | 5   | `docs`    | Markdown, MDX, reStructuredText, AsciiDoc, `.txt`, `.org`, `.pod`, `.cff`; a `docs/`, `doc/`, `documentation/`, `adr/`, `adrs/`, `rfc/`, `rfcs/` or `wiki/` directory; `README`, `LICENSE`/`LICENCE`, `COPYING`, `NOTICE`, `AUTHORS`, `CONTRIBUTORS`, `CHANGELOG`, `CHANGES`, `HISTORY`, `CODEOWNERS`, `CONTRIBUTING`, `SECURITY`, `FUNDING`, `CODE_OF_CONDUCT`, `CITATION`, `.mailmap`; `.env.example`, `.env.sample`, `.env.template`, `.env.dist`                                                                                                                                                                                                                                                                                                                              |
+   | 6   | `tooling` | by directory: `scripts/`, `tools/`, `.husky/`, `.changeset/`, `.vscode/`, `.idea/`, `.devcontainer/`, `.yarn/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+   | 7   | `logic`   | everything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+   Judgment calls, recorded: deploy configuration is kept because a path cannot tell whether it
+   changes what runs, and the graph instructions tell the model to map configuration only where
+   code reads it; `next.config.js`, `app.config.ts`, `config/*.yml` and `settings.*` are logic
+   (runtime settings); `vite.config.ts` and `tailwind.config.js` are tooling (build); test-runner
+   configuration is tooling, a test tree is a test; a documentation site's own code under `docs/`
+   is left out; `scripts/` is tooling even when a script runs in production (follow-up if it
+   bites); `bin/` is logic.
+
+2. **What the call gets.** `changeMapScope(triagedPaths)` is the logic files in diff order; when a
+   pull request changes tests and no logic, the tests ("the tests are the logic"); otherwise
+   nothing. With nothing to map, no call is made and the document records
+   `provenance.graphUnavailable: { reason: "no-logic" }` (schema 1.2), which the renderer and the
+   web show as Rocky's fixed sentence; a pull request whose triaged set is empty (all noise or
+   unanalysed) keeps today's "no graph, no reason". The map's input budget
+   (`GRAPH_MAX_INPUT_CHARS`) is counted over the mapped files only, so documentation cannot push a
+   small change over it. The excluded files' paths and diffs are not in the call at all, which
+   also makes it cheaper (the dogfooding pull request, 29 files: the graph call went from 37,994 to 11,029 input tokens, 48,294 to 16,384 in total with the schema's cache write, and from ten cards to five, all backed by the billing sources).
+3. **Cards reference only the mapped files.** The schema's integrity pass checks graph ids, not
+   file references (the published contract lets a context node name a file outside the pull
+   request, `docs/schema/analysis-document.md` decision 6). The pipeline is stricter:
+   `checkGraphFiles` (`validate.ts`) runs with the graph's integrity check, and a node or edge
+   `files[].path` outside the mapped set is an issue (`nodes[i].files[j].path: UNKNOWN_FILE`,
+   exact string match) for the repair round; a persisting one makes the map `analysis-failed`.
+   Context nodes still exist; they carry no file. The CLI's `--dry-run` plan applies the same
+   scope.
+4. **One line in the graph instructions**: configuration and schema files are given only when
+   code reads them at run time; map what they change in the running system, not the file.
+   `PIPELINE_VERSION` is **not** bumped: the version keys per-file units (triage and review), and
+   neither changed (H4-4 review, N4; the comment in `instructions.ts` says so now).
+
+**Threat model (adds to the table above).**
+
+| #   | Threat                                                                                                                                                                      | Prevention                                                                                                                                                                                                                                     | Test                                                                                                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A22 | **Filter bypass by path**: a PR author names production code to look like a test, a doc or tooling (`ledger.test.ts` holding the ledger), or a doc to look like code.       | The scope narrows the map only; triage, review, floors and the verdict read every file as before. A hidden card is the whole impact; a doc drawn as a card is a cosmetic card.                                                                 | `pipeline.test.ts` H4-5 ("excluded files are still triaged and reviewed"); `map-scope.test.ts` per category.                                                                                          |
+| A23 | **Untrusted names or paths** steer the classifier or the prompt: a path built to make the scan slow, or one carrying instruction text.                                      | The category is read from the lower-cased path split on `/`, with set lookups, anchored regexes and the pre-triage infix scan (no backtracking); paths reach the model only as parts under Rocky's `file.N.path` labels, never as labels (N7). | `map-scope.test.ts` property test (never throws, deterministic, bounded time on repeated markers); `pipeline.test.ts` A1 (a path is a part, never a label) and H4-5 (label shapes on the graph call). |
+| A24 | **Excluded-file content reaches the model** anyway (a diff of a doc in the graph call), defeating the product rule and the saving.                                          | The graph parts are built from the mapped set only; nothing else is in the call.                                                                                                                                                               | `pipeline.test.ts` H4-5: no excluded path or diff in any graph part; the test-only and docs-only cases; the budget counts mapped files only.                                                          |
+| A25 | **The model maps files outside the set**: a card backed by an excluded file (seen in a previous run, or guessed: `README.md`, `.github/workflows/ci.yml`) or a non-PR file. | `checkGraphFiles` on every graph answer, before storage: an issue per reference, repair round, then `analysis-failed`. The schema's own checks and the leak guard are unchanged.                                                               | `validate.test.ts`; `pipeline.test.ts` H4-5 (an excluded PR file, a file outside the PR, a differently-spelled path, an edge; the repaired answer is stored).                                         |
+| A26 | **"Nothing to map" shown with model text**, or a model claiming a map is unavailable.                                                                                       | `no-logic` is an enum value written by the pipeline; `applyKnownFields` owns `graphUnavailable`; the renderer and the web print their own sentence for it; `BriefingUnavailable` keeps its three reasons.                                      | `v1-2.test.ts` (accepted for the graph, refused for the briefing, any other text refused); `render.test.ts` and `briefing-model.test.ts` (fixed text).                                                |
+
+**Residual risks.**
+
+- **R7:** a runtime file the rules call tooling or docs (a settings file in `scripts/`, a
+  `robots.txt`) is missing from the map. Only the map: the review is complete. The table is
+  deliberately narrow and amended by evidence.
+- **R8:** the grammar-size limit on the enforced graph schema is the provider's and unverified
+  offline (ADR 0013 amendment H4-5); the real run is the evidence.

@@ -1262,3 +1262,167 @@ describe("A28 risky files reviewed with no finding are marked read-by-hand (P4-4
     expect(second.document.provenance.readByHand).toEqual([{ path: "src/auth/session.ts" }]);
   });
 });
+
+describe("H4-5 the change map shows logic only", () => {
+  const LOGIC = "src/billing/ledger.ts";
+  const PORT = "src/billing/port.ts";
+  const TEST = "src/billing/ledger.test.ts";
+  const DOC = "docs/adr/0040-ledger.md";
+  const CI = ".github/workflows/ci.yml";
+  const TOOLING = "eslint.config.js";
+  const MIGRATION = "db/migrations/0003_ledger.sql";
+  const EXCLUDED = [TEST, DOC, CI, TOOLING];
+  const mixed = [LOGIC, PORT, MIGRATION, ...EXCLUDED].map((path) => addedFile(path, LINES));
+  const graphCalls = (calls: readonly ScriptedCall[]) => calls.filter((c) => c.role === "graph");
+  const partsOf = (call: ScriptedCall) => call.untrusted.map((part) => part.text);
+  /** A map whose one node is backed by `path`. */
+  const mapOf = (path: string, extra: Record<string, unknown> = {}) => ({
+    ...GRAPH,
+    nodes: [{ ...GRAPH.nodes[0], files: [{ path }] }],
+    ...extra,
+  });
+
+  it("the graph call gets the logic files only; excluded files are still triaged and reviewed", async () => {
+    const { outcome, calls } = await analyze(script(), { diff: mixed.join("\n") });
+    const { document, stats } = done(outcome);
+    const [graph] = graphCalls(calls);
+    expect(graphCalls(calls)).toHaveLength(1);
+    const labels = graph!.labels.filter((label) => label.endsWith(".path"));
+    expect(labels.map((label) => graph!.part(label))).toEqual([LOGIC, PORT, MIGRATION]);
+    // Neither an excluded path nor its diff reaches the model (T3): the labels are Rocky's
+    // `file.N.*` and the parts carry only the mapped files.
+    for (const text of partsOf(graph!)) {
+      for (const path of EXCLUDED) expect(text).not.toContain(path);
+    }
+    expect(graph!.labels.every((label) => /^(pr_title|file\.\d+\.(path|diff))$/.test(label))).toBe(
+      true,
+    );
+    // The filter narrows the map, never the review (T1).
+    expect(document.triage.files.map((f) => f.path).sort()).toEqual(
+      [LOGIC, PORT, MIGRATION, ...EXCLUDED].sort(),
+    );
+    expect(
+      calls
+        .filter(is("triage"))
+        .map((c) => c.part("file_path"))
+        .sort(),
+    ).toEqual([LOGIC, PORT, MIGRATION, ...EXCLUDED].sort());
+    expect(stats.graph).toBe("drawn");
+    expect(document.graph).toMatchObject({ flows: [], views: [] });
+    expect(document.graph?.walkthrough).toBeUndefined();
+  });
+
+  it("a docs-only, tooling-only or CI-only pull request has no map, with Rocky's fixed reason, and no graph call", async () => {
+    const diff = EXCLUDED.filter((path) => path !== TEST)
+      .map((path) => addedFile(path, LINES))
+      .join("\n");
+    const { outcome, calls } = await analyze(script(), { diff });
+    const { document, stats } = done(outcome);
+    expect(graphCalls(calls)).toHaveLength(0);
+    expect(document.graph).toBeUndefined();
+    expect(document.provenance.graphUnavailable).toEqual({ reason: "no-logic" });
+    expect(stats.graph).toBe("unavailable");
+    expect(stats.calls.graph).toBe(0);
+    // The rest of the review is whole: every file triaged, the briefing written.
+    expect(document.triage.files).toHaveLength(3);
+    expect(document.briefing.summary).toBe(BRIEFING.summary);
+  });
+
+  it("a test-only pull request is mapped from its tests", async () => {
+    const fixture = "tests/fixtures/ledger.json";
+    const diff = [TEST, DOC, fixture].map((path) => addedFile(path, LINES)).join("\n");
+    const { outcome, calls } = await analyze(
+      script((call) => (call.role === "graph" ? { value: mapOf(TEST) } : undefined)),
+      { diff },
+    );
+    const { document } = done(outcome);
+    const [graph] = graphCalls(calls);
+    expect(graph!.labels.filter((l) => l.endsWith(".path")).map((l) => graph!.part(l))).toEqual([
+      TEST,
+      fixture,
+    ]);
+    expect(document.graph?.nodes[0]?.files).toEqual([{ path: TEST }]);
+    expect(document.provenance.graphUnavailable).toBeUndefined();
+  });
+
+  it("a PR with only noise still has no map and no reason (nothing was analysed)", async () => {
+    const { outcome } = await analyze(script(), { diff: addedFile("yarn.lock", ["x"]) });
+    const { document, stats } = done(outcome);
+    expect(document.provenance.graphUnavailable).toBeUndefined();
+    expect(stats.graph).toBe("none");
+  });
+
+  it.each([
+    ["an excluded PR file", DOC],
+    ["a file outside the PR", "src/orgs/memberships.ts"],
+    ["an excluded path spelled differently", "DOCS/adr/0040-ledger.md"],
+  ])(
+    "a card backed by %s goes back as an issue, then the map is unavailable (T4)",
+    async (_name, path) => {
+      const { outcome, calls } = await analyze(
+        script((call) => (call.role === "graph" ? { value: mapOf(path) } : undefined)),
+        { diff: mixed.join("\n") },
+      );
+      const { document } = done(outcome);
+      const [first, repair] = graphCalls(calls);
+      expect(graphCalls(calls)).toHaveLength(1 + MAX_REPAIR_ROUNDS);
+      expect(first!.repair).toBe(false);
+      expect(repair!.part("validation_issues")).toBe("nodes[0].files[0].path: UNKNOWN_FILE");
+      expect(document.graph).toBeUndefined();
+      expect(document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+      expect(document.findings).toBeDefined();
+    },
+  );
+
+  it("an edge backed by an excluded file is refused too; a repaired answer is stored", async () => {
+    const edgeMap = (path: string) => ({
+      ...GRAPH,
+      nodes: [GRAPH.nodes[0], { ...GRAPH.nodes[0], id: "n2", label: "Port" }],
+      edges: [{ id: "e1", from: "n1", to: "n2", kind: "call", delta: "added", files: [{ path }] }],
+    });
+    const { outcome, calls } = await analyze(
+      script((call) =>
+        call.role === "graph" ? { value: edgeMap(call.repair ? PORT : CI) } : undefined,
+      ),
+      { diff: mixed.join("\n") },
+    );
+    const { document } = done(outcome);
+    const [, repair] = graphCalls(calls);
+    expect(repair!.part("validation_issues")).toBe("edges[0].files[0].path: UNKNOWN_FILE");
+    expect(document.graph?.edges[0]?.files).toEqual([{ path: PORT }]);
+  });
+
+  it("the graph answer is lanes, nodes and edges only: flows, views or a walkthrough are invalid output", async () => {
+    const { outcome, calls } = await analyze(
+      script((call) =>
+        call.role === "graph" && !call.repair
+          ? { value: { ...GRAPH, flows: [], views: [], walkthrough: { steps: [] } } }
+          : undefined,
+      ),
+    );
+    const { document } = done(outcome);
+    const [, repair] = graphCalls(calls);
+    expect(repair!.part("validation_issues")).toBe("(root): unrecognized_keys");
+    expect(document.graph).toMatchObject({ flows: [], views: [] });
+  });
+
+  it("the map's size budget counts the mapped files only", async () => {
+    // Docs big enough to blow the budget on their own sit next to one small logic file.
+    const lines = Array.from({ length: 1_500 }, (_, i) => `line ${i} ${"x".repeat(100)}`);
+    const diff = [
+      addedFile("docs/a.md", lines),
+      addedFile("docs/b.md", lines),
+      addedFile("docs/c.md", lines),
+      addedFile(LOGIC, LINES),
+    ].join("\n");
+    const { outcome, calls } = await analyze(script(), { diff });
+    expect(lines.join("").length * 3).toBeGreaterThan(GRAPH_MAX_INPUT_CHARS);
+    expect(graphCalls(calls)).toHaveLength(1);
+    expect(done(outcome).document.provenance.graphUnavailable).toBeUndefined();
+  });
+
+  it("the graph instructions say config is mapped only when it feeds code", () => {
+    expect(GRAPH_INSTRUCTIONS.text).toMatch(/configuration|config/i);
+    expect(GRAPH_INSTRUCTIONS.text).toMatch(/run time|runtime/i);
+  });
+});

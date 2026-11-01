@@ -88,6 +88,7 @@ export {
   GraphUnavailable,
   ReadByHandFile,
   GraphUnavailableReason,
+  BriefingUnavailableReason,
   Hunk,
   hunksInOrder,
   LlmRole,

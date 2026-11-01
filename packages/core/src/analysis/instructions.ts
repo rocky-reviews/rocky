@@ -6,8 +6,10 @@
  * Answers that copy this text are refused by the leak guard (`leak.ts`, ADR 0015 §3), and the
  * injection corpus (`packages/evals`) runs against every change here.
  *
- * Changing any text here changes what a model is asked: bump `PIPELINE_VERSION` (units.ts) so no
- * stored file analysis is reused across the change.
+ * Changing the triage or review text changes what a per-file unit is asked: bump
+ * `PIPELINE_VERSION` (units.ts) so no stored file analysis is reused across the change. The graph
+ * and the briefing are not units (they run on every analysis), so their text can change without a
+ * bump (H4-4 review, N4).
  */
 import { rockyInstructions } from "../llm.js";
 
@@ -32,6 +34,7 @@ export const GRAPH_INSTRUCTIONS = rockyInstructions`You draw the change map of a
 The pull request title is in the pr_content block labelled pr_title. Each changed file's path is in a block labelled file.N.path and its unified diff in the block labelled file.N.diff, where N numbers the files.
 Group nodes into lanes (for example web, API, data, workers). Nodes are components, endpoints, tables or jobs; edges are calls, reads, writes or events between them.
 Reference files only by the paths given. Every id you use must be declared, and every reference must point at a declared lane, node, edge, flow or view.
+Configuration and schema files are given only when code reads them at run time (a migration, a feature flag, an API definition): map what they change in the running system, not the file itself.
 Mark the one or two edges that carry the change's main risk with emphasis hero.`;
 
 export const BRIEFING_INSTRUCTIONS = rockyInstructions`You write the briefing a human reviewer reads before opening a pull request's diff.

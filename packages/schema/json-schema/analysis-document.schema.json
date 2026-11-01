@@ -1655,7 +1655,8 @@
               "enum": [
                 "analysis-failed",
                 "too-large",
-                "timeout"
+                "timeout",
+                "no-logic"
               ],
               "type": "string"
             }
@@ -1796,8 +1797,8 @@
       "type": "object"
     },
     "schemaVersion": {
-      "description": "Contract version the document targets. Current: 1.1.0.",
-      "pattern": "^1\\.(0|1)\\.\\d+$",
+      "description": "Contract version the document targets. Current: 1.2.0.",
+      "pattern": "^1\\.(0|1|2)\\.\\d+$",
       "type": "string"
     },
     "triage": {
@@ -1969,5 +1970,5 @@
   ],
   "title": "Rocky Reviews analysis document",
   "type": "object",
-  "version": "1.1.0"
+  "version": "1.2.0"
 }
