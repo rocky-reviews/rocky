@@ -143,6 +143,13 @@ in-memory store behind a port, plus its tests.
   shows up in dogfooding, pause them when the map is off screen (IntersectionObserver).
 - Flow playback scrolls sideways on phones; a vertical layout for narrow screens would read
   better.
+- ui-verifier (fixed): walkthrough focus text unreadable at 375 (a focus is now never drawn
+  below the map's own size, `MIN_FOCUS_ZOOM`); flow labels broke mid-expression (now as wide as
+  the arrow plus a column, broken between words); notice and status-line spacing.
+- ui-verifier nits (recorded, not fixed): no "scroll sideways" hint under the flow diagram at
+  375; inactive walkthrough stop dots are `--faint`; edge labels near acceptInvitation() overlap
+  the hero edge in pr-847 (pre-H4-6); the P5-3 focus ring on a card at the scroll box's left edge
+  is clipped at 375 (pre-H4-6).
 
 ### H4-5 follow-ups
 

@@ -4,6 +4,7 @@ import {
   clampStop,
   fitTransform,
   MAX_ZOOM,
+  MIN_FOCUS_ZOOM,
   STAGE_MAX_HEIGHT,
   STAGE_MIN_HEIGHT,
   stageFor,
@@ -113,9 +114,12 @@ describe("pan and zoom", () => {
     expect((small.x + small.width) * t.scale + t.x).toBeLessThanOrEqual(stage.width);
   });
 
-  it("never zooms out past the overview for a large focus", () => {
-    const stage = stageFor(500, map);
-    const t = fitTransform(stage, map, { x: 0, y: 0, width: 1000, height: 500 });
-    expect(t.scale).toBe(stage.base);
+  it("never draws a focus smaller than the map's own size, even on a phone", () => {
+    const stage = stageFor(340, map);
+    const focus = { x: 300, y: 100, width: 460, height: 120 };
+    const t = fitTransform(stage, map, focus);
+    expect(t.scale).toBe(MIN_FOCUS_ZOOM);
+    // Centred on the focus, which runs past both edges of the stage.
+    expect((focus.x + focus.width / 2) * t.scale + t.x).toBeCloseTo(stage.width / 2);
   });
 });

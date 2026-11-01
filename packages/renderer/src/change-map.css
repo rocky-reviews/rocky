@@ -321,7 +321,8 @@
   opacity: 0.55;
 }
 
-.cm-edge.cm-focus {
+/* `.cm` lifts it over `.cm-edge.cm-animated`'s dashes. */
+.cm .cm-edge.cm-focus {
   stroke: var(--ai);
   stroke-width: 2.4;
   stroke-dasharray: none;

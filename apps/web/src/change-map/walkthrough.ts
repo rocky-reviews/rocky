@@ -102,6 +102,11 @@ export const STAGE_MIN_HEIGHT = 220;
 const FOCUS_PADDING = 24;
 /** A focus is never drawn larger than this (1 is the map's own size). */
 export const MAX_ZOOM = 1.25;
+/**
+ * Nor smaller than the map's own size: on a narrow stage the focus stays legible (and its badges
+ * keep their 24 px targets), centred, and may run past the stage's edges.
+ */
+export const MIN_FOCUS_ZOOM = 1;
 
 /**
  * The stage for a map in a box `available` wide: the whole map fits at `base` scale (never
@@ -122,7 +127,8 @@ const place = (stage: number, drawn: number, wanted: number): number =>
 
 /**
  * Where the map sits for a stop: the whole map at `base` scale for an overview, otherwise
- * zoomed until the focus fills the stage (within `base` and MAX_ZOOM) and centred on it.
+ * zoomed until the focus fills the stage (between the map's own size and MAX_ZOOM) and centred
+ * on it.
  */
 export const fitTransform = (
   stage: Size & { base: number },
@@ -141,7 +147,7 @@ export const fitTransform = (
     (stage.width - FOCUS_PADDING * 2) / Math.max(1, focus.width),
     (stage.height - FOCUS_PADDING * 2) / Math.max(1, focus.height),
   );
-  const scale = Math.max(stage.base, Math.min(Math.max(MAX_ZOOM, stage.base), fit));
+  const scale = Math.max(stage.base, MIN_FOCUS_ZOOM, Math.min(MAX_ZOOM, fit));
   const centreX = (focus.x + focus.width / 2) * scale;
   const centreY = (focus.y + focus.height / 2) * scale;
   return {

@@ -12,7 +12,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0 var(--space-3);
+  gap: 6px var(--space-3);
   margin-bottom: 6px;
 }
 .map-head > .h-eyebrow {
@@ -68,7 +68,7 @@
   outline: 2px solid var(--you);
   outline-offset: 2px;
 }
-.map-notice {
+.brief .map-notice {
   margin: 0 0 10px;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
@@ -184,7 +184,7 @@
 }
 
 /* ---------- Flow playback ---------- */
-.flow-summary {
+.brief .flow-summary {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: var(--text-md);
@@ -265,6 +265,8 @@ button.seq-head-box {
 /* An arrow runs from the centre of one column to the centre of another. */
 .seq-arrow {
   display: grid;
+  /* A definite track, so a label's percentage width is the arrow's. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px;
   margin-inline: calc(50% / var(--span));
   color: var(--muted);
@@ -275,13 +277,15 @@ button.seq-head-box {
 }
 .seq-label {
   justify-self: center;
-  max-width: 100%;
   padding: 0 var(--space-1);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   text-align: center;
-  overflow-wrap: break-word;
+  /* Wider than its arrow by a column, and broken only between words, as code reads. */
+  width: max-content;
+  max-width: calc(100% + var(--col-min));
+  overflow-wrap: normal;
 }
 .seq-arrow.is-self .seq-label {
   justify-self: start;
@@ -358,8 +362,8 @@ button.seq-head-box {
   background: var(--ai);
   box-shadow: 0 0 0 4px var(--ai-bg);
 }
-.seq-now {
-  margin: 10px 0;
+.brief .seq-now {
+  margin: 14px 0 10px;
   color: var(--text);
   font-size: var(--text-md);
 }
