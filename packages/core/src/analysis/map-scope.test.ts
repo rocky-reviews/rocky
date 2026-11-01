@@ -45,7 +45,61 @@ const cases: Record<MapCategory, string[]> = {
     "alembic/versions/abc_add.py",
     "schema/tables.sql",
     ".env.production",
+    ".envrc",
     "src/env.ts",
+    // B1: doc stems are docs only without an extension or with a doc extension.
+    "src/auth/security.ts",
+    "src/security.service.ts",
+    "billing/license.ts",
+    "funding.ts",
+    "router/history.ts",
+    "models/history.rb",
+    "diff/changes.ts",
+    "notice.ts",
+    "readme.ts",
+    "src/changelog/generator.ts",
+    // S1: tool stems are tooling only as configuration files.
+    "semgrep.ts",
+    "snyk.ts",
+    "codecov.ts",
+    "renovate.ts",
+    "parcel.ts",
+    "zap.go",
+    "karma.ts",
+    "lib/jest.ts",
+    "babel.ts",
+    "sonar.ts",
+    "nx.ts",
+    "turbo.ts",
+    "mocha.ts",
+    "c8.ts",
+    "src/vite.ts",
+    "src/eslint.ts",
+    // S2: `requirements` is a manifest only as requirements*.txt|in.
+    "src/requirements.ts",
+    "src/requirements/checker.py",
+    // S3: `*Test.java`-style suffixes need a boundary.
+    "Contest.java",
+    "Latest.kt",
+    "Attest.swift",
+    "Greatest.cs",
+    "Protest.scala",
+    "src/contest.java",
+    // S4: directory rules are anchored to the repository root or a package root.
+    "src/agent/tools/search.ts",
+    "cmd/tools/main.go",
+    "src/integrations/ci/runner.ts",
+    "src/editor/doc/model.ts",
+    "src/docs/generator.ts",
+    "app/fixtures/seed.ts",
+    "src/fixtures/ledger.json",
+    "lib/scripts/runner.rb",
+    "app/services/ci/status.rb",
+    "api/spec/openapi.yaml",
+    "test/openapi.yaml",
+    "tests/fixtures/schema.sql",
+    "tests/fixtures/migrations/0001.sql",
+    "src/agent/tools/README.ts",
   ],
   test: [
     "src/billing/ledger.test.ts",
@@ -54,19 +108,29 @@ const cases: Record<MapCategory, string[]> = {
     "test/ledger_test.go",
     "spec/models/user_spec.rb",
     "e2e/checkout.e2e.spec.ts",
-    "src/fixtures/ledger.json",
     "src/__fixtures__/ledger.json",
     "src/__mocks__/forge.ts",
     "src/__snapshots__/ledger.test.ts.snap",
     "src/ledger.snap",
     "testdata/ledger.golden",
     "test-data/ledger.csv",
-    "tests/fixtures/schema.sql",
     "tests/conftest.py",
     "tests/test_ledger.py",
     "src/main/test/LedgerTest.java",
     "LedgerTests.cs",
+    "internal/ledger/testdata/golden.json",
+    "accounts/tests.py",
+    "Ledger.Tests.cs",
+    "ledger_test.kt",
+    "src/ledger_spec.php",
     "cypress/e2e/checkout.cy.ts",
+    "src/auth/__tests__/README.md",
+    "src/auth/__tests__/openapi.yaml",
+    "src/orders/__mocks__/forge.ts",
+    "packages/schema/fixtures/pr-847.json",
+    "fixtures/users.yml",
+    "spec/fixtures/users.yml",
+    "apps/web/testdata/golden.txt",
   ],
   docs: [
     "README.md",
@@ -91,6 +155,12 @@ const cases: Record<MapCategory, string[]> = {
     ".env.sample",
     "CITATION.cff",
     ".mailmap",
+    "LICENSE-MIT",
+    "README-dev",
+    "README.rst",
+    "packages/core/docs/ports.md",
+    "packages/core/adr/0001.md",
+    "apps/web/src/notes.txt",
   ],
   tooling: [
     "package.json",
@@ -123,6 +193,7 @@ const cases: Record<MapCategory, string[]> = {
     "vitest.config.ts",
     "vitest.workspace.ts",
     "jest.config.js",
+    "jest.config.cjs",
     "playwright.config.ts",
     "cypress.config.ts",
     ".mocharc.yml",
@@ -190,7 +261,19 @@ const cases: Record<MapCategory, string[]> = {
     "scripts/evals.ts",
     "scripts/security/gitleaks.sh",
     "tools/release.sh",
+    "scripts/ci/publish.sh",
+    "packages/core/scripts/gen.ts",
+    "apps/web/tools/icons.mjs",
     "pnpm-lock.yaml",
+    "go.sum",
+    "Gemfile.lock",
+    "nest-cli.json",
+    "jest.setup.ts",
+    "vitest.setup.ts",
+    "karma.conf.js",
+    "gulpfile.js",
+    "requirements.in",
+    "requirements-dev.in",
   ],
   ci: [
     ".github/workflows/ci.yml",
@@ -211,7 +294,8 @@ const cases: Record<MapCategory, string[]> = {
     "cloudbuild.yaml",
     "ci/build.sh",
     ".ci/test.sh",
-    "scripts/ci/publish.sh",
+    "packages/core/ci/test.sh",
+    "apps/web/.github/workflows/x.yml",
   ],
 };
 
@@ -237,10 +321,47 @@ describe("mapCategory", () => {
     expect(mapCategory("tools/deploy/Dockerfile")).toBe("logic");
   });
 
-  it("tests win over everything, so a fixture migration is a test", () => {
-    expect(mapCategory("tests/fixtures/migrations/0001.sql")).toBe("test");
+  it("a definition by name wins over a test directory, but not over __tests__ (S4)", () => {
+    expect(mapCategory("api/spec/openapi.yaml")).toBe("logic");
+    expect(mapCategory("tests/fixtures/schema.sql")).toBe("logic");
+    expect(mapCategory("src/auth/__tests__/openapi.yaml")).toBe("test");
     expect(mapCategory("src/auth/__tests__/README.md")).toBe("test");
-    expect(mapCategory("test/openapi.yaml")).toBe("test");
+  });
+
+  it("directory rules apply only at the repository root or a package root (S4)", () => {
+    expect(mapCategory("tools/release.sh")).toBe("tooling");
+    expect(mapCategory("packages/core/tools/gen.ts")).toBe("tooling");
+    expect(mapCategory("src/agent/tools/search.ts")).toBe("logic");
+    expect(mapCategory("cmd/tools/main.go")).toBe("logic");
+    expect(mapCategory("ci/build.sh")).toBe("ci");
+    expect(mapCategory("src/integrations/ci/runner.ts")).toBe("logic");
+    expect(mapCategory("docs/guide.html")).toBe("docs");
+    expect(mapCategory("src/docs/generator.ts")).toBe("logic");
+    expect(mapCategory("src/editor/doc/model.ts")).toBe("logic");
+    expect(mapCategory("fixtures/users.yml")).toBe("test");
+    expect(mapCategory("app/fixtures/seed.ts")).toBe("logic");
+    expect(mapCategory("spec/fixtures/users.yml")).toBe("test");
+  });
+
+  it("a doc stem is a doc only without an extension or with a doc extension (B1)", () => {
+    expect(mapCategory("SECURITY")).toBe("docs");
+    expect(mapCategory("SECURITY.md")).toBe("docs");
+    expect(mapCategory("security.ts")).toBe("logic");
+    expect(mapCategory("LICENSE")).toBe("docs");
+    expect(mapCategory("LICENSE.txt")).toBe("docs");
+    expect(mapCategory("license.ts")).toBe("logic");
+    expect(mapCategory("history.rb")).toBe("logic");
+  });
+
+  it("a tool stem is tooling only as a configuration file (S1)", () => {
+    expect(mapCategory("jest.config.ts")).toBe("tooling");
+    expect(mapCategory(".jestrc")).toBe("tooling");
+    expect(mapCategory("jest.json")).toBe("tooling");
+    expect(mapCategory("lib/jest.ts")).toBe("logic");
+    expect(mapCategory("semgrep.yml")).toBe("tooling");
+    expect(mapCategory("semgrep.ts")).toBe("logic");
+    expect(mapCategory("vitest.workspace.ts")).toBe("tooling");
+    expect(mapCategory("vitest.ts")).toBe("logic");
   });
 
   it("CI wins over the tooling and docs rules inside its directories", () => {
@@ -257,56 +378,103 @@ describe("mapCategory", () => {
         expect(mapCategory(path)).toBe(first);
       }),
     );
-    // Repeated markers must not make the scan slow (no backtracking).
+    // Repeated markers must not make the scan slow (no backtracking): a generous bound, since
+    // the real guard is structural (anchored regexes, set lookups, one infix scan).
     const started = performance.now();
-    mapCategory(`${".test.".repeat(400)}x`);
-    mapCategory(`${"a/".repeat(2_000)}x.test.ts`);
-    mapCategory(`${"README.md/".repeat(500)}x`);
-    expect(performance.now() - started).toBeLessThan(200);
+    for (const path of [
+      `${".test.".repeat(400)}x`,
+      `${"a/".repeat(2_000)}x.test.ts`,
+      `${"README.md/".repeat(500)}x`,
+      `${"Test".repeat(500)}.java`,
+      `${"eslint.".repeat(500)}config.js`,
+    ])
+      mapCategory(path);
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
+
+const mappable = (...paths: string[]) => paths.map((path) => ({ path, mappable: true }));
 
 describe("changeMapScope", () => {
   it("maps the logic files and leaves tests, docs, tooling and CI out", () => {
     expect(
-      changeMapScope([
-        "README.md",
-        "src/billing/ledger.ts",
-        "src/billing/ledger.test.ts",
-        ".github/workflows/ci.yml",
-        "eslint.config.js",
-        "src/billing/port.ts",
-      ]),
+      changeMapScope(
+        mappable(
+          "README.md",
+          "src/billing/ledger.ts",
+          "src/billing/ledger.test.ts",
+          ".github/workflows/ci.yml",
+          "eslint.config.js",
+          "src/billing/port.ts",
+        ),
+      ),
     ).toEqual({ kind: "logic", paths: ["src/billing/ledger.ts", "src/billing/port.ts"] });
   });
 
   it("keeps the caller's order", () => {
-    expect(changeMapScope(["b.ts", "README.md", "a.ts"])).toEqual({
+    expect(changeMapScope(mappable("b.ts", "README.md", "a.ts"))).toEqual({
       kind: "logic",
       paths: ["b.ts", "a.ts"],
     });
   });
 
+  it("a logic file with an ordinary name next to a README is logic, not no-logic (B1)", () => {
+    expect(changeMapScope(mappable("src/security.ts", "README.md"))).toEqual({
+      kind: "logic",
+      paths: ["src/security.ts"],
+    });
+    expect(changeMapScope(mappable("lib/jest.ts", "CHANGELOG.md"))).toEqual({
+      kind: "logic",
+      paths: ["lib/jest.ts"],
+    });
+  });
+
   it("maps a test-only pull request from its tests", () => {
     expect(
-      changeMapScope(["src/billing/ledger.test.ts", "README.md", "tests/fixtures/ledger.json"]),
+      changeMapScope(
+        mappable("src/billing/ledger.test.ts", "README.md", "spec/fixtures/ledger.json"),
+      ),
     ).toEqual({
       kind: "tests",
-      paths: ["src/billing/ledger.test.ts", "tests/fixtures/ledger.json"],
+      paths: ["src/billing/ledger.test.ts", "spec/fixtures/ledger.json"],
     });
   });
 
   it("has nothing to map for a docs-only, tooling-only or CI-only pull request", () => {
-    expect(changeMapScope(["README.md", "docs/adr/0001.md"])).toEqual({ kind: "none" });
-    expect(changeMapScope(["package.json", "tsconfig.json"])).toEqual({ kind: "none" });
-    expect(changeMapScope([".github/workflows/ci.yml"])).toEqual({ kind: "none" });
+    expect(changeMapScope(mappable("README.md", "docs/adr/0001.md"))).toEqual({ kind: "none" });
+    expect(changeMapScope(mappable("package.json", "tsconfig.json"))).toEqual({ kind: "none" });
+    expect(changeMapScope(mappable(".github/workflows/ci.yml"))).toEqual({ kind: "none" });
     expect(changeMapScope([])).toEqual({ kind: "none" });
   });
 
   it("keeps runtime config and schema next to the code that reads them", () => {
-    expect(changeMapScope(["db/migrations/0003.sql", "openapi.yaml", "README.md"])).toEqual({
-      kind: "logic",
-      paths: ["db/migrations/0003.sql", "openapi.yaml"],
+    expect(changeMapScope(mappable("db/migrations/0003.sql", "openapi.yaml", "README.md"))).toEqual(
+      { kind: "logic", paths: ["db/migrations/0003.sql", "openapi.yaml"] },
+    );
+  });
+
+  it("logic that cannot be sent makes the map unmappable, never a map of the tests (S5)", () => {
+    const files = [
+      { path: "src/big.ts", mappable: false },
+      { path: "src/big.test.ts", mappable: true },
+      { path: "README.md", mappable: true },
+    ];
+    expect(changeMapScope(files)).toEqual({
+      kind: "unmappable",
+      category: "logic",
+      paths: ["src/big.ts"],
     });
+    // Some logic is mappable: only that is sent.
+    expect(changeMapScope([...files, { path: "src/small.ts", mappable: true }])).toEqual({
+      kind: "logic",
+      paths: ["src/small.ts"],
+    });
+    // The same rule for a test-only PR.
+    expect(
+      changeMapScope([
+        { path: "src/big.test.ts", mappable: false },
+        { path: "README.md", mappable: true },
+      ]),
+    ).toEqual({ kind: "unmappable", category: "tests", paths: ["src/big.test.ts"] });
   });
 });

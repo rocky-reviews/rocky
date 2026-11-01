@@ -65,7 +65,10 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   role only the pull request's logic files (or its tests, for a test-only pull request), and a
   card may be backed only by one of them.
 - **One more unavailable reason.** `provenance.graphUnavailable.reason: "no-logic"` (schema 1.2)
-  means the pull request changed no code with behaviour (documentation, tooling or CI only) and
-  no graph call was made. `UNAVAILABLE_REASON_TEXT` gives it Rocky's own sentence ("Nothing to
-  map: this pull request changes no code with behaviour."), as §4 requires; the web shows the
-  same idea in its own words (`briefing-model.ts`). The pipeline's `detail` is still never drawn.
+  means the path rules found no logic or test file in the pull request (documentation, tooling
+  or CI only) and no graph call was made. `UNAVAILABLE_REASON_TEXT` gives it Rocky's own sentence ("Nothing to
+  map: Rocky's path rules found only documentation, tooling or CI files."), as §4 requires; the
+  web shows the same sentence (`briefing-model.ts`). The sentence speaks of the path rules, not
+  of the code: the rules are heuristics (security review, H4-5). The pipeline's `detail` is
+  still never drawn, and the briefing's Retry button does not apply to this reason (a retry
+  would classify the same paths the same way).

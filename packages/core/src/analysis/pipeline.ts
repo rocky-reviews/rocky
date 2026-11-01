@@ -26,7 +26,7 @@ import {
   limits,
   parseAnalysisDocumentJson,
   Provenance,
-  SCHEMA_VERSION,
+  requiredSchemaVersion,
   type AnalysisDocument,
   type Briefing,
   type BriefingUnavailable,
@@ -85,10 +85,10 @@ import {
   type Sha256Hex,
 } from "./units.js";
 import {
-  checkGraphFiles,
   checkReview,
   checkTriage,
   partitionIssues,
+  stripGraphFiles,
   type ProvenanceBase,
   type UnitCheck,
 } from "./validate.js";
@@ -156,6 +156,8 @@ export interface AnalysisStats {
   calls: Record<AnalysisStage, number>;
   repairs: number;
   graph: "drawn" | "unavailable" | "none";
+  /** Graph file references outside the mapped set, dropped from the stored map (H4-5). */
+  graphFilesStripped: number;
 }
 
 /**
@@ -564,7 +566,8 @@ const run = async (
   ) =>
     parseAnalysisDocumentJson(
       JSON.stringify({
-        schemaVersion: SCHEMA_VERSION,
+        // The lowest minor the document needs, so older readers keep reading (H4-5, S7).
+        schemaVersion: requiredSchemaVersion({ provenance: { graphUnavailable } }),
         provenance: {
           ...base,
           generator: { ...base.generator, roles: generatorRoles(models, request.previous) },
@@ -605,15 +608,30 @@ const run = async (
   // --- Change map ----------------------------------------------------------------------------
   // The map shows code with behaviour (H4-5, ADR 0014 amendment): the graph model gets the
   // triaged files the deterministic scope keeps (logic, or the tests of a test-only PR) and
-  // nothing else, so an excluded file's path or diff never reaches it, and a card may be
-  // backed only by a file it was given (`checkGraphFiles`). A PR with nothing to map gets the
-  // fixed reason `no-logic` and no call.
+  // nothing else, so an excluded file's path or diff never reaches it. The scope is decided over
+  // every file the rules left to the AI (S5): logic that could not be sent (binary, too large,
+  // triage failed or refused) makes the map unavailable, never a map drawn from the tests. A
+  // card may be backed only by a file the call carried: a stray reference is dropped and counted
+  // (`stripGraphFiles`, S6). A PR with nothing to map gets the fixed reason `no-logic`, no call.
   let graph: GraphAnswer | undefined;
   let graphUnavailable: GraphUnavailable | undefined;
-  const scope = changeMapScope(triageFiles.map((file) => file.path));
-  if (scope.kind === "none" && triageFiles.length > 0) {
-    graphUnavailable = { reason: "no-logic" };
-  } else if (scope.kind !== "none") {
+  const triagedPaths = new Set(triageFiles.map((file) => file.path));
+  const scope = changeMapScope(
+    files
+      .filter((file) => preTriage(file.path).kind !== "noise")
+      .map((file) => ({ path: file.path, mappable: triagedPaths.has(file.path) })),
+  );
+  if (scope.kind === "none") {
+    if (triageFiles.length > 0) graphUnavailable = { reason: "no-logic" };
+  } else if (scope.kind === "unmappable") {
+    // Every file of the deciding category was binary, too large, or failed its triage.
+    const sizes = new Set(scope.paths);
+    graphUnavailable = {
+      reason: files.some((file) => sizes.has(file.path) && (file.binary || file.tooLarge))
+        ? "too-large"
+        : "analysis-failed",
+    };
+  } else {
     const inScope = new Set(scope.paths);
     const mapped = files.filter((file) => inScope.has(file.path));
     const parts: LlmUntrustedText[] = [
@@ -635,17 +653,18 @@ const run = async (
           untrusted: parts,
           output: GRAPH_OUTPUT,
           maxOutputTokens: MAX_OUTPUT_TOKENS.graph,
-          check: (answer) => {
-            const part = checkPart("graph", STUB_BRIEFING, answer, undefined);
-            if (part === "unrepairable") return part;
-            return [...checkGraphFiles(answer, inScope), ...part];
-          },
+          // Checked as it will be stored: with stray file references already dropped.
+          check: (answer) =>
+            checkPart("graph", STUB_BRIEFING, stripGraphFiles(answer, inScope).answer, undefined),
         },
         observe("graph"),
         signal,
       );
-      if (drawn.ok) graph = drawn.value;
-      else
+      if (drawn.ok) {
+        const kept = stripGraphFiles(drawn.value, inScope);
+        graph = kept.answer;
+        stats.graphFilesStripped = kept.stripped;
+      } else
         graphUnavailable = {
           reason:
             drawn.reason === "too_large"
@@ -820,6 +839,7 @@ const newStats = (): AnalysisStats => ({
   calls: { triage: 0, review: 0, graph: 0, briefing: 0 },
   repairs: 0,
   graph: "none",
+  graphFilesStripped: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

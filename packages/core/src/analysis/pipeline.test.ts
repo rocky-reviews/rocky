@@ -1357,39 +1357,137 @@ describe("H4-5 the change map shows logic only", () => {
     ["a file outside the PR", "src/orgs/memberships.ts"],
     ["an excluded path spelled differently", "DOCS/adr/0040-ledger.md"],
   ])(
-    "a card backed by %s goes back as an issue, then the map is unavailable (T4)",
+    "a card backed by %s loses that reference; the map is kept and the drop is counted (T4, S6)",
     async (_name, path) => {
       const { outcome, calls } = await analyze(
-        script((call) => (call.role === "graph" ? { value: mapOf(path) } : undefined)),
+        script((call) =>
+          call.role === "graph"
+            ? {
+                value: mapOf(path, {
+                  nodes: [{ ...GRAPH.nodes[0], files: [{ path }, { path: LOGIC }] }],
+                }),
+              }
+            : undefined,
+        ),
         { diff: mixed.join("\n") },
       );
-      const { document } = done(outcome);
-      const [first, repair] = graphCalls(calls);
-      expect(graphCalls(calls)).toHaveLength(1 + MAX_REPAIR_ROUNDS);
-      expect(first!.repair).toBe(false);
-      expect(repair!.part("validation_issues")).toBe("nodes[0].files[0].path: UNKNOWN_FILE");
-      expect(document.graph).toBeUndefined();
-      expect(document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
-      expect(document.findings).toBeDefined();
+      const { document, stats } = done(outcome);
+      // One call: a stray reference is not worth a repair round or a lost map.
+      expect(graphCalls(calls)).toHaveLength(1);
+      expect(document.graph?.nodes[0]?.files).toEqual([{ path: LOGIC }]);
+      expect(document.provenance.graphUnavailable).toBeUndefined();
+      expect(stats.graph).toBe("drawn");
+      expect(stats.graphFilesStripped).toBe(1);
+      expect(JSON.stringify(document.graph)).not.toContain(path);
     },
   );
 
-  it("an edge backed by an excluded file is refused too; a repaired answer is stored", async () => {
-    const edgeMap = (path: string) => ({
+  it("an edge backed by an excluded file loses the reference too; a clean map strips nothing", async () => {
+    const edgeMap = (paths: string[]) => ({
       ...GRAPH,
       nodes: [GRAPH.nodes[0], { ...GRAPH.nodes[0], id: "n2", label: "Port" }],
-      edges: [{ id: "e1", from: "n1", to: "n2", kind: "call", delta: "added", files: [{ path }] }],
+      edges: [
+        {
+          id: "e1",
+          from: "n1",
+          to: "n2",
+          kind: "call",
+          delta: "added",
+          files: paths.map((path) => ({ path })),
+        },
+      ],
     });
+    const stray = await analyze(
+      script((call) =>
+        call.role === "graph" ? { value: edgeMap([CI, PORT, TOOLING]) } : undefined,
+      ),
+      { diff: mixed.join("\n") },
+    );
+    const { document, stats } = done(stray.outcome);
+    expect(document.graph?.edges[0]?.files).toEqual([{ path: PORT }]);
+    expect(stats.graphFilesStripped).toBe(2);
+
+    const clean = await analyze(
+      script((call) => (call.role === "graph" ? { value: edgeMap([PORT, LOGIC]) } : undefined)),
+      { diff: mixed.join("\n") },
+    );
+    expect(done(clean.outcome).stats.graphFilesStripped).toBe(0);
+  });
+
+  it("a stripped map still goes through the integrity check (an unknown lane stays invalid)", async () => {
     const { outcome, calls } = await analyze(
       script((call) =>
-        call.role === "graph" ? { value: edgeMap(call.repair ? PORT : CI) } : undefined,
+        call.role === "graph"
+          ? {
+              value: {
+                ...GRAPH,
+                nodes: [{ ...GRAPH.nodes[0], lane: "ghost", files: [{ path: DOC }] }],
+              },
+            }
+          : undefined,
       ),
       { diff: mixed.join("\n") },
     );
     const { document } = done(outcome);
     const [, repair] = graphCalls(calls);
-    expect(repair!.part("validation_issues")).toBe("edges[0].files[0].path: UNKNOWN_FILE");
-    expect(document.graph?.edges[0]?.files).toEqual([{ path: PORT }]);
+    expect(repair!.part("validation_issues")).toBe("nodes[0].lane: BROKEN_REFERENCE");
+    expect(document.graph).toBeUndefined();
+    expect(document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+  });
+
+  it("logic that cannot be sent makes the map unavailable, never a map drawn from the tests (S5)", async () => {
+    // The one logic file is too large: no graph call, `too-large`, tests untouched as a source.
+    const big = Array.from({ length: 6_000 }, (_, i) => `line ${i}`);
+    const diff = [addedFile(LOGIC, big), addedFile(TEST, LINES), addedFile(DOC, LINES)].join("\n");
+    const { outcome, calls } = await analyze(script(), { diff });
+    const { document, stats } = done(outcome);
+    expect(document.provenance.unanalysed).toEqual([{ path: LOGIC, reason: "too-large" }]);
+    expect(graphCalls(calls)).toHaveLength(0);
+    expect(document.provenance.graphUnavailable).toEqual({ reason: "too-large" });
+    expect(stats.graph).toBe("unavailable");
+  });
+
+  it("logic whose triage failed or was refused makes the map `analysis-failed` (S5)", async () => {
+    const diff = [addedFile(LOGIC, LINES), addedFile(TEST, LINES)].join("\n");
+    for (const answer of [{ status: "refused" } as const, { status: "invalid_output" } as const]) {
+      const { outcome, calls } = await analyze(
+        script((call) => (is("triage", LOGIC)(call) ? answer : undefined)),
+        { diff },
+      );
+      const { document } = done(outcome);
+      expect(document.provenance.unanalysed.map((f) => f.path)).toEqual([LOGIC]);
+      expect(graphCalls(calls)).toHaveLength(0);
+      expect(document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+    }
+  });
+
+  it("the mappable logic files are sent when some logic could not be (S5)", async () => {
+    const big = Array.from({ length: 6_000 }, (_, i) => `line ${i}`);
+    const diff = [addedFile(LOGIC, big), addedFile(PORT, LINES), addedFile(TEST, LINES)].join("\n");
+    const { outcome, calls } = await analyze(script(), { diff });
+    const [graph] = graphCalls(calls);
+    expect(graph!.labels.filter((l) => l.endsWith(".path")).map((l) => graph!.part(l))).toEqual([
+      PORT,
+    ]);
+    expect(done(outcome).document.graph).toBeDefined();
+  });
+
+  it("documents are stamped with the lowest schema minor they need (S7)", async () => {
+    const drawn = done((await analyze(script(), { diff: mixed.join("\n") })).outcome);
+    expect(drawn.document.schemaVersion).toBe("1.1.0");
+    const docsOnly = done((await analyze(script(), { diff: addedFile(DOC, LINES) })).outcome);
+    expect(docsOnly.document.provenance.graphUnavailable).toEqual({ reason: "no-logic" });
+    expect(docsOnly.document.schemaVersion).toBe("1.2.0");
+    const failed = done(
+      (
+        await analyze(
+          script((call) => (call.role === "graph" ? { status: "refused" } : undefined)),
+          { diff: mixed.join("\n") },
+        )
+      ).outcome,
+    );
+    expect(failed.document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
+    expect(failed.document.schemaVersion).toBe("1.1.0");
   });
 
   it("the graph answer is lanes, nodes and edges only: flows, views or a walkthrough are invalid output", async () => {

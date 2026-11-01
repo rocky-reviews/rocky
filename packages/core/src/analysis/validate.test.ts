@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { GraphAnswer } from "./outputs.js";
-import { checkGraphFiles } from "./validate.js";
+import { stripGraphFiles } from "./validate.js";
 
 /**
  * H4-5: a card or an edge may only be backed by a file the graph call was given (the filtered
  * set). The published schema allows any well-formed path (context nodes, other producers); the
- * pipeline is stricter, so a model cannot map a file it never saw, or one Rocky left out.
+ * pipeline is stricter: a reference outside the set is dropped and counted, and the map is kept
+ * (review round 1, S6).
  */
 
 const lane = { id: "api", label: "API" };
@@ -30,29 +31,33 @@ const edge = (id: string, files: { path: string }[] = []): GraphAnswer["edges"][
 });
 const allowed = new Set(["src/a.ts", "src/b.ts"]);
 
-describe("checkGraphFiles", () => {
-  it("accepts cards and edges backed by allowed files, or by none", () => {
+describe("stripGraphFiles", () => {
+  it("keeps an answer whose cards and edges are backed by allowed files, or by none, as is", () => {
     const answer: GraphAnswer = {
       lanes: [lane],
       nodes: [node("a", [{ path: "src/a.ts" }]), node("b")],
       edges: [edge("e", [{ path: "src/b.ts" }, { path: "src/a.ts" }])],
     };
-    expect(checkGraphFiles(answer, allowed)).toEqual([]);
+    const result = stripGraphFiles(answer, allowed);
+    expect(result.stripped).toBe(0);
+    expect(result.answer).toBe(answer);
   });
 
-  it("names every reference outside the set, by its path in the answer, with no value", () => {
+  it("drops every reference outside the set, counts them, and leaves the rest untouched", () => {
     const answer: GraphAnswer = {
       lanes: [lane],
       nodes: [node("a", [{ path: "src/a.ts" }, { path: "README.md" }]), node("b", [{ path: "x" }])],
-      edges: [edge("e", [{ path: "SRC/a.ts" }])],
+      edges: [edge("e", [{ path: "SRC/a.ts" }, { path: "src/b.ts" }])],
     };
-    const issues = checkGraphFiles(answer, allowed);
-    expect(issues).toEqual([
-      "nodes[0].files[1].path: UNKNOWN_FILE",
-      "nodes[1].files[0].path: UNKNOWN_FILE",
-      "edges[0].files[0].path: UNKNOWN_FILE",
-    ]);
-    expect(issues.join("\n")).not.toContain("README");
+    const result = stripGraphFiles(answer, allowed);
+    expect(result.stripped).toBe(3);
+    expect(result.answer).toEqual({
+      lanes: [lane],
+      nodes: [node("a", [{ path: "src/a.ts" }]), node("b", [])],
+      edges: [edge("e", [{ path: "src/b.ts" }])],
+    });
+    // The input is not mutated.
+    expect(answer.nodes[0]?.files).toHaveLength(2);
   });
 
   it("matches exactly: no normalisation, prefix or case folding", () => {
@@ -61,15 +66,33 @@ describe("checkGraphFiles", () => {
       nodes: [node("a", [{ path: "src/a.ts/" }, { path: "./src/a.ts" }, { path: "src/a.TS" }])],
       edges: [],
     };
-    expect(checkGraphFiles(answer, allowed)).toHaveLength(3);
+    const result = stripGraphFiles(answer, allowed);
+    expect(result.stripped).toBe(3);
+    expect(result.answer.nodes[0]?.files).toEqual([]);
   });
 
-  it("with an empty set, every reference is an issue", () => {
+  it("is deterministic and idempotent: stripping a stripped answer changes nothing", () => {
+    const answer: GraphAnswer = {
+      lanes: [lane],
+      nodes: [node("a", [{ path: "src/a.ts" }, { path: "docs/x.md" }])],
+      edges: [],
+    };
+    const once = stripGraphFiles(answer, allowed);
+    const twice = stripGraphFiles(once.answer, allowed);
+    expect(twice.stripped).toBe(0);
+    expect(twice.answer).toBe(once.answer);
+    expect(stripGraphFiles(answer, allowed).answer).toEqual(once.answer);
+  });
+
+  it("with an empty set, every reference is dropped", () => {
     const answer: GraphAnswer = {
       lanes: [lane],
       nodes: [node("a", [{ path: "src/a.ts" }])],
       edges: [],
     };
-    expect(checkGraphFiles(answer, new Set())).toEqual(["nodes[0].files[0].path: UNKNOWN_FILE"]);
+    expect(stripGraphFiles(answer, new Set())).toEqual({
+      answer: { lanes: [lane], nodes: [node("a", [])], edges: [] },
+      stripped: 1,
+    });
   });
 });

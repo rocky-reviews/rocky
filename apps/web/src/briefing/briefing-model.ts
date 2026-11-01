@@ -124,7 +124,7 @@ const GRAPH_REASON: Record<GraphUnavailableReason, string> = {
   "analysis-failed": "The AI's map of this change did not pass Rocky's checks.",
   "too-large": "This pull request is too large to map.",
   timeout: "The map took too long to produce.",
-  "no-logic": "Nothing to map: this pull request changes no code with behaviour.",
+  "no-logic": "Nothing to map: Rocky's path rules found only documentation, tooling or CI files.",
 };
 
 export const BRIEFING_REASON: Record<BriefingUnavailableReason, string> = {

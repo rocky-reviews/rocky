@@ -125,8 +125,14 @@ export const planAnalysis = (diff: string, title: string, truncated: boolean): P
     }
   }
 
-  const scope = changeMapScope(triaged.map((file) => file.path));
-  const inScope = new Set(scope.kind === "none" ? [] : scope.paths);
+  // Decided over every non-noise file, as the pipeline does: a binary or too-large logic file
+  // means no map rather than a map drawn from the tests (H4-5, S5).
+  const scope = changeMapScope(
+    files
+      .filter((file) => file.disposition !== "noise")
+      .map((file) => ({ path: file.path, mappable: file.disposition === "triage" })),
+  );
+  const inScope = new Set(scope.kind === "logic" || scope.kind === "tests" ? scope.paths : []);
   const graphParts: LlmUntrustedText[] = [
     { label: "pr_title", text: title },
     ...triaged
@@ -138,7 +144,11 @@ export const planAnalysis = (diff: string, title: string, truncated: boolean): P
   ];
   const graphChars = graphParts.reduce((sum, part) => sum + part.text.length, 0);
   const graphSkipped =
-    inScope.size === 0 ? "no-logic" : graphChars > GRAPH_MAX_INPUT_CHARS ? "too-large" : false;
+    scope.kind === "none"
+      ? "no-logic"
+      : scope.kind === "unmappable" || graphChars > GRAPH_MAX_INPUT_CHARS
+        ? "too-large"
+        : false;
   if (graphSkipped === false) {
     calls.push({
       stage: "graph",

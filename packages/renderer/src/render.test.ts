@@ -355,8 +355,11 @@ describe("unavailable map", () => {
     if (map.status !== "unavailable") return;
     expect(map.reason).toBe("no-logic");
     expect(map.svg).toContain(CHANGE_MAP_UNAVAILABLE);
-    expect(map.svg).toContain(UNAVAILABLE_REASON_TEXT["no-logic"]);
-    expect(UNAVAILABLE_REASON_TEXT["no-logic"]).toMatch(/no code|nothing to map/i);
+    // The apostrophe in "Rocky's" is escaped in the markup; the sentence is otherwise verbatim.
+    expect(map.svg).toContain("Nothing to map: Rocky");
+    expect(map.svg).toContain("path rules found only documentation, tooling or CI files.");
+    expect(UNAVAILABLE_REASON_TEXT["no-logic"]).toMatch(/nothing to map/i);
+    expect(UNAVAILABLE_REASON_TEXT["no-logic"]).not.toMatch(/behaviour|no code/i);
   });
 
   it("shows only the heading when the document has no graph and no reason", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SCHEMA_VERSION } from "./document.js";
+import { BASE_SCHEMA_VERSION, SCHEMA_VERSION } from "./document.js";
 import { applyKnownFields, type KnownFacts } from "./known-fields.js";
 import { parseAnalysisDocument } from "./parse.js";
 import type { Provenance } from "./provenance.js";
@@ -17,7 +17,9 @@ const modelOutput = () => {
 describe("applyKnownFields", () => {
   it("adds provenance and the schema version to output that has neither", () => {
     const result = applyKnownFields(modelOutput(), facts()) as Record<string, unknown>;
-    expect(result.schemaVersion).toBe(SCHEMA_VERSION);
+    // The lowest minor the document needs (H4-5 S7): nothing here uses a 1.2 field.
+    expect(result.schemaVersion).toBe(BASE_SCHEMA_VERSION);
+    expect(result.schemaVersion).not.toBe(SCHEMA_VERSION);
     expect(result.provenance).toEqual(facts());
     expectAccepted(result);
   });
@@ -45,8 +47,25 @@ describe("applyKnownFields", () => {
       facts(),
     ) as Record<string, unknown>;
     expect(result.provenance).toEqual(facts());
+    expect(result.schemaVersion).toBe(BASE_SCHEMA_VERSION);
+    expectAccepted(result);
+  });
+
+  it("stamps the current version only when the facts use a 1.2 value (no-logic)", () => {
+    const output = modelOutput() as Record<string, unknown>;
+    delete output["graph"];
+    const result = applyKnownFields(output, {
+      ...facts(),
+      graphUnavailable: { reason: "no-logic" },
+    }) as Record<string, unknown>;
     expect(result.schemaVersion).toBe(SCHEMA_VERSION);
     expectAccepted(result);
+    const older = applyKnownFields(output, {
+      ...facts(),
+      graphUnavailable: { reason: "timeout" },
+    }) as Record<string, unknown>;
+    expect(older.schemaVersion).toBe(BASE_SCHEMA_VERSION);
+    expectAccepted(older);
   });
 
   it("a model cannot add files: a triage entry or finding outside the facts is rejected", () => {

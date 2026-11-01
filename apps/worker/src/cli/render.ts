@@ -150,7 +150,7 @@ export type UsagePricer = (report: UsageReport) => string | undefined;
 /** Fixed text per `Plan.graphSkipped` (H4-5). */
 const GRAPH_SKIPPED: Readonly<Record<string, string>> = {
   "too-large": " (PR too large for the change map)",
-  "no-logic": " (nothing to map: no code with behaviour changed)",
+  "no-logic": " (nothing to map: the path rules found only documentation, tooling or CI files)",
 };
 
 export const renderUsage = (report: UsageReport, price?: UsagePricer): string => {

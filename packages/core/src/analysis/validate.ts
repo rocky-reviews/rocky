@@ -120,25 +120,26 @@ export const checkReview = (
  * H4-5: a card or an edge may be backed only by a file the graph call was given (the mapped
  * set, `map-scope.ts`). The published schema lets a file reference name any well-formed path
  * (context nodes, other producers); the pipeline is stricter, so a model can neither map a file
- * Rocky left out nor one it never saw. Exact string match, like every path check in the schema.
- * Issue lines carry the answer's own path and a code, never the value.
+ * Rocky left out nor one it never saw. A stray reference is dropped, deterministically, and the
+ * map is kept (review round 1, S6): `files` is a list that may be empty, so the document stays
+ * valid, and one stray path is not worth a repair call or a lost map. Exact string match, like
+ * every path check in the schema. Only `files[]` is checked: a label, subtitle or summary can
+ * still name any file, as any model text can.
  */
-export const checkGraphFiles = (answer: GraphAnswer, allowed: ReadonlySet<string>): string[] => {
-  const issues: string[] = [];
-  const check = (
-    collection: "nodes" | "edges",
-    items: readonly { files: readonly { path: string }[] }[],
-  ) => {
-    items.forEach((item, index) => {
-      item.files.forEach((file, at) => {
-        if (!allowed.has(file.path))
-          issues.push(`${collection}[${index}].files[${at}].path: UNKNOWN_FILE`);
-      });
+export const stripGraphFiles = <T extends GraphAnswer>(
+  answer: T,
+  allowed: ReadonlySet<string>,
+): { readonly answer: T; readonly stripped: number } => {
+  let stripped = 0;
+  const keep = <F extends { readonly path: string }>(files: readonly F[]): F[] =>
+    files.filter((file) => {
+      if (allowed.has(file.path)) return true;
+      stripped++;
+      return false;
     });
-  };
-  check("nodes", answer.nodes);
-  check("edges", answer.edges);
-  return issues.slice(0, MAX_REPAIR_ISSUES);
+  const nodes = answer.nodes.map((node) => ({ ...node, files: keep(node.files) }));
+  const edges = answer.edges.map((edge) => ({ ...edge, files: keep(edge.files) }));
+  return { answer: stripped === 0 ? answer : { ...answer, nodes, edges }, stripped };
 };
 
 export type DocumentPart = "graph" | "briefing";
