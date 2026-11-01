@@ -17,7 +17,7 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.1.0" as const;
+export const SCHEMA_VERSION = "1.2.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 const [currentMajor = "1", currentMinor = "0"] = SCHEMA_VERSION.split(".");

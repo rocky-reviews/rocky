@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P5-1
+- **Amended by:** H4-5 (only lanes, nodes and edges are asked of the model; the `no-logic`
+  reason; "Amendment (H4-5)" below)
 
 ## Context
 
@@ -49,3 +51,21 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   labels never cover a card (POC defect 3).
 - The SVG is not a standalone image: opened without the stylesheet it is unstyled. A comment or
   export surface that needs a self-contained file needs a separate theme pass.
+
+## Amendment (H4-5): the model is asked for what is drawn
+
+- **Only lanes, nodes and edges are requested** from the graph role (ADR 0013 amendment H4-5):
+  the architecture view is the only one this renderer draws (§1), and asking for flows,
+  payloads, drill-down views and a walkthrough cost tokens, kept the graph out of enforced
+  structured output and produced data nothing shows. The document schema keeps those fields,
+  empty or absent; when their UI is built, each comes back as **its own model call with its own
+  output schema** (flows and views compile separately; the walkthrough alone pushed the grammar
+  over its limit, H4-4), validated by the same document schema and integrity pass.
+- **The map shows code with behaviour** (ADR 0014 amendment H4-5): the pipeline sends the graph
+  role only the pull request's logic files (or its tests, for a test-only pull request), and a
+  card may be backed only by one of them.
+- **One more unavailable reason.** `provenance.graphUnavailable.reason: "no-logic"` (schema 1.2)
+  means the pull request changed no code with behaviour (documentation, tooling or CI only) and
+  no graph call was made. `UNAVAILABLE_REASON_TEXT` gives it Rocky's own sentence ("Nothing to
+  map: this pull request changes no code with behaviour."), as §4 requires; the web shows the
+  same idea in its own words (`briefing-model.ts`). The pipeline's `detail` is still never drawn.

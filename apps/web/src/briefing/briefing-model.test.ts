@@ -143,6 +143,18 @@ describe("graphState", () => {
     });
   });
 
+  it("says nothing was mapped, in Rocky's words, when the PR changed no logic (H4-5)", () => {
+    const noLogic = {
+      ...withoutGraph(),
+      provenance: { ...doc.provenance, graphUnavailable: { reason: "no-logic" as const } },
+    };
+    const state = graphState(noLogic);
+    expect(state.kind).toBe("unavailable");
+    if (state.kind !== "unavailable") return;
+    expect(state.reason).toMatch(/no code|nothing to map/i);
+    expect(state.detail).toBeUndefined();
+  });
+
   it("has no reason when the document has no graph and says nothing", () => {
     expect(graphState(withoutGraph())).toEqual({ kind: "unavailable" });
   });

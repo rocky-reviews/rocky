@@ -6,6 +6,7 @@
  */
 import type {
   AnalysisDocument,
+  BriefingUnavailableReason,
   GraphUnavailableReason,
   RiskLevel,
   TriagedFileLevel,
@@ -123,9 +124,10 @@ const GRAPH_REASON: Record<GraphUnavailableReason, string> = {
   "analysis-failed": "The AI's map of this change did not pass Rocky's checks.",
   "too-large": "This pull request is too large to map.",
   timeout: "The map took too long to produce.",
+  "no-logic": "Nothing to map: this pull request changes no code with behaviour.",
 };
 
-export const BRIEFING_REASON: Record<GraphUnavailableReason, string> = {
+export const BRIEFING_REASON: Record<BriefingUnavailableReason, string> = {
   "analysis-failed": "The AI's briefing did not pass Rocky's checks",
   "too-large": "The pull request was too large for an AI briefing",
   timeout: "The AI's briefing took too long",

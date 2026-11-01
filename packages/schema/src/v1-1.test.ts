@@ -12,11 +12,10 @@ const AUTH = "src/auth/invitations.ts";
 const PAGE = "web/src/pages/InvitePage.tsx";
 
 describe("schema 1.1: version policy", () => {
-  it("is 1.1.0 and still reads 1.0 documents, but no newer minor", () => {
-    expect(SCHEMA_VERSION).toBe("1.1.0");
+  it("reads 1.0 and 1.1 documents (the current version is 1.2, v1-2.test.ts)", () => {
+    expect(SCHEMA_VERSION).toMatch(/^1\.\d+\.0$/);
     expect(isSupportedVersion("1.0.0")).toBe(true);
     expect(isSupportedVersion("1.1.3")).toBe(true);
-    expect(isSupportedVersion("1.2.0")).toBe(false);
     expect(isSupportedVersion("1.10.0")).toBe(false);
     const doc = pr847();
     doc.schemaVersion = "1.0.0";

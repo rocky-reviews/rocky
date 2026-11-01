@@ -67,7 +67,7 @@ const GENERATED_INFIXES = [".generated.", ".gen."] as const;
  * repeat the marker (CodeQL js/polynomial-redos). The first occurrence decides: if any occurrence
  * has a character after it, the first one does.
  */
-const hasInfix = (name: string, markers: readonly string[]): boolean =>
+export const hasInfix = (name: string, markers: readonly string[]): boolean =>
   markers.some((marker) => {
     const at = name.indexOf(marker);
     return at !== -1 && at + marker.length < name.length;
@@ -83,6 +83,15 @@ const AUTH_WORD = /(?:^|[/._-])(?:sso|saml|oidc|jwt|acls?|rbac|iam|keys?)(?:[/._
 const TEST_SEGMENTS = new Set(["__tests__", "test", "tests", "spec", "specs", "e2e"]);
 const TEST_INFIXES = [".test.", ".spec.", "_test.", "_spec."] as const;
 
+/** A test by its directory or its name; `lower` is the lower-cased path. */
+export const isTestPath = (lower: string): boolean => {
+  const segments = lower.split("/");
+  const name = segments.at(-1) ?? "";
+  return (
+    segments.slice(0, -1).some((dir) => TEST_SEGMENTS.has(dir)) || hasInfix(name, TEST_INFIXES)
+  );
+};
+
 export const preTriage = (path: string): PreTriage => {
   const lower = path.toLowerCase();
   const segments = lower.split("/");
@@ -92,8 +101,7 @@ export const preTriage = (path: string): PreTriage => {
   if (dirs.some((dir) => MIGRATION_SEGMENTS.has(dir)) || name.endsWith(".sql")) {
     return { kind: "analyse", floor: "important", rule: "migration" };
   }
-  const test = dirs.some((dir) => TEST_SEGMENTS.has(dir)) || hasInfix(name, TEST_INFIXES);
-  if (!test && (AUTH_ANYWHERE.test(lower) || AUTH_WORD.test(lower))) {
+  if (!isTestPath(lower) && (AUTH_ANYWHERE.test(lower) || AUTH_WORD.test(lower))) {
     return { kind: "analyse", floor: "important", rule: "auth" };
   }
   if (LOCKFILES.has(name)) return { kind: "noise", rule: "lockfile" };

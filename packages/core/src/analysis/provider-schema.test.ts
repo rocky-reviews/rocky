@@ -110,9 +110,19 @@ describe("providerJsonSchema (H4-4)", () => {
 });
 
 describe("the role contracts (H4-4)", () => {
+  /**
+   * The full graph (flows, views, walkthrough) is what carried the hand-written constraints. Since
+   * H4-5 the graph role sends lanes, nodes and edges only, so the fold is exercised here on the
+   * full document schema, which a later flows or views call would send.
+   */
+  const FULL_GRAPH = outputSchema("rocky_full_graph", Graph);
+
   it("send no type beside a combinator, while the graph's constraints stay in the description", () => {
     expect(typeBesideCombinator(GRAPH_OUTPUT.jsonSchema)).toEqual([]);
-    const text = JSON.stringify(GRAPH_OUTPUT.jsonSchema);
+    // Nothing to fold in what the graph role sends today (H4-5): no description carries a fold.
+    expect(JSON.stringify(GRAPH_OUTPUT.jsonSchema)).not.toContain("{anyOf:");
+    expect(typeBesideCombinator(FULL_GRAPH.jsonSchema)).toEqual([]);
+    const text = JSON.stringify(FULL_GRAPH.jsonSchema);
     expect(text).toContain('{anyOf: [{\\"required\\":[\\"request\\"]}');
     expect(text).toContain(
       '{\\"properties\\":{\\"lanes\\":{\\"minItems\\":1}},\\"required\\":[\\"lanes\\"]}',
@@ -148,8 +158,8 @@ describe("the role contracts (H4-4)", () => {
         },
       ],
     });
-    expect(GRAPH_OUTPUT.parse(flow({ request: { type: "Login" } })).success).toBe(true);
-    const empty = GRAPH_OUTPUT.parse(flow({}));
+    expect(FULL_GRAPH.parse(flow({ request: { type: "Login" } })).success).toBe(true);
+    const empty = FULL_GRAPH.parse(flow({}));
     expect(empty.success).toBe(false);
     if (!empty.success) expect(empty.issues.join("\n")).toMatch(/payload/);
 
@@ -157,8 +167,8 @@ describe("the role contracts (H4-4)", () => {
       ...base,
       views: [{ id: "v1", title: "All", scope }],
     });
-    expect(GRAPH_OUTPUT.parse(view({ kind: "selection", nodes: ["n1"] })).success).toBe(true);
-    const unselected = GRAPH_OUTPUT.parse(view({ kind: "selection" }));
+    expect(FULL_GRAPH.parse(view({ kind: "selection", nodes: ["n1"] })).success).toBe(true);
+    const unselected = FULL_GRAPH.parse(view({ kind: "selection" }));
     expect(unselected.success).toBe(false);
     if (!unselected.success) expect(unselected.issues.join("\n")).toMatch(/views\[0\]\.scope/);
   });

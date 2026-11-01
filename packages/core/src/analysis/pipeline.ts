@@ -65,6 +65,7 @@ import {
   type ReviewFinding,
 } from "./outputs.js";
 import { instructionLeaks } from "./leak.js";
+import { changeMapScope } from "./map-scope.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
@@ -84,6 +85,7 @@ import {
   type Sha256Hex,
 } from "./units.js";
 import {
+  checkGraphFiles,
   checkReview,
   checkTriage,
   partitionIssues,
@@ -91,7 +93,10 @@ import {
   type UnitCheck,
 } from "./validate.js";
 
-/** Characters of diff sent to the change-map call; a larger PR gets `too-large` (P4-6). */
+/**
+ * Characters of diff sent to the change-map call; a larger PR gets `too-large` (P4-6). Counted
+ * over the mapped files only (H4-5): docs and tooling do not use up the map's budget.
+ */
 export const GRAPH_MAX_INPUT_CHARS = 400_000;
 export const DEFAULT_CONCURRENCY = 4;
 
@@ -598,10 +603,19 @@ const run = async (
   if (!together.ok) throw new Failed("document_invalid");
 
   // --- Change map ----------------------------------------------------------------------------
+  // The map shows code with behaviour (H4-5, ADR 0014 amendment): the graph model gets the
+  // triaged files the deterministic scope keeps (logic, or the tests of a test-only PR) and
+  // nothing else, so an excluded file's path or diff never reaches it, and a card may be
+  // backed only by a file it was given (`checkGraphFiles`). A PR with nothing to map gets the
+  // fixed reason `no-logic` and no call.
   let graph: GraphAnswer | undefined;
   let graphUnavailable: GraphUnavailable | undefined;
-  if (triageFiles.length > 0) {
-    const mapped = files.filter((file) => triageFiles.some((t) => t.path === file.path));
+  const scope = changeMapScope(triageFiles.map((file) => file.path));
+  if (scope.kind === "none" && triageFiles.length > 0) {
+    graphUnavailable = { reason: "no-logic" };
+  } else if (scope.kind !== "none") {
+    const inScope = new Set(scope.paths);
+    const mapped = files.filter((file) => inScope.has(file.path));
     const parts: LlmUntrustedText[] = [
       { label: "pr_title", text: request.pullRequest.title },
       ...mapped.flatMap((file, index) => [
@@ -621,7 +635,11 @@ const run = async (
           untrusted: parts,
           output: GRAPH_OUTPUT,
           maxOutputTokens: MAX_OUTPUT_TOKENS.graph,
-          check: (answer) => checkPart("graph", STUB_BRIEFING, answer, undefined),
+          check: (answer) => {
+            const part = checkPart("graph", STUB_BRIEFING, answer, undefined);
+            if (part === "unrepairable") return part;
+            return [...checkGraphFiles(answer, inScope), ...part];
+          },
         },
         observe("graph"),
         signal,
