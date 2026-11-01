@@ -104,4 +104,20 @@ describe("fuzz: random hostile strings", () => {
       { numRuns: 150 },
     );
   });
+
+  it("render to an inert map with motion and a focus (H4-6)", () => {
+    fc.assert(
+      fc.property(hostileString, fc.boolean(), (input, focused) => {
+        const source = withLabels(input);
+        const nodes = source.graph?.nodes.map((node) => node.id).slice(0, 2) ?? [];
+        const map = renderChangeMap(source, {
+          motion: true,
+          ...(focused ? { focus: { lanes: [], nodes: [...nodes, input], edges: [input] } } : {}),
+        });
+        expect(map.status).toBe("rendered");
+        inspectSvg(map.svg);
+      }),
+      { numRuns: 100 },
+    );
+  });
 });

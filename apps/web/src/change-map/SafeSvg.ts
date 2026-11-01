@@ -40,6 +40,7 @@ const PROPS: Readonly<Record<string, string>> = {
   "data-node": "data-node",
   "data-edge": "data-edge",
   "data-findings": "data-findings",
+  pathLength: "pathLength",
 };
 
 const ELEMENTS = new Set(["svg", "defs", "marker", "path", "g", "rect", "text", "title"]);

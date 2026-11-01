@@ -3,6 +3,7 @@ import "@rocky-reviews/renderer/change-map.css";
 import "./styles/shell.css";
 import "./styles/diff.css";
 import "./briefing/briefing.css";
+import "./change-map/map-styles.css";
 import "./inbox/inbox.css";
 import "./drafts/drafts.css";
 import "./keyboard/keyboard.css";
