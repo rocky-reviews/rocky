@@ -93,35 +93,37 @@ export const ShortcutsDialog = ({
             <span aria-hidden="true">{mode === "dark" ? "☀" : "☾"}</span> Switch to {nextMode} mode
           </button>
         </div>
-        <fieldset className="modal-section map-style-setting" aria-describedby="map-style-note">
-          <legend>Change map style</legend>
-          {MAP_STYLES.map((option) => (
-            <label key={option.value} className="map-style-option">
-              <input
-                type="radio"
-                name="map-style"
-                value={option.value}
-                checked={mapStyle.style === option.value}
-                onChange={(e) => {
-                  if (isMapStyle(e.target.value)) mapStyle.setStyle(e.target.value);
-                }}
-              />
-              <span>
-                <span className="map-style-label">{option.label}</span>
-                <span className="map-style-hint">{option.hint}</span>
-              </span>
-            </label>
-          ))}
-          <p id="map-style-note" className="note">
-            {mapStyle.remembered ? (
-              "Remembered in this browser."
-            ) : (
-              <span role="status">
-                This browser could not save the choice, so it lasts until you reload the page.
-              </span>
-            )}
-          </p>
-        </fieldset>
+        <div className="modal-section map-style-setting">
+          <fieldset aria-describedby="map-style-note">
+            <legend>Change map style</legend>
+            {MAP_STYLES.map((option) => (
+              <label key={option.value} className="map-style-option">
+                <input
+                  type="radio"
+                  name="map-style"
+                  value={option.value}
+                  checked={mapStyle.style === option.value}
+                  onChange={(e) => {
+                    if (isMapStyle(e.target.value)) mapStyle.setStyle(e.target.value);
+                  }}
+                />
+                <span>
+                  <span className="map-style-label">{option.label}</span>
+                  <span className="map-style-hint">{option.hint}</span>
+                </span>
+              </label>
+            ))}
+            <p id="map-style-note" className="note">
+              {mapStyle.remembered ? (
+                "Remembered in this browser."
+              ) : (
+                <span role="status">
+                  This browser could not save the choice, so it lasts until you reload the page.
+                </span>
+              )}
+            </p>
+          </fieldset>
+        </div>
         <div className="modal-section shortcuts-setting">
           <label className="switch">
             <input

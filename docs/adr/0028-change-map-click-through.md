@@ -60,3 +60,10 @@ described.
   wider than the POC's because a label in any inner corridor widens every gap (P5-1 review note).
 - `pnpm test:e2e` covers the behaviour (`e2e/change-map.e2e.spec.ts`); it is not part of
   `pnpm verify` yet (P5-2 follow-up).
+
+## Amendment (H4-6): every map style
+
+Live traffic and the Guided walkthrough draw the same cards and badges under the same delegated
+listeners (`useMapClicks` in `apps/web/src/change-map/map-parts.tsx`); the dots never take
+pointer events. Flow playback's column heads open their node's file through the same
+`targets.node` lookup. See [ADR 0035](0035-change-map-styles-and-motion.md).

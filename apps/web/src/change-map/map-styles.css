@@ -83,9 +83,12 @@
 .map-paused .cm * {
   animation-play-state: paused !important;
 }
-.map-traffic-only .cm-edge:not(.cm-traffic),
-.map-traffic-only .cm-label:not(.cm-traffic) {
+/* Lines and label boxes fade; label text keeps its contrast. */
+.map-traffic-only .cm-edge:not(.cm-traffic) {
   opacity: 0.14;
+}
+.map-traffic-only .cm-label:not(.cm-traffic) .cm-pill {
+  opacity: 0.3;
 }
 
 /* ---------- Guided walkthrough ---------- */

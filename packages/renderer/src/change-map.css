@@ -299,9 +299,26 @@
   stroke-dasharray: 0 50;
 }
 
-/* A walkthrough step: what it is about stays lit, the rest steps back. */
-.cm-dim {
+/*
+ * A walkthrough step: what it is about stays lit, the rest steps back. Lines, fills and
+ * outlines fade; text never does (it keeps its 4.5:1): a dimmed card's title turns --muted, and
+ * badges (findings) do not dim at all.
+ */
+.cm-edge.cm-dim {
   opacity: 0.3;
+}
+
+.cm-label.cm-dim .cm-pill,
+.cm-node.cm-dim .cm-card {
+  opacity: 0.35;
+}
+
+.cm-node.cm-dim .cm-node-title {
+  fill: var(--muted);
+}
+
+.cm-lane.cm-dim .cm-lane-bg {
+  opacity: 0.55;
 }
 
 .cm-edge.cm-focus {
@@ -392,19 +409,20 @@
   }
 
   /* A walkthrough step lights up and dims smoothly. */
-  .cm-lane,
-  .cm-node,
-  .cm-badge,
-  .cm-edge,
-  .cm-label {
+  .cm-edge {
     transition:
       opacity 0.5s ease,
       stroke 0.5s ease;
   }
 
+  .cm-pill {
+    transition: opacity 0.5s ease;
+  }
+
   .cm-card,
   .cm-lane-bg {
     transition:
+      opacity 0.5s ease,
       stroke 0.5s ease,
       stroke-width 0.5s ease;
   }

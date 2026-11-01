@@ -158,13 +158,16 @@ kbd {
 
 /* H4-6: the change map style, with the theme toggle, at every width. */
 .map-style-setting {
-  border: 0;
   border-top: 1px solid var(--border);
+}
+.map-style-setting fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
   min-width: 0;
 }
 .map-style-setting legend {
-  float: left;
-  width: 100%;
+  padding: 0;
   margin-bottom: var(--space-1);
   font-weight: 600;
 }
@@ -192,7 +195,6 @@ kbd {
   font-size: var(--text-base);
 }
 .map-style-setting .note {
-  clear: both;
   margin: 6px 0 0;
   color: var(--muted);
   font-size: var(--text-base);

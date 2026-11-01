@@ -158,6 +158,32 @@ test.describe("Guided walkthrough", () => {
     await expect(section(page)).toContainText("Stop 2 of 3");
   });
 
+  test("dimming fades lines and boxes, never text", async ({ page }) => {
+    await open(page, "walkthrough");
+    await page.getByRole("button", { name: "Next stop" }).click();
+    await expect(section(page).locator('[data-node="page"]')).toHaveClass(/cm-dim/);
+    // Once the entrance (rise, fade-in) and the dimming's easing have finished.
+    await page.evaluate(() =>
+      Promise.all(
+        document
+          .getAnimations()
+          .filter((animation) => animation.effect?.getTiming().iterations !== Infinity)
+          .map((animation) => animation.finished),
+      ),
+    );
+    const faded = await section(page)
+      .locator("svg text")
+      .evaluateAll((texts) =>
+        texts.flatMap((text) => {
+          let opacity = 1;
+          for (let el: Element | null = text; el !== null; el = el.parentElement)
+            opacity *= Number(getComputedStyle(el).opacity);
+          return opacity < 1 ? [text.textContent ?? ""] : [];
+        }),
+      );
+    expect(faded).toEqual([]);
+  });
+
   test("Play tour moves on by itself and stops at the end", async ({ page }) => {
     await page.clock.install({ time: FIXTURE_NOW });
     await open(page, "walkthrough");
