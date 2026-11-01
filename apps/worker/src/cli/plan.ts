@@ -21,7 +21,8 @@ import { estimateInputTokens } from "./budget.js";
  *   file the rules floor at important is certain, every other file with new-side lines may be);
  * - one change-map call over the files the map scope keeps (H4-5: logic, or the tests of a
  *   test-only PR; skipped when there is nothing to map or the PR is over the graph's input
- *   budget) and one briefing.
+ *   budget), then its flows and walkthrough calls over the same files plus the map's outline
+ *   (H4-7; skipped with the map, and certain only if the map call succeeds), and one briefing.
  *
  * Token figures use the budget's own input estimate and each stage's output cap, which is what the
  * cap check reserves for a call in flight. "Certain" counts the certain calls once; "worst case"
@@ -62,6 +63,10 @@ export type Plan =
 
 /** Briefing input per triaged file (its triage and findings as JSON): a rough allowance. */
 const BRIEFING_CHARS_PER_FILE = 1_200;
+/** The map's outline (ids, labels, kinds) the flows and walkthrough calls get: an allowance. */
+const MAP_OUTLINE_CHARS = 4_000;
+/** The flows outline the walkthrough call gets: an allowance. */
+const FLOWS_OUTLINE_CHARS = 2_000;
 
 const estimate = (stage: AnalysisStage, untrusted: readonly LlmUntrustedText[]): number => {
   const call = STAGE_CALLS[stage];
@@ -155,6 +160,26 @@ export const planAnalysis = (diff: string, title: string, truncated: boolean): P
       certain: true,
       inputTokens: estimate("graph", graphParts),
       maxOutputTokens: STAGE_CALLS.graph.maxOutputTokens,
+    });
+    const [title = { label: "pr_title", text: "" }, ...mappedFiles] = graphParts;
+    const outline = { label: "graph", text: "x".repeat(MAP_OUTLINE_CHARS) };
+    // Run only when the map call succeeds (H4-7): planned, but not certain.
+    calls.push({
+      stage: "flows",
+      certain: false,
+      inputTokens: estimate("flows", [title, outline, ...mappedFiles]),
+      maxOutputTokens: STAGE_CALLS.flows.maxOutputTokens,
+    });
+    calls.push({
+      stage: "walkthrough",
+      certain: false,
+      inputTokens: estimate("walkthrough", [
+        title,
+        outline,
+        { label: "flows", text: "x".repeat(FLOWS_OUTLINE_CHARS) },
+        ...mappedFiles,
+      ]),
+      maxOutputTokens: STAGE_CALLS.walkthrough.maxOutputTokens,
     });
   }
   calls.push({

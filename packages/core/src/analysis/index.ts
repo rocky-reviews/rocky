@@ -49,9 +49,11 @@ export {
   type AnalysisRequest,
   type AnalysisStage,
   type AnalysisStats,
+  type MapSectionStatus,
+  type StageTokens,
 } from "./pipeline.js";
 export { providerJsonSchema } from "./provider-schema.js";
-export { STAGE_CALLS, type StageTemplate } from "./stages.js";
+export { STAGE_CALLS, stageOf, type StageTemplate } from "./stages.js";
 export { belowVerdictFloor } from "./verdict.js";
 export {
   createLeakDetector,

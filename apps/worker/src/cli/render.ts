@@ -138,6 +138,27 @@ export const renderBriefing = (doc: AnalysisDocument, pr: PullRequestHeader): st
           : "none"
     }`,
   );
+  if (doc.graph !== undefined) {
+    // The sections drawn by their own calls (H4-7): counts and Rocky's fixed reasons only.
+    const flows = doc.graph.flows.length;
+    const steps = doc.graph.walkthrough?.steps.length;
+    out.push(
+      `  flows: ${
+        provenance.flowsUnavailable !== undefined
+          ? `unavailable (${provenance.flowsUnavailable.reason})`
+          : `${flows} drawn`
+      }`,
+    );
+    out.push(
+      `  walkthrough: ${
+        provenance.walkthroughUnavailable !== undefined
+          ? `unavailable (${provenance.walkthroughUnavailable.reason})`
+          : steps === undefined
+            ? "none"
+            : `${steps} steps`
+      }`,
+    );
+  }
   return `${out.join("\n")}\n`;
 };
 
@@ -203,11 +224,11 @@ export const renderPlan = (
   }
   out.push("");
   out.push("Planned calls (input estimate + output cap, in tokens)");
-  for (const stage of ["triage", "review", "graph", "briefing"] as const) {
+  for (const stage of ["triage", "review", "graph", "flows", "walkthrough", "briefing"] as const) {
     const calls = plan.calls.filter((call) => call.stage === stage);
     if (calls.length === 0) {
       out.push(
-        `  ${stage.padEnd(8)} none${stage === "graph" ? (GRAPH_SKIPPED[String(plan.graphSkipped)] ?? "") : ""}`,
+        `  ${stage.padEnd(11)} none${stage === "graph" ? (GRAPH_SKIPPED[String(plan.graphSkipped)] ?? "") : ""}`,
       );
       continue;
     }
@@ -217,8 +238,10 @@ export const renderPlan = (
     const count =
       certain === calls.length
         ? `${calls.length} ${calls.length === 1 ? "call" : "calls"}`
-        : `${certain} to ${calls.length} calls (depends on the triage)`;
-    out.push(`  ${stage.padEnd(8)} ${count}  input ~${fmt(input)}  output cap ${fmt(output)}`);
+        : stage === "flows" || stage === "walkthrough"
+          ? `${calls.length} call (if the map is drawn)`
+          : `${certain} to ${calls.length} calls (depends on the triage)`;
+    out.push(`  ${stage.padEnd(11)} ${count}  input ~${fmt(input)}  output cap ${fmt(output)}`);
   }
   out.push("");
   out.push(`Certain calls: ~${fmt(plan.certainTokens)} tokens at their caps`);

@@ -131,7 +131,8 @@ describe("runEvals (P4-7) on the scripted roles", () => {
     const failsClosed = injection.cases.filter((c) => c.expectFailsClosed);
     expect(failsClosed.length).toBeGreaterThan(0);
     expect(failsClosed.every((c) => c.status === "failed")).toBe(true);
-  });
+    // A whole injection run through the pipeline: over the 5 s default under coverage (H4-7).
+  }, 60_000);
 });
 
 describe("the eval subjects", () => {

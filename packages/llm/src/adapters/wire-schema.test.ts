@@ -83,14 +83,14 @@ describe("which roles the provider enforces (H4-4, H4-5)", () => {
       triage: "structured",
       review: "structured",
       graph: "structured",
+      flows: "structured",
+      walkthrough: "structured",
       briefing: "structured",
     });
   });
 
-  it("the graph schema stays inside the API's published complexity limits (H4-5)", () => {
-    // ADR 0013 amendment H4-4: at most 24 optional parameters and no recursive definition. The
-    // grammar-size limit has no offline oracle; the real run is its evidence (docs/progress.md).
-    const sent = jsonSchemaOutputFormat(STAGE_CALLS.graph.output.jsonSchema as never).schema;
+  /** Optional parameters in a sent schema, the API's published limit being 24 (ADR 0013 H4-4). */
+  const optionalCount = (sent: unknown): number => {
     let optional = 0;
     const walk = (node: unknown): void => {
       if (Array.isArray(node)) return node.forEach(walk);
@@ -103,8 +103,34 @@ describe("which roles the provider enforces (H4-4, H4-5)", () => {
       Object.values(node).forEach(walk);
     };
     walk(sent);
-    expect(optional).toBeLessThanOrEqual(24);
+    return optional;
+  };
+
+  it("the graph schema stays inside the API's published complexity limits (H4-5)", () => {
+    // ADR 0013 amendment H4-4: at most 24 optional parameters and no recursive definition. The
+    // grammar-size limit has no offline oracle; the real run is its evidence (docs/progress.md).
+    const sent = jsonSchemaOutputFormat(STAGE_CALLS.graph.output.jsonSchema as never).schema;
+    expect(optionalCount(sent)).toBeLessThanOrEqual(24);
     expect(JSON.stringify(sent)).not.toMatch(/"flows"|"views"|"walkthrough"|JsonValue|"View"/);
+  });
+
+  it("the flows and walkthrough schemas compile on their own, without the payload's recursive sample (H4-7)", () => {
+    const flows = jsonSchemaOutputFormat(STAGE_CALLS.flows.output.jsonSchema as never).schema;
+    expect(optionalCount(flows)).toBeLessThanOrEqual(24);
+    expect(JSON.stringify(flows)).not.toMatch(/"payload"|JsonValue|"views"|"walkthrough"|"\$defs"/);
+    expect(JSON.stringify(flows)).toMatch(/"participants"/);
+    const walkthrough = jsonSchemaOutputFormat(
+      STAGE_CALLS.walkthrough.output.jsonSchema as never,
+    ).schema;
+    expect(optionalCount(walkthrough)).toBeLessThanOrEqual(24);
+    expect(JSON.stringify(walkthrough)).not.toMatch(/"stage"|"messages"|"lanes"|"\$defs"|anyOf/);
+    expect(JSON.stringify(walkthrough)).toMatch(/"heading"/);
+    // Each is a fraction of the graph's grammar, which compiled on the real provider (H4-5).
+    const graphBytes = JSON.stringify(
+      jsonSchemaOutputFormat(STAGE_CALLS.graph.output.jsonSchema as never).schema,
+    ).length;
+    expect(JSON.stringify(flows).length).toBeLessThan(graphBytes);
+    expect(JSON.stringify(walkthrough).length).toBeLessThan(graphBytes / 4);
   });
 });
 

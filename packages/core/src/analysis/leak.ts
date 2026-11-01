@@ -27,10 +27,12 @@ import {
 } from "../prompt.js";
 import {
   BRIEFING_INSTRUCTIONS,
+  FLOWS_INSTRUCTIONS,
   GRAPH_INSTRUCTIONS,
   REPAIR_INSTRUCTIONS,
   REVIEW_INSTRUCTIONS,
   TRIAGE_INSTRUCTIONS,
+  WALKTHROUGH_INSTRUCTIONS,
 } from "./instructions.js";
 
 /** Words in a run that counts as a copy. Shorter runs ("for a human code reviewer") are prose. */
@@ -50,6 +52,8 @@ export const PROMPT_TEXTS: readonly string[] = Object.freeze([
     TRIAGE_INSTRUCTIONS,
     REVIEW_INSTRUCTIONS,
     GRAPH_INSTRUCTIONS,
+    FLOWS_INSTRUCTIONS,
+    WALKTHROUGH_INSTRUCTIONS,
     BRIEFING_INSTRUCTIONS,
     REPAIR_INSTRUCTIONS,
   ].map((instructions) => instructions.text),

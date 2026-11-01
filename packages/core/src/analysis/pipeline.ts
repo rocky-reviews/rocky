@@ -3,7 +3,8 @@
  * document (or a failure code) out.
  *
  *   diff → rules pre-triage → triage (per file) → review (critical and important files only)
- *        → change map → briefing → validate/repair → outcome (the worker stores it)
+ *        → change map → its flows → its walkthrough → briefing → validate/repair
+ *        → outcome (the worker stores it)
  *
  * - Known facts come from the diff and the caller, never from a model (ADR 0004 §3).
  * - Every model answer is schema-validated, then integrity-checked in a document; a failing
@@ -33,11 +34,14 @@ import {
   type ChangedFile,
   type Finding,
   type GraphUnavailable,
+  type MapSectionUnavailable,
+  type MapSectionUnavailableReason,
   type NoiseFile,
   type RiskLevel,
   type TriagedFile,
   type UnanalysedFile,
   type UnanalysedReason,
+  type Walkthrough,
 } from "@rocky-reviews/schema";
 import {
   isLlmCallError,
@@ -45,22 +49,28 @@ import {
   type LlmFatalErrorKind,
   type LlmRoles,
   type LlmUntrustedText,
+  type LlmUsage,
 } from "../llm.js";
 import type { Clock } from "../ports.js";
 import { parseUnifiedDiff, type DiffFailure, type DiffFile } from "./diff.js";
 import {
   BRIEFING_INSTRUCTIONS,
+  FLOWS_INSTRUCTIONS,
   GRAPH_INSTRUCTIONS,
   REVIEW_INSTRUCTIONS,
   TRIAGE_INSTRUCTIONS,
+  WALKTHROUGH_INSTRUCTIONS,
 } from "./instructions.js";
 import {
   BRIEFING_OUTPUT,
+  FLOWS_OUTPUT,
   GRAPH_OUTPUT,
   MAX_OUTPUT_TOKENS,
   REVIEW_OUTPUT,
   TRIAGE_OUTPUT,
+  WALKTHROUGH_OUTPUT,
   type BriefingAnswer,
+  type FlowsAnswer,
   type GraphAnswer,
   type ReviewFinding,
 } from "./outputs.js";
@@ -87,8 +97,13 @@ import {
 import {
   checkReview,
   checkTriage,
+  graphIds,
   partitionIssues,
+  stripFlowRefs,
   stripGraphRefs,
+  stripWalkthroughRefs,
+  toWalkthrough,
+  type DocumentPart,
   type MappedFiles,
   type ProvenanceBase,
   type UnitCheck,
@@ -140,7 +155,21 @@ export type AnalysisFailureCode =
   | `llm_${LlmFatalErrorKind}`
   | "internal_error";
 
-export type AnalysisStage = "triage" | "review" | "graph" | "briefing";
+export type AnalysisStage = "triage" | "review" | "graph" | "flows" | "walkthrough" | "briefing";
+
+/**
+ * What became of a map section drawn by its own call (H4-7): `drawn`, `skipped` when there was
+ * no map to draw it over (no call), or the fixed reason also written to the document.
+ */
+export type MapSectionStatus = "drawn" | "skipped" | MapSectionUnavailableReason;
+
+/** Provider-reported tokens of one stage, summed over its calls (repair rounds included). */
+export interface StageTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
 
 /** Counts only: safe to log. */
 export interface AnalysisStats {
@@ -157,10 +186,18 @@ export interface AnalysisStats {
   calls: Record<AnalysisStage, number>;
   repairs: number;
   graph: "drawn" | "unavailable" | "none";
-  /** Graph file references outside the mapped set, dropped from the stored map (H4-5). */
+  /** Graph file references outside the mapped set, dropped from the stored map (H4-5; flow steps included, H4-7). */
   graphFilesStripped: number;
-  /** Graph line ranges outside the file's changed lines, dropped from the stored map (H4-5). */
+  /** Graph line ranges outside the file's changed lines, dropped from the stored map (H4-5; flow steps included, H4-7). */
   graphRangesStripped: number;
+  flows: MapSectionStatus;
+  walkthrough: MapSectionStatus;
+  /** Flow participants, messages and whole flows dropped for naming an unknown node (H4-7). */
+  flowsStripped: number;
+  /** Walkthrough focus ids and steps dropped for naming an unknown node or edge (H4-7). */
+  walkthroughStripped: number;
+  /** Token counts per stage, as the provider reported them (H4-7). */
+  tokens: Record<AnalysisStage, StageTokens>;
 }
 
 /**
@@ -239,6 +276,63 @@ const UNANALYSED_REASON: Readonly<Record<UnitFailure, UnanalysedReason>> = {
   invalid: "analysis-failed",
   too_large: "too-large",
   timeout: "timeout",
+};
+
+/** The same mapping for a whole-PR part: the map, its sections, the briefing. */
+const PART_REASON: Readonly<Record<UnitFailure, MapSectionUnavailableReason>> = {
+  refused: "analysis-failed",
+  truncated: "analysis-failed",
+  invalid: "analysis-failed",
+  too_large: "too-large",
+  timeout: "timeout",
+};
+
+/** The map as it is stored: the graph call's answer with the sections its own calls drew (H4-7). */
+type StoredGraph = GraphAnswer & {
+  readonly flows?: FlowsAnswer["flows"];
+  readonly walkthrough?: Walkthrough;
+};
+
+/**
+ * What the flows and walkthrough calls are told about the drawn map: ids, labels and kinds, so
+ * they can name its nodes and edges, and nothing a card says beyond that (summaries and file
+ * references stay out: fewer tokens, and nothing to echo). Model-written text, so it travels as
+ * an untrusted part like the diff it describes.
+ */
+const graphOutline = (graph: GraphAnswer) => ({
+  lanes: graph.lanes.map(({ id, label }) => ({ id, label })),
+  nodes: graph.nodes.map(({ id, label, kind, lane, subtitle }) => ({
+    id,
+    label,
+    kind,
+    lane,
+    ...(subtitle === undefined ? {} : { subtitle }),
+  })),
+  edges: graph.edges.map(({ id, from, to, kind, label }) => ({
+    id,
+    from,
+    to,
+    kind,
+    ...(label === undefined ? {} : { label }),
+  })),
+});
+
+const flowsOutline = (flows: FlowsAnswer["flows"]) =>
+  flows.map((flow) => ({
+    id: flow.id,
+    title: flow.title,
+    participants: flow.participants.map((participant) => participant.node),
+    messages: flow.messages.map(({ id, from, to, label, kind }) => ({ id, from, to, label, kind })),
+  }));
+
+const DOCUMENT_PARTS: readonly DocumentPart[] = ["graph", "flows", "walkthrough", "briefing"];
+
+const addUsage = (into: StageTokens, usage: LlmUsage | undefined): void => {
+  if (usage === undefined) return;
+  into.input += usage.inputTokens;
+  into.output += usage.outputTokens;
+  into.cacheRead += usage.cacheReadInputTokens;
+  into.cacheWrite += usage.cacheWrite5mInputTokens + usage.cacheWrite1hInputTokens;
 };
 
 /** A briefing no other part's check can trip over (verdict and estimate at their maximum). */
@@ -358,6 +452,10 @@ const run = async (
       stats.calls[stage]++;
       if (repair) stats.repairs++;
       if (!models.has(role)) models.set(role, { provider: result.provider, model: result.model });
+      // Counts only: every attempt the provider reported, or the answering one.
+      const tokens = stats.tokens[stage];
+      if (result.attempts === undefined) addUsage(tokens, result.usage);
+      else for (const attempt of result.attempts) addUsage(tokens, attempt.usage);
     },
   });
 
@@ -561,16 +659,22 @@ const run = async (
       file.newFileLines === undefined ? [] : [[file.path, file.newFileLines] as const],
     ),
   );
+  /** The pipeline-written reasons for the sections a drawn map lacks (schema 1.3, H4-7). */
+  interface SectionReasons {
+    readonly flowsUnavailable?: MapSectionUnavailable | undefined;
+    readonly walkthroughUnavailable?: MapSectionUnavailable | undefined;
+  }
   const assemble = (
     briefing: Briefing,
-    graph: GraphAnswer | undefined,
+    graph: StoredGraph | undefined,
     graphUnavailable: GraphUnavailable | undefined,
     briefingUnavailable?: BriefingUnavailable,
+    sections: SectionReasons = {},
   ) =>
     parseAnalysisDocumentJson(
       JSON.stringify({
         // The lowest minor the document needs, so older readers keep reading (H4-5, S7).
-        schemaVersion: requiredSchemaVersion({ provenance: { graphUnavailable } }),
+        schemaVersion: requiredSchemaVersion({ provenance: { graphUnavailable, ...sections } }),
         provenance: {
           ...base,
           generator: { ...base.generator, roles: generatorRoles(models, request.previous) },
@@ -578,6 +682,12 @@ const run = async (
           unanalysed,
           ...(graphUnavailable === undefined ? {} : { graphUnavailable }),
           ...(briefingUnavailable === undefined ? {} : { briefingUnavailable }),
+          ...(sections.flowsUnavailable === undefined
+            ? {}
+            : { flowsUnavailable: sections.flowsUnavailable }),
+          ...(sections.walkthroughUnavailable === undefined
+            ? {}
+            : { walkthroughUnavailable: sections.walkthroughUnavailable }),
           readByHand,
         },
         briefing,
@@ -590,16 +700,16 @@ const run = async (
 
   /** Issues the document reports against one part, or `unrepairable` for any other issue. */
   const checkPart = (
-    part: "graph" | "briefing",
+    part: DocumentPart,
     briefing: Briefing,
-    graph: GraphAnswer | undefined,
+    graph: StoredGraph | undefined,
     graphUnavailable: GraphUnavailable | undefined,
   ): UnitCheck => {
     const result = assemble(briefing, graph, graphUnavailable);
     if (result.ok) return [];
     const split = partitionIssues(result.error.issues);
-    const otherPart = part === "graph" ? split.briefing : split.graph;
-    if (split.other > 0 || otherPart.length > 0) return "unrepairable";
+    const foreign = DOCUMENT_PARTS.some((other) => other !== part && split[other].length > 0);
+    if (split.other > 0 || foreign) return "unrepairable";
     return split[part];
   };
 
@@ -619,6 +729,14 @@ const run = async (
   // nothing to map gets the fixed reason `no-logic`, no call.
   let graph: GraphAnswer | undefined;
   let graphUnavailable: GraphUnavailable | undefined;
+  /** What the graph call was given, for the calls that draw over its answer (H4-7). */
+  let mapInput:
+    | {
+        readonly title: LlmUntrustedText;
+        readonly files: readonly LlmUntrustedText[];
+        readonly spans: MappedFiles;
+      }
+    | undefined;
   const triagedPaths = new Set(triageFiles.map((file) => file.path));
   const scope = changeMapScope(
     files
@@ -651,13 +769,12 @@ const run = async (
         ];
       }),
     );
-    const parts: LlmUntrustedText[] = [
-      { label: "pr_title", text: request.pullRequest.title },
-      ...mapped.flatMap((file, index) => [
-        { label: `file.${index}.path`, text: file.path },
-        { label: `file.${index}.diff`, text: file.patch },
-      ]),
-    ];
+    const title: LlmUntrustedText = { label: "pr_title", text: request.pullRequest.title };
+    const fileParts: LlmUntrustedText[] = mapped.flatMap((file, index) => [
+      { label: `file.${index}.path`, text: file.path },
+      { label: `file.${index}.diff`, text: file.patch },
+    ]);
+    const parts: LlmUntrustedText[] = [title, ...fileParts];
     const size = parts.reduce((total, part) => total + part.text.length, 0);
     if (size > GRAPH_MAX_INPUT_CHARS) {
       graphUnavailable = { reason: "too-large" };
@@ -680,21 +797,114 @@ const run = async (
       if (drawn.ok) {
         const kept = stripGraphRefs(drawn.value, spans);
         graph = kept.answer;
+        mapInput = { title, files: fileParts, spans };
         stats.graphFilesStripped = kept.files;
         stats.graphRangesStripped = kept.ranges;
-      } else
-        graphUnavailable = {
-          reason:
-            drawn.reason === "too_large"
-              ? "too-large"
-              : drawn.reason === "timeout"
-                ? "timeout"
-                : "analysis-failed",
-        };
+      } else graphUnavailable = { reason: PART_REASON[drawn.reason] };
     }
   }
   stats.graph =
     graph !== undefined ? "drawn" : graphUnavailable !== undefined ? "unavailable" : "none";
+
+  // --- The map's flows and walkthrough (H4-7) ------------------------------------------------
+  // Two more calls on the graph role, each its own enforced output, drawn over the stored map:
+  // the sequences a reviewer must follow, then a short tour. Each gets what the graph call got
+  // (the title and the mapped files, nothing else) plus the map's outline (ids, labels, kinds)
+  // as an untrusted part, since it is model-written text. A participant, a focus id or a file
+  // reference the map does not declare is dropped and counted (`stripFlowRefs`,
+  // `stripWalkthroughRefs`), the rest is checked in the whole document, and a call that fails
+  // after its repair round leaves its section absent with a fixed reason: the map, the findings
+  // and the briefing are untouched. No map (nothing to map, too large, failed) means no call.
+  let flows: FlowsAnswer["flows"] | undefined;
+  let flowsUnavailable: MapSectionUnavailable | undefined;
+  let walkthrough: Walkthrough | undefined;
+  let walkthroughUnavailable: MapSectionUnavailable | undefined;
+  const storedGraph = (): StoredGraph | undefined =>
+    graph === undefined
+      ? undefined
+      : {
+          ...graph,
+          flows: flows ?? [],
+          ...(walkthrough === undefined ? {} : { walkthrough }),
+        };
+  if (graph !== undefined && mapInput !== undefined) {
+    const drawnMap = graph;
+    const { title, files: mappedFiles, spans: mappedSpans } = mapInput;
+    const ids = graphIds(drawnMap);
+    const outline: LlmUntrustedText = {
+      label: "graph",
+      text: JSON.stringify(graphOutline(drawnMap)),
+    };
+    const over = (
+      candidate: FlowsAnswer["flows"],
+      steps: Walkthrough | undefined,
+    ): StoredGraph => ({
+      ...drawnMap,
+      flows: candidate,
+      ...(steps === undefined ? {} : { walkthrough: steps }),
+    });
+    const drawnFlows = await completeWithRepair(
+      llm,
+      {
+        role: "graph",
+        instructions: FLOWS_INSTRUCTIONS,
+        untrusted: [title, outline, ...mappedFiles],
+        output: FLOWS_OUTPUT,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.flows,
+        check: (answer) => {
+          const kept = stripFlowRefs(answer, ids, mappedSpans).answer.flows;
+          // The document takes an empty list; an answer with nothing left is not worth storing.
+          if (kept.length === 0) return ["flows: too_small"];
+          return checkPart("flows", STUB_BRIEFING, over(kept, undefined), undefined);
+        },
+      },
+      observe("flows"),
+      signal,
+    );
+    if (drawnFlows.ok) {
+      const kept = stripFlowRefs(drawnFlows.value, ids, mappedSpans);
+      flows = kept.answer.flows;
+      stats.flowsStripped = kept.refs;
+      stats.graphFilesStripped += kept.files;
+      stats.graphRangesStripped += kept.ranges;
+    } else flowsUnavailable = { reason: PART_REASON[drawnFlows.reason] };
+
+    const drawnSteps = await completeWithRepair(
+      llm,
+      {
+        role: "graph",
+        instructions: WALKTHROUGH_INSTRUCTIONS,
+        untrusted: [
+          title,
+          outline,
+          { label: "flows", text: JSON.stringify(flowsOutline(flows ?? [])) },
+          ...mappedFiles,
+        ],
+        output: WALKTHROUGH_OUTPUT,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.walkthrough,
+        // Checked as it will be stored: too few steps left after stripping is the document's
+        // own `steps: too_small`, sent back for the repair round.
+        check: (answer) =>
+          checkPart(
+            "walkthrough",
+            STUB_BRIEFING,
+            over(flows ?? [], toWalkthrough(stripWalkthroughRefs(answer, ids).answer)),
+            undefined,
+          ),
+      },
+      observe("walkthrough"),
+      signal,
+    );
+    if (drawnSteps.ok) {
+      const kept = stripWalkthroughRefs(drawnSteps.value, ids);
+      walkthrough = toWalkthrough(kept.answer);
+      stats.walkthroughStripped = kept.refs;
+    } else walkthroughUnavailable = { reason: PART_REASON[drawnSteps.reason] };
+  }
+  stats.flows = flows !== undefined ? "drawn" : (flowsUnavailable?.reason ?? "skipped");
+  stats.walkthrough =
+    walkthrough !== undefined ? "drawn" : (walkthroughUnavailable?.reason ?? "skipped");
+  const sections: SectionReasons = { flowsUnavailable, walkthroughUnavailable };
 
   // --- Briefing ------------------------------------------------------------------------------
   const floor = maxRisk(
@@ -769,7 +979,7 @@ const run = async (
       ],
       output: BRIEFING_OUTPUT,
       maxOutputTokens: MAX_OUTPUT_TOKENS.briefing,
-      check: (answer) => checkPart("briefing", toBriefing(answer), graph, graphUnavailable),
+      check: (answer) => checkPart("briefing", toBriefing(answer), storedGraph(), graphUnavailable),
     },
     observe("briefing"),
     signal,
@@ -777,14 +987,7 @@ const run = async (
   // A briefing that fails after its repair round is replaced by Rocky's own (round 1, item 1).
   const briefingUnavailable: BriefingUnavailable | undefined = briefed.ok
     ? undefined
-    : {
-        reason:
-          briefed.reason === "too_large"
-            ? "too-large"
-            : briefed.reason === "timeout"
-              ? "timeout"
-              : "analysis-failed",
-      };
+    : { reason: PART_REASON[briefed.reason] };
   const briefing: Briefing = briefed.ok
     ? toBriefing(briefed.value)
     : {
@@ -806,7 +1009,7 @@ const run = async (
       };
 
   // --- Final validation: the whole document, as it will be stored ----------------------------
-  const final = assemble(briefing, graph, graphUnavailable, briefingUnavailable);
+  const final = assemble(briefing, storedGraph(), graphUnavailable, briefingUnavailable, sections);
   // Defence in depth: `toBriefing` already raised the verdict to a floor at least as high as the
   // stored-document rule, so this cannot trip unless that clamp breaks. It is the same check
   // `completeAnalysis` runs at the write (round 2, N3).
@@ -846,6 +1049,17 @@ const generatorRoles = (
   return roles;
 };
 
+const STAGES: readonly AnalysisStage[] = [
+  "triage",
+  "review",
+  "graph",
+  "flows",
+  "walkthrough",
+  "briefing",
+];
+const perStage = <T>(value: () => T): Record<AnalysisStage, T> =>
+  Object.fromEntries(STAGES.map((stage) => [stage, value()])) as Record<AnalysisStage, T>;
+
 const newStats = (): AnalysisStats => ({
   files: 0,
   noise: 0,
@@ -854,11 +1068,16 @@ const newStats = (): AnalysisStats => ({
   reviewed: 0,
   unanalysed: 0,
   findings: 0,
-  calls: { triage: 0, review: 0, graph: 0, briefing: 0 },
+  calls: perStage(() => 0),
   repairs: 0,
   graph: "none",
   graphFilesStripped: 0,
   graphRangesStripped: 0,
+  flows: "skipped",
+  walkthrough: "skipped",
+  flowsStripped: 0,
+  walkthroughStripped: 0,
+  tokens: perStage(() => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })),
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

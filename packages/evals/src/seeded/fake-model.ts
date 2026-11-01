@@ -1,8 +1,11 @@
 /**
  * A scripted "decent model" for a seeded PR (P4-7 `--fake`): fixed triage and findings per path,
- * a briefing whose review path follows the triage block, and a one-node graph. Like the other
- * scripts it answers by role and path only, so the pipeline's wiring decides what is stored.
+ * a briefing whose review path follows the triage block, and a one-node graph whose flows and
+ * walkthrough calls (H4-7) it refuses: a one-node map has no sequence to draw, and the sections'
+ * absence is what the seeded scores are blind to. Like the other scripts it answers by role and
+ * path only, so the pipeline's wiring decides what is stored.
  */
+import { stageOf } from "@rocky-reviews/core";
 import type { Script } from "@rocky-reviews/core/testing";
 import type { RiskLevel, TriagedFileLevel } from "@rocky-reviews/schema";
 import type { Severity } from "../score.js";
@@ -83,6 +86,7 @@ export const fakeModel =
         },
       };
     }
+    if (stageOf(call) !== "graph") return { status: "refused" };
     return { value: GRAPH };
   };
 
