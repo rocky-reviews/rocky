@@ -9,6 +9,9 @@ export {
 export {
   ANALYSIS_STAGES,
   CHARS_PER_TOKEN,
+  GRAPH_ROLE_CALLS,
+  MAP_STAGES,
+  UNIT_STAGES,
   DEFAULT_ANALYSIS_TOKEN_LIMIT,
   estimateAnalysisTokens,
   FILE_CALL_OVERHEAD_TOKENS,
@@ -50,7 +53,7 @@ export {
   type AnalysisStage,
   type AnalysisStats,
   type MapSectionStatus,
-  type StageTokens,
+  type StageUsage,
 } from "./pipeline.js";
 export { providerJsonSchema } from "./provider-schema.js";
 export { STAGE_CALLS, stageOf, type StageTemplate } from "./stages.js";

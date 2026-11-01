@@ -31,9 +31,9 @@ import { providerJsonSchema } from "./provider-schema.js";
 export const MAX_FINDINGS_PER_FILE = 25;
 /** At most this many issues go back to a model in a repair round. */
 export const MAX_REPAIR_ISSUES = 50;
-/** The flows call asks for the key sequences only; the document allows `MAX_FLOWS`. */
+/** The flows call asks for one to three key sequences (as its prompt says); the document allows `MAX_FLOWS`. */
 export const MIN_ANSWER_FLOWS = 1;
-export const MAX_ANSWER_FLOWS = 4;
+export const MAX_ANSWER_FLOWS = 3;
 /** The walkthrough call asks for three to seven steps; the document allows 2 to 12. */
 export const MIN_ANSWER_STEPS = 3;
 export const MAX_ANSWER_STEPS = 7;

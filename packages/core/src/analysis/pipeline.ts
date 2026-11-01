@@ -75,7 +75,7 @@ import {
   type ReviewFinding,
 } from "./outputs.js";
 import { instructionLeaks } from "./leak.js";
-import { changeMapScope } from "./map-scope.js";
+import { changeMapScope, GRAPH_MAX_INPUT_CHARS } from "./map-scope.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
@@ -99,6 +99,8 @@ import {
   checkTriage,
   graphIds,
   partitionIssues,
+  rebaseFlowIssues,
+  rebaseStepIssues,
   stripFlowRefs,
   stripGraphRefs,
   stripWalkthroughRefs,
@@ -109,11 +111,7 @@ import {
   type UnitCheck,
 } from "./validate.js";
 
-/**
- * Characters of diff sent to the change-map call; a larger PR gets `too-large` (P4-6). Counted
- * over the mapped files only (H4-5): docs and tooling do not use up the map's budget.
- */
-export const GRAPH_MAX_INPUT_CHARS = 400_000;
+export { GRAPH_MAX_INPUT_CHARS };
 export const DEFAULT_CONCURRENCY = 4;
 
 export interface AnalysisRequest {
@@ -163,10 +161,14 @@ export type AnalysisStage = "triage" | "review" | "graph" | "flows" | "walkthrou
  */
 export type MapSectionStatus = "drawn" | "skipped" | MapSectionUnavailableReason;
 
-/** Provider-reported tokens of one stage, summed over its calls (repair rounds included). */
-export interface StageTokens {
-  input: number;
-  output: number;
+/**
+ * Provider-reported tokens of one stage, summed over its calls (repair rounds included). The
+ * key names are ones the log redactor keeps (`inputTokens` and `outputTokens` are allowlisted;
+ * `tokens`, `output` and `*Tokens` as a bare suffix are not), so the counts reach the log.
+ */
+export interface StageUsage {
+  inputTokens: number;
+  outputTokens: number;
   cacheRead: number;
   cacheWrite: number;
 }
@@ -197,7 +199,7 @@ export interface AnalysisStats {
   /** Walkthrough focus ids and steps dropped for naming an unknown node or edge (H4-7). */
   walkthroughStripped: number;
   /** Token counts per stage, as the provider reported them (H4-7). */
-  tokens: Record<AnalysisStage, StageTokens>;
+  usageByStage: Record<AnalysisStage, StageUsage>;
 }
 
 /**
@@ -327,10 +329,10 @@ const flowsOutline = (flows: FlowsAnswer["flows"]) =>
 
 const DOCUMENT_PARTS: readonly DocumentPart[] = ["graph", "flows", "walkthrough", "briefing"];
 
-const addUsage = (into: StageTokens, usage: LlmUsage | undefined): void => {
+const addUsage = (into: StageUsage, usage: LlmUsage | undefined): void => {
   if (usage === undefined) return;
-  into.input += usage.inputTokens;
-  into.output += usage.outputTokens;
+  into.inputTokens += usage.inputTokens;
+  into.outputTokens += usage.outputTokens;
   into.cacheRead += usage.cacheReadInputTokens;
   into.cacheWrite += usage.cacheWrite5mInputTokens + usage.cacheWrite1hInputTokens;
 };
@@ -453,9 +455,9 @@ const run = async (
       if (repair) stats.repairs++;
       if (!models.has(role)) models.set(role, { provider: result.provider, model: result.model });
       // Counts only: every attempt the provider reported, or the answering one.
-      const tokens = stats.tokens[stage];
-      if (result.attempts === undefined) addUsage(tokens, result.usage);
-      else for (const attempt of result.attempts) addUsage(tokens, attempt.usage);
+      const usage = stats.usageByStage[stage];
+      if (result.attempts === undefined) addUsage(usage, result.usage);
+      else for (const attempt of result.attempts) addUsage(usage, attempt.usage);
     },
   });
 
@@ -852,10 +854,17 @@ const run = async (
         output: FLOWS_OUTPUT,
         maxOutputTokens: MAX_OUTPUT_TOKENS.flows,
         check: (answer) => {
-          const kept = stripFlowRefs(answer, ids, mappedSpans).answer.flows;
+          const kept = stripFlowRefs(answer, ids, mappedSpans);
           // The document takes an empty list; an answer with nothing left is not worth storing.
-          if (kept.length === 0) return ["flows: too_small"];
-          return checkPart("flows", STUB_BRIEFING, over(kept, undefined), undefined);
+          if (kept.answer.flows.length === 0) return ["flows: too_small"];
+          const checked = checkPart(
+            "flows",
+            STUB_BRIEFING,
+            over(kept.answer.flows, undefined),
+            undefined,
+          );
+          // Issues sit on the stripped list; the model repairs its own answer (SF2).
+          return checked === "unrepairable" ? checked : rebaseFlowIssues(checked, kept.index);
         },
       },
       observe("flows"),
@@ -884,13 +893,16 @@ const run = async (
         maxOutputTokens: MAX_OUTPUT_TOKENS.walkthrough,
         // Checked as it will be stored: too few steps left after stripping is the document's
         // own `steps: too_small`, sent back for the repair round.
-        check: (answer) =>
-          checkPart(
+        check: (answer) => {
+          const kept = stripWalkthroughRefs(answer, ids);
+          const checked = checkPart(
             "walkthrough",
             STUB_BRIEFING,
-            over(flows ?? [], toWalkthrough(stripWalkthroughRefs(answer, ids).answer)),
+            over(flows ?? [], toWalkthrough(kept.answer)),
             undefined,
-          ),
+          );
+          return checked === "unrepairable" ? checked : rebaseStepIssues(checked, kept.index);
+        },
       },
       observe("walkthrough"),
       signal,
@@ -1077,7 +1089,7 @@ const newStats = (): AnalysisStats => ({
   walkthrough: "skipped",
   flowsStripped: 0,
   walkthroughStripped: 0,
-  tokens: perStage(() => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })),
+  usageByStage: perStage(() => ({ inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 })),
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

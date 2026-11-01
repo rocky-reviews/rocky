@@ -60,6 +60,13 @@ export interface ScopedFile {
  * be sent, so the map is unavailable for the reason the caller knows (too large, failed), never
  * drawn from the other category. `none`: nothing of either category.
  */
+/**
+ * Characters of diff sent to the change-map call and to each of the calls drawn over it (the
+ * flows, the walkthrough; H4-7); a larger PR gets `too-large` (P4-6). Counted over the mapped
+ * files only (H4-5): docs and tooling do not use up the map's budget.
+ */
+export const GRAPH_MAX_INPUT_CHARS = 400_000;
+
 export type ChangeMapScope =
   | { readonly kind: "logic" | "tests"; readonly paths: readonly string[] }
   | {
