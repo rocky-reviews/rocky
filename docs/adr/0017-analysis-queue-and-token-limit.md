@@ -207,7 +207,8 @@ and before any model call. It counts:
   rules pre-triage, binary and too-large files, and files whose unit the previous analysis
   covers (same path and unit key) are left out;
 - a fixed overhead of 2 000 tokens per file call;
-- a fixed overhead of 4 000 tokens for each of the 4 stages.
+- a fixed overhead of 4 000 tokens for each of the 6 stages (triage, review, graph, and since
+  H4-7 the map's flows and walkthrough, then the briefing).
 
 It is a size, not a bill: review and the change map read parts of the diff again. P4-5's usage
 totals are logged next to it (§8) to calibrate it.
