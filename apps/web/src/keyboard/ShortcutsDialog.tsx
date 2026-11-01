@@ -4,9 +4,12 @@
  * the page inert, focus starts on Close, Tab stays inside, and Escape or a click outside closes
  * it; the shell then returns focus to where it was. P6-9: below 760 px the top bar has no room
  * for the theme toggle, so it is here (CSS shows it only at that width); `m` still toggles it.
+ * H4-6 (ADR 0035): the change map style sits with it, at every width: three radio buttons, so
+ * arrow keys move between them, remembered in this browser like the theme.
  */
 import { Fragment, useEffect, useRef } from "react";
 import { trapTab } from "../shell/focus-trap.js";
+import { MAP_STYLES, type MapStyleSetting, isMapStyle } from "../change-map/map-style.js";
 import type { Mode } from "../theme.js";
 import { finishKeys, HELP_ROWS, isMac } from "./keymap.js";
 
@@ -19,6 +22,7 @@ type Props = {
   onSingleKeys: (on: boolean) => void;
   mode: Mode;
   onToggleMode: () => void;
+  mapStyle: MapStyleSetting;
   onClose: () => void;
 };
 
@@ -28,6 +32,7 @@ export const ShortcutsDialog = ({
   onSingleKeys,
   mode,
   onToggleMode,
+  mapStyle,
   onClose,
 }: Props) => {
   const nextMode = mode === "dark" ? "light" : "dark";
@@ -88,6 +93,35 @@ export const ShortcutsDialog = ({
             <span aria-hidden="true">{mode === "dark" ? "☀" : "☾"}</span> Switch to {nextMode} mode
           </button>
         </div>
+        <fieldset className="modal-section map-style-setting" aria-describedby="map-style-note">
+          <legend>Change map style</legend>
+          {MAP_STYLES.map((option) => (
+            <label key={option.value} className="map-style-option">
+              <input
+                type="radio"
+                name="map-style"
+                value={option.value}
+                checked={mapStyle.style === option.value}
+                onChange={(e) => {
+                  if (isMapStyle(e.target.value)) mapStyle.setStyle(e.target.value);
+                }}
+              />
+              <span>
+                <span className="map-style-label">{option.label}</span>
+                <span className="map-style-hint">{option.hint}</span>
+              </span>
+            </label>
+          ))}
+          <p id="map-style-note" className="note">
+            {mapStyle.remembered ? (
+              "Remembered in this browser."
+            ) : (
+              <span role="status">
+                This browser could not save the choice, so it lasts until you reload the page.
+              </span>
+            )}
+          </p>
+        </fieldset>
         <div className="modal-section shortcuts-setting">
           <label className="switch">
             <input

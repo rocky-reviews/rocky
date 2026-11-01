@@ -2,51 +2,62 @@
  * The change map's place in the briefing (P6-2): heading, hint, legend and the unavailable
  * state are page HTML here. The map itself is `ChangeMapCanvas`: the renderer's SVG (P5-1),
  * put in the page as React elements from its checked tree (P5-2, ADR 0022), clickable (P5-3).
+ * H4-6 (ADR 0035): it plays in the style chosen in the settings (Live traffic, Guided
+ * walkthrough or Flow playback), falling back to Live traffic with a notice when the document
+ * has no walkthrough or flows.
  */
-import { renderChangeMap } from "@rocky-reviews/renderer";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
-import {
-  Component,
-  type KeyboardEvent,
-  type MouseEvent,
-  type ReactNode,
-  type RefObject,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { SafeSvgView } from "../change-map/SafeSvg.js";
-import { mapTargets, targetAt } from "../change-map/targets.js";
+import { Component, type ReactNode, useMemo } from "react";
+import { FlowPlayback } from "../change-map/FlowPlayback.js";
+import { LiveMap } from "../change-map/LiveMap.js";
+import { type MapMode, mapModeFor } from "../change-map/map-mode.js";
+import { type OpenFile, useReducedMotion } from "../change-map/map-parts.js";
+import { mapStyleLabel, useMapStyle } from "../change-map/map-style.js";
+import { WalkthroughMap } from "../change-map/WalkthroughMap.js";
+import { useKeyboard } from "../keyboard/KeyboardContext.js";
 import { graphState } from "./briefing-model.js";
 
-type Props = { doc: AnalysisDocument; onOpenFile: (path: string, line?: number) => void };
+type Props = { doc: AnalysisDocument; onOpenFile: OpenFile };
+
+const LIVE: MapMode = { kind: "live", notice: undefined };
 
 export const ChangeMapSlot = ({ doc, onOpenFile }: Props) => {
   const state = graphState(doc);
+  const { style } = useMapStyle();
+  const mode = useMemo(
+    () => (doc.graph === undefined ? LIVE : mapModeFor(style, doc.graph)),
+    [style, doc.graph],
+  );
   return (
     <section className="section" aria-labelledby="change-map-title">
-      <h3 className="h-eyebrow" id="change-map-title">
-        Change map
-        {state.kind === "drawn" && (
-          <span className="eyebrow-hint">
-            <span className="eyebrow-sep" aria-hidden="true">
-              ·{" "}
+      <div className="map-head">
+        <h3 className="h-eyebrow" id="change-map-title">
+          Change map
+          {state.kind === "drawn" && (
+            <span className="eyebrow-hint">
+              <span className="eyebrow-sep" aria-hidden="true">
+                ·{" "}
+              </span>
+              {mode.kind === "flows"
+                ? "click a column head to open its file"
+                : "click a card to open its file, a badge to open its finding"}
             </span>
-            click a card to open its file, a badge to open its finding
-          </span>
-        )}
-      </h3>
+          )}
+        </h3>
+        {doc.graph !== undefined && <MapStyleButton />}
+      </div>
       {doc.graph !== undefined ? (
         <>
-          <ChangeMapCanvas doc={doc} onOpenFile={onOpenFile} />
-          <ul className="legend" aria-label="Legend">
-            <li className="lg-add">New in this PR</li>
-            <li className="lg-mod">Changed</li>
-            <li className="lg-unch">Existing, untouched</li>
-            <li className="lg-hero">Where the change matters</li>
-            <li className="lg-find">Open findings</li>
-          </ul>
+          <ChangeMapCanvas doc={doc} onOpenFile={onOpenFile} mode={mode} />
+          {mode.kind !== "flows" && (
+            <ul className="legend" aria-label="Legend">
+              <li className="lg-add">New in this PR</li>
+              <li className="lg-mod">Changed</li>
+              <li className="lg-unch">Existing, untouched</li>
+              <li className="lg-hero">Where the change matters</li>
+              <li className="lg-find">Open findings</li>
+            </ul>
+          )}
         </>
       ) : (
         <div className="map-unavailable">
@@ -66,7 +77,9 @@ export const ChangeMapSlot = ({ doc, onOpenFile }: Props) => {
 
 type CanvasProps = {
   doc: AnalysisDocument;
-  onOpenFile: (path: string, line?: number) => void;
+  onOpenFile: OpenFile;
+  /** H4-6: the style to play; Live traffic when not given. */
+  mode?: MapMode;
 };
 
 /**
@@ -75,73 +88,65 @@ type CanvasProps = {
  * click and one keydown listener on the wrapper (React's delegation, no inline handler); the
  * ids under the event are resolved in the document (`change-map/targets.ts`), never used as
  * selectors or URLs. Cards and badges are focusable buttons in the SVG itself, so Tab, Enter
- * and Space work as on any button.
+ * and Space work as on any button. H4-6: played in `mode` (`change-map/`).
  */
-export const ChangeMapCanvas = ({ doc, onOpenFile }: CanvasProps) => (
+export const ChangeMapCanvas = ({ doc, onOpenFile, mode = LIVE }: CanvasProps) => (
   <MapBoundary>
-    <MapView doc={doc} onOpenFile={onOpenFile} />
+    <MapView doc={doc} onOpenFile={onOpenFile} mode={mode} />
   </MapBoundary>
 );
 
-const MapView = ({ doc, onOpenFile }: CanvasProps) => {
-  const targets = useMemo(() => mapTargets(doc), [doc]);
-  const map = useMemo(
-    () => renderChangeMap(doc, { idPrefix: "brief", interactive: { files: targets.files } }),
-    [doc, targets],
-  );
-  const open = (root: Element, target: EventTarget | null): boolean => {
-    const hit = targetAt(root, target, targets);
-    if (hit === undefined) return false;
-    if (hit.line === undefined) onOpenFile(hit.path);
-    else onOpenFile(hit.path, hit.line);
-    return true;
-  };
-  const onClick = (event: MouseEvent<HTMLDivElement>) => {
-    open(event.currentTarget, event.target);
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    if (!(event.target instanceof Element) || event.target.getAttribute("role") !== "button")
-      return;
-    // Space would scroll the page; Enter has nothing else to do here.
-    if (open(event.currentTarget, event.target)) event.preventDefault();
-  };
-  const box = useRef<HTMLDivElement>(null);
-  const overflows = useOverflow(box, map);
+/**
+ * Says which style plays and opens the settings dialog, where the choice sits with the
+ * light/dark mode. Outside the styles, so it stays the same element when the style changes
+ * and the dialog can return focus to it.
+ */
+const MapStyleButton = () => {
+  const { style } = useMapStyle();
+  const { openHelp } = useKeyboard();
   return (
-    <>
-      {/* The listeners only delegate: the focusable controls are the SVG buttons inside. */}
-      <div className="map-scroll" ref={box} onClick={onClick} onKeyDown={onKeyDown}>
-        <SafeSvgView svg={map.tree} />
-      </div>
-      {overflows && (
-        <p className="map-scroll-hint">
-          Scroll sideways to see the whole map <span aria-hidden="true">→</span>
-        </p>
-      )}
-    </>
+    <button
+      type="button"
+      className="map-btn map-btn-quiet"
+      aria-haspopup="dialog"
+      onClick={openHelp}
+    >
+      Map style: {mapStyleLabel(style)}
+    </button>
   );
 };
 
-/**
- * P6-8: whether the box is narrower than its content (the map scrolls sideways on phones), so
- * the page can say so; nothing else shows that part of the map is out of view. Both the box and
- * the map inside it are watched, and a new map (`content`) checks again.
- */
-const useOverflow = (ref: RefObject<HTMLElement | null>, content: unknown): boolean => {
-  const [overflows, setOverflows] = useState(false);
-  useEffect(() => {
-    const el = ref.current;
-    if (el === null) return;
-    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 1);
-    check();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(check);
-    observer.observe(el);
-    for (const child of el.children) observer.observe(child);
-    return () => observer.disconnect();
-  }, [ref, content]);
-  return overflows;
+const MapView = ({ doc, onOpenFile, mode }: Required<CanvasProps>) => {
+  const reducedMotion = useReducedMotion();
+  switch (mode.kind) {
+    case "walkthrough":
+      return (
+        <WalkthroughMap
+          doc={doc}
+          stops={mode.stops}
+          onOpenFile={onOpenFile}
+          reducedMotion={reducedMotion}
+        />
+      );
+    case "flows":
+      return (
+        <FlowPlayback
+          doc={doc}
+          flows={mode.flows}
+          onOpenFile={onOpenFile}
+          reducedMotion={reducedMotion}
+        />
+      );
+    default:
+      return (
+        <LiveMap
+          doc={doc}
+          onOpenFile={onOpenFile}
+          reducedMotion={reducedMotion}
+          notice={mode.notice}
+        />
+      );
+  }
 };
 
 /**

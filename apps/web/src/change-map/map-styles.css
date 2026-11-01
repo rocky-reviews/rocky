@@ -1,0 +1,437 @@
+/*
+ * H4-6 (ADR 0035): the three change-map styles' page parts: their controls, the walkthrough's
+ * stage and panel, and the flow playback's sequence diagram. The map's own motion is in the
+ * renderer's change-map.css. Everything that moves sits inside
+ * `prefers-reduced-motion: no-preference`; colours are tokens only.
+ */
+
+/* ---------- controls ---------- */
+/* The heading and the "Map style" button share a line while there is room. */
+.map-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
+  margin-bottom: 6px;
+}
+.map-head > .h-eyebrow {
+  margin-bottom: 0;
+}
+.map-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0 0 10px;
+}
+/* 44 px targets (H4-6 criterion 6), the app's button look. */
+.map-btn {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+}
+.map-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.map-btn[aria-pressed="true"] {
+  border-color: var(--you);
+  background: var(--you-bg);
+  color: var(--you);
+}
+.map-btn-primary {
+  border-color: var(--you);
+  background: var(--you);
+  color: var(--on-you);
+}
+.map-btn-primary:hover:not(:disabled) {
+  background: var(--you);
+}
+.map-btn-quiet {
+  color: var(--muted);
+}
+.map-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.map-btn:focus-visible,
+.walk-dot:focus-visible,
+.seq-tick:focus-visible,
+.seq-head-box:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+}
+.map-notice {
+  margin: 0 0 10px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+/* ---------- Live traffic: the page's switches ---------- */
+.map-paused .cm,
+.map-paused .cm * {
+  animation-play-state: paused !important;
+}
+.map-traffic-only .cm-edge:not(.cm-traffic),
+.map-traffic-only .cm-label:not(.cm-traffic) {
+  opacity: 0.14;
+}
+
+/* ---------- Guided walkthrough ---------- */
+/* The panel goes beside the map where the column is wide enough, under it otherwise. */
+.walk {
+  container-type: inline-size;
+}
+.walk-grid {
+  display: grid;
+  gap: var(--space-3);
+}
+@container (min-width: 880px) {
+  .walk-grid {
+    grid-template-columns: minmax(0, 1fr) 280px;
+  }
+}
+.walk-stage {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+}
+.walk-pan {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.walk-pan > .cm {
+  display: block;
+}
+.walk-panel {
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+}
+.walk-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.walk-say {
+  display: grid;
+  gap: var(--space-1);
+}
+.walk-heading {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: 650;
+}
+.walk-body {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+.walk-dots {
+  display: flex;
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.walk-dot {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+}
+.walk-dot > span {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--faint);
+}
+.walk-dot[aria-current="step"] > span {
+  width: 22px;
+  background: var(--ai);
+}
+.walk-buttons {
+  margin: 0;
+}
+
+/* ---------- Flow playback ---------- */
+.flow-summary {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+.seq-scroll {
+  overflow-x: auto;
+  padding: 4px;
+  margin: -4px;
+}
+.seq {
+  --col-min: 132px;
+  min-width: calc(var(--cols) * var(--col-min));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  padding: var(--space-3) 0;
+}
+.seq-heads,
+.seq-msg,
+.seq-lifelines {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(var(--col-min), 1fr));
+}
+.seq-heads,
+.seq-msgs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.seq-head {
+  display: grid;
+  justify-items: center;
+  padding: 0 var(--space-1);
+}
+.seq-head-box {
+  min-height: 44px;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+button.seq-head-box {
+  cursor: pointer;
+}
+.seq-head.is-on .seq-head-box {
+  border-color: var(--ai);
+  box-shadow: 0 0 0 3px var(--ai-bg);
+}
+.seq-body {
+  position: relative;
+  padding-top: var(--space-2);
+}
+.seq-lifelines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.seq-lifelines > span {
+  justify-self: center;
+  width: 0;
+  border-left: 1px dashed var(--border);
+}
+.seq-msgs {
+  position: relative;
+}
+.seq-msg {
+  padding: var(--space-1) 0 10px;
+}
+/* An arrow runs from the centre of one column to the centre of another. */
+.seq-arrow {
+  display: grid;
+  gap: 3px;
+  margin-inline: calc(50% / var(--span));
+  color: var(--muted);
+  min-width: 0;
+}
+.seq-arrow.is-self {
+  margin-inline: 50% 0;
+}
+.seq-label {
+  justify-self: center;
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: center;
+  overflow-wrap: break-word;
+}
+.seq-arrow.is-self .seq-label {
+  justify-self: start;
+  text-align: start;
+}
+.seq-num {
+  font-family: var(--font-ui);
+  font-weight: 700;
+  color: var(--muted);
+}
+.seq-line {
+  position: relative;
+  height: 0;
+  border-top: 2px solid currentColor;
+}
+.kind-async .seq-line,
+.kind-return .seq-line {
+  border-top-style: dashed;
+}
+.seq-line::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  right: -1px;
+  border-left: 8px solid currentColor;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+}
+.is-rev .seq-line::after {
+  right: auto;
+  left: -1px;
+  border-left: 0;
+  border-right: 8px solid currentColor;
+}
+.is-self .seq-line {
+  width: 36px;
+  height: 18px;
+  border: 2px solid currentColor;
+  border-left: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.is-self .seq-line::after {
+  top: auto;
+  bottom: -6px;
+  right: auto;
+  left: -1px;
+  border-left: 0;
+  border-right: 8px solid currentColor;
+}
+.seq-msg.is-active {
+  background: var(--ai-bg);
+}
+.seq-msg.is-active .seq-arrow {
+  color: var(--ai);
+}
+.seq-msg.is-active .seq-label {
+  font-weight: 650;
+}
+/* Still to come: the line is ghosted; the text keeps its contrast. */
+.seq-msg.is-future .seq-line {
+  opacity: 0.25;
+}
+.seq-msg.is-future .seq-label {
+  color: var(--muted);
+}
+.seq-token {
+  display: none;
+  position: absolute;
+  top: -6px;
+  left: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--ai);
+  box-shadow: 0 0 0 4px var(--ai-bg);
+}
+.seq-now {
+  margin: 10px 0;
+  color: var(--text);
+  font-size: var(--text-md);
+}
+.seq-note {
+  color: var(--muted);
+}
+.seq-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.seq-tick {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seq-tick.is-past {
+  background: var(--panel-2);
+}
+.seq-tick.is-active {
+  border-color: var(--ai);
+  background: var(--ai-bg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .walk-pan {
+    transition: transform 0.85s cubic-bezier(0.65, 0, 0.35, 1);
+  }
+  .walk-say {
+    animation: map-say 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  }
+  .seq-token {
+    display: block;
+    animation: seq-go 0.9s cubic-bezier(0.45, 0, 0.55, 1) both;
+  }
+  .is-rev .seq-token {
+    animation-direction: reverse;
+  }
+  .is-self .seq-token {
+    display: none;
+  }
+  .seq-msg,
+  .seq-head-box {
+    transition:
+      background-color 0.35s ease,
+      border-color 0.35s ease,
+      box-shadow 0.35s ease;
+  }
+}
+
+@keyframes seq-go {
+  from {
+    left: 0;
+  }
+  to {
+    left: calc(100% - 10px);
+  }
+}
+
+@keyframes map-say {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

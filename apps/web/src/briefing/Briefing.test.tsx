@@ -88,14 +88,15 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(text(map)).toContain(
       "New in this PR Changed Existing, untouched Where the change matters Open findings",
     );
-    expect(map).toMatch(/<div class="map-scroll"><svg [^>]*class="cm"[^>]*role="group"/);
+    // H4-6: Live traffic is the default style, so the map is drawn with motion.
+    expect(map).toMatch(/<div class="map-scroll"><svg [^>]*class="cm cm-motion"[^>]*role="group"/);
     expect(text(map)).toMatch(/WEB .*API .*DATA .*WORKERS/);
   });
 
   it("makes the map's cards and badges buttons, ids under the brief- prefix (P5-3)", () => {
     const map = section(html, "Change map");
     expect(map).toContain(
-      '<g class="cm-node cm-added" data-node="page" tabindex="0" role="button" ' +
+      '<g class="cm-node cm-added cm-wave-0" data-node="page" tabindex="0" role="button" ' +
         'aria-label="InvitePage web/src/pages, opens web/src/pages/InvitePage.tsx">',
     );
     expect(map.match(/role="button"/g)).toHaveLength(10);

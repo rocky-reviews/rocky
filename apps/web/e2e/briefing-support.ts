@@ -13,6 +13,7 @@ export const STATE_PULLS = {
   superseded: 854,
   reanalysing: 855,
   outOfDate: 856,
+  noTour: 857,
 } as const;
 
 /** Opens the shell on a fixture PR with a fixed clock and no saved theme choice. */

@@ -175,11 +175,16 @@ test.describe("keyboard", () => {
       if (!inMain) break;
       names.push(
         await page.evaluate(() => {
-          const { dataset } = document.activeElement as HTMLElement | SVGElement;
+          const el = document.activeElement as HTMLElement | SVGElement;
+          const { dataset } = el;
+          // H4-6: the map's own controls (style, Traffic only, Pause motion) come first.
+          if (el.classList.contains("map-btn")) return "map control";
           return dataset.path ?? dataset.node ?? dataset.findings ?? "";
         }),
       );
     }
+    expect(names.slice(9, 12)).toEqual(["map control", "map control", "map control"]);
+    names.splice(9, 3);
     // 9 risk-table files, 5 map cards backed by a PR file, each followed by its finding badge
     // (P5-3), 4 path steps, the start button.
     expect(names).toHaveLength(24);

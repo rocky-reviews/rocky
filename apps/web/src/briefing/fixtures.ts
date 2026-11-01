@@ -17,6 +17,7 @@ export const BRIEFING_FIXTURE_PULLS = {
   superseded: 854,
   reanalysing: 855,
   outOfDate: 856,
+  noTour: 857,
 } as const;
 
 /** A push after the analysed commit: the PR's head in the re-analysing and out-of-date states. */
@@ -64,6 +65,15 @@ const graphUnavailable = variant(BRIEFING_FIXTURE_PULLS.graphUnavailable, (doc) 
   });
 });
 
+/** H4-6: a map with no walkthrough and no flows, so the guided styles fall back to Live traffic. */
+const noTour = variant(BRIEFING_FIXTURE_PULLS.noTour, (doc) => {
+  const graph = doc.graph as Record<string, unknown>;
+  delete graph.walkthrough;
+  graph.flows = [];
+  // The view that named the flow keeps its nodes and edges.
+  graph.views = [];
+});
+
 const n = BRIEFING_FIXTURE_PULLS;
 /** The state fixtures, as `base` (GitHub's view of pr-847) under each state's number. */
 export const briefingFixtures = (base: object): RawShellData[] => {
@@ -101,6 +111,7 @@ export const briefingFixtures = (base: object): RawShellData[] => {
       analysis: variant(n.outOfDate, () => {}),
       analysisRun: { status: "done" },
     },
+    { pull: pull(n.noTour), myReview: null, analysis: noTour },
     {
       pull: pull(n.superseded),
       myReview: null,
