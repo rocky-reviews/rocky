@@ -63,7 +63,11 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   over its limit, H4-4), validated by the same document schema and integrity pass.
 - **The map shows code with behaviour** (ADR 0014 amendment H4-5): the pipeline sends the graph
   role only the pull request's logic files (or its tests, for a test-only pull request), and a
-  card may be backed only by one of them.
+  card may be backed only by one of them, with a line range only inside that file's changed
+  lines. The renderer draws ranges nowhere; the web opens a ranged card at its first line
+  (ADR 0028 §5). The graph prompt now asks for components by role, unchanged context cards,
+  lanes as the reader's model and hero edges (ADR 0014 amendment H4-5, item 4), the shape this
+  renderer was built for.
 - **One more unavailable reason.** `provenance.graphUnavailable.reason: "no-logic"` (schema 1.2)
   means the path rules found no logic or test file in the pull request (documentation, tooling
   or CI only) and no graph call was made. `UNAVAILABLE_REASON_TEXT` gives it Rocky's own sentence ("Nothing to

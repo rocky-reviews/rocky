@@ -15,7 +15,33 @@ describe("change-map targets (P5-3)", () => {
 
   it("opens a card's first file that is in the PR", () => {
     expect(targets.node("page")).toEqual({ kind: "file", path: "web/src/pages/InvitePage.tsx" });
-    expect(targets.node("auth")).toEqual({ kind: "file", path: "src/auth/invitations.ts" });
+    // The fixture's auth card carries a range (lines 19–33): it opens at its first line (H4-5).
+    expect(targets.node("auth")).toEqual({
+      kind: "file",
+      path: "src/auth/invitations.ts",
+      line: 19,
+    });
+  });
+
+  it("opens a card at the first line of its range when the reference carries one (H4-5)", () => {
+    const ranged = mapTargets({
+      ...doc,
+      graph: {
+        ...doc.graph!,
+        nodes: doc.graph!.nodes.map((node) =>
+          node.id === "page"
+            ? { ...node, files: [{ path: node.files[0]!.path, range: { start: 12, end: 40 } }] }
+            : node,
+        ),
+      },
+    });
+    expect(ranged.node("page")).toEqual({
+      kind: "file",
+      path: "web/src/pages/InvitePage.tsx",
+      line: 12,
+    });
+    // A reference without a range opens the file as before: no `line` key at all.
+    expect(targets.node("page")).not.toHaveProperty("line");
   });
 
   it("opens nothing for a card outside the PR, without files, or unknown", () => {

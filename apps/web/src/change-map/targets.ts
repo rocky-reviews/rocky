@@ -8,11 +8,15 @@
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 
 export type MapTarget =
-  | { readonly kind: "file"; readonly path: string }
+  | { readonly kind: "file"; readonly path: string; readonly line?: number }
   | { readonly kind: "finding"; readonly path: string; readonly line: number };
 
 export type MapTargets = {
-  /** The PR file a card opens: its first file reference that is in the PR. */
+  /**
+   * The PR file a card opens: its first file reference that is in the PR, at the first line of
+   * its range when the reference carries one (H4-5; the diff viewer takes the nearest line it
+   * shows, ADR 0028 §5).
+   */
   node: (id: string) => MapTarget | undefined;
   /**
    * A badge lists its findings worst first; it opens the first. Every id must be one of the
@@ -33,8 +37,11 @@ export const mapTargets = (doc: AnalysisDocument): MapTargets => {
   return {
     files,
     node: (id) => {
-      const path = nodes.get(id)?.files.find((ref) => prFiles.has(ref.path))?.path;
-      return path === undefined ? undefined : { kind: "file", path };
+      const ref = nodes.get(id)?.files.find((file) => prFiles.has(file.path));
+      if (ref === undefined) return undefined;
+      return ref.range === undefined
+        ? { kind: "file", path: ref.path }
+        : { kind: "file", path: ref.path, line: ref.range.start };
     },
     findings: (ids) => {
       const list = ids.split(" ").map((id) => findings.get(id));
