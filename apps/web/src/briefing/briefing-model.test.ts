@@ -3,6 +3,7 @@ import { type AnalysisDocument, parseAnalysisDocument } from "@rocky-reviews/sch
 import { describe, expect, it } from "vitest";
 import {
   briefingBanner,
+  briefingLead,
   failureText,
   graphState,
   readByHand,
@@ -113,6 +114,21 @@ describe("readByHand", () => {
       provenance: { ...doc.provenance, readByHand: [{ path: "src/api/index.ts" }] },
     };
     expect(readByHand(marked)).toEqual(["src/api/index.ts"]);
+  });
+});
+
+describe("briefingLead (H4-8)", () => {
+  it("is the TL;DR of a 1.4 document, even next to a summary", () => {
+    expect(briefingLead(doc)).toEqual({ kind: "tldr", items: doc.briefing.tldr });
+    const both = { ...doc, briefing: { ...doc.briefing, summary: "Old paragraph." } };
+    expect(briefingLead(both)).toEqual({ kind: "tldr", items: doc.briefing.tldr });
+  });
+
+  it("is the summary paragraph of an older document", () => {
+    const briefing = { ...doc.briefing, summary: "Adds invitations." };
+    delete briefing.tldr;
+    const old = { ...doc, briefing };
+    expect(briefingLead(old)).toEqual({ kind: "summary", text: "Adds invitations." });
   });
 });
 

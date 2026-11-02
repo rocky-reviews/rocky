@@ -45,6 +45,23 @@
   background: var(--high-bg);
 }
 
+/* H4-8: the TL;DR, a few one-line bullets under their own heading, right after the verdict. The
+   bullet mark is the AI's cyan, like the AI tag's mark; the text stays --text. */
+.brief-tldr {
+  margin-top: 14px;
+}
+.tldr-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: var(--text-lg);
+  line-height: 1.5;
+}
+.tldr-list li::marker {
+  color: var(--ai);
+}
+
 /* POC: the level colour as text on its tint (below WCAG AA in light mode); here a level bar. */
 .verdict {
   display: flex;

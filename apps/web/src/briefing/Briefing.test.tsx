@@ -1,3 +1,4 @@
+import type { AnalysisDocument } from "@rocky-reviews/schema";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
@@ -54,10 +55,20 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(html).toMatch(/<h2[^>]*>Briefing &amp; change map<\/h2>/);
   });
 
-  it("shows the summary with its emphasis", () => {
-    expect(html).toContain(
-      '<p class="brief-summary"><bdi>Adds <strong>email invitations to orgs</strong>.',
+  it("opens with the verdict, then the TL;DR as a bulleted list under its own heading (H4-8)", () => {
+    expect(html).not.toContain("brief-summary");
+    expect(html).toContain('<h3 class="h-eyebrow" id="tldr-title">TL;DR</h3>');
+    const list = html.slice(
+      html.indexOf('<ul class="tldr-list" aria-labelledby="tldr-title">'),
+      html.indexOf("</ul>", html.indexOf('class="tldr-list"')),
     );
+    expect(list.match(/<li>/g)).toHaveLength(4);
+    expect(list).toContain("<li><bdi>Adds <strong>email invitations to orgs</strong>:");
+    expect(list).toContain("<code>src/auth/invitations.ts</code>");
+    expect(text(list)).toContain("admin included (F1).");
+    // The verdict sits above the TL;DR, and the risk table after it.
+    expect(html.indexOf('class="verdict v-critical"')).toBeLessThan(html.indexOf("tldr-title"));
+    expect(html.indexOf("tldr-title")).toBeLessThan(html.indexOf('class="risk-table"'));
   });
 
   it("shows the risk verdict: level and why", () => {
@@ -138,6 +149,20 @@ describe("briefing from the pr-847 analysis document", () => {
   });
 });
 
+describe("a document written before schema 1.4 (summary paragraph, no TL;DR)", async () => {
+  const html = render(await fixture("summaryOnly"));
+
+  it("shows the summary with its emphasis, above the verdict, as before (H4-8)", () => {
+    expect(html).toContain(
+      '<p class="brief-summary"><bdi>Adds <strong>email invitations to orgs</strong>.',
+    );
+    expect(html).not.toContain("TL;DR");
+    expect(html).not.toContain("tldr-list");
+    expect(html.indexOf("brief-summary")).toBeLessThan(html.indexOf('class="verdict v-critical"'));
+    expect(text(section(html, "Critical risk"))).toContain("The UI and wiring look routine.");
+  });
+});
+
 describe("briefing the pipeline wrote itself (provenance.briefingUnavailable)", async () => {
   const html = render(await fixture("briefingUnavailable"));
   const t = text(html);
@@ -149,6 +174,8 @@ describe("briefing the pipeline wrote itself (provenance.briefingUnavailable)", 
   });
 
   it("still shows the verdict, risk table and path", () => {
+    expect(html).toContain('<p class="brief-summary"><bdi>Rocky could not produce');
+    expect(html).not.toContain("TL;DR");
     expect(t).toContain("Critical risk");
     expect(t).toContain("3 files need your attention");
     expect(t).toContain("Suggested review path");
@@ -262,7 +289,7 @@ describe("untrusted model output", () => {
     ...doc,
     briefing: {
       ...doc.briefing,
-      summary: hostile,
+      tldr: [hostile, `Second ${hostile}`],
       verdict: { ...doc.briefing.verdict, reason: hostile },
       reviewPath: doc.briefing.reviewPath.map((s) => ({ ...s, why: hostile })),
       checkedOk: [hostile],
@@ -278,9 +305,25 @@ describe("untrusted model output", () => {
     />,
   );
 
-  it("renders summary, reason, path, memory and checks as text", () => {
+  it("renders the TL;DR, reason, path, memory and checks as text", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("<li><bdi>Second &lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("renders a hostile summary paragraph as text too", () => {
+    const briefing: AnalysisDocument["briefing"] = { ...evil.briefing, summary: hostile };
+    delete briefing.tldr;
+    const old = renderToStaticMarkup(
+      <BriefingView
+        analysis={{ ...evil, briefing }}
+        run={{ status: "done" }}
+        headSha={main.pull.headSha}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(old).not.toContain("<img");
+    expect(old).toContain('<p class="brief-summary"><bdi>&lt;img src=x onerror=alert(1)&gt;');
   });
 
   it("isolates bidi controls in every place they appear", () => {
