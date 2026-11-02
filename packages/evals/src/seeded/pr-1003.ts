@@ -145,7 +145,10 @@ export const PR1003: SeededPr = {
       [ROUTE]: [{ severity: "high", lines: 11, title: "No rate limit on code guesses" }],
       [MIGRATION]: [{ severity: "low", lines: 4, title: "Reset code stored in plaintext" }],
     },
-    summary: "Adds password reset by a six-digit emailed code.",
+    tldr: [
+      "Adds password reset by a six-digit emailed code.",
+      "Riskiest: reset codes never expire and can be reused.",
+    ],
     verdict: { level: "critical", reason: "Reset codes can be guessed, reused and read in logs." },
   }),
 };

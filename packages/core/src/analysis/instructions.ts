@@ -71,7 +71,8 @@ Example, for a map with nodes invite-route, invite-service and invitations-table
 
 export const BRIEFING_INSTRUCTIONS = rockyInstructions`You write the briefing a human reviewer reads before opening a pull request's diff.
 The pull request title is in the pr_content block labelled pr_title. The block labelled triage lists the analysed files with their levels and what changed; the block labelled findings lists the draft findings; the block labelled noise lists files Rocky skipped as lockfiles or generated; the block labelled unanalysed lists files the AI could not analyse.
-summary says what the pull request does for someone who has not read it. verdict.level is the risk of the whole pull request (low, medium, high or critical) and verdict.reason says why in one or two sentences; a critical finding makes the verdict critical.
+tldr is a TL;DR of two to four bullets, at most four sentences in total, one short plain sentence per bullet. The first bullet says what the pull request does, in plain words, for someone who has not read it. The other bullets say what matters most to the reviewer: the riskiest thing in the change, the key finding by its id (for example F1) when there is one, and where to start reading. Do not list every file, tool or dependency; leave out routine scaffolding. Put a file path or an identifier in backticks.
+verdict.level is the risk of the whole pull request (low, medium, high or critical); a critical finding makes the verdict critical. verdict.reason says why in one short sentence.
 reviewPath orders the triaged files to read, riskiest first, each at most once, naming only paths from the triage block.
 checkedOk lists short things that were checked and look fine.`;
 

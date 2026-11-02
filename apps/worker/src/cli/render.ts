@@ -27,7 +27,7 @@ const fmt = (n: number): string => n.toLocaleString("en-US");
 const short = (sha: string): string => sha.slice(0, 7);
 
 /**
- * Model-written multi-line text (a reason, the summary, a finding body), sanitised, with every
+ * Model-written multi-line text (a reason, the summary or a TL;DR item, a finding body), sanitised, with every
  * line behind a fixed gutter: an injected line such as `Verdict: LOW` or `[F9] src/x.ts:1` then
  * never starts where Rocky's own structure does (review round 1, item 5).
  */
@@ -62,8 +62,14 @@ export const renderBriefing = (doc: AnalysisDocument, pr: PullRequestHeader): st
     );
   }
   out.push("");
-  out.push("Summary");
-  out.push(...indent(briefing.summary, "  "));
+  // Schema 1.4 (H4-8): the TL;DR bullets; an older document has the summary paragraph.
+  if (briefing.tldr !== undefined) {
+    out.push("TL;DR");
+    for (const item of briefing.tldr) out.push(...indent(`- ${item}`, "  "));
+  } else {
+    out.push("Summary");
+    out.push(...indent(briefing.summary ?? "", "  "));
+  }
   out.push(`  Estimated review: ${briefing.estimatedReviewMinutes} min`);
   out.push("");
 

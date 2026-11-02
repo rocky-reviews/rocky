@@ -170,7 +170,10 @@ export const pr912Script = (call: ScriptedCall): ScriptedAnswer => {
     );
     return {
       value: {
-        summary: "Adds one-off charges through Stripe, an endpoint and a table.",
+        tldr: [
+          "Adds one-off charges through Stripe, with an endpoint and a table.",
+          "Start with the charge endpoint, where the amount comes in.",
+        ],
         verdict: PR912_VERDICT,
         reviewPath: triaged.map((p) => ({ path: p, why: "In order of risk." })),
         checkedOk: ["Amounts are integers in cents."],
