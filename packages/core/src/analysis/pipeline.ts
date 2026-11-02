@@ -676,7 +676,10 @@ const run = async (
     parseAnalysisDocumentJson(
       JSON.stringify({
         // The lowest minor the document needs, so older readers keep reading (H4-5, S7).
-        schemaVersion: requiredSchemaVersion({ provenance: { graphUnavailable, ...sections } }),
+        schemaVersion: requiredSchemaVersion({
+          briefing,
+          provenance: { graphUnavailable, ...sections },
+        }),
         provenance: {
           ...base,
           generator: { ...base.generator, roles: generatorRoles(models, request.previous) },
@@ -929,7 +932,8 @@ const run = async (
     triageFiles.reduce((total, file) => total + file.reviewMinutes, 0),
   );
   const toBriefing = (answer: BriefingAnswer): Briefing => ({
-    summary: answer.summary,
+    // The TL;DR replaces the summary paragraph in what Rocky writes (H4-8, schema 1.4).
+    tldr: answer.tldr,
     // The verdict never sits below what the findings say, nor below the risk of a file that was
     // not reviewed, whatever the model answered (Fix A). When it is raised, the model's reason
     // ("Looks fine.") no longer describes it, so a fixed Rocky reason replaces it (round 2, N4).

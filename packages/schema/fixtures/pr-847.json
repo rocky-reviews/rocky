@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.1.0",
+  "schemaVersion": "1.4.0",
   "provenance": {
     "repo": {
       "owner": "acme",
@@ -176,10 +176,15 @@
     }
   },
   "briefing": {
-    "summary": "Adds **email invitations to orgs**. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.",
+    "tldr": [
+      "Adds **email invitations to orgs**: an admin invites by email and the invitee joins through a 7-day link.",
+      "Riskiest: accepting an invite lets the invitee choose their own role, admin included (F1).",
+      "The invite route has no permission check (F2), and an accepted invite can be reused (F3).",
+      "Start with `src/auth/invitations.ts`, then the route and the migration."
+    ],
     "verdict": {
       "level": "critical",
-      "reason": "This PR adds a **new way to gain membership in an org**. Rocky drafted 1 critical and 3 high findings, all on the auth path. The UI and wiring look routine."
+      "reason": "This PR adds a **new way to gain membership in an org**, with 1 critical and 3 high findings on the auth path."
     },
     "estimatedReviewMinutes": 7,
     "reviewPath": [

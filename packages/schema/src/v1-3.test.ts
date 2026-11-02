@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   BASE_SCHEMA_VERSION,
   isSupportedVersion,
+  MAP_SECTIONS_SCHEMA_VERSION,
   NO_LOGIC_SCHEMA_VERSION,
   requiredSchemaVersion,
-  SCHEMA_VERSION,
 } from "./document.js";
 import { FLOW_MESSAGE_RULE, FlowMessage, FlowMessageBase, flowMessageConsistent } from "./graph.js";
 import { applyKnownFields } from "./known-fields.js";
 import { MapSectionUnavailableReason } from "./provenance.js";
-import { expectAccepted, expectRejected, pr847 } from "./test-helpers.js";
+import { expectAccepted, expectRejected, pr847, pr847WithSummary } from "./test-helpers.js";
 
 /**
  * The fixture's views and second walkthrough step reference its flow, so a document without
@@ -27,15 +27,16 @@ const withoutFlows = (doc: ReturnType<typeof pr847>) => {
  * model calls, so each gets a pipeline-owned reason for being missing from a drawn map:
  * `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`. Additive: every 1.0,
  * 1.1 and 1.2 document still parses, and a document that uses neither field is stamped as
- * before (H4-5, S7).
+ * before (H4-5, S7). Schema 1.4 (H4-8, v1-4.test.ts) moved the current version on; 1.3 stays
+ * the stamp for these two fields.
  */
 
 describe("schema 1.3: version policy", () => {
-  it("is 1.3.0 and still reads 1.0 to 1.2 documents, but no newer minor", () => {
-    expect(SCHEMA_VERSION).toBe("1.3.0");
+  it("is 1.3.0 and still reads 1.0 to 1.2 documents; 1.4 is the newest minor read", () => {
+    expect(MAP_SECTIONS_SCHEMA_VERSION).toBe("1.3.0");
     for (const version of ["1.0.0", "1.1.3", "1.2.0", "1.3.0"])
       expect(isSupportedVersion(version), version).toBe(true);
-    for (const version of ["1.4.0", "1.10.0", "1.30.0", "2.0.0"])
+    for (const version of ["1.5.0", "1.10.0", "1.30.0", "2.0.0"])
       expect(isSupportedVersion(version), version).toBe(false);
     for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
       const doc = pr847();
@@ -54,13 +55,13 @@ describe("schema 1.3: version policy", () => {
       BASE_SCHEMA_VERSION,
     );
     expect(requiredSchemaVersion({ provenance: { flowsUnavailable: { reason: "timeout" } } })).toBe(
-      SCHEMA_VERSION,
+      MAP_SECTIONS_SCHEMA_VERSION,
     );
     expect(
       requiredSchemaVersion({
         provenance: { walkthroughUnavailable: { reason: "analysis-failed" } },
       }),
-    ).toBe(SCHEMA_VERSION);
+    ).toBe(MAP_SECTIONS_SCHEMA_VERSION);
   });
 });
 
@@ -136,7 +137,7 @@ describe("schema 1.3: provenance.flowsUnavailable and provenance.walkthroughUnav
   });
 
   it("the overlay owns them: a model's reasons are replaced and its section is dropped beside a pipeline reason", () => {
-    const doc = pr847();
+    const doc = pr847WithSummary();
     const facts = { ...doc.provenance };
     const { briefing, triage, findings } = doc;
     // A map as Rocky's pipeline draws it: no views, and no step staged on a flow.
@@ -183,7 +184,7 @@ describe("schema 1.3: provenance.flowsUnavailable and provenance.walkthroughUnav
     expect(value.graph?.walkthrough).toBeUndefined();
     expect(value.provenance.flowsUnavailable).toEqual({ reason: "analysis-failed" });
     expect(value.provenance.walkthroughUnavailable).toEqual({ reason: "too-large" });
-    expect(value.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(value.schemaVersion).toBe(MAP_SECTIONS_SCHEMA_VERSION);
     expect(graph?.flows?.length).toBeGreaterThan(0); // the model output itself is not mutated
     expect(graph?.walkthrough).toBeDefined();
   });

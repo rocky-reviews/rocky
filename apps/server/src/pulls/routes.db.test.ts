@@ -534,7 +534,7 @@ describe("GET /api/repos/:owner/:repo/pulls/:number: refusals", () => {
     );
     for (const line of lines) {
       expect(line).not.toMatch(/rocky-app|acme\/|Team invitations/);
-      expect(line).not.toContain(pr847.briefing.summary.slice(0, 20));
+      expect(line).not.toContain(pr847.briefing.tldr[0]!.slice(0, 20));
     }
     const entries = lines
       .map((l) => JSON.parse(l) as { pull_page?: Record<string, unknown> })
@@ -548,6 +548,6 @@ describe("GET /api/repos/:owner/:repo/pulls/:number: refusals", () => {
     expect(joined).not.toContain("Team invitations");
     expect(joined).not.toContain("rocky-app");
     expect(joined).not.toContain("dana-k");
-    expect(joined).not.toContain(pr847.briefing.summary.slice(0, 20));
+    expect(joined).not.toContain(pr847.briefing.tldr[0]!.slice(0, 20));
   });
 });

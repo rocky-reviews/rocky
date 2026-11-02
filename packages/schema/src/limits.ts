@@ -57,6 +57,17 @@ export const MAX_TITLE_LENGTH = 200;
 export const MAX_REASON_LENGTH = 500;
 /** One "checked, looks fine" item. */
 export const MAX_CHECKED_ITEM_LENGTH = 300;
+/**
+ * One TL;DR bullet of the briefing (schema 1.4, H4-8): a single sentence a reviewer reads at a
+ * glance. 160 characters is two lines of the briefing column on a phone.
+ */
+export const MAX_TLDR_ITEM_LENGTH = 160;
+/**
+ * The verdict reason a model may write (H4-8): one short sentence. The document keeps
+ * MAX_REASON_LENGTH for the verdict so documents written before 1.4 still read; only the
+ * briefing call's answer is held to this.
+ */
+export const MAX_VERDICT_REASON_ANSWER_LENGTH = 200;
 /** A memory entry as it is quoted in the document. */
 export const MAX_MEMORY_TEXT_LENGTH = 300;
 /** Where a memory entry came from, e.g. "decision · PR #612". */
@@ -78,7 +89,7 @@ export const MAX_BODY_LENGTH = 4000;
 export const MAX_FLAG_TEXT_LENGTH = 1000;
 /** The prompt handed to a coding agent for "send to agent". */
 export const MAX_AGENT_PROMPT_LENGTH = 2000;
-/** The briefing summary paragraph. */
+/** The briefing summary paragraph (documents before schema 1.4; a 1.4 briefing has a TL;DR). */
 export const MAX_BRIEFING_SUMMARY_LENGTH = 2000;
 /** One replacement line in a suggestion (code lines, so generous). */
 export const MAX_SUGGESTION_LINE_LENGTH = 500;
@@ -144,6 +155,9 @@ export const MAX_FLAGS_TOTAL = 2000;
 export const MAX_MEMORY_REFS_PER_FINDING = 8;
 export const MAX_MEMORY_APPLIED = 50;
 export const MAX_CHECKED_ITEMS = 30;
+/** TL;DR bullets: two at least (what the PR does, what matters most), four at most (H4-8). */
+export const MIN_TLDR_ITEMS = 2;
+export const MAX_TLDR_ITEMS = 4;
 export const MAX_REVIEW_PATH = 50;
 export const MAX_GENERATOR_ROLES = 8;
 

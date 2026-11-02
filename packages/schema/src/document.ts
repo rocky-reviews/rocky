@@ -17,22 +17,28 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.3.0" as const;
+export const SCHEMA_VERSION = "1.4.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 /**
  * The version a document is stamped with: the lowest minor whose contract it uses (H4-5, review
  * round 1, S7), so a reader that only knows 1.1 still reads every document that needs nothing
  * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; 1.3 (H4-7) added the
- * pipeline-owned `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`. A
- * document that uses none of them is a 1.1 document.
+ * pipeline-owned `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`; 1.4
+ * (H4-8) added `briefing.tldr`, which may stand in for `briefing.summary`. A document that uses
+ * none of them is a 1.1 document.
  */
 export const BASE_SCHEMA_VERSION = "1.1.0" as const;
 export const NO_LOGIC_SCHEMA_VERSION = "1.2.0" as const;
+export const MAP_SECTIONS_SCHEMA_VERSION = "1.3.0" as const;
 export type StampedSchemaVersion =
-  typeof BASE_SCHEMA_VERSION | typeof NO_LOGIC_SCHEMA_VERSION | SchemaVersion;
+  | typeof BASE_SCHEMA_VERSION
+  | typeof NO_LOGIC_SCHEMA_VERSION
+  | typeof MAP_SECTIONS_SCHEMA_VERSION
+  | SchemaVersion;
 
 export const requiredSchemaVersion = (doc: {
+  readonly briefing?: unknown;
   readonly provenance?:
     | {
         readonly graphUnavailable?: { readonly reason?: unknown } | undefined;
@@ -41,12 +47,19 @@ export const requiredSchemaVersion = (doc: {
       }
     | undefined;
 }): StampedSchemaVersion => {
+  // `briefing` is unvalidated model output when the overlay stamps it, so it is only looked at.
+  const briefing = doc.briefing;
+  const tldr =
+    typeof briefing === "object" && briefing !== null
+      ? (briefing as { readonly tldr?: unknown }).tldr
+      : undefined;
+  if (tldr !== undefined) return SCHEMA_VERSION;
   const provenance = doc.provenance;
   if (
     provenance?.flowsUnavailable !== undefined ||
     provenance?.walkthroughUnavailable !== undefined
   )
-    return SCHEMA_VERSION;
+    return MAP_SECTIONS_SCHEMA_VERSION;
   return provenance?.graphUnavailable?.reason === "no-logic"
     ? NO_LOGIC_SCHEMA_VERSION
     : BASE_SCHEMA_VERSION;

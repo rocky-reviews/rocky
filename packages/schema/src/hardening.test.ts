@@ -263,7 +263,7 @@ describe("prototype-key safety", () => {
     );
     expectRejected(root, "INVALID_SHAPE", "__proto__");
     const nested = JSON.parse(
-      JSON.stringify(pr847()).replace('"summary"', '"constructor": {"x":1}, "summary"'),
+      JSON.stringify(pr847()).replace('"tldr"', '"constructor": {"x":1}, "tldr"'),
     );
     expectRejected(nested, "INVALID_SHAPE", "briefing");
   });

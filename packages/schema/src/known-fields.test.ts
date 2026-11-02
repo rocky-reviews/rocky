@@ -1,15 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { BASE_SCHEMA_VERSION, NO_LOGIC_SCHEMA_VERSION, SCHEMA_VERSION } from "./document.js";
+import {
+  BASE_SCHEMA_VERSION,
+  MAP_SECTIONS_SCHEMA_VERSION,
+  NO_LOGIC_SCHEMA_VERSION,
+  SCHEMA_VERSION,
+} from "./document.js";
 import { applyKnownFields, type KnownFacts } from "./known-fields.js";
 import { parseAnalysisDocument } from "./parse.js";
 import type { Provenance } from "./provenance.js";
-import { expectAccepted, expectRejected, pr847 } from "./test-helpers.js";
+import { expectAccepted, expectRejected, pr847, pr847WithSummary } from "./test-helpers.js";
 
 const facts = (): KnownFacts => pr847().provenance;
 
-/** What a model might send: the document minus the facts, plus some facts it made up. */
+/**
+ * What a model might send: the document minus the facts, plus some facts it made up. A summary
+ * briefing, so the stamp is decided by the facts alone (a TL;DR makes it 1.4: v1-4.test.ts).
+ */
 const modelOutput = () => {
-  const doc = pr847();
+  const doc = pr847WithSummary();
   const { briefing, triage, findings, graph } = doc;
   return { briefing, triage, findings, graph };
 };
@@ -69,7 +77,7 @@ describe("applyKnownFields", () => {
       ...facts(),
       flowsUnavailable: { reason: "timeout" },
     }) as Record<string, unknown>;
-    expect(flows.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(flows.schemaVersion).toBe(MAP_SECTIONS_SCHEMA_VERSION);
     const kept = expectAccepted(flows);
     expect(kept.graph?.flows).toEqual([]);
     expect(kept.graph?.walkthrough).toBeDefined();
@@ -77,7 +85,7 @@ describe("applyKnownFields", () => {
       ...facts(),
       walkthroughUnavailable: { reason: "analysis-failed" },
     }) as Record<string, unknown>;
-    expect(walkthrough.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(walkthrough.schemaVersion).toBe(MAP_SECTIONS_SCHEMA_VERSION);
     const value = expectAccepted(walkthrough);
     expect(value.graph?.walkthrough).toBeUndefined();
     expect(value.graph?.flows.length).toBeGreaterThan(0);

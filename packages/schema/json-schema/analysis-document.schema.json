@@ -205,6 +205,18 @@
   "properties": {
     "briefing": {
       "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "summary"
+          ]
+        },
+        {
+          "required": [
+            "tldr"
+          ]
+        }
+      ],
       "description": "What to read before the diff.",
       "properties": {
         "checkedOk": {
@@ -291,10 +303,22 @@
           "type": "array"
         },
         "summary": {
-          "description": "What the PR does, for someone who has not read it.",
+          "description": "What the PR does, for someone who has not read it. Documents before 1.4 always carry it; a 1.4 document may carry the TL;DR instead.",
           "maxLength": 2000,
           "minLength": 1,
           "type": "string"
+        },
+        "tldr": {
+          "description": "Schema 1.4. The briefing as two to four one-sentence bullets. The first says what the PR does; the rest say what matters most to the reviewer.",
+          "items": {
+            "description": "One short sentence.",
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 4,
+          "minItems": 2,
+          "type": "array"
         },
         "verdict": {
           "additionalProperties": false,
@@ -310,7 +334,7 @@
               "type": "string"
             },
             "reason": {
-              "description": "One or two sentences: what makes this PR this risky.",
+              "description": "One short sentence: what makes this PR this risky. Documents before 1.4 may have two.",
               "maxLength": 500,
               "minLength": 1,
               "type": "string"
@@ -324,7 +348,6 @@
         }
       },
       "required": [
-        "summary",
         "verdict",
         "estimatedReviewMinutes",
         "reviewPath"
@@ -1833,8 +1856,8 @@
       "type": "object"
     },
     "schemaVersion": {
-      "description": "Contract version the document targets. Current: 1.3.0.",
-      "pattern": "^1\\.(0|1|2|3)\\.\\d+$",
+      "description": "Contract version the document targets. Current: 1.4.0.",
+      "pattern": "^1\\.(0|1|2|3|4)\\.\\d+$",
       "type": "string"
     },
     "triage": {
@@ -2006,5 +2029,5 @@
   ],
   "title": "Rocky Reviews analysis document",
   "type": "object",
-  "version": "1.3.0"
+  "version": "1.4.0"
 }
