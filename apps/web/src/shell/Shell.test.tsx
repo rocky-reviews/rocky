@@ -180,9 +180,10 @@ describe("sidebar", () => {
   const html = render();
   const side = text(html.slice(html.indexOf('<nav id="sidebar"'), html.indexOf("</nav>")));
 
-  it("shows review coverage with minutes from the analysis", () => {
+  it("shows review coverage as a count of high-risk files left, with no time estimate (H4-9)", () => {
     expect(side).toContain("Critical + Important reviewed 0/4");
-    expect(side).toContain("About 7 min of high-risk code left");
+    expect(side).toContain("4 high-risk files left");
+    expect(side).not.toMatch(/\bmin\b/);
     expect(html).toMatch(/role="progressbar"[^>]*aria-valuemax="4" aria-valuenow="0"/);
   });
 

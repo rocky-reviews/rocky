@@ -383,7 +383,7 @@ test.describe("keyboard", () => {
     await page.keyboard.press("Space");
     await expect(box).toBeChecked();
     await expect(page.locator(".coverage-top b")).toHaveText("1/4");
-    await expect(page.locator(".coverage-note")).toHaveText("About 4 min of high-risk code left");
+    await expect(page.locator(".coverage-note")).toHaveText("3 high-risk files left");
     await expect(page.locator("li.nav-item.viewed")).toHaveCount(1);
   });
 

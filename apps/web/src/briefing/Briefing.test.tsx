@@ -49,9 +49,10 @@ describe("briefing from the pr-847 analysis document", () => {
   const html = render(main);
   const t = text(html);
 
-  it("heads it with the AI mark and the estimated time", () => {
+  it("heads it with the AI mark and no review-time estimate (H4-9)", () => {
     expect(html).toContain('<span class="ai-tag">AI briefing</span>');
-    expect(t).toContain("AI briefing · est. ~7 min review");
+    expect(t).not.toContain("min review");
+    expect(t).not.toContain("AI briefing ·");
     expect(html).toMatch(/<h2[^>]*>Briefing &amp; change map<\/h2>/);
   });
 
@@ -169,7 +170,8 @@ describe("briefing the pipeline wrote itself (provenance.briefingUnavailable)", 
 
   it("does not call it an AI briefing, and says why", () => {
     expect(html).not.toContain('class="ai-tag"');
-    expect(t).toContain("Briefing by Rocky · est. ~7 min review");
+    expect(t).toContain("Briefing by Rocky");
+    expect(t).not.toContain("min review");
     expect(t).toContain("AI briefing unavailable: The AI's briefing did not pass Rocky's checks.");
   });
 
@@ -199,7 +201,7 @@ describe("change map unavailable (provenance.graphUnavailable)", async () => {
   });
 
   it("keeps the rest of the briefing", () => {
-    expect(t).toContain("AI briefing · est. ~7 min review");
+    expect(t).toContain("AI briefing");
     expect(t).toContain("Suggested review path");
   });
 

@@ -337,9 +337,6 @@ const Row = ({
             </span>
           </span>
         )}
-        {item.estimatedMinutes !== null && item.analysis !== "out_of_date" && (
-          <span className="inbox-minutes">~{item.estimatedMinutes} min</span>
-        )}
         {item.analysis !== "done" && (
           <span className="inbox-note-pill">{ANALYSIS_LABEL[item.analysis]}</span>
         )}

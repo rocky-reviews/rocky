@@ -8,6 +8,7 @@ import { useReview } from "../drafts/ReviewProvider.js";
 import { useToast } from "./Toast.js";
 import {
   type Coverage,
+  coverageNote,
   LEVEL_LABEL,
   type NoiseGroup,
   type SidebarFile,
@@ -109,11 +110,7 @@ export const SidebarContent = ({
         >
           <div style={{ width: `${percent}%` }} />
         </div>
-        <div className="coverage-note">
-          {coverage.done
-            ? "All high-risk files reviewed ✓"
-            : `About ${coverage.minutesLeft} min of high-risk code left`}
-        </div>
+        <div className="coverage-note">{coverageNote(coverage)}</div>
       </section>
 
       <button

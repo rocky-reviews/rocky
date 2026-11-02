@@ -51,9 +51,9 @@ The default output is plain text, with no colour codes:
   answered;
 - the verdict level and its reason, and a note when the briefing is Rocky's own fallback
   (`briefingUnavailable`, [ADR 0015](adr/0015-prompt-injection-defence.md) §6);
-- the summary and the estimated review time;
+- the TL;DR (or an older document's summary). The estimated review time is not printed (H4-9);
 - the risk table, by triage level (critical, important, normal, low), then noise. Each row has
-  the path, score, minutes and reason;
+  the path, score and reason;
 - the findings, grouped by severity. Each has `[id] path:line`, title and confidence, the body,
   and any suggested replacement;
 - the review path in order, and what the AI checked and found fine;
