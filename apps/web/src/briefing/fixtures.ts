@@ -35,7 +35,6 @@ const variant = (number: number, change: (doc: Doc) => void): Doc => {
   return doc;
 };
 
-/** The briefing as `analyzePullRequest` writes it when the AI briefing fails (P4-4). */
 /** A briefing with the summary paragraph instead of the TL;DR, as before schema 1.4 (H4-8). */
 const withSummary = (doc: Doc, summary: string) => {
   const briefing = doc.briefing as Partial<Doc["briefing"]> & { summary?: string };
@@ -43,6 +42,7 @@ const withSummary = (doc: Doc, summary: string) => {
   briefing.summary = summary;
 };
 
+/** The briefing as `analyzePullRequest` writes it when the AI briefing fails (P4-4). */
 const briefingUnavailable = variant(BRIEFING_FIXTURE_PULLS.briefingUnavailable, (doc) => {
   // Rocky's own briefing has the summary paragraph; its document is stamped 1.1.
   doc.schemaVersion = "1.1.0";

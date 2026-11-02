@@ -329,10 +329,14 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 - **Version policy:** the reader accepts `1.0.x` to `1.4.x` (`^1\.(0|1|2|3|4)\.\d+$`); a
   newer minor is still refused. A document is stamped `1.4.0` only when it has a TL;DR, so a
   1.3 reader keeps reading every document that has none (Rocky's fallback briefing among them).
+- **In practice almost every AI-briefed document is 1.4.** The briefing call always answers
+  with a TL;DR, so only Rocky's fallback briefing (the AI briefing failed) is still stamped
+  lower. A reader that only knows 1.3 refuses the rest as UNSUPPORTED_SCHEMA_VERSION. **Deploy
+  the readers (server and web) before the worker** that writes 1.4 documents.
 - **`briefing.tldr`** (optional; `Tldr`, `TldrItem`): two to four bullets
-  (`MIN_TLDR_ITEMS`, `MAX_TLDR_ITEMS`), each one line of prose of at most 160 characters
-  (`MAX_TLDR_ITEM_LENGTH`): inline `**bold**` and `` `code` `` as everywhere in the briefing, no
-  newline. The first bullet says what the PR does; the rest what matters most to the reviewer.
+  (`MIN_TLDR_ITEMS`, `MAX_TLDR_ITEMS`), each single-line text (`line`) of at most 160 characters
+  (`MAX_TLDR_ITEM_LENGTH`): inline `**bold**` and `` `code` `` as everywhere in the briefing; no
+  newline, tab, U+2028 or U+2029 (those render as line breaks and could fake a second line). The first bullet says what the PR does; the rest what matters most to the reviewer.
 - **`briefing.summary` is optional** from 1.4, and a briefing must have a `summary` or a `tldr`
   (INVALID_SHAPE at `briefing` otherwise; the JSON Schema says the same with `anyOf`). Decision:
   the AI briefing carries the TL;DR only. A short summary next to it would repeat the first

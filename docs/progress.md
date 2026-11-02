@@ -222,13 +222,20 @@ in-memory store behind a port, plus its tests.
 - **Needs human (dogfooding):** no live call was made. Re-run the analysis on a real PR and read
   the TL;DR: whether the model keeps to four short sentences and leaves out scaffolding is a
   prompt question the fakes cannot answer.
-- The fake evals run without `--max-tokens` now uses 989K of its 1M default cap (the briefing
-  instructions are longer); CI's harness step passes no cap, so a little more prompt text would
-  cap the run. Pass `--max-tokens 2000000` in `evals.yml` or raise the default.
-- A TL;DR bullet that names a finding id (F3) is not checked against the findings; an invented
-  id would read as real. An integrity check (`UNKNOWN_FINDING_REF` on `F\d+` in the TL;DR) or
-  linking the id in the UI would close it.
-- "One sentence" is asked for and bounded by length and a no-newline rule, not counted; a model
+- The fake evals use 989K tokens; the default `--max-tokens` is 1M. Fix round: CI's harness step
+  (`evals.yml`) and the README's regenerate command now pass `--max-tokens 2000000`, the cap
+  the baseline was made with (as in H4-7). `evals.yml` is a protected file, so the label above
+  covers it too.
+- **N3:** a TL;DR bullet that names a finding id (F3) is not checked against the findings; an
+  invented id would read as real. An integrity check (`UNKNOWN_FINDING_REF` on `F\d+` in the
+  TL;DR) or linking the id in the UI would close it.
+- **N4:** the injection adversary's briefing leak payloads are smaller than before (two 160-char
+  bullets and a 200-char reason instead of a 2 000-char summary and a 500-char reason). Each is
+  still well over the leak guard's n-gram window, so the leak tests still exercise the guard; a
+  later change that shrinks the fields further should re-check that.
+- Fix round S1: TL;DR items are `line` text (no tab, U+2028 or U+2029 either), not prose with a
+  newline rule.
+- "One sentence" is asked for and bounded by length and the single-line rule, not counted; a model
   can still pack two short sentences into one bullet.
 - `briefing.summary` is no longer written by the AI briefing; nothing else reads it except the
   CLI and the web, which fall back to it. A 2.0 schema could drop it once no stored document
