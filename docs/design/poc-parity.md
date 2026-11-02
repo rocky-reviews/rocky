@@ -30,6 +30,7 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 - [x] P6-1 · Viewed files struck through — `shell.e2e.spec.ts` "viewed checkboxes update coverage and strike the file through"
 - [x] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Noise files listed once shown or trusted — `shell.e2e.spec.ts` "noise: Show lists the files, Trust marks them viewed"
+- [x] H4-9 · Normal, Low and noise collapsed by default (headers and counts only) behind one "Show N lower-risk files" / "Hide lower-risk files" toggle, remembered per browser (`rocky-sidebar-lower-risk`); a selected file's group always shows its rows — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-lower-risk-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-light.png), [pr-shell-lower-risk-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-dark.png); `Sidebar.test.tsx`, `shell.e2e.spec.ts` "lower-risk files: …"
 
 ## Briefing (P6-2)
 
@@ -165,6 +166,9 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   (POC level colour on tint, 3.2–4.1:1 in light mode); the "Commented"/"Closed" status pill
   uses `--text` on `--low-bg`; "✦ AI briefing" keeps the cyan mark and sets the label in
   `--text` (POC `--ai` at 3.7:1). axe reports 0 serious issues at all widths and modes.
+- **Lower-risk files collapsed (H4-9).** The POC lists every group open. The app opens only
+  Critical and Important; Normal, Low and noise show their headers and counts behind one toggle
+  (shown by default when nothing is Critical or Important). The choice is kept per browser.
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".

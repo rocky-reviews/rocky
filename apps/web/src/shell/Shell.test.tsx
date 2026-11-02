@@ -193,13 +193,14 @@ describe("sidebar", () => {
     expect(side).toContain(
       "src/auth/invitations.ts 97 , risk score 97, 3 findings, worst critical",
     );
-    expect(html.match(/<input type="checkbox"/g)).toHaveLength(7);
+    // H4-9: the Normal and Low rows are behind the lower-risk toggle by default.
+    expect(html.match(/<input type="checkbox"/g)).toHaveLength(4);
   });
 
-  it("collapses the noise group into a summary with Trust and Show", () => {
+  it("shows the noise group's header only, behind the lower-risk toggle (H4-9)", () => {
     expect(side).toContain("Noise · auto-summarized 2");
-    expect(side).toContain("2 files (85 lines) the AI summarised as noise.");
-    expect(side).toContain("Trust & mark viewed");
+    expect(side).toContain("Show 5 lower-risk files");
+    expect(side).not.toContain("Trust & mark viewed");
     expect(side).not.toContain("pnpm-lock.yaml");
   });
 

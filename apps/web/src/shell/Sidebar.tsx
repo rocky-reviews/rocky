@@ -5,6 +5,12 @@
 import { type ReactNode, useState } from "react";
 import type { Severity } from "@rocky-reviews/schema";
 import { useReview } from "../drafts/ReviewProvider.js";
+import {
+  isLowerRisk,
+  lowerRiskShownByDefault,
+  readLowerRisk,
+  saveLowerRisk,
+} from "./lower-risk.js";
 import { useToast } from "./Toast.js";
 import {
   type Coverage,
@@ -30,6 +36,8 @@ type Props = {
   onSelect: (selection: Selection) => void;
   onToggleViewed: (path: string) => void;
   onMarkViewed: (paths: readonly string[]) => void;
+  /** Where the lower-risk choice is kept; tests pass their own. */
+  storage?: () => Storage;
 };
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -56,6 +64,8 @@ const Count = ({ n }: { n: number }) => (
   </span>
 );
 
+const browserStorage = (): Storage => window.localStorage;
+
 const isSelected = (selection: Selection, path: string): boolean =>
   selection.kind === "file" && selection.path === path;
 
@@ -69,6 +79,7 @@ export const SidebarContent = ({
   onSelect,
   onToggleViewed,
   onMarkViewed,
+  storage = browserStorage,
 }: Props) => {
   const [noiseOpen, setNoiseOpen] = useState(false);
   const { decisionOf } = useReview();
@@ -85,6 +96,63 @@ export const SidebarContent = ({
   const noiseSelected = noise.files.some((f) => isSelected(selection, f.path));
   const percent =
     coverage.total === 0 ? 100 : Math.round((coverage.reviewed / coverage.total) * 100);
+
+  // H4-9: Normal, Low and noise sit behind one toggle, remembered per browser.
+  const [lowerChoice, setLowerChoice] = useState(() => readLowerRisk(storage));
+  const lowerShown = lowerChoice ?? lowerRiskShownByDefault(groups);
+  const lowerGroups = groups.filter((g) => isLowerRisk(g.level));
+  const lowerCount = lowerGroups.reduce((n, g) => n + g.files.length, 0) + noise.files.length;
+  const lowerIds = [
+    ...lowerGroups.map((g) => `section-${g.level}`),
+    ...(noise.files.length > 0 ? ["section-noise"] : []),
+  ];
+  const renderGroup = (group: SidebarGroup) => (
+    <section
+      key={group.level}
+      id={`section-${group.level}`}
+      aria-labelledby={`group-${group.level}`}
+    >
+      <h2 className="group-label" id={`group-${group.level}`}>
+        <span>{LEVEL_LABEL[group.level]}</span>
+        <Count n={group.files.length} />
+      </h2>
+      {(!isLowerRisk(group.level) ||
+        lowerShown ||
+        group.files.some((f) => isSelected(selection, f.path))) && (
+        <ul className="file-list">
+          {group.files.map((file) => (
+            <FileRow
+              key={file.path}
+              path={file.path}
+              level={file.level}
+              viewed={viewed.has(file.path)}
+              selected={isSelected(selection, file.path)}
+              onSelect={() => onSelect({ kind: "file", path: file.path })}
+              onToggleViewed={() => onToggleViewed(file.path)}
+              extra={
+                <>
+                  <span className="dots" aria-hidden="true">
+                    {file.findings.map((f) => (
+                      <span
+                        key={f.id}
+                        className={`dot ${f.severity}${decisionOf(f.id).state === "draft" ? "" : " done"}`}
+                      />
+                    ))}
+                  </span>
+                  <span className="score" aria-hidden="true">
+                    {file.score}
+                  </span>
+                  <span className="sr-only">
+                    , risk score {file.score}, {findingsText(file.findings)}
+                  </span>
+                </>
+              }
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
 
   return (
     <>
@@ -125,45 +193,27 @@ export const SidebarContent = ({
         </span>
       </button>
 
-      {groups.map((group) => (
-        <section key={group.level} aria-labelledby={`group-${group.level}`}>
-          <h2 className="group-label" id={`group-${group.level}`}>
-            <span>{LEVEL_LABEL[group.level]}</span>
-            <Count n={group.files.length} />
-          </h2>
-          <ul className="file-list">
-            {group.files.map((file) => (
-              <FileRow
-                key={file.path}
-                path={file.path}
-                level={file.level}
-                viewed={viewed.has(file.path)}
-                selected={isSelected(selection, file.path)}
-                onSelect={() => onSelect({ kind: "file", path: file.path })}
-                onToggleViewed={() => onToggleViewed(file.path)}
-                extra={
-                  <>
-                    <span className="dots" aria-hidden="true">
-                      {file.findings.map((f) => (
-                        <span
-                          key={f.id}
-                          className={`dot ${f.severity}${decisionOf(f.id).state === "draft" ? "" : " done"}`}
-                        />
-                      ))}
-                    </span>
-                    <span className="score" aria-hidden="true">
-                      {file.score}
-                    </span>
-                    <span className="sr-only">
-                      , risk score {file.score}, {findingsText(file.findings)}
-                    </span>
-                  </>
-                }
-              />
-            ))}
-          </ul>
-        </section>
-      ))}
+      {groups.filter((g) => !isLowerRisk(g.level)).map(renderGroup)}
+
+      {lowerCount > 0 && (
+        <button
+          type="button"
+          className="lower-risk-toggle"
+          aria-expanded={lowerShown}
+          aria-controls={lowerIds.join(" ")}
+          onClick={() => {
+            const next = !lowerShown;
+            saveLowerRisk(storage, next);
+            setLowerChoice(next);
+          }}
+        >
+          {lowerShown
+            ? "Hide lower-risk files"
+            : `Show ${lowerCount} lower-risk ${lowerCount === 1 ? "file" : "files"}`}
+        </button>
+      )}
+
+      {groups.filter((g) => isLowerRisk(g.level)).map(renderGroup)}
 
       {unanalysed.length > 0 && (
         <section aria-labelledby="group-unanalysed">
@@ -188,57 +238,58 @@ export const SidebarContent = ({
       )}
 
       {noise.files.length > 0 && (
-        <section aria-labelledby="group-noise">
+        <section id="section-noise" aria-labelledby="group-noise">
           <h2 className="group-label" id="group-noise">
             <span>Noise · auto-summarized</span>
             <Count n={noise.files.length} />
           </h2>
-          {noiseOpen || noiseViewed || noiseSelected ? (
-            <ul className="file-list" ref={focusFirst}>
-              {noise.files.map((file) => (
-                <FileRow
-                  key={file.path}
-                  path={file.path}
-                  level="low"
-                  viewed={viewed.has(file.path)}
-                  selected={isSelected(selection, file.path)}
-                  onSelect={() => onSelect({ kind: "file", path: file.path })}
-                  onToggleViewed={() => onToggleViewed(file.path)}
-                />
-              ))}
-            </ul>
-          ) : (
-            <div className="noise-box">
-              {noise.files.length} {noise.files.length === 1 ? "file" : "files"} ({noise.lines}{" "}
-              lines) the AI summarised as noise.
-              <div className="noise-actions">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    setFocusNoise(true);
-                    onMarkViewed(noise.files.map((f) => f.path));
-                    const n = noise.files.length;
-                    toast(
-                      `${n} noise ${n === 1 ? "file" : "files"} marked viewed from the AI summary`,
-                    );
-                  }}
-                >
-                  Trust &amp; mark viewed
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={() => {
-                    setFocusNoise(true);
-                    setNoiseOpen(true);
-                  }}
-                >
-                  Show
-                </button>
+          {(lowerShown || noiseSelected) &&
+            (noiseOpen || noiseViewed || noiseSelected ? (
+              <ul className="file-list" ref={focusFirst}>
+                {noise.files.map((file) => (
+                  <FileRow
+                    key={file.path}
+                    path={file.path}
+                    level="low"
+                    viewed={viewed.has(file.path)}
+                    selected={isSelected(selection, file.path)}
+                    onSelect={() => onSelect({ kind: "file", path: file.path })}
+                    onToggleViewed={() => onToggleViewed(file.path)}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <div className="noise-box">
+                {noise.files.length} {noise.files.length === 1 ? "file" : "files"} ({noise.lines}{" "}
+                lines) the AI summarised as noise.
+                <div className="noise-actions">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setFocusNoise(true);
+                      onMarkViewed(noise.files.map((f) => f.path));
+                      const n = noise.files.length;
+                      toast(
+                        `${n} noise ${n === 1 ? "file" : "files"} marked viewed from the AI summary`,
+                      );
+                    }}
+                  >
+                    Trust &amp; mark viewed
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => {
+                      setFocusNoise(true);
+                      setNoiseOpen(true);
+                    }}
+                  >
+                    Show
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            ))}
         </section>
       )}
     </>

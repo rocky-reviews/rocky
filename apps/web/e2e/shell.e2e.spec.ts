@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "./test.js";
-import { MODES, openShell, WIDTHS } from "./support.js";
+import { MODES, openShell, showLowerRisk, WIDTHS } from "./support.js";
 
 /** P6-1: accessibility, keyboard paths, layout limits and the theme rules. */
 
@@ -280,7 +280,14 @@ test.describe("keyboard", () => {
   });
 
   const DRAWERS = [
-    { name: "Files", region: "#sidebar", close: "Close files", width: 375, last: "Show" },
+    {
+      name: "Files",
+      region: "#sidebar",
+      close: "Close files",
+      width: 375,
+      // H4-9: the lower-risk groups are collapsed, so their toggle is the last control.
+      last: "Show 5 lower-risk files",
+    },
     {
       name: "Review panel",
       region: "#review-panel",
@@ -387,10 +394,57 @@ test.describe("keyboard", () => {
     await expect(page.locator("li.nav-item.viewed")).toHaveCount(1);
   });
 
+  test("lower-risk files: hidden by default, one toggle shows them, the choice is remembered (H4-9)", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openShell(page);
+    const toggle = page.getByRole("button", { name: "Show 5 lower-risk files" });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAttribute(
+      "aria-controls",
+      "section-normal section-low section-noise",
+    );
+    await expect(page.locator('#sidebar button.nav-file[title="src/api/index.ts"]')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Trust & mark viewed" })).toHaveCount(0);
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    const hide = page.getByRole("button", { name: "Hide lower-risk files" });
+    await expect(hide).toBeFocused();
+    await expect(hide).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator('#sidebar button.nav-file[title="src/api/index.ts"]')).toBeVisible();
+    await expect(page.getByRole("button", { name: "Trust & mark viewed" })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("rocky-sidebar-lower-risk"))).toBe(
+      "shown",
+    );
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Hide lower-risk files" })).toBeVisible();
+    await page.getByRole("button", { name: "Hide lower-risk files" }).click();
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Show 5 lower-risk files" })).toBeVisible();
+  });
+
+  test("lower-risk files: j/k still walks every file and reveals the one it opens (H4-9)", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openShell(page);
+    await page.locator('#sidebar button.nav-file[title="src/jobs/sendInviteEmail.ts"]').click();
+    // The last high-risk file; k moves on to a Normal file, whose group opens to show it.
+    await page.locator("#main").focus();
+    await page.keyboard.press("k");
+    const next = page.locator("#sidebar .nav-file[aria-current='page']");
+    await expect(next).toHaveCount(1);
+    await expect(next).not.toHaveAttribute("title", "src/jobs/sendInviteEmail.ts");
+    await expect(next).toBeVisible();
+    await expect(page.locator("#section-normal .nav-file").first()).toBeVisible();
+  });
+
   test("noise: Show lists the files, Trust marks them viewed", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openShell(page);
-    await page.getByRole("button", { name: "Show" }).click();
+    await showLowerRisk(page);
+    await page.getByRole("button", { name: "Show", exact: true }).click();
     await expect(page.getByRole("button", { name: /^pnpm-lock\.yaml/ })).toBeFocused();
     await page.reload();
     await page.getByRole("button", { name: "Trust & mark viewed" }).click();

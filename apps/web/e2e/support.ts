@@ -28,3 +28,9 @@ export const settle = async (page: Page): Promise<void> => {
       "*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important}",
   });
 };
+
+/** H4-9: Normal, Low and noise are collapsed by default; this lists them. */
+export const showLowerRisk = async (page: Page): Promise<void> => {
+  const toggle = page.locator("#sidebar .lower-risk-toggle");
+  if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+};
