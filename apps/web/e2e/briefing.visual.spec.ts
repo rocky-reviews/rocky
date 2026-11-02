@@ -25,6 +25,8 @@ const STATES: { id: string; pr: number; full: boolean }[] = [
   { id: "brief-superseded", pr: STATE_PULLS.superseded, full: false },
   { id: "brief-reanalysing", pr: STATE_PULLS.reanalysing, full: false },
   { id: "brief-out-of-date", pr: STATE_PULLS.outOfDate, full: false },
+  // H4-8: a document before schema 1.4 keeps its summary paragraph.
+  { id: "brief-summary-only", pr: STATE_PULLS.summaryOnly, full: false },
 ];
 
 for (const state of STATES) {

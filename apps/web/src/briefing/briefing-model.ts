@@ -113,6 +113,18 @@ export const startFile = (doc: AnalysisDocument): string | undefined =>
 export const readByHand = (doc: AnalysisDocument): string[] =>
   doc.provenance.readByHand.map((f) => f.path);
 
+/**
+ * What the briefing opens with (H4-8): the TL;DR bullets of a schema 1.4 document, or the summary
+ * paragraph every older document (and Rocky's own fallback briefing) carries. The schema
+ * guarantees one of the two; a document with both shows the TL;DR.
+ */
+export type BriefingLead = { kind: "tldr"; items: string[] } | { kind: "summary"; text: string };
+
+export const briefingLead = (doc: AnalysisDocument): BriefingLead =>
+  doc.briefing.tldr !== undefined
+    ? { kind: "tldr", items: doc.briefing.tldr }
+    : { kind: "summary", text: doc.briefing.summary ?? "" };
+
 export const VERDICT_LABEL: Record<RiskLevel, string> = {
   low: "Low risk",
   medium: "Medium risk",

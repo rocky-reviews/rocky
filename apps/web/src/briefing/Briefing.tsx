@@ -1,5 +1,6 @@
 /**
- * The briefing (P6-2, POC `renderBrief`): summary and risk verdict, the risk table with
+ * The briefing (P6-2, POC `renderBrief`): the risk verdict and the TL;DR (H4-8; an older
+ * document's summary paragraph instead), the risk table with
  * clickable files, the change map slot, the suggested path, project memory applied and what the
  * AI checked. Without a document it shows where the analysis stands instead (`BriefingState`).
  *
@@ -12,6 +13,7 @@ import {
   type Banner,
   BRIEFING_REASON,
   briefingBanner,
+  briefingLead,
   failureText,
   nameOf,
   readByHand,
@@ -87,6 +89,7 @@ const Briefing = ({
   // P6-5: k opens the first file in review order; the hint shows only when that is this file.
   const startKey = useKeyShortcut(start !== undefined && reviewOrder(doc)[0] === start ? "k" : "");
   const minutes = `est. ~${briefing.estimatedReviewMinutes} min review`;
+  const lead = briefingLead(doc);
 
   return (
     <>
@@ -107,15 +110,30 @@ const Briefing = ({
               <b>AI briefing unavailable:</b> {BRIEFING_REASON[fallback.reason]}.
             </p>
           )}
-          <p className="brief-summary">
-            <InlineText text={briefing.summary} />
-          </p>
-          <div className={`verdict v-${briefing.verdict.level}`}>
-            <p className="verdict-level">{VERDICT_LABEL[briefing.verdict.level]}</p>
-            <p className="verdict-reason">
-              <InlineText text={briefing.verdict.reason} />
-            </p>
-          </div>
+          {lead.kind === "tldr" ? (
+            <>
+              <VerdictBox verdict={briefing.verdict} />
+              <div className="brief-tldr">
+                <h3 className="h-eyebrow" id="tldr-title">
+                  TL;DR
+                </h3>
+                <ul className="tldr-list" aria-labelledby="tldr-title">
+                  {lead.items.map((item, i) => (
+                    <li key={i}>
+                      <InlineText text={item} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="brief-summary">
+                <InlineText text={lead.text} />
+              </p>
+              <VerdictBox verdict={briefing.verdict} />
+            </>
+          )}
           <table className="risk-table">
             <caption className="sr-only">Files by risk</caption>
             <tbody>
@@ -257,6 +275,16 @@ const Briefing = ({
     </>
   );
 };
+
+/** The risk call: the level as a label on its tint, and the model's one-line reason. */
+const VerdictBox = ({ verdict }: { verdict: AnalysisDocument["briefing"]["verdict"] }) => (
+  <div className={`verdict v-${verdict.level}`}>
+    <p className="verdict-level">{VERDICT_LABEL[verdict.level]}</p>
+    <p className="verdict-reason">
+      <InlineText text={verdict.reason} />
+    </p>
+  </div>
+);
 
 const FileButton = ({
   path,
