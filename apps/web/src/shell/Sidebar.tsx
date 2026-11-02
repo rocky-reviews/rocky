@@ -5,12 +5,7 @@
 import { type ReactNode, useState } from "react";
 import type { Severity } from "@rocky-reviews/schema";
 import { useReview } from "../drafts/ReviewProvider.js";
-import {
-  isLowerRisk,
-  lowerRiskShownByDefault,
-  readLowerRisk,
-  saveLowerRisk,
-} from "./lower-risk.js";
+import { isLowerRisk, hasHighRisk, readLowerRisk, saveLowerRisk } from "./lower-risk.js";
 import { useToast } from "./Toast.js";
 import {
   type Coverage,
@@ -99,7 +94,8 @@ export const SidebarContent = ({
 
   // H4-9: Normal, Low and noise sit behind one toggle, remembered per browser.
   const [lowerChoice, setLowerChoice] = useState(() => readLowerRisk(storage));
-  const lowerShown = lowerChoice ?? lowerRiskShownByDefault(groups);
+  const foldable = hasHighRisk(groups);
+  const lowerShown = !foldable || (lowerChoice ?? false);
   const lowerGroups = groups.filter((g) => isLowerRisk(g.level));
   const lowerCount = lowerGroups.reduce((n, g) => n + g.files.length, 0) + noise.files.length;
   const lowerIds = [
@@ -195,7 +191,7 @@ export const SidebarContent = ({
 
       {groups.filter((g) => !isLowerRisk(g.level)).map(renderGroup)}
 
-      {lowerCount > 0 && (
+      {foldable && lowerCount > 0 && (
         <button
           type="button"
           className="lower-risk-toggle"

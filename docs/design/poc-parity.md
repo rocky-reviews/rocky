@@ -23,7 +23,7 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 
 ## Sidebar (triage)
 
-- [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, high-risk files left (H4-9: "N high-risk files left", a count; the minutes are hidden), "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); minutes from `triage.files[].reviewMinutes` (defect 6)
+- [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, high-risk files left (H4-9: "N high-risk files left", a count; the minutes are hidden), "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-2 · "Briefing & change map" entry — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); built with the P6-1 sidebar, returns to the briefing (`briefing.e2e.spec.ts` "the Briefing & change map entry returns to the briefing")
 - [x] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); faded dots once decided (P6-4): [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png)
@@ -168,7 +168,8 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   `--text` (POC `--ai` at 3.7:1). axe reports 0 serious issues at all widths and modes.
 - **Lower-risk files collapsed (H4-9).** The POC lists every group open. The app opens only
   Critical and Important; Normal, Low and noise show their headers and counts behind one toggle
-  (shown by default when nothing is Critical or Important). The choice is kept per browser.
+  (always shown, with no toggle, when nothing is Critical or Important). The choice is kept
+  per browser.
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".

@@ -107,11 +107,19 @@ describe("lower-risk files in the sidebar (H4-9)", () => {
     expect(rows(inNoise, "pnpm-lock.yaml")).toBe(1);
   });
 
-  it("shows them by default when nothing is Critical or Important", () => {
+  it("always shows them, with no toggle, when nothing is Critical or Important", () => {
     const low = groups.filter((g) => g.level === "normal" || g.level === "low");
     const html = render({ g: low });
     expect(rows(html, "web/src/pages/InvitePage.tsx")).toBe(1);
-    expect(toggle(html)).toContain('aria-expanded="true"');
-    expect(rows(render({ g: low, storage: stored("hidden") }), "src/api/index.ts")).toBe(0);
+    expect(html).toContain("noise-box");
+    expect(html).not.toContain("lower-risk-toggle");
+  });
+
+  it('ignores a saved "hidden" when nothing is Critical or Important', () => {
+    const low = groups.filter((g) => g.level === "normal" || g.level === "low");
+    const html = render({ g: low, storage: stored("hidden") });
+    expect(rows(html, "src/api/index.ts")).toBe(1);
+    expect(rows(html, "web/src/pages/InvitePage.tsx")).toBe(1);
+    expect(html).not.toContain("lower-risk-toggle");
   });
 });

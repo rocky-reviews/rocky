@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 export const WIDTHS = [
   { width: 375, height: 812 },
@@ -29,8 +29,14 @@ export const settle = async (page: Page): Promise<void> => {
   });
 };
 
-/** H4-9: Normal, Low and noise are collapsed by default; this lists them. */
+/**
+ * H4-9: Normal, Low and noise are collapsed by default; this lists them. Only for a PR with
+ * Critical or Important files (the pr-847 fixture): without them there is no toggle.
+ */
 export const showLowerRisk = async (page: Page): Promise<void> => {
   const toggle = page.locator("#sidebar .lower-risk-toggle");
+  await expect(toggle).toHaveCount(1);
   if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+  // Off the toggle, so screenshots do not catch its hover state.
+  await page.mouse.move(0, 0);
 };

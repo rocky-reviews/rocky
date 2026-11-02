@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  LOWER_RISK_KEY,
-  lowerRiskShownByDefault,
-  readLowerRisk,
-  saveLowerRisk,
-} from "./lower-risk.js";
+import { LOWER_RISK_KEY, hasHighRisk, readLowerRisk, saveLowerRisk } from "./lower-risk.js";
 import type { SidebarGroup } from "./triage-model.js";
 
 const memory = (): Storage => {
@@ -52,10 +47,10 @@ describe("the lower-risk choice (H4-9)", () => {
     expect(saveLowerRisk(throwing, true)).toBe(false);
   });
 
-  it("hides lower-risk files by default only when there is something high-risk", () => {
-    expect(lowerRiskShownByDefault([group("critical"), group("normal")])).toBe(false);
-    expect(lowerRiskShownByDefault([group("important"), group("low")])).toBe(false);
-    expect(lowerRiskShownByDefault([group("normal"), group("low")])).toBe(true);
-    expect(lowerRiskShownByDefault([])).toBe(true);
+  it("knows whether there is anything Critical or Important to read first", () => {
+    expect(hasHighRisk([group("critical"), group("normal")])).toBe(true);
+    expect(hasHighRisk([group("important"), group("low")])).toBe(true);
+    expect(hasHighRisk([group("normal"), group("low")])).toBe(false);
+    expect(hasHighRisk([])).toBe(false);
   });
 });
