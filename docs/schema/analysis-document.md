@@ -44,9 +44,9 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 | Section         | Written by          | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | **Rocky**           | The lowest minor whose contract the document uses (`requiredSchemaVersion`): `"1.3.0"` when `flowsUnavailable` or `walkthroughUnavailable` is present, else `"1.2.0"` when `graphUnavailable.reason` is `no-logic`, else `"1.1.0"`. Patch and minor versions add optional fields or widen an enum; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                                                                                                                               |
+| `schemaVersion` | **Rocky**           | The lowest minor whose contract the document uses (`requiredSchemaVersion`): `"1.4.0"` when `briefing.tldr` is present, else `"1.3.0"` when `flowsUnavailable` or `walkthroughUnavailable` is present, else `"1.2.0"` when `graphUnavailable.reason` is `no-logic`, else `"1.1.0"`. Patch and minor versions add optional fields or widen an enum; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                                                                               |
 | `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what.                                                                                                                                                                                                                                                                                                                  |
-| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `briefing`      | model               | TL;DR (2–4 one-sentence bullets; schema 1.4) or, in older documents and Rocky's fallback briefing, a summary paragraph; risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                                                                                                                                                                                                                                           |
 | `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough. Rocky's pipeline asks for lanes, nodes and edges in one call (H4-5), then the flows (without payloads) and the walkthrough (steps focused on nodes and edges) in two more (H4-7); views stay empty. Absent when the graph role failed or there was nothing to map; `provenance.graphUnavailable` then says why; a failed flows or walkthrough call leaves that section out and `provenance.flowsUnavailable` / `walkthroughUnavailable` says why. |
@@ -83,7 +83,13 @@ count or a hunk range. Every other section is then checked against those facts.
     "generator": { "name": "rocky", "roles": [{ "role": "review", "model": "…" }] }
   },
   "briefing": {
-    "summary": "Adds **email invitations to orgs**. An admin creates an invite, …",
+    // Schema 1.4: two to four one-sentence bullets. A document before 1.4 has a "summary"
+    // paragraph instead; a briefing has at least one of the two.
+    "tldr": [
+      "Adds **email invitations to orgs**: an admin invites by email and the invitee joins …",
+      "Riskiest: accepting an invite lets the invitee choose their own role, admin included (F1).",
+      "Start with `src/auth/invitations.ts`, then the route and the migration."
+    ],
     // F1 below is critical, so the verdict must be critical (VERDICT_TOO_LOW otherwise).
     "verdict": { "level": "critical", "reason": "This PR adds a **new way to gain membership** …" },
     // At least the sum of the files' reviewMinutes (REVIEW_MINUTES_TOO_LOW otherwise).
@@ -221,7 +227,9 @@ count or a hunk range. Every other section is then checked against those facts.
 | Finding title / body                   | 200 / 4 000 chars          |
 | Triage reason, what changed, why       | 500 chars each             |
 | Agent prompt                           | 2 000 chars                |
-| Briefing summary                       | 2 000 chars                |
+| Briefing summary (before 1.4)          | 2 000 chars                |
+| Briefing TL;DR                         | 2–4 items × 160 chars      |
+| Verdict reason                         | 500 chars (200 asked for)  |
 | Review path / checked-ok / memory used | 50 / 30 / 50 items         |
 | Estimated review minutes (PR)          | 1–480                      |
 | Estimated review minutes (per file)    | 0–480                      |
@@ -253,7 +261,7 @@ count or a hunk range. Every other section is then checked against those facts.
 | `SUGGESTION_RANGE_OUTSIDE_FILE`                    | With content available, the range exists in the file.                                                                                                                                                                                                                                           |
 | `SUGGESTION_NOOP`                                  | With content available, the replacement differs from the original lines.                                                                                                                                                                                                                        |
 | `LIMIT_EXCEEDED`                                   | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                                                             |
-| `UNSUPPORTED_SCHEMA_VERSION`                       | Only `1.0.x` to `1.3.x` is read (the version policy above).                                                                                                                                                                                                                                     |
+| `UNSUPPORTED_SCHEMA_VERSION`                       | Only `1.0.x` to `1.4.x` is read (the version policy above).                                                                                                                                                                                                                                     |
 | `INVALID_JSON`                                     | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                                                                    |
 | `TOO_DEEP` / `SHARED_REFERENCE` / `INTERNAL_ERROR` | The parser never throws; input nested over 64 levels is `TOO_DEEP`; any object reached twice (a cycle or a shared subtree, i.e. not `JSON.parse` output) is `SHARED_REFERENCE`, both with the path and found in one linear pass; an unexpected error is `INTERNAL_ERROR` without echoing input. |
 
@@ -316,6 +324,28 @@ registry to point at. Ids are compared case-insensitively because anchors often 
   with no `stage`, a `focus` of nodes and edges (or `all`), and no lanes or message ids. The
   schema keeps the richer shapes for other producers and a later call.
 
+## Schema 1.4 (H4-8, ADR 0014 amendment)
+
+- **Version policy:** the reader accepts `1.0.x` to `1.4.x` (`^1\.(0|1|2|3|4)\.\d+$`); a
+  newer minor is still refused. A document is stamped `1.4.0` only when it has a TL;DR, so a
+  1.3 reader keeps reading every document that has none (Rocky's fallback briefing among them).
+- **`briefing.tldr`** (optional; `Tldr`, `TldrItem`): two to four bullets
+  (`MIN_TLDR_ITEMS`, `MAX_TLDR_ITEMS`), each one line of prose of at most 160 characters
+  (`MAX_TLDR_ITEM_LENGTH`): inline `**bold**` and `` `code` `` as everywhere in the briefing, no
+  newline. The first bullet says what the PR does; the rest what matters most to the reviewer.
+- **`briefing.summary` is optional** from 1.4, and a briefing must have a `summary` or a `tldr`
+  (INVALID_SHAPE at `briefing` otherwise; the JSON Schema says the same with `anyOf`). Decision:
+  the AI briefing carries the TL;DR only. A short summary next to it would repeat the first
+  bullet, cost output tokens, and give the UI two texts to choose from; every 1.0–1.3 document
+  keeps its summary and reads unchanged, and Rocky's own fallback briefing still writes the fixed
+  summary paragraph. A document with both is valid; the UI shows the TL;DR.
+- **`verdict.reason`** keeps its 500-character document limit, so the two-sentence reasons of
+  older documents stay valid. The briefing call asks for one short sentence and its answer
+  schema enforces `MAX_VERDICT_REASON_ANSWER_LENGTH` (200): an older document is read leniently,
+  a new answer is held to the tighter limit.
+- **`BriefingFields`** is exported: the briefing without its summary-or-TL;DR rule, for a
+  producer that projects it (Zod refuses `.pick()` on a refined object).
+
 ## How this is tested
 
 - 300+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
@@ -345,8 +375,8 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 The open questions from the first draft, with the decision taken at the H2 gate and why. The
 schema version stayed `1.0.0` at H2: no producer had consumed the contract yet, and H2 was the
 gate that fixed it. P4-4 moved it to `1.1.0` (above); H4-5 added `1.2.0` (the `no-logic`
-reason) and H4-7 `1.3.0` (the two map-section reasons), each stamped only on documents that use
-it so a 1.1 reader keeps reading every other one.
+reason), H4-7 `1.3.0` (the two map-section reasons) and H4-8 `1.4.0` (the briefing's TL;DR),
+each stamped only on documents that use it so a 1.1 reader keeps reading every other one.
 
 NFD handling (above) was never a question: the facts keep git's spelling, collisions under NFC
 are refused, and model paths must match exactly.
