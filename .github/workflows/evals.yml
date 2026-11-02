@@ -91,7 +91,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run the evals on the scripted roles
-        run: pnpm evals run --fake --injection --out "$RUNNER_TEMP/fake.json"
+        # The baseline is regenerated with the same 2M cap (H4-7, H4-8); the default 1M is too
+        # close to what the injection run uses.
+        run: pnpm evals run --fake --injection --max-tokens 2000000 --out "$RUNNER_TEMP/fake.json"
 
       - name: Gate against the base branch's fake baseline
         env:

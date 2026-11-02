@@ -205,7 +205,7 @@ settings:
   changes them on purpose, regenerate it:
 
   ```
-  pnpm evals run --fake --injection --out packages/evals/baselines/fake.json
+  pnpm evals run --fake --injection --max-tokens 2000000 --out packages/evals/baselines/fake.json
   ```
 
 - **`baselines/live.json`** is a placeholder (`kind: "placeholder"`, a notice that starts

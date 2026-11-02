@@ -53,7 +53,7 @@ export const requiredSchemaVersion = (doc: {
     typeof briefing === "object" && briefing !== null
       ? (briefing as { readonly tldr?: unknown }).tldr
       : undefined;
-  if (tldr !== undefined) return SCHEMA_VERSION;
+  if (Array.isArray(tldr)) return SCHEMA_VERSION;
   const provenance = doc.provenance;
   if (
     provenance?.flowsUnavailable !== undefined ||

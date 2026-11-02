@@ -14,7 +14,7 @@ import {
   MIN_REVIEW_MINUTES,
   MIN_TLDR_ITEMS,
 } from "./limits.js";
-import { prose, RepositoryPath } from "./primitives.js";
+import { line, prose, RepositoryPath } from "./primitives.js";
 
 /**
  * PR-level risk. Must not sit below what the findings say (VERDICT_TOO_LOW): a critical finding
@@ -43,14 +43,12 @@ export const ReviewPathStep = z
 export type ReviewPathStep = z.infer<typeof ReviewPathStep>;
 
 /**
- * One TL;DR bullet (schema 1.4, H4-8): one sentence on one line. Inline `**bold**` and
- * `` `code` `` render as everywhere else in the briefing; a newline would turn a bullet into a
- * paragraph, so it is refused.
+ * One TL;DR bullet (schema 1.4, H4-8): one sentence on one line. Single-line text, so no
+ * newline, tab, line or paragraph separator (U+2028 and U+2029 render as line breaks and could
+ * fake a second, Rocky-looking line inside a bullet). Inline `**bold**` and `` `code` `` render
+ * as everywhere else in the briefing.
  */
-export const TldrItem = prose(MAX_TLDR_ITEM_LENGTH, "One short sentence.").refine(
-  (text) => !text.includes("\n"),
-  { message: "a TL;DR item is one line" },
-);
+export const TldrItem = line(MAX_TLDR_ITEM_LENGTH, "One short sentence.");
 
 /** The TL;DR itself: required in the briefing call's answer, optional in the document. */
 export const Tldr = z

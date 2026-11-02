@@ -561,9 +561,14 @@ for a TL;DR of at most four sentences that is easier to scan than a paragraph.
    the summary paragraph as before. The CLI prints a TL;DR block or the summary. The answer
    schema goes through the SDK transform in `wire-schema.test.ts` (no `$defs`, no combinator;
    the array and length limits move into descriptions as for every role).
+5. **Rollout.** The briefing call always answers with a TL;DR, so almost every AI-briefed
+   document is stamped 1.4; only Rocky's fallback briefing stays 1.1. A server or web build that
+   only reads up to 1.3 refuses a 1.4 document (UNSUPPORTED_SCHEMA_VERSION), so the readers
+   (server and web) must be deployed before the worker that writes 1.4.
 
 **Threat model.** No new input or side effect: the TL;DR is model text like the summary it
-replaces, validated as prose (no control, bidi or invisible characters, no newline), checked by
+replaces, validated as single-line text (no control, bidi or invisible characters, no newline, tab,
+U+2028 or U+2029, so a bullet cannot fake a second line), checked by
 the leak guard with the rest of the document (`pipeline.test.ts` H4-8, `injection.test.ts`'s
 adversary now writes TL;DR bullets), rendered through `InlineText` in a `<bdi>`
 (`Briefing.test.tsx` "untrusted model output") and through the CLI's gutter (`render.test.ts`).

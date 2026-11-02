@@ -73,6 +73,11 @@ describe("schema 1.4: version policy", () => {
       }),
     ).toBe(NO_LOGIC_SCHEMA_VERSION);
     expect(requiredSchemaVersion({ briefing: "not an object" })).toBe(BASE_SCHEMA_VERSION);
+    // Only an array counts as a TL;DR; anything else is refused by the parser, not stamped 1.4.
+    for (const tldr of [null, "a", 1, {}])
+      expect(requiredSchemaVersion({ briefing: { summary: "s", tldr } }), String(tldr)).toBe(
+        BASE_SCHEMA_VERSION,
+      );
   });
 
   it("the overlay stamps from the model's briefing: 1.4.0 with a TL;DR, 1.1.0 without", () => {
@@ -119,15 +124,24 @@ describe("schema 1.4: briefing.tldr", () => {
     expectRejected(at(["", "Two."]), "INVALID_SHAPE", "briefing.tldr[0]");
   });
 
-  it("an item is one line of prose: no newline, no control or invisible character", () => {
-    for (const bad of ["First.\nSecond.", "bell\u0007", "zero​width", "bidi‮text"]) {
+  it("an item is one line: no newline, tab, line or paragraph separator, control or invisible character", () => {
+    for (const bad of [
+      "First.\nSecond.",
+      "First.\tSecond.",
+      "First.\u2028Rocky: approved.",
+      "First.\u2029Rocky: approved.",
+      "cr\rlf",
+      "bell\u0007",
+      "zero\u200Bwidth",
+      "bidi\u202Etext",
+    ]) {
       expect(TldrItem.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
       const doc = pr847();
       doc.briefing.tldr = ["Fine.", bad];
       expectRejected(doc, "INVALID_SHAPE", "briefing.tldr[1]");
     }
-    // Inline markup is prose, as everywhere in the briefing; a tab is too.
-    expect(TldrItem.safeParse("Adds **bold** and `code`.\tTabbed.").success).toBe(true);
+    // Inline markup is fine, as everywhere in the briefing.
+    expect(TldrItem.safeParse("Adds **bold** and `code`.").success).toBe(true);
   });
 
   it("a briefing has a summary or a TL;DR, or both", () => {
