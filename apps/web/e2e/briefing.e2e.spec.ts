@@ -220,15 +220,13 @@ test.describe("clickable files", () => {
     await expect(mainHeading(page)).toHaveText("pnpm-lock.yaml");
   });
 
-  test("a change-map card, a path step and the start button open their files", async ({ page }) => {
+  test("a change-map card and the start button open their files", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openBriefing(page, STATE_PULLS.main);
+    // H4-11: the suggested review path is gone; the order still drives the start button.
+    await expect(page.getByText("Suggested review path")).toHaveCount(0);
     await page.locator('.map-scroll [data-node="page"]').click();
     await expect(mainHeading(page)).toHaveText("web/src/pages/InvitePage.tsx");
-
-    await page.getByRole("button", { name: "Briefing & change map" }).click();
-    await page.locator(".path-list button").nth(2).click();
-    await expect(mainHeading(page)).toHaveText("db/migrations/20261020_add_invitations.sql");
 
     await page.getByRole("button", { name: "Briefing & change map" }).click();
     await page.getByRole("button", { name: "Start with the riskiest file" }).click();
@@ -308,8 +306,8 @@ test.describe("keyboard", () => {
     expect(names.slice(4, 7)).toEqual(["map control", "map control", "map control"]);
     names.splice(4, 3);
     // The selected risk chip and its 3 Critical files, 5 map cards backed by a PR file, each
-    // followed by its finding badge (P5-3), 4 path steps, the start button.
-    expect(names).toHaveLength(19);
+    // followed by its finding badge (P5-3), the start button (H4-11: no path steps).
+    expect(names).toHaveLength(15);
     expect(names.slice(4, 14)).toEqual([
       "page",
       "F9",

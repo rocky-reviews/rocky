@@ -118,18 +118,6 @@ export const nameOf = (doc: AnalysisDocument): ((path: string) => string) => {
   return (path) => names.get(path) ?? path;
 };
 
-export type PathRow = { path: string; why: string; score: number; level: TriagedFileLevel };
-
-export const reviewPathRows = (doc: AnalysisDocument): PathRow[] => {
-  const triaged = new Map(doc.triage.files.map((f) => [f.path, f]));
-  return doc.briefing.reviewPath.flatMap((step) => {
-    const file = triaged.get(step.path);
-    return file === undefined
-      ? []
-      : [{ path: step.path, why: step.why, score: file.score, level: file.level }];
-  });
-};
-
 /** Where "Start with the riskiest file" goes: the path's first stop, else the top triaged file. */
 export const startFile = (doc: AnalysisDocument): string | undefined =>
   doc.briefing.reviewPath[0]?.path ??
