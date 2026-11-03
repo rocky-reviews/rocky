@@ -79,19 +79,108 @@ test.describe("layout", () => {
     await expect(page.getByRole("list", { name: "TL;DR" })).toHaveCount(0);
   });
 
-  test("the risk table stacks at 375 px (POC defect 1)", async ({ page }) => {
+  test("the risk chips wrap inside the card at 375 px (POC defect 1)", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
-    await openBriefing(page, STATE_PULLS.main);
-    const table = await page.locator(".risk-table").boundingBox();
+    await openBriefing(page, STATE_PULLS.graphUnavailable);
     const card = await page.locator(".brief").boundingBox();
-    expect(table && card && table.x + table.width <= card.x + card.width).toBe(true);
+    const chips = await page.getByRole("tab").evaluateAll((els) =>
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return { right: r.right, top: r.top };
+      }),
+    );
+    expect(chips).toHaveLength(5);
+    expect(chips.every((c) => card !== null && c.right <= card.x + card.width)).toBe(true);
+    expect(new Set(chips.map((c) => c.top)).size).toBeGreaterThan(1);
+  });
+});
+
+test.describe("files by risk (H4-10)", () => {
+  const tablist = (page: Page) => page.getByRole("tablist", { name: "Files by risk" });
+  const panel = (page: Page) => page.getByRole("tabpanel");
+
+  test("a chip per level with its count; the highest level's files are listed", async ({
+    page,
+  }) => {
+    await openBriefing(page, STATE_PULLS.main);
+    await expect(tablist(page).getByRole("tab")).toHaveText([
+      "Critical 3 files",
+      "Important 1 file",
+      "Normal 2 files",
+      "Ignore 3 files",
+    ]);
+    const critical = page.getByRole("tab", { name: "Critical 3 files" });
+    await expect(critical).toHaveAttribute("aria-selected", "true");
+    await expect(panel(page)).toHaveAccessibleName("Critical 3 files");
+    await expect(panel(page).getByRole("button")).toHaveText([
+      "auth/invitations.ts",
+      "routes/invitations.ts",
+      "20261020_add_invitations.sql",
+    ]);
+  });
+
+  test("clicking a chip swaps the list", async ({ page }) => {
+    await openBriefing(page, STATE_PULLS.main);
+    await page.getByRole("tab", { name: "Normal 2 files" }).click();
+    await expect(page.getByRole("tab", { name: "Normal 2 files" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(page.getByRole("tab", { name: "Critical 3 files" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    await expect(panel(page)).toHaveAccessibleName("Normal 2 files");
+    await expect(panel(page).getByRole("button")).toHaveCount(2);
+    await expect(
+      panel(page).getByRole("button", { name: "Open src/auth/invitations.ts" }),
+    ).toHaveCount(0);
+  });
+
+  test("Left, Right, Home and End move the selection and the focus, with one tab stop", async ({
+    page,
+  }) => {
+    await openBriefing(page, STATE_PULLS.main);
+    const tab = (name: string) => page.getByRole("tab", { name });
+    await tab("Critical 3 files").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Important 1 file")).toBeFocused();
+    await expect(tab("Important 1 file")).toHaveAttribute("aria-selected", "true");
+    await expect(tab("Important 1 file")).toHaveAttribute("tabindex", "0");
+    await expect(tab("Critical 3 files")).toHaveAttribute("tabindex", "-1");
+    await expect(panel(page)).toHaveAccessibleName("Important 1 file");
+    await page.keyboard.press("End");
+    await expect(tab("Ignore 3 files")).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(tab("Critical 3 files")).toBeFocused();
+    await page.keyboard.press("ArrowLeft");
+    await expect(tab("Ignore 3 files")).toBeFocused();
+    await page.keyboard.press("Home");
+    await expect(tab("Critical 3 files")).toBeFocused();
+    await expect(tab("Critical 3 files")).toHaveAttribute("aria-selected", "true");
+    // Tab leaves the tab list for the panel's first file.
+    await page.keyboard.press("Tab");
+    expect(await focusedName(page)).toBe("Open src/auth/invitations.ts");
+  });
+
+  test("Not analysed is a chip, not the default", async ({ page }) => {
+    await openBriefing(page, STATE_PULLS.graphUnavailable);
+    const unanalysed = page.getByRole("tab", { name: "Not analysed 1 file" });
+    await expect(unanalysed).toHaveAttribute("aria-selected", "false");
+    await expect(page.getByRole("tab", { name: "Critical 3 files" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 });
 
 test.describe("clickable files", () => {
-  test("a risk-table file selects it in the sidebar and the main column", async ({ page }) => {
+  test("a file under the risk chips selects it in the sidebar and the main column", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openBriefing(page, STATE_PULLS.main);
+    await page.getByRole("tab", { name: "Important 1 file" }).click();
     await page.getByRole("button", { name: "Open src/jobs/sendInviteEmail.ts" }).click();
     await expect(mainHeading(page)).toHaveText("src/jobs/sendInviteEmail.ts");
     await expect(
@@ -105,6 +194,7 @@ test.describe("clickable files", () => {
   test("an unanalysed file opens and is selected in the sidebar", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openBriefing(page, STATE_PULLS.graphUnavailable);
+    await page.getByRole("tab", { name: "Not analysed 1 file" }).click();
     await page.getByRole("button", { name: "Open src/api/index.ts" }).click();
     await expect(mainHeading(page)).toHaveText("src/api/index.ts");
     await expect(
@@ -123,8 +213,9 @@ test.describe("clickable files", () => {
     await expect(page.locator("#briefing-title")).toBeVisible();
   });
 
-  test("a noise file in the ignore row opens too", async ({ page }) => {
+  test("a noise file in the Ignore level opens too", async ({ page }) => {
     await openBriefing(page, STATE_PULLS.main);
+    await page.getByRole("tab", { name: "Ignore 3 files" }).click();
     await page.getByRole("button", { name: "Open pnpm-lock.yaml" }).click();
     await expect(mainHeading(page)).toHaveText("pnpm-lock.yaml");
   });
@@ -161,7 +252,7 @@ test.describe("clickable files", () => {
 });
 
 test.describe("keyboard", () => {
-  test("skip link, then Tab reaches the risk table and Enter opens the file (1440 px)", async ({
+  test("skip link, then Tab reaches the risk chips, then the files, and Enter opens one (1440 px)", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -171,6 +262,8 @@ test.describe("keyboard", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#main")).toBeFocused();
 
+    await page.keyboard.press("Tab");
+    expect(await focusedName(page)).toBe("risk-tab-critical");
     await page.keyboard.press("Tab");
     expect(await focusedName(page)).toBe("Open src/auth/invitations.ts");
     const ring = await page.evaluate(() => {
@@ -205,16 +298,19 @@ test.describe("keyboard", () => {
           const { dataset } = el;
           // H4-6: the map's own controls (style, Traffic only, Pause motion) come first.
           if (el.classList.contains("map-btn")) return "map control";
+          // H4-10: the risk chips are one tab stop, the selected (Critical) chip.
+          if (el.getAttribute("role") === "tab") return "risk chip";
           return dataset.path ?? dataset.node ?? dataset.findings ?? "";
         }),
       );
     }
-    expect(names.slice(9, 12)).toEqual(["map control", "map control", "map control"]);
-    names.splice(9, 3);
-    // 9 risk-table files, 5 map cards backed by a PR file, each followed by its finding badge
-    // (P5-3), 4 path steps, the start button.
-    expect(names).toHaveLength(24);
-    expect(names.slice(9, 19)).toEqual([
+    expect(names[0]).toBe("risk chip");
+    expect(names.slice(4, 7)).toEqual(["map control", "map control", "map control"]);
+    names.splice(4, 3);
+    // The selected risk chip and its 3 Critical files, 5 map cards backed by a PR file, each
+    // followed by its finding badge (P5-3), 4 path steps, the start button.
+    expect(names).toHaveLength(19);
+    expect(names.slice(4, 14)).toEqual([
       "page",
       "F9",
       "route",
