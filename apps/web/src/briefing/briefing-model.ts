@@ -53,7 +53,8 @@ const shownPaths = (doc: AnalysisDocument): string[] => [
 
 /**
  * The files by risk (H4-10: count chips; the POC's risk table): critical, important, normal,
- * ignore (low + noise), then unanalysed, each level only when it has files.
+ * unanalysed (files to read by hand rank above ignore, as in the sidebar), then ignore (low +
+ * noise), each level only when it has files.
  */
 export const riskLevels = (doc: AnalysisDocument): RiskLevelGroup[] => {
   const names = shortNames(shownPaths(doc));
@@ -61,8 +62,8 @@ export const riskLevels = (doc: AnalysisDocument): RiskLevelGroup[] => {
     ["critical", "Critical", byScore(doc, "critical")],
     ["important", "Important", byScore(doc, "important")],
     ["normal", "Normal", byScore(doc, "normal")],
-    ["ignore", "Ignore", [...byScore(doc, "low"), ...doc.triage.noise.map((f) => f.path)]],
     ["unanalysed", "Not analysed", doc.provenance.unanalysed.map((f) => f.path)],
+    ["ignore", "Ignore", [...byScore(doc, "low"), ...doc.triage.noise.map((f) => f.path)]],
   ];
   return levels
     .filter(([, , paths]) => paths.length > 0)
@@ -73,12 +74,24 @@ export const riskLevels = (doc: AnalysisDocument): RiskLevelGroup[] => {
     }));
 };
 
-/**
- * The level selected first: the highest risk present (levels come riskiest first). Not analysed
- * comes last, just another chip, so it is the default only when it is the only level.
- */
+/** The level selected first: the first present, as levels come riskiest first. */
 export const defaultRiskLevel = (levels: readonly RiskLevelGroup[]): RiskLevelKey | undefined =>
   levels[0]?.key;
+
+/** A level the reviewer picked, for the document (head commit) it was picked on. */
+export type RiskChoice = { head: string; key: RiskLevelKey };
+
+/**
+ * The selected level: the reviewer's choice while it is for this document's head commit and the
+ * level still has files; otherwise the default, so a new document starts on its riskiest level.
+ */
+export const selectedRiskLevel = (
+  levels: readonly RiskLevelGroup[],
+  head: string,
+  choice: RiskChoice | undefined,
+): RiskLevelGroup | undefined =>
+  (choice?.head === head ? levels.find((l) => l.key === choice.key) : undefined) ??
+  levels.find((l) => l.key === defaultRiskLevel(levels));
 
 /**
  * Where a key moves the focus in a WAI-ARIA tab list of `count` tabs, from tab `index`: Left and

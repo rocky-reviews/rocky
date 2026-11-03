@@ -161,11 +161,31 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(chips.map((c) => text(c).split(" ")[0])).toEqual([
       "Important",
       "Normal",
-      "Ignore",
       "Not",
+      "Ignore",
     ]);
     expect(chips[0]).toContain('aria-selected="true"');
     expect(markup).toContain('aria-labelledby="risk-tab-important"');
+  });
+
+  it("opens on Not analysed when only Ignore and Not analysed have files", async () => {
+    const data = await fixture("graphUnavailable");
+    const doc = data.analysis;
+    if (doc === null) throw new Error("PR 849 has an analysis");
+    const markup = renderToStaticMarkup(
+      <BriefingView
+        analysis={{
+          ...doc,
+          triage: { ...doc.triage, files: doc.triage.files.filter((f) => f.level === "low") },
+        }}
+        run={{ status: "done" }}
+        headSha={data.pull.headSha}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(tabs(markup).map((c) => text(c))).toEqual(["Not analysed 1 file", "Ignore 2 files"]);
+    expect(tabs(markup)[0]).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-labelledby="risk-tab-unanalysed"');
   });
 
   it("says so when the document lists no files", () => {
@@ -295,12 +315,15 @@ describe("change map unavailable (provenance.graphUnavailable)", async () => {
   });
 
   it("lists the files the AI could not analyse and the ones to read by hand", () => {
-    expect(
-      tabs(html)
-        .map((c) => text(c))
-        .at(-1),
-    ).toBe("Not analysed 1 file");
-    expect(tabs(html).at(-1)).toContain('aria-selected="false"');
+    // Files to read by hand rank above Ignore, as in the sidebar.
+    expect(tabs(html).map((c) => text(c).split(" ")[0])).toEqual([
+      "Critical",
+      "Important",
+      "Normal",
+      "Not",
+      "Ignore",
+    ]);
+    expect(tabs(html)[3]).toContain('aria-selected="false"');
     expect(t).toContain(
       "Read by hand: the AI reviewed these risky files and drafted nothing. sendInviteEmail.ts",
     );

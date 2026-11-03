@@ -2,7 +2,8 @@
  * The briefing (P6-2, POC `renderBrief`): the risk verdict and the TL;DR (H4-8; an older
  * document's summary paragraph instead), the files by risk (H4-10: a chip per level, the
  * selected level's files clickable below), the change map slot, the suggested path, project
- * memory applied and what the AI checked. Without a document it shows where the analysis stands instead (`BriefingState`).
+ * memory applied and what the AI checked. Without a document it shows where the analysis stands
+ * instead (`BriefingState`).
  *
  * Everything from the document is untrusted text: model prose goes through `InlineText`, paths
  * and labels sit in `<bdi>`, and the fixed text for pipeline reasons comes from briefing-model.
@@ -15,13 +16,15 @@ import {
   BRIEFING_REASON,
   briefingBanner,
   briefingLead,
-  defaultRiskLevel,
   failureText,
   nameOf,
   readByHand,
   reviewPathRows,
+  type RiskChoice,
   type RiskLevelGroup,
+  type RiskLevelKey,
   riskLevels,
+  selectedRiskLevel,
   startFile,
   tabKeyTarget,
   tokensText,
@@ -137,7 +140,7 @@ const Briefing = ({
             </>
           )}
           <RiskLevels
-            key={doc.provenance.head.sha}
+            head={doc.provenance.head.sha}
             levels={riskLevels(doc)}
             onOpenFile={onOpenFile}
           />
@@ -272,26 +275,30 @@ const VerdictBox = ({ verdict }: { verdict: AnalysisDocument["briefing"]["verdic
 
 /**
  * H4-10: the files by risk as count chips, a WAI-ARIA tab list (selection follows focus), over
- * one panel with the selected level's files. The selection is component state; the briefing
- * keys it by the document's head commit, so a new document starts on its default level.
+ * one panel with the selected level's files. The selection is component state, kept with the
+ * head commit it was made on, so a new document starts on its default level.
  */
 const RiskLevels = ({
+  head,
   levels,
   onOpenFile,
 }: {
+  head: string;
   levels: RiskLevelGroup[];
   onOpenFile: (p: string) => void;
 }) => {
-  const [chosen, setChosen] = useState(() => defaultRiskLevel(levels));
+  const [choice, setChoice] = useState<RiskChoice>();
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
-  const selected = levels.find((l) => l.key === chosen) ?? levels[0];
+  tabs.current.length = levels.length;
+  const selected = selectedRiskLevel(levels, head, choice);
+  const choose = (key: RiskLevelKey) => setChoice({ head, key });
 
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
     const target = tabKeyTarget(levels.length, index, e.key);
     const level = target === undefined ? undefined : levels[target];
     if (target === undefined || level === undefined) return;
     e.preventDefault();
-    setChosen(level.key);
+    choose(level.key);
     tabs.current[target]?.focus();
   };
 
@@ -320,7 +327,7 @@ const RiskLevels = ({
                   ref={(el) => {
                     tabs.current[index] = el;
                   }}
-                  onClick={() => setChosen(level.key)}
+                  onClick={() => choose(level.key)}
                   onKeyDown={(e) => onKeyDown(e, index)}
                 >
                   <span className="risk-dot" aria-hidden="true" />

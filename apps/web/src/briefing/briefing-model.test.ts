@@ -9,8 +9,10 @@ import {
   graphState,
   readByHand,
   reviewPathRows,
+  type RiskChoice,
   type RiskLevelKey,
   riskLevels,
+  selectedRiskLevel,
   shortNames,
   startFile,
   tabKeyTarget,
@@ -63,7 +65,7 @@ describe("riskLevels (H4-10: count chips)", () => {
     expect(riskLevels({ ...doc, triage: { files: [], noise: [] } })).toEqual([]);
   });
 
-  it("adds a Not analysed level for files the AI could not analyse, only when there are some", () => {
+  it("adds a Not analysed level, above Ignore, only when the AI could not analyse some files", () => {
     expect(levels.some((l) => l.key === "unanalysed")).toBe(false);
     const withUnanalysed: AnalysisDocument = {
       ...doc,
@@ -72,7 +74,14 @@ describe("riskLevels (H4-10: count chips)", () => {
         unanalysed: [{ path: "src/api/index.ts", reason: "too-large" }],
       },
     };
-    const level = riskLevels(withUnanalysed).at(-1);
+    expect(riskLevels(withUnanalysed).map((l) => l.key)).toEqual([
+      "critical",
+      "important",
+      "normal",
+      "unanalysed",
+      "ignore",
+    ]);
+    const level = riskLevels(withUnanalysed).at(-2);
     expect(level).toMatchObject({ key: "unanalysed", label: "Not analysed" });
     expect(level?.files.map((f) => f.path)).toEqual(["src/api/index.ts"]);
   });
@@ -88,13 +97,42 @@ describe("defaultRiskLevel", () => {
     expect(defaultRiskLevel([level("ignore")])).toBe("ignore");
   });
 
-  it("keeps the highest risk level over Not analysed, which is just another chip", () => {
+  it("ranks Not analysed below Normal and above Ignore", () => {
     expect(defaultRiskLevel([level("normal"), level("unanalysed")])).toBe("normal");
+    expect(defaultRiskLevel([level("unanalysed"), level("ignore")])).toBe("unanalysed");
     expect(defaultRiskLevel([level("unanalysed")])).toBe("unanalysed");
   });
 
   it("has none when there are no levels", () => {
     expect(defaultRiskLevel([])).toBeUndefined();
+  });
+});
+
+describe("selectedRiskLevel", () => {
+  const levels = riskLevels(doc);
+  const head = doc.provenance.head.sha;
+  const key = (choice?: RiskChoice, at = head) => selectedRiskLevel(levels, at, choice)?.key;
+
+  it("is the default until the reviewer picks a level", () => {
+    expect(key()).toBe("critical");
+  });
+
+  it("is the picked level on the document it was picked on", () => {
+    expect(key({ head, key: "normal" })).toBe("normal");
+  });
+
+  it("resets to the riskiest level when the head commit changes", () => {
+    expect(key({ head, key: "normal" }, "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d")).toBe(
+      "critical",
+    );
+  });
+
+  it("falls back to the default when the picked level has no files", () => {
+    expect(key({ head, key: "unanalysed" })).toBe("critical");
+  });
+
+  it("is none without levels", () => {
+    expect(selectedRiskLevel([], head, { head, key: "normal" })).toBeUndefined();
   });
 });
 

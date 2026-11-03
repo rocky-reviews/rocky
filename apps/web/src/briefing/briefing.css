@@ -121,6 +121,7 @@
   font-variant-numeric: tabular-nums;
 }
 .risk-chip:hover {
+  border-color: var(--muted);
   color: var(--text);
 }
 .risk-chip[aria-selected="true"] {
@@ -129,6 +130,7 @@
   color: var(--text);
 }
 .risk-dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -137,7 +139,7 @@
 /* Ignore is a ring, so it differs from Normal's grey by shape (H4-10 mockup). */
 .r-ignore > .risk-dot {
   background: transparent;
-  border: 1.5px solid var(--faint);
+  border: 1.5px solid var(--muted);
 }
 .r-critical > .risk-dot {
   background: var(--crit);
