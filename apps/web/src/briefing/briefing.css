@@ -255,54 +255,6 @@
   font-weight: 600;
 }
 
-/* ---------- suggested path ---------- */
-.path-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  counter-reset: step;
-}
-.path-list li {
-  counter-increment: step;
-}
-.path-list button {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  padding: 7px var(--space-2);
-  border-radius: var(--radius-md);
-}
-.path-list button:hover {
-  background: var(--panel-2);
-}
-.path-list button::before {
-  content: counter(step);
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  flex: none;
-  display: grid;
-  place-items: center;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  background: var(--you-bg);
-  color: var(--you);
-}
-.path-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  overflow-wrap: anywhere;
-}
-.path-list .why {
-  color: var(--muted);
-  font-size: var(--text-base);
-}
-
 /* ---------- memory and checks ---------- */
 .two {
   display: grid;

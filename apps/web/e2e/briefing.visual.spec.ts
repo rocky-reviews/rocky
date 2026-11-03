@@ -7,7 +7,7 @@ import { openBriefing, STATE_PULLS, unclipMain } from "./briefing-support.js";
 /**
  * P6-2 acceptance: the briefing and each of its empty and failed states at 375/1024/1440 px x
  * light/dark. States with a document are taken at full length (the main column unclipped), so
- * the change map, path, memory and checks are all in the picture; the others at viewport size.
+ * the change map, memory and checks are all in the picture; the others at viewport size.
  * Baselines in e2e/__screenshots__/, copies in artifacts/screenshots/P6-2/.
  */
 
