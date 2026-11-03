@@ -223,6 +223,11 @@ in-memory store behind a port, plus its tests.
   app shows now; only its order is used. A later task could drop the "why" from the prompt and
   schema (or show it elsewhere) to save output tokens.
 - The CLI still prints the review path.
+- Rocky's own fallback briefing still says "Read the files in the order shown."
+  (`packages/core/src/analysis/pipeline.ts`, web fixture `briefing/fixtures.ts`); nothing in the
+  briefing shows an order now. Reword it (for example "Start with the riskiest file.").
+- `docs/design/poc-parity.md` keeps the removed review-path item ticked; an "n/a (H4-11)" marker
+  would read better. The `Briefing.test.tsx` test name still says "risk table" (chips since H4-10).
 
 ### H4-10 follow-ups
 
