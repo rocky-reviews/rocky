@@ -225,6 +225,11 @@ in-memory store behind a port, plus its tests.
   (`settledTop`); polling for a stable value over a few frames would be faster and less brittle.
 - N4 (predates H4-13): Shift+Tab into the diff from below lands on the active line's button,
   which is pinned and can be far away, so the view jumps to it.
+- Predates H4-13: copying code from the diff includes the screen-reader sign text ("added: ")
+  because the `sr-only` span sits inside `code.src` (`DiffBody.tsx`). Keep the sign announced
+  without putting it in the copied text (outside the code element, or `user-select: none`).
+- `onClickList` skips `.draft, .mine, .compose` but not `.collapsed-draft`; a click on one makes
+  the nearest line active (no scroll, no visible effect). Add it to the skip list.
 
 ### H4-12 follow-ups
 
