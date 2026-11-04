@@ -1,10 +1,13 @@
 /**
  * The triage sidebar (POC `renderSidebar`): review coverage, the briefing entry, files grouped
  * by risk level with a viewed checkbox, severity dots and the risk score, and the noise group.
+ * H4-12: the Tree button under the coverage card opens the change tree (also `t`).
  */
 import { type ReactNode, useState } from "react";
 import type { Severity } from "@rocky-reviews/schema";
 import { useReview } from "../drafts/ReviewProvider.js";
+import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
+import { FolderIcon } from "./icons.js";
 import { isLowerRisk, hasHighRisk, readLowerRisk, saveLowerRisk } from "./lower-risk.js";
 import { useToast } from "./Toast.js";
 import {
@@ -33,6 +36,8 @@ type Props = {
   onMarkViewed: (paths: readonly string[]) => void;
   /** Where the lower-risk choice is kept; tests pass their own. */
   storage?: () => Storage;
+  /** H4-12: opens the change tree. */
+  onOpenTree?: (() => void) | undefined;
 };
 
 const SEVERITY_LABEL: Record<Severity, string> = {
@@ -75,7 +80,9 @@ export const SidebarContent = ({
   onToggleViewed,
   onMarkViewed,
   storage = browserStorage,
+  onOpenTree,
 }: Props) => {
+  const treeKey = useKeyShortcut("t");
   const [noiseOpen, setNoiseOpen] = useState(false);
   const { decisionOf } = useReview();
   const toast = useToast();
@@ -176,6 +183,22 @@ export const SidebarContent = ({
         </div>
         <div className="coverage-note">{coverageNote(coverage)}</div>
       </section>
+
+      {onOpenTree !== undefined && (
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost tree-btn"
+          aria-haspopup="dialog"
+          aria-keyshortcuts={treeKey}
+          onClick={onOpenTree}
+        >
+          <FolderIcon />
+          <span>
+            <span className="sr-only">Change </span>Tree
+          </span>
+          <Kbd k="t" />
+        </button>
+      )}
 
       <button
         type="button"

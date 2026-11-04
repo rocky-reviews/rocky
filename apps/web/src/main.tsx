@@ -8,6 +8,7 @@ import "./inbox/inbox.css";
 import "./drafts/drafts.css";
 import "./keyboard/keyboard.css";
 import "./finish/finish.css";
+import "./change-tree/change-tree.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";

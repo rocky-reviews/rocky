@@ -75,3 +75,11 @@ letters must type.
 - The preference is per browser, not per account; a per-user setting can come with user settings.
 - Tests: `keymap.test.ts` (unit), `keyboard.e2e.spec.ts` (the keyboard-only review, typing,
   modifiers, the switch, the dialog's focus trap, axe), `keyboard.visual.spec.ts` (screenshots).
+
+## Amendment H4-12: `t` opens the change tree
+
+`t` (action `tree`) opens the change tree modal, the same as the sidebar's Tree button and the
+briefing's "View as tree". It follows every rule above: no modifiers, not while typing, not on
+key repeat, off with the single-key switch, and nothing while a modal is open (so `t` does not
+fire inside the tree itself). The help dialog lists it after `b`. While the tree is open over the
+Files drawer, the drawer's own Escape and Tab handling stand down, so Escape closes only the tree.

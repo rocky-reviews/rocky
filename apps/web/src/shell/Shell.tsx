@@ -8,6 +8,9 @@
  * P6-6: Finish review (ADR 0031), a modal in the same way, opened from the top bar or
  * ⌘/Ctrl+Enter; after it posts, the status pill shows the verdict and the posted items are
  * read-only (the review state is loaded again).
+ * H4-12: the change tree, a modal in the same way, opened from the sidebar's Tree button (also in
+ * the Files drawer, which stays open behind it), `t` or the briefing's "View as tree"; a file
+ * clicked in it opens like a sidebar click and focus moves to the main column.
  */
 import type { Finding } from "@rocky-reviews/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +24,8 @@ import type { ReviewSource } from "../data/review-data.js";
 import type { MyReview, ShellData } from "../data/shell-data.js";
 import { ReviewProvider, useReview } from "../drafts/ReviewProvider.js";
 import { FinishReview } from "../finish/FinishReview.js";
+import { changeTree } from "../change-tree/change-tree-model.js";
+import { ChangeTreeDialog } from "../change-tree/ChangeTreeDialog.js";
 import { myReviewOf, pendingCount } from "../finish/finish-model.js";
 import { fetchSession } from "../session.js";
 import { MainContent } from "./MainArea.js";
@@ -212,7 +217,37 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
     },
     [toast, login],
   );
-  const modal = overlay !== null || help || finish;
+  // H4-12: the change tree. Closed by Escape or a click outside, focus goes back to the opener;
+  // closed by opening a file, to the main column (the file replaced what was under focus).
+  const [tree, setTree] = useState(false);
+  const treeReturn = useRef<Element | "main" | null>(null);
+  const treeModel = useMemo(
+    () => (data.analysis === null ? null : changeTree(data.analysis)),
+    [data.analysis],
+  );
+  const openTree = useCallback(() => {
+    if (treeModel === null) return;
+    setTree((open) => {
+      if (!open) treeReturn.current = document.activeElement;
+      return true;
+    });
+  }, [treeModel]);
+  const closeTree = useCallback(() => setTree(false), []);
+  useEffect(() => {
+    if (tree || treeReturn.current === null) return;
+    const back = treeReturn.current;
+    treeReturn.current = null;
+    if (
+      back !== "main" &&
+      back instanceof HTMLElement &&
+      back !== document.body &&
+      back.isConnected
+    )
+      back.focus();
+    else if (back === "main") focusMain();
+    else document.getElementById("main")?.focus({ preventScroll: true });
+  }, [tree]);
+  const modal = overlay !== null || help || finish || tree;
 
   // Focus moves into an opened drawer, and on close back to its toggle, or to the region
   // itself when a wider window now shows it in place (the toggle is hidden then).
@@ -241,14 +276,15 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
   }, [drawer, overlay, closeDrawer]);
 
   useEffect(() => {
-    if (overlay === null) return;
+    // The change tree opens over the Files drawer and takes the keys while it is open.
+    if (overlay === null || tree) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") closeDrawer();
       if (event.key === "Tab") trapTab(event, overlay === "files" ? "#sidebar" : "#review-panel");
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [overlay, closeDrawer]);
+  }, [overlay, closeDrawer, tree]);
 
   const select = (next: Selection) => {
     setSelection(next);
@@ -261,6 +297,13 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
   const openFile = (path: string, line?: number) => {
     select({ kind: "file", path, line });
     focusMain();
+  };
+
+  const openFromTree = (path: string) => {
+    treeReturn.current = "main";
+    setTree(false);
+    setSelection({ kind: "file", path });
+    if (overlay === "files") closeDrawer("#main");
   };
 
   const toggleViewed = (path: string) =>
@@ -310,6 +353,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
               onToggleViewed={toggleViewed}
               onToggleMode={toggle}
               onHelp={keyboard.openHelp}
+              onTree={openTree}
               onAsk={() => toast(NOT_YET.ask)}
               onFinish={openFinish}
             />
@@ -342,7 +386,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                       }
                     : { "aria-label": "Files" })}
                   data-open={drawer === "files"}
-                  inert={(overlay !== null && overlay !== "files") || help || finish}
+                  inert={(overlay !== null && overlay !== "files") || help || finish || tree}
                 >
                   {drawer === "files" && (
                     <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
@@ -360,6 +404,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                       onSelect={select}
                       onToggleViewed={toggleViewed}
                       onMarkViewed={markViewed}
+                      onOpenTree={openTree}
                     />
                   )}
                 </nav>
@@ -371,6 +416,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                     headSha={data.pull.headSha}
                     onOpenFile={openFile}
                     files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+                    onOpenTree={openTree}
                   />
                 </main>
                 <aside
@@ -385,7 +431,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                       }
                     : { "aria-label": "Review panel" })}
                   data-open={drawer === "panel"}
-                  inert={(overlay !== null && overlay !== "panel") || help || finish}
+                  inert={(overlay !== null && overlay !== "panel") || help || finish || tree}
                 >
                   {drawer === "panel" && (
                     <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
@@ -405,6 +451,14 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                   onToggleMode={toggle}
                   mapStyle={mapStyleSetting}
                   onClose={closeHelp}
+                />
+              )}
+              {tree && treeModel !== null && (
+                <ChangeTreeDialog
+                  tree={treeModel}
+                  selected={selection.kind === "file" ? selection.path : null}
+                  onOpenFile={openFromTree}
+                  onClose={closeTree}
                 />
               )}
               {finish && (

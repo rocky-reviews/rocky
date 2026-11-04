@@ -31,6 +31,7 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 - [x] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Noise files listed once shown or trusted — `shell.e2e.spec.ts` "noise: Show lists the files, Trust marks them viewed"
 - [x] H4-9 · Normal, Low and noise collapsed by default (headers and counts only) behind one "Show N lower-risk files" / "Hide lower-risk files" toggle, remembered per browser (`rocky-sidebar-lower-risk`); a selected file's group always shows its rows — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-lower-risk-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-light.png), [pr-shell-lower-risk-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-dark.png); `Sidebar.test.tsx`, `shell.e2e.spec.ts` "lower-risk files: …"
+- [x] H4-12 · Change tree (not in the POC; mockup "A · Compact tree"): a "Tree" button with a folder icon and its `t` hint under the coverage card (also in the 375 px Files drawer), "View as tree" after the briefing's risk chips, and `t` open one modal. Only changed folders, single-child chains collapsed (`api/routes/`), root files in "(root config)"; each folder row has a caret, its worst-level dot, the name with "/", "new" when every file was added, "N files · K to read", lines changed and a risk bar; key files named, the rest folded into "+ N more files (M tests)"; biggest folder first, the riskiest open (down to its files to read); not analysed files a visible group, ignored files (low + noise) one collapsed line. A file click opens it like the sidebar and closes the modal; the open file is highlighted — [change-tree-1440-light](../../apps/web/e2e/__screenshots__/change-tree-1440-light.png), [change-tree-1440-dark](../../apps/web/e2e/__screenshots__/change-tree-1440-dark.png), [change-tree-1024-light](../../apps/web/e2e/__screenshots__/change-tree-1024-light.png), [change-tree-375-dark](../../apps/web/e2e/__screenshots__/change-tree-375-dark.png), [change-tree-file-1440-light](../../apps/web/e2e/__screenshots__/change-tree-file-1440-light.png), [change-tree-file-375-dark](../../apps/web/e2e/__screenshots__/change-tree-file-375-dark.png), Not analysed group [change-tree-unanalysed-1440-light](../../apps/web/e2e/__screenshots__/change-tree-unanalysed-1440-light.png), [change-tree-unanalysed-375-dark](../../apps/web/e2e/__screenshots__/change-tree-unanalysed-375-dark.png), [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-files-drawer-375-light](../../apps/web/e2e/__screenshots__/pr-files-drawer-375-light.png), [brief-375-dark](../../apps/web/e2e/__screenshots__/brief-375-dark.png); `change-tree-model.test.ts`, `ChangeTreeDialog.test.tsx`, `change-tree.e2e.spec.ts` (each entry point, Escape returns focus, Tab trap, file click, 375 px drawer, axe 0 serious at every width and mode)
 
 ## Briefing (P6-2)
 
@@ -110,6 +111,7 @@ All in `keyboard.e2e.spec.ts` "a full review with the keyboard only" unless note
 - [x] v toggle viewed
 - [ ] / open Ask, pre-filled with selected code — the key is bound and shows "Ask is not available yet." until Ask (P9-2) exists
 - [x] b back to briefing
+- [x] H4-12 · t change tree (not in the POC), listed in the dialog as "Change tree: what changed where"; typing t in a text field types it — `keymap.test.ts`, `change-tree.e2e.spec.ts` "t opens the tree…", "t types in a comment box…", [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png)
 - [x] m toggle light/dark
 - [x] ? shortcuts dialog — [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png), [keys-help-1440-dark](../../apps/web/e2e/__screenshots__/keys-help-1440-dark.png), [keys-help-1024-light](../../apps/web/e2e/__screenshots__/keys-help-1024-light.png), [keys-help-1024-dark](../../apps/web/e2e/__screenshots__/keys-help-1024-dark.png), [keys-help-375-light](../../apps/web/e2e/__screenshots__/keys-help-375-light.png), [keys-help-375-dark](../../apps/web/e2e/__screenshots__/keys-help-375-dark.png); focus trap, Escape, click outside, axe 0 serious ("the shortcuts dialog")
 - [x] ⌘↵ open Finish review; Esc closes dialogs / cancels edit, dismiss, compose — ⌘/Ctrl+Enter opens the Finish review modal (P6-6), Esc closes it (never while the review is being sent) and the dialog, drawers, edit, dismiss and compose; "a full review with the keyboard only" now ends with the review submitted
@@ -271,3 +273,15 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   tokens). The strip leaves out "/ ask" until Ask exists and ends with "? all shortcuts". j from
   the first file goes back to the briefing (the POC stayed on the file). Shortcuts are off while
   a drawer or dialog is open.
+- **Change tree (H4-12, not in the POC).** Built from the approved mockup's option A with the
+  app's tokens and the shortcuts dialog's modal frame, not the mockup's CSS. Differences from the
+  mockup: the modal title is "Change tree"; lines changed show deletions too ("+34 −3"); the lede
+  leaves out the mockup's "all in billing/src and docs/adr"; the riskiest top folder (worst level,
+  then files to read, then size) starts open together with its sub-folders that hold files to
+  read, so those files are named without another click (the mockup opened only the top folder);
+  not analysed files get a group of their own; below 520 px the lines column is dropped, as in
+  the mockup, and the counts wrap so short folder names stay whole. The "new" tag is the app's
+  neutral pill (the mockup's green text on a pale fill is below 4.5:1 at that size), and the
+  Ignored line has no risk bar (all its files are one level). The focus ring goes round the whole
+  row, and the title stays in view while the list scrolls. The tree is nested lists with
+  disclosure buttons, not `role="tree"`.
