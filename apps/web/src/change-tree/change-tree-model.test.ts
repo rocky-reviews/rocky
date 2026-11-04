@@ -182,6 +182,32 @@ describe("changeTree (H4-12)", () => {
     expect(tree.folders.map((f) => f.summary.additions)).toEqual([1284, 122, 66, 63, 77]);
   });
 
+  it("calls a folder new only when every changed file under it was added, ignored ones too", () => {
+    const t = changeTree(
+      source([
+        ["src/a.ts", "critical", 4],
+        ["src/lock.json", "noise", 9, false],
+        ["lib/b.ts", "normal", 2],
+        ["lib/old.ts", "low", 1, false],
+        ["new/c.ts", "normal", 1],
+        ["new/d.bin", "unanalysed", 0],
+        ["x.ts", "normal", 1],
+        ["y.md", "low", 1, false],
+      ]),
+    );
+    expect(top(t, "src").summary.isNew).toBe(false);
+    expect(top(t, "lib").summary.isNew).toBe(false);
+    expect(top(t, "new").summary.isNew).toBe(true);
+    expect(top(t, "(root config)").summary.isNew).toBe(false);
+    const modifiedUnanalysed = changeTree(
+      source([
+        ["n/c.ts", "normal", 1],
+        ["n/d.bin", "unanalysed", 0, false],
+      ]),
+    );
+    expect(modifiedUnanalysed.folders[0]?.summary.isNew).toBe(false);
+  });
+
   it("starts the riskiest top folder expanded, the biggest of equals", () => {
     expect(tree.expanded).toBe(top(tree, "billing").id);
     const riskier = changeTree(
@@ -196,8 +222,9 @@ describe("changeTree (H4-12)", () => {
 
   it("gives the header counts: every file, the folders with changes, the files to read", () => {
     expect(tree.total).toBe(29);
-    // billing, billing/src, .github/workflows, scripts/security, docs/adr, (root)
-    expect(tree.folderCount).toBe(6);
+    // Over every changed file, as the file count: billing, billing/src, .github/workflows,
+    // scripts/security, docs/adr, docs (progress.md, ignored) and the root.
+    expect(tree.folderCount).toBe(7);
     expect(tree.toRead).toBe(3);
   });
 
@@ -235,6 +262,12 @@ describe("changeTree (H4-12)", () => {
     expect(names(top(t, "src").folders)).toEqual(["auth", "api/routes", "jobs"]);
     expect(t.toRead).toBe(4);
     expect(t.total).toBe(9);
+    // src/api/index.ts and src/generated/api-types.ts (ignored) are modified: src is not new.
+    expect(top(t, "src").summary.isNew).toBe(false);
+    expect(top(t, "db/migrations").summary.isNew).toBe(true);
+    // src/auth, src/api/routes, src/api, src/generated, src/jobs, web/src/pages,
+    // db/migrations and the root (pnpm-lock.yaml).
+    expect(t.folderCount).toBe(8);
     expect(paths(t.ignored.files)).toEqual([
       "src/generated/api-types.ts",
       "pnpm-lock.yaml",

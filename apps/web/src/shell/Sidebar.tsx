@@ -185,19 +185,22 @@ export const SidebarContent = ({
       </section>
 
       {onOpenTree !== undefined && (
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost tree-btn"
-          aria-haspopup="dialog"
-          aria-keyshortcuts={treeKey}
-          onClick={onOpenTree}
-        >
-          <FolderIcon />
-          <span>
-            <span className="sr-only">Change </span>Tree
-          </span>
+        // The t hint sits beside the button, not in it: its name "Change tree" must contain all
+        // of its visible text (axe label-content-name-mismatch).
+        <div className="tree-entry">
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost tree-btn"
+            aria-label="Change tree"
+            aria-haspopup="dialog"
+            aria-keyshortcuts={treeKey}
+            onClick={onOpenTree}
+          >
+            <FolderIcon />
+            Tree
+          </button>
           <Kbd k="t" />
-        </button>
+        </div>
       )}
 
       <button

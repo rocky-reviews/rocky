@@ -178,11 +178,15 @@ export const ChangeTreeDialog = ({ tree, selected, onOpenFile, onClose }: Props)
             {summary.isNew && <span className="ct-tag">new</span>}
           </button>
           <span className="ct-count">
-            <span>{plural(summary.files, "file", "files")}</span>
+            {/* On a phone the two parts stack; the "·" ends the first line, never starts one. */}
+            <span>
+              {plural(summary.files, "file", "files")}
+              {summary.toRead > 0 && " ·"}
+            </span>
             {summary.toRead > 0 && (
               <>
                 {" "}
-                <span>· {summary.toRead} to read</span>
+                <span>{summary.toRead} to read</span>
               </>
             )}
           </span>
@@ -209,7 +213,7 @@ export const ChangeTreeDialog = ({ tree, selected, onOpenFile, onClose }: Props)
 
   const { ignored, unanalysed } = tree;
   return (
-    <div className="modal-layer">
+    <div className="modal-layer modal-layer-top">
       <div className="scrim" aria-hidden="true" onClick={onClose} />
       <div
         id="change-tree-dialog"
@@ -246,8 +250,11 @@ export const ChangeTreeDialog = ({ tree, selected, onOpenFile, onClose }: Props)
                     <span className="ct-name">Not analysed</span>
                   </span>
                   <span className="ct-count">{plural(unanalysed.length, "file", "files")}</span>
-                  <span className="ct-lines" />
-                  <span />
+                  <Lines
+                    additions={unanalysed.reduce((n, f) => n + f.additions, 0)}
+                    deletions={unanalysed.reduce((n, f) => n + f.deletions, 0)}
+                  />
+                  <span className="ct-bar" aria-hidden="true" />
                 </div>
                 <ul className="ct-list">{unanalysed.map((f) => fileItem(f, true))}</ul>
               </li>
@@ -268,7 +275,7 @@ export const ChangeTreeDialog = ({ tree, selected, onOpenFile, onClose }: Props)
                   </button>
                   <span className="ct-count">{plural(ignored.files.length, "file", "files")}</span>
                   <Lines additions={ignored.additions} deletions={ignored.deletions} />
-                  <span />
+                  <span className="ct-bar" aria-hidden="true" />
                 </div>
                 <ul id="ct-ignored" className="ct-list" hidden={!open.ignored}>
                   {ignored.files.map((f) => fileItem(f, true))}
@@ -289,6 +296,12 @@ export const ChangeTreeDialog = ({ tree, selected, onOpenFile, onClose }: Props)
               <span className="ct-dot r-normal" />
               Normal
             </span>
+            {unanalysed.length > 0 && (
+              <span>
+                <span className="ct-dot r-unanalysed" />
+                Not analysed
+              </span>
+            )}
             <span>
               <span className="ct-dot r-ignore" />
               Ignore

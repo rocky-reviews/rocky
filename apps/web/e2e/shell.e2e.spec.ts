@@ -186,7 +186,7 @@ test.describe("keyboard", () => {
       // P6-6: the Finish review button with its pending count.
       "Finish review0, 0 comments to post",
       // H4-12: the change tree button under the coverage card, with its t hint.
-      "Change Treet",
+      "Change tree",
       "Briefing & change map",
       "Viewed src/auth/invitations.ts",
       "src/auth/invitations.ts97, risk score 97, 3 findings, worst critical",

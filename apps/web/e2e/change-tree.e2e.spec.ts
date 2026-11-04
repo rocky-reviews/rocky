@@ -12,7 +12,7 @@ import { expect, type Page, test } from "./test.js";
 
 const dialog = (page: Page) => page.getByRole("dialog", { name: "Change tree" });
 const treeButton = (page: Page) =>
-  page.locator("#sidebar").getByRole("button", { name: "Change Tree" });
+  page.locator("#sidebar").getByRole("button", { name: "Change tree", exact: true });
 const ready = (page: Page) => page.locator("#review-panel .tally").waitFor({ state: "attached" });
 
 const open = async (page: Page) => {
@@ -26,7 +26,7 @@ test("the sidebar's Tree button opens the tree; Escape returns focus to it", asy
   await expect(dialog(page)).toBeVisible();
   await expect(dialog(page)).toHaveAttribute("aria-modal", "true");
   await expect(dialog(page).getByRole("button", { name: "Close" })).toBeFocused();
-  await expect(dialog(page)).toContainText("9 files in 5 folders · 4 to read carefully");
+  await expect(dialog(page)).toContainText("9 files in 8 folders · 4 to read carefully");
   await expect(page.locator("main")).toHaveAttribute("inert", "");
   await page.keyboard.press("Escape");
   await expect(dialog(page)).toHaveCount(0);
@@ -81,6 +81,23 @@ test("the tree's folders are disclosure buttons, and folded files unfold in plac
   await db.press("Enter");
   await expect(db).toHaveAttribute("aria-expanded", "true");
   await expect(migration).toBeVisible();
+
+  // The dialog's top edge stays put when a folder opens or closes (the next click lands where
+  // the pointer is).
+  const top = async () => (await dialog(page).boundingBox())?.y;
+  const before = await top();
+  await dialog(page)
+    .getByRole("button", { name: /^src\// })
+    .click();
+  await expect(dialog(page).getByRole("button", { name: /^src\// })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  expect(await top()).toBe(before);
+  await dialog(page)
+    .getByRole("button", { name: /^src\// })
+    .click();
+  expect(await top()).toBe(before);
 
   const more = dialog(page).getByRole("button", { name: "+ 1 more file (1 test)" });
   await more.press("Enter");
