@@ -44,6 +44,21 @@ describe("app shell layout", () => {
   });
 });
 
+describe("change tree entry points (H4-12)", () => {
+  it("offers the Tree button and the briefing's link, with the modal closed", () => {
+    const html = render();
+    expect(html).toContain("tree-btn");
+    expect(html).toContain("View as tree");
+    expect(html).not.toContain("change-tree-dialog");
+  });
+
+  it("offers neither without an analysis", () => {
+    const html = render({ ...data, analysis: null });
+    expect(html).not.toContain("tree-btn");
+    expect(html).not.toContain("View as tree");
+  });
+});
+
 describe("top bar", () => {
   const bar = text(render().split("</header>")[0] ?? "");
 

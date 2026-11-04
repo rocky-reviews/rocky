@@ -2,7 +2,7 @@
  * Keyboard shortcuts on the PR page (P6-5, ADR 0030, POC `keydown`): which key does what, when a
  * key counts as a shortcut, and where k/j and n/p move. Pure, so it is tested without a DOM.
  *
- * - Single-character keys (k j n p a e d v / b m ?) fire only with no Ctrl, ⌘ or Alt, never
+ * - Single-character keys (k j n p a e d v / b t m ?) fire only with no Ctrl, ⌘ or Alt, never
  *   while typing, and can be turned off (WCAG 2.1.4); the choice is remembered per browser.
  * - ⌘/Ctrl+Enter (finish) has a modifier, so it stays on; it too is ignored while typing, where
  *   text fields give it their own meaning (save the comment).
@@ -19,6 +19,7 @@ export type ShortcutAction =
   | "viewed"
   | "ask"
   | "briefing"
+  | "tree"
   | "mode"
   | "help"
   | "finish";
@@ -34,6 +35,7 @@ const SINGLE_KEYS: Readonly<Record<string, ShortcutAction>> = {
   v: "viewed",
   "/": "ask",
   b: "briefing",
+  t: "tree",
   m: "mode",
   "?": "help",
 };
@@ -160,6 +162,7 @@ export const HELP_ROWS: readonly { keys: readonly string[]; label: string; singl
   { keys: ["v"], label: "Toggle viewed on the current file", single: true },
   { keys: ["/"], label: "Ask about the PR (not available yet)", single: true },
   { keys: ["b"], label: "Back to the briefing", single: true },
+  { keys: ["t"], label: "Change tree: what changed where", single: true },
   { keys: ["m"], label: "Toggle light / dark", single: true },
   { keys: ["?"], label: "This list", single: true },
   { keys: ["finish"], label: "Finish review", single: false },

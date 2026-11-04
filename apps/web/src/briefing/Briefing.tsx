@@ -3,8 +3,9 @@
  * document's summary paragraph instead), the files by risk (H4-10: a chip per level, the
  * selected level's files clickable below), the change map slot, project memory applied and what
  * the AI checked. H4-11 removed the suggested review path section; the document's review path
- * still orders "Start with the riskiest file", k and j. Without a document it shows where the
- * analysis stands instead (`BriefingState`).
+ * still orders "Start with the riskiest file", k and j. H4-12: "View as tree" after the chips
+ * opens the change tree. Without a document it shows where the analysis stands instead
+ * (`BriefingState`).
  *
  * Everything from the document is untrusted text: model prose goes through `InlineText`, paths
  * and labels sit in `<bdi>`, and the fixed text for pipeline reasons comes from briefing-model.
@@ -45,9 +46,11 @@ type Props = {
    * (a finding badge on the change map, P5-3), the diff opens focused on that line.
    */
   onOpenFile: (path: string, line?: number) => void;
+  /** H4-12: opens the change tree ("View as tree" after the risk chips). */
+  onOpenTree?: (() => void) | undefined;
 };
 
-export const BriefingView = ({ analysis, run, headSha, onOpenFile }: Props) =>
+export const BriefingView = ({ analysis, run, headSha, onOpenFile, onOpenTree }: Props) =>
   analysis === null ? (
     <BriefingState run={run.status === "done" ? { status: "none" } : run} />
   ) : (
@@ -55,6 +58,7 @@ export const BriefingView = ({ analysis, run, headSha, onOpenFile }: Props) =>
       doc={analysis}
       banner={briefingBanner(run, analysis.provenance.head.sha, headSha)}
       onOpenFile={onOpenFile}
+      onOpenTree={onOpenTree}
     />
   );
 
@@ -81,10 +85,12 @@ const Briefing = ({
   doc,
   banner,
   onOpenFile,
+  onOpenTree,
 }: {
   doc: AnalysisDocument;
   banner: Banner | undefined;
   onOpenFile: (p: string, line?: number) => void;
+  onOpenTree: (() => void) | undefined;
 }) => {
   const { briefing, provenance } = doc;
   const fallback = provenance.briefingUnavailable;
@@ -141,6 +147,7 @@ const Briefing = ({
             head={doc.provenance.head.sha}
             levels={riskLevels(doc)}
             onOpenFile={onOpenFile}
+            onOpenTree={onOpenTree}
           />
           {byHand.length > 0 && (
             <p className="read-by-hand">
@@ -245,10 +252,12 @@ const RiskLevels = ({
   head,
   levels,
   onOpenFile,
+  onOpenTree,
 }: {
   head: string;
   levels: RiskLevelGroup[];
   onOpenFile: (p: string) => void;
+  onOpenTree: (() => void) | undefined;
 }) => {
   const [choice, setChoice] = useState<RiskChoice>();
   const tabs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -274,31 +283,43 @@ const RiskLevels = ({
         <p className="empty-note">No files to show.</p>
       ) : (
         <>
-          <div className="risk-chips" role="tablist" aria-labelledby="risk-title">
-            {levels.map((level, index) => {
-              const on = level.key === selected.key;
-              return (
-                <button
-                  type="button"
-                  role="tab"
-                  key={level.key}
-                  id={`risk-tab-${level.key}`}
-                  className={`risk-chip r-${level.key}`}
-                  aria-selected={on}
-                  aria-controls="risk-panel"
-                  tabIndex={on ? 0 : -1}
-                  ref={(el) => {
-                    tabs.current[index] = el;
-                  }}
-                  onClick={() => choose(level.key)}
-                  onKeyDown={(e) => onKeyDown(e, index)}
-                >
-                  <span className="risk-dot" aria-hidden="true" />
-                  {level.label} <b>{level.files.length}</b>
-                  <span className="sr-only">{level.files.length === 1 ? " file" : " files"}</span>
-                </button>
-              );
-            })}
+          <div className="risk-chips-bar">
+            <div className="risk-chips" role="tablist" aria-labelledby="risk-title">
+              {levels.map((level, index) => {
+                const on = level.key === selected.key;
+                return (
+                  <button
+                    type="button"
+                    role="tab"
+                    key={level.key}
+                    id={`risk-tab-${level.key}`}
+                    className={`risk-chip r-${level.key}`}
+                    aria-selected={on}
+                    aria-controls="risk-panel"
+                    tabIndex={on ? 0 : -1}
+                    ref={(el) => {
+                      tabs.current[index] = el;
+                    }}
+                    onClick={() => choose(level.key)}
+                    onKeyDown={(e) => onKeyDown(e, index)}
+                  >
+                    <span className="risk-dot" aria-hidden="true" />
+                    {level.label} <b>{level.files.length}</b>
+                    <span className="sr-only">{level.files.length === 1 ? " file" : " files"}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {onOpenTree !== undefined && (
+              <button
+                type="button"
+                className="tree-link"
+                aria-haspopup="dialog"
+                onClick={onOpenTree}
+              >
+                View as tree
+              </button>
+            )}
           </div>
           <div
             className="risk-files"

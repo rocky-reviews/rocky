@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   finishKeys,
+  HELP_ROWS,
   type KeyInput,
   isMac,
   isTextEntry,
@@ -37,6 +38,23 @@ describe("shortcutFor", () => {
     expect(shortcutFor(key("b"), true)).toBe("briefing");
     expect(shortcutFor(key("m"), true)).toBe("mode");
     expect(shortcutFor(key("?", { shiftKey: true }), true)).toBe("help");
+  });
+
+  it("H4-12: t opens the change tree, and is listed in the help", () => {
+    expect(shortcutFor(key("t"), true)).toBe("tree");
+    expect(shortcutFor(key("T"), true)).toBe("tree");
+    expect(shortcutFor(key("T", { shiftKey: true }), true)).toBeNull();
+    expect(shortcutFor(key("t"), false)).toBeNull();
+    expect(shortcutFor(key("t", { metaKey: true }), true)).toBeNull();
+    expect(shortcutFor(key("t", { repeat: true }), true)).toBeNull();
+    expect(HELP_ROWS.find((r) => r.keys.includes("t"))).toEqual({
+      keys: ["t"],
+      label: "Change tree: what changed where",
+      single: true,
+    });
+    // Every single key in the help maps to exactly one action.
+    const singles = HELP_ROWS.filter((r) => r.single).flatMap((r) => r.keys);
+    expect(new Set(singles).size).toBe(singles.length);
   });
 
   it("ignores other keys, Shift+letter and inherited names", () => {

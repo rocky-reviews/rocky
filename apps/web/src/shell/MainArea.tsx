@@ -17,11 +17,27 @@ type Props = {
   onOpenFile: (path: string, line?: number) => void;
   /** P6-3: the file view's viewed state and navigation. */
   files: FileActions;
+  /** H4-12: opens the change tree (the briefing's "View as tree"). */
+  onOpenTree?: (() => void) | undefined;
 };
 
-export const MainContent = ({ selection, analysis, run, headSha, onOpenFile, files }: Props) =>
+export const MainContent = ({
+  selection,
+  analysis,
+  run,
+  headSha,
+  onOpenFile,
+  files,
+  onOpenTree,
+}: Props) =>
   selection.kind === "briefing" ? (
-    <BriefingView analysis={analysis} run={run} headSha={headSha} onOpenFile={onOpenFile} />
+    <BriefingView
+      analysis={analysis}
+      run={run}
+      headSha={headSha}
+      onOpenFile={onOpenFile}
+      onOpenTree={onOpenTree}
+    />
   ) : (
     <article className="card file-card">
       {analysis === null ? (

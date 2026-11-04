@@ -23,6 +23,8 @@ type Props = {
   onToggleViewed: (path: string) => void;
   onToggleMode: () => void;
   onHelp: () => void;
+  /** H4-12: opens the change tree. */
+  onTree: () => void;
   onAsk: () => void;
   onFinish: () => void;
 };
@@ -87,6 +89,9 @@ export const ShortcutKeys = (props: Props) => {
           return true;
         case "help":
           p.onHelp();
+          return true;
+        case "tree":
+          p.onTree();
           return true;
         case "ask":
           p.onAsk();
