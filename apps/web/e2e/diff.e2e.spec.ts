@@ -267,6 +267,33 @@ test.describe("pointer clicks keep the scroll (H4-13)", () => {
     expect(await settledTop(page)).toBe(top);
   });
 
+  /** The new-side line of the row holding `locator`. */
+  const lineOf = (locator: Locator) =>
+    locator.evaluate((el) => el.closest(".ln")?.querySelector("button[data-line]")?.textContent);
+
+  test("after a click on code, Tab focuses the clicked line in place", async ({ page }) => {
+    await openLarge(page);
+    // Line 1 is the active line (pinned, far above), so Tab used to jump back to it.
+    const top = await scrollTo(page, 20_000);
+    const code = await midScreen(page, ".diff .ln:not(.del) .src");
+    const line = await lineOf(code);
+    await code.click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press("Tab");
+    expect(await focusedLabel(page)).toBe(`Comment on line ${line}`);
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  test("after a click on code, ArrowDown moves from the clicked line", async ({ page }) => {
+    await openLarge(page);
+    const top = await scrollTo(page, 20_000);
+    const code = await midScreen(page, ".diff .ln:not(.del) .src");
+    const line = Number(await lineOf(code));
+    await code.click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedLabel(page)).toBe(`Comment on line ${line + 1}`);
+    expect(await settledTop(page)).toBe(top);
+  });
+
   test("dragging across code still selects text, without scrolling", async ({ page }) => {
     await openLarge(page);
     const top = await scrollTo(page, 20_000);

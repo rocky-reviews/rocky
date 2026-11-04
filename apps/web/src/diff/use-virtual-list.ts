@@ -207,7 +207,8 @@ export const useVirtualList = (
     const scroller = scrollerRef.current;
     if (list === null || scroller === null) return 0;
     const y = viewOf(list, scroller).top - list.getBoundingClientRect().top;
-    return firstFrom(latest.current.index, Math.floor(y));
+    // Rounded up: a row hidden by a fraction of a pixel under the header is not on screen.
+    return firstFrom(latest.current.index, Math.ceil(y));
   }, []);
 
   return {
