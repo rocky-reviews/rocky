@@ -45,7 +45,10 @@ export type FolderSummary = {
   worst: TreeLevel;
   additions: number;
   deletions: number;
-  /** Every file in it was added. */
+  /**
+   * Every changed file under it was added, counting the ignored and unanalysed files the tree
+   * leaves out (a folder with a modified lockfile or generated file is not new).
+   */
   isNew: boolean;
   byLevel: Record<TreeLevel, number>;
 };
@@ -71,7 +74,7 @@ export type TreeFolder = {
 export type ChangeTree = {
   /** Every file in the PR. */
   total: number;
-  /** Folders that directly hold a file in the tree (the root counts once). */
+  /** Folders that directly hold a changed file, any file (the root counts once), as `total`. */
   folderCount: number;
   toRead: number;
   /** Top folders, biggest first, "(root config)" last. */
@@ -118,7 +121,7 @@ const allFiles = (node: Node): TreeFile[] => [
   ...[...node.dirs.values()].flatMap(allFiles),
 ];
 
-const summarise = (files: readonly TreeFile[], added: ReadonlySet<string>): FolderSummary => {
+const summarise = (files: readonly TreeFile[], isNew: boolean): FolderSummary => {
   const byLevel: Record<TreeLevel, number> = { critical: 0, important: 0, normal: 0 };
   for (const f of files) if (f.level in byLevel) byLevel[f.level as TreeLevel] += 1;
   return {
@@ -127,7 +130,7 @@ const summarise = (files: readonly TreeFile[], added: ReadonlySet<string>): Fold
     worst: byLevel.critical > 0 ? "critical" : byLevel.important > 0 ? "important" : "normal",
     additions: files.reduce((n, f) => n + f.additions, 0),
     deletions: files.reduce((n, f) => n + f.deletions, 0),
-    isNew: files.every((f) => added.has(f.path)),
+    isNew,
     byLevel,
   };
 };
@@ -162,6 +165,12 @@ export const changeTree = (doc: TreeSource): ChangeTree => {
     else ignored.push(file(f.path, "ignore"));
   }
   const unanalysed = doc.provenance.unanalysed.map((f) => file(f.path, "unanalysed"));
+  const every = [...shown, ...ignored, ...unanalysed].map((f) => f.path);
+  /** Whether every changed file under a folder ("" for the root's own files) was added. */
+  const allAdded = (path: string) =>
+    every
+      .filter((p) => (path === "" ? !p.includes("/") : p.startsWith(`${path}/`)))
+      .every((p) => added.has(p));
 
   const root: Node = { name: "", path: "", dirs: new Map(), files: [] };
   for (const f of shown) {
@@ -197,7 +206,7 @@ export const changeTree = (doc: TreeSource): ChangeTree => {
       rest,
       restTests: rest.filter((f) => f.test).length,
       foldRest: rest.length > 0 && !(key.length === 0 && rest.length <= 2),
-      summary: summarise(allFiles(node), added),
+      summary: summarise(allFiles(node), allAdded(node.path)),
     };
   };
   const folders = [...squashed.dirs.values()].map(folder).toSorted(byWeight);
@@ -205,8 +214,8 @@ export const changeTree = (doc: TreeSource): ChangeTree => {
     folders.push(folder({ name: ROOT_CONFIG, path: "", dirs: new Map(), files: squashed.files }));
 
   return {
-    total: shown.length + ignored.length + unanalysed.length,
-    folderCount: new Set(shown.map((f) => f.path.split("/").slice(0, -1).join("/"))).size,
+    total: every.length,
+    folderCount: new Set(every.map((p) => p.split("/").slice(0, -1).join("/"))).size,
     toRead: shown.filter(isKey).length,
     folders,
     expanded: folders.toSorted(riskier)[0]?.id,

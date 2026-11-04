@@ -148,8 +148,11 @@ describe("the change tree button (H4-12)", () => {
     )?.[0];
     expect(button).toContain('aria-haspopup="dialog"');
     expect(button).toContain('aria-keyshortcuts="t"');
-    expect(button).toContain('<span class="sr-only">Change </span>Tree');
-    expect(button).toContain('<kbd aria-hidden="true">t</kbd>');
+    expect(button).toContain('aria-label="Change tree"');
+    expect(button).toMatch(/<\/svg>Tree/);
+    // The hint beside the button, so the name contains all of the button's visible text.
+    expect(button).not.toContain("<kbd");
+    expect(html).toContain('</svg>Tree</button><kbd aria-hidden="true">t</kbd></div>');
     expect(html.indexOf("tree-btn")).toBeGreaterThan(html.indexOf("coverage-note"));
     expect(html.indexOf("tree-btn")).toBeLessThan(html.indexOf("nav-brief"));
   });

@@ -55,7 +55,7 @@ describe("ChangeTreeDialog (H4-12)", () => {
   });
 
   it("says how many files, folders and files to read", () => {
-    expect(text(html)).toContain("9 files in 5 folders · 4 to read carefully");
+    expect(text(html)).toContain("9 files in 8 folders · 4 to read carefully");
   });
 
   it("gives each folder a disclosure button; the riskiest starts expanded", () => {
@@ -69,7 +69,9 @@ describe("ChangeTreeDialog (H4-12)", () => {
   });
 
   it("shows a folder's counts, new tag, lines and risk bar", () => {
-    expect(text(html)).toContain("src/ new 4 files · 3 to read");
+    // src holds modified (ignored) files, so it is not new; src/auth is.
+    expect(text(html)).toContain("src/ 4 files · 3 to read");
+    expect(text(html)).toContain("auth/ new 2 files · 1 to read");
     expect(html).toContain('aria-label="2 critical, 1 important, 1 normal"');
     expect(text(html)).toMatch(/\+91\b/);
   });
@@ -119,6 +121,9 @@ describe("ChangeTreeDialog (H4-12)", () => {
       />,
     );
     expect(text(out)).toContain("Not analysed 1 file");
+    // In the legend too, only when the group is there.
+    expect(out).toMatch(/<span class="ct-dot r-unanalysed"><\/span>Not analysed<\/span>/);
+    expect(html).not.toMatch(/<span class="ct-dot r-unanalysed"><\/span>Not analysed<\/span>/);
     expect(out).toContain('aria-label="Open assets/logo.bin (not analysed)"');
   });
 });
