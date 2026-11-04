@@ -154,7 +154,11 @@ export const DiffBody = ({
     () => [activeItem, composerItem, editingItem],
     [activeItem, composerItem, editingItem],
   );
-  const { listRef, measureRef, range, parts, reveal } = useVirtualList(keys, estimate, pinned);
+  const { listRef, measureRef, range, parts, reveal, firstOnScreen } = useVirtualList(
+    keys,
+    estimate,
+    pinned,
+  );
   // Drafts by line, kept here so they outlive the composer element.
   const [drafts, setDrafts] = useState<ReadonlyMap<number, string>>(() => new Map());
   const setDraft = useCallback(
@@ -287,9 +291,16 @@ export const DiffBody = ({
   };
 
   // Tabbing in while the active line is scrolled away: start from the first line on screen.
+  // H4-13: only for keyboard focus. A click or tap on code also focuses the list (it is
+  // focusable), and moving focus to a line from there would scroll and drop a text selection;
+  // the browser's :focus-visible heuristic tells the two apart.
   const onFocusList = (event: FocusEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
-    const first = lines.find((l) => l.i >= range.start && l.i < range.end);
+    if (!event.currentTarget.matches(":focus-visible")) return;
+    const from = firstOnScreen();
+    const first =
+      lines.find((l) => l.i >= from && l.i < range.end) ??
+      lines.find((l) => l.i >= range.start && l.i < range.end);
     if (first) focusLine(first.n);
   };
 
