@@ -147,8 +147,10 @@ learned entries (`not_permitted` otherwise). Learning never replaces what a pers
 `MEMORY_CANARY` (`rk-canary-memory-8c41d0e7a95b23f6`) sits in every memory part. The leak guard
 checks it like the prompt canary (any answer, joined values, never allowed even though it is in
 the call's input), so an answer that copies the block is repaired, then fails closed (the file
-becomes unanalysed, raising the floor). `containsPromptCanary` (P8-1) now checks both canaries,
-so no stored entry can carry either, and the evals' independent check (`check.ts`) looks for it.
+becomes unanalysed, raising the floor). `containsPromptCanary` and `containsPromptCanaryFragment` (P8-1)
+now check both canaries, the latter any run of eight characters of either, so no stored entry can
+carry one (or half of one to be rebuilt by two quoted entries); the load-time re-check and the
+learner apply the same fragment rule, and the evals' independent check (`check.ts`) looks for it.
 `REVIEW_MEMORY_INSTRUCTIONS` joins `PROMPT_TEXTS`.
 
 Entries themselves are **not** leak texts. R3 asked for that for _private_ prompt text. Entry

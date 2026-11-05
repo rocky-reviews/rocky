@@ -20,7 +20,7 @@ import { isDismissReason, type DismissReason } from "../drafts.js";
 import type { LlmUntrustedText } from "../llm.js";
 import { isMemoryKind, type MemoryKind } from "../memory.js";
 import { MEMORY_CANARY_MARKER } from "../prompt.js";
-import { instructionLeaks } from "./leak.js";
+import { containsPromptCanaryFragment, instructionLeaks } from "./leak.js";
 import { MAX_MEMORY_PER_FILE } from "./outputs.js";
 
 export { MAX_MEMORY_PER_FILE };
@@ -67,6 +67,9 @@ const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
   // Rocky's prompt text, with nothing allowed: stored memory must not trip the leak guard on a
   // later, unrelated pull request (which would fail its analysis), nor carry the marker.
   if (instructionLeaks({ text, path, source }, []).length > 0) return undefined;
+  // Nor eight characters of either canary: two entries quoted together must not rebuild one.
+  if ([text, path, source].some((value) => containsPromptCanaryFragment(String(value))))
+    return undefined;
   return {
     id,
     kind,

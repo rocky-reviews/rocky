@@ -1,4 +1,4 @@
-import { PROMPT_CANARY, PROMPT_CANARY_MARKER } from "./prompt.js";
+import { MEMORY_CANARY, PROMPT_CANARY, PROMPT_CANARY_MARKER } from "./prompt.js";
 import { describe, expect, it } from "vitest";
 import {
   FORMER_MEMBER_LABEL,
@@ -292,5 +292,31 @@ describe("labels", () => {
     const entry = { kind: "decision" as const, evidence: valid().evidence };
     expect(memorySourceLabel(entry)).toBe("decision · PR #847");
     expect(memorySourceLabel({ ...entry, kind: "dismissal" })).toBe("dismissal · PR #847");
+  });
+});
+
+describe("P8-2: the memory canary is refused at storage like the prompt canary", () => {
+  it("refuses the memory canary, or eight of its characters, in text and path", () => {
+    const base = {
+      kind: "convention",
+      text: "Use the shared validator.",
+      evidence: {
+        path: "src/a.ts",
+        sha: "c".repeat(40),
+        range: { start: 1, end: 1 },
+        pullRequestNumber: 1,
+      },
+      confidence: 60,
+    };
+    const prepare = (patch: Record<string, unknown>) =>
+      prepareMemoryEntry({ ...base, ...patch }, { origin: "learned" });
+    expect(prepare({}).ok).toBe(true);
+    expect(prepare({ text: `note ${MEMORY_CANARY.slice(3, 11)}` })).toEqual({
+      ok: false,
+      problem: "invalid_text",
+    });
+    expect(
+      prepare({ evidence: { ...base.evidence, path: `src/${MEMORY_CANARY.slice(0, 8)}.ts` } }),
+    ).toEqual({ ok: false, problem: "invalid_path" });
   });
 });

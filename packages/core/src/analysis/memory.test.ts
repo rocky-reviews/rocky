@@ -166,6 +166,11 @@ describe("usableMemory: every entry is re-checked before any use", () => {
     ["the memory canary", { text: `note ${MEMORY_CANARY_MARKER}` }],
     ["the prompt canary, spaced out", { text: PROMPT_CANARY_MARKER.split("").join(" ") }],
     ["the memory canary in capitals", { text: `x ${MEMORY_CANARY.toUpperCase()} y` }],
+    ["eight characters of the memory canary", { text: `x ${MEMORY_CANARY.slice(4, 12)} y` }],
+    [
+      "eight characters of the memory canary in its path",
+      { path: `src/${MEMORY_CANARY.slice(0, 8)}.ts` },
+    ],
     ["a run of Rocky's prompt text", { text: REVIEW_INSTRUCTIONS.text.slice(0, 200) }],
   ])("drops an entry with %s", (_name, overrides) => {
     const result = usableMemory([{ ...entry(1), ...overrides }]);

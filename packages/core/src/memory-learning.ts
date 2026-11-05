@@ -23,7 +23,7 @@
  * refused here, and the store refuses the canary prefix and PR-content markers again.
  */
 import type { Finding } from "@rocky-reviews/schema";
-import { instructionLeaks } from "./analysis/leak.js";
+import { containsPromptCanaryFragment, instructionLeaks } from "./analysis/leak.js";
 import type { DismissReason } from "./drafts.js";
 import type { MemoryEvidence, MemoryKind } from "./memory.js";
 
@@ -81,7 +81,7 @@ export const learnedEntry = (
   const title = oneLine(finding.title).replace(/\.$/u, "");
   if (title.length === 0) return null;
   // Model text about PR content: refused when it carries a canary or Rocky's prompt text.
-  if (instructionLeaks(title, []).length > 0) return null;
+  if (instructionLeaks(title, []).length > 0 || containsPromptCanaryFragment(title)) return null;
   const evidence: MemoryEvidence = {
     path: finding.path,
     sha: source.headSha,

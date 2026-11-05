@@ -148,11 +148,11 @@ export const containsPromptCanary = (text: string): boolean => {
   return SQUASHED_CANARIES.some((canary) => squashed.includes(canary));
 };
 
-/** Every run of `length` consecutive canary characters. */
+/** Every run of `length` consecutive characters of either canary (P8-2: the memory one too). */
 const canaryFragments = (length: number): string[] => {
   const out: string[] = [];
-  for (let i = 0; i + length <= SQUASHED_CANARY.length; i++) {
-    out.push(SQUASHED_CANARY.slice(i, i + length));
+  for (const canary of SQUASHED_CANARIES) {
+    for (let i = 0; i + length <= canary.length; i++) out.push(canary.slice(i, i + length));
   }
   return out;
 };

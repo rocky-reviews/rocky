@@ -84,6 +84,7 @@ describe("learnedEntry: what a decision teaches (P8-2)", () => {
   it.each([
     ["the prompt canary", `About ${PROMPT_CANARY}`],
     ["the memory canary, spaced", MEMORY_CANARY_MARKER.split("").join(" ")],
+    ["eight characters of the memory canary", `Fix ${MEMORY_CANARY_MARKER.slice(-8)} now`],
     ["a run of Rocky's prompt text", REVIEW_INSTRUCTIONS.text.slice(0, 120)],
     ["nothing", "   "],
   ])("refuses a title with %s", (_name, title) => {

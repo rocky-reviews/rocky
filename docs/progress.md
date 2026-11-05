@@ -93,7 +93,8 @@ Task log for the project plan. Agents append a row when a task is merged.
   triage too; keying memory only into the review (two-part units) would avoid the triage re-run.
 - `supersedeMemoryEntry` gained `origin: "learned"` in P8-1's file (ADR 0037 §3); P8-1's own
   tests do not cover it (P8-2's `memory-learning.test.ts` does).
-- `containsPromptCanary` now also refuses the memory canary (P8-1's helper, extended here).
+- `containsPromptCanary` and `containsPromptCanaryFragment` now also cover the memory canary
+  (P8-1's helpers, extended here; `prepareMemoryEntry` refuses eight characters of either).
 - Review nits go here.
 
 ### H4-16 follow-ups
