@@ -101,7 +101,8 @@ describe("the review with project memory (P8-2)", () => {
     expect(optionalCount(sent)).toBe(
       optionalCount(jsonSchemaOutputFormat(STAGE_CALLS.review.output.jsonSchema as never).schema),
     );
-    expect(JSON.stringify(sent)).toMatch(/"memoryApplied"/);
+    expect(JSON.stringify(sent)).toMatch(/"suppressed"/);
+    expect(JSON.stringify(sent)).not.toMatch(/"memoryApplied"/);
   });
 });
 

@@ -1,37 +1,53 @@
 /**
- * Project memory in the review prompt (P8-2, ADR 0037). The worker loads the
- * repository's current entries inside the analysis's tenant transaction and passes them in the
- * request; this module decides which reach each file's review call and how, and turns the
- * model's citations back into `MemoryRef`s.
+ * Project memory in the review prompt (P8-2, ADR 0037). The worker loads the repository's
+ * current entries inside the analysis's tenant transaction and passes them in the request; this
+ * module decides which reach each file's review call and how, and turns the model's citations
+ * back into `MemoryRef`s.
  *
  * - Entries are persisted text derived from earlier PR content and model output: untrusted. They
  *   travel only as one untrusted part labelled `memory` (the adapters delimit it with the call's
  *   nonce and neutralise chat-template tokens), as JSON, behind `MEMORY_CANARY_MARKER`. Nothing
  *   from an entry ever reaches the instructions slot.
  * - An entry is re-checked here before any use (`usableMemory`): a malformed one, or one whose
- *   text or path holds a canary or a run of Rocky's prompt text, is dropped and counted.
- * - Each call gets at most `MAX_MEMORY_PER_FILE` entries, most relevant first (`selectMemory`),
- *   under per-call handles (`M1`, …). The model cites handles; the pipeline resolves them against
- *   the call's own selection, so an id the call was not given (another repository's, another
- *   file's, an invented one) can never be stored.
+ *   text or path holds a canary, eight characters of one, or a run of Rocky's prompt text, is
+ *   dropped and counted.
+ * - Each call gets at most `MAX_MEMORY_PER_FILE` entries, chosen by relevance (`selectMemory`)
+ *   and presented in a stable order under per-call handles (`M1`, …). The model cites handles;
+ *   the pipeline resolves them against the call's own selection, so an id the call was not given
+ *   (another repository's, another file's, an invented one) can never be stored.
+ * - A dismissal covers findings up to its severity (`coversSeverity`), never a critical one.
  */
-import { MemoryRef, pathProblem, type MemoryRef as MemoryRefValue } from "@rocky-reviews/schema";
+import {
+  MemoryRef,
+  pathProblem,
+  Severity,
+  type MemoryRef as MemoryRefValue,
+} from "@rocky-reviews/schema";
 import { isDismissReason, type DismissReason } from "../drafts.js";
 import type { LlmUntrustedText } from "../llm.js";
-import { isMemoryKind, type MemoryKind } from "../memory.js";
+import { isMemoryKind, isMemoryOrigin, type MemoryKind, type MemoryOrigin } from "../memory.js";
 import { MEMORY_CANARY_MARKER } from "../prompt.js";
 import { containsPromptCanaryFragment, instructionLeaks } from "./leak.js";
 import { MAX_MEMORY_PER_FILE } from "./outputs.js";
 
 export { MAX_MEMORY_PER_FILE };
 
+type FindingSeverity = Severity;
+
 /** One current entry of the analysed repository, as the review stage may use it. */
 export interface AnalysisMemoryEntry {
   /** The stored entry's id (a uuid): what a `MemoryRef` cites and `last_used_at` touches. */
   readonly id: string;
   readonly kind: MemoryKind;
+  /** `member` (a person wrote it) or `learned` (from a posted review). */
+  readonly origin: MemoryOrigin;
   /** The dismissal reason; `null` for conventions and decisions. */
   readonly reason: DismissReason | null;
+  /**
+   * For a dismissal: the severity of the finding it was learned from, the highest it covers.
+   * `null` for other kinds, and for a dismissal that carries none (covers up to `medium`).
+   */
+  readonly severity: FindingSeverity | null;
   /** The stored, scrubbed text (one line, at most 300 characters). */
   readonly text: string;
   /** The evidence path the entry was decided on. */
@@ -42,21 +58,34 @@ export interface AnalysisMemoryEntry {
   readonly confidence: number;
 }
 
-/** Most entries one analysis takes from the request (the worker lists newest first). */
-export const MAX_ANALYSIS_MEMORY = 200;
+/**
+ * Most entries one analysis takes from the request. The worker loads member-written entries,
+ * learned dismissals and other learned entries under separate bounds that add up to this.
+ */
+export const MAX_ANALYSIS_MEMORY = 250;
 export const MEMORY_LABEL = "memory";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SEVERITY_RANK: Readonly<Record<FindingSeverity, number>> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
+/** What a dismissal without a recorded severity covers. */
+const DEFAULT_COVERED: FindingSeverity = "medium";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
   if (!isRecord(value)) return undefined;
-  const { id, kind, reason, text, path, source, confidence } = value;
+  const { id, kind, origin, reason, severity, text, path, source, confidence } = value;
   if (typeof id !== "string" || !UUID.test(id)) return undefined;
-  if (!isMemoryKind(kind)) return undefined;
+  if (!isMemoryKind(kind) || !isMemoryOrigin(origin)) return undefined;
   if (kind === "dismissal" ? !isDismissReason(reason) : reason !== null) return undefined;
+  const level = severity === null ? null : Severity.safeParse(severity);
+  if (level !== null && (!level.success || kind !== "dismissal")) return undefined;
   if (typeof path !== "string" || pathProblem(path) !== undefined) return undefined;
   if (typeof confidence !== "number" || !Number.isSafeInteger(confidence)) return undefined;
   if (confidence < 0 || confidence > 100) return undefined;
@@ -68,12 +97,14 @@ const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
   // later, unrelated pull request (which would fail its analysis), nor carry the marker.
   if (instructionLeaks({ text, path, source }, []).length > 0) return undefined;
   // Nor eight characters of either canary: two entries quoted together must not rebuild one.
-  if ([text, path, source].some((value) => containsPromptCanaryFragment(String(value))))
+  if ([text, path, source].some((part) => containsPromptCanaryFragment(String(part))))
     return undefined;
   return {
     id,
     kind,
+    origin,
     reason: kind === "dismissal" && isDismissReason(reason) ? reason : null,
+    severity: level === null || !level.success ? null : level.data,
     text: text as string,
     path,
     source: source as string,
@@ -107,13 +138,17 @@ export const usableMemory = (
   return { entries: kept, dropped };
 };
 
+/**
+ * The directory of a path; root-level files share the directory `""` (so every root-level file
+ * counts as one directory: docs/progress.md, N3).
+ */
 const dirname = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf("/")));
 const topLevel = (path: string): string | undefined =>
   path.includes("/") ? path.slice(0, path.indexOf("/")) : undefined;
 
 /**
  * How close an entry's path is to the reviewed file: 3 the same file, 2 the same directory, 1
- * the same top-level directory, 0 otherwise.
+ * the same top-level directory, 0 otherwise. Only entries scoring at least 1 are offered.
  */
 export const pathRelevance = (entryPath: string, filePath: string): number => {
   if (entryPath === filePath) return 3;
@@ -135,33 +170,52 @@ export interface SelectedMemory {
 }
 
 /**
- * The entries one file's review is given, most relevant first: path relevance, then kind
- * (dismissals, decisions, conventions), then confidence, then the given order (newest first).
- * A dismissal is only offered on its own top-level directory or closer: it can keep a finding
- * out of the review, so it applies near where reviewers took it, never across the repository.
- * At most `MAX_MEMORY_PER_FILE`.
+ * The entries one file's review is given. Only entries on the same top-level directory or
+ * closer (path relevance ≥ 1) are offered at all: an entry elsewhere costs tokens and, through
+ * the unit key, re-reviews of files it says nothing about (fix round, S2/M3). Which ones, when more
+ * than `MAX_MEMORY_PER_FILE` qualify: path relevance, then kind (dismissals, decisions,
+ * conventions), then member-written before learned, then confidence, then id. Handles follow the
+ * entries' ids, so the prompt (and the unit key) depends only on which entries were chosen,
+ * never on the order they came in or on a confidence that changed elsewhere.
  */
 export const selectMemory = (
   entries: readonly AnalysisMemoryEntry[],
   filePath: string,
 ): readonly SelectedMemory[] =>
   entries
-    .map((entry, index) => ({ entry, index, score: pathRelevance(entry.path, filePath) }))
-    .filter(({ entry, score }) => entry.kind !== "dismissal" || score > 0)
+    .map((entry) => ({ entry, score: pathRelevance(entry.path, filePath) }))
+    .filter(({ score }) => score > 0)
     .sort(
       (a, b) =>
         b.score - a.score ||
         KIND_RANK[b.entry.kind] - KIND_RANK[a.entry.kind] ||
+        Number(b.entry.origin === "member") - Number(a.entry.origin === "member") ||
         b.entry.confidence - a.entry.confidence ||
-        a.index - b.index,
+        (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0),
     )
     .slice(0, MAX_MEMORY_PER_FILE)
-    .map(({ entry }, index) => ({ handle: `M${index + 1}`, entry }));
+    .map(({ entry }) => entry)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((entry, index) => ({ handle: `M${index + 1}`, entry }));
+
+/** The highest severity a dismissal covers: its own, `medium` without one, never critical. */
+export const coveredSeverity = (entry: AnalysisMemoryEntry): FindingSeverity =>
+  entry.severity === null || entry.severity === "critical" ? DEFAULT_COVERED : entry.severity;
+
+/**
+ * Whether `entry` may keep a finding of `severity` out of the review: only a dismissal, only up
+ * to the severity it covers, and never a critical finding.
+ */
+export const coversSeverity = (entry: AnalysisMemoryEntry, severity: FindingSeverity): boolean =>
+  entry.kind === "dismissal" &&
+  severity !== "critical" &&
+  SEVERITY_RANK[severity] <= SEVERITY_RANK[coveredSeverity(entry)];
 
 /**
  * The untrusted part one review call carries: the marker, then the entries as JSON (handle,
- * kind, reason, path, text). JSON-escaped text cannot end the part; the adapters' per-call nonce
- * is what delimits it, and they refuse content that holds the nonce.
+ * kind, reason and covered severity for dismissals, path, text). JSON-escaped text cannot end the
+ * part; the adapters' per-call nonce is what delimits it, and they refuse content that holds the
+ * nonce.
  */
 export const memoryPart = (selection: readonly SelectedMemory[]): LlmUntrustedText => ({
   label: MEMORY_LABEL,
@@ -171,6 +225,7 @@ export const memoryPart = (selection: readonly SelectedMemory[]): LlmUntrustedTe
       id: handle,
       kind: entry.kind,
       ...(entry.reason === null ? {} : { reason: entry.reason }),
+      ...(entry.kind === "dismissal" ? { coversUpTo: coveredSeverity(entry) } : {}),
       path: entry.path,
       text: entry.text,
     })),
@@ -178,8 +233,8 @@ export const memoryPart = (selection: readonly SelectedMemory[]): LlmUntrustedTe
 });
 
 /**
- * What a file's unit key must change with: the entries its review was given, in order (ids and
- * everything the prompt showed). `undefined` without memory, so a unit analysed without memory
+ * What a file's review must change with: the entries it was given (ids and everything the
+ * prompt showed), in handle order. `undefined` without memory, so a unit analysed without memory
  * keeps the key it always had.
  */
 export const memoryKeyOf = (selection: readonly SelectedMemory[]): string | undefined =>
@@ -191,6 +246,7 @@ export const memoryKeyOf = (selection: readonly SelectedMemory[]): string | unde
           entry.id,
           entry.kind,
           entry.reason,
+          entry.kind === "dismissal" ? coveredSeverity(entry) : null,
           entry.path,
           entry.text,
         ]),
@@ -220,3 +276,9 @@ export const resolveHandles = (
   }
   return { ids, stripped };
 };
+
+/** The selected entry behind one handle, if the call was given it. */
+export const entryOfHandle = (
+  selection: readonly SelectedMemory[],
+  handle: string,
+): AnalysisMemoryEntry | undefined => selection.find((s) => s.handle === handle)?.entry;

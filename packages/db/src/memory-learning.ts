@@ -2,7 +2,6 @@ import {
   corroboratedConfidence,
   isDismissReason,
   learnedEntry,
-  MAX_ANALYSIS_MEMORY,
   MAX_LEARNED_PER_REVIEW,
   memorySourceLabel,
   memorySubject,
@@ -10,9 +9,9 @@ import {
   type LearnedEntry,
   type ReviewDecision,
 } from "@rocky-reviews/core";
-import { parseAnalysisDocument, type AnalysisDocument } from "@rocky-reviews/schema";
+import { parseAnalysisDocument, type AnalysisDocument, type Severity } from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
-import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./memory.js";
+import { createMemoryEntry, lockRepoMemory, supersedeMemoryEntry } from "./memory.js";
 
 /**
  * Project memory around an analysis (P8-2, ADR 0037): what the worker gives a review
@@ -28,27 +27,82 @@ import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./me
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+type LearnerRole = "owner" | "admin" | "member";
+const ROLE_RANK: Readonly<Record<LearnerRole, number>> = { owner: 2, admin: 1, member: 0 };
+const isLearnerRole = (value: unknown): value is LearnerRole =>
+  value === "owner" || value === "admin" || value === "member";
+/** A learned entry without a recorded role ranks as `member`. */
+const roleRank = (value: string | null): number => (isLearnerRole(value) ? ROLE_RANK[value] : 0);
+
 export class MemoryLearningError extends Error {
   override readonly name = "MemoryLearningError";
 }
 
 /**
- * The repository's current entries as the pipeline takes them (`AnalysisRequest.memory`), newest
- * first, at most `MAX_ANALYSIS_MEMORY`. The pipeline re-checks each one before use.
+ * How many current entries of each group an analysis loads, newest first in each (fix round,
+ * M2/S5): member-written entries, learned dismissals and other learned entries are bounded
+ * separately, so neither a burst of learned entries can push out what people wrote nor newer
+ * conventions push out the dismissals. Together `MAX_ANALYSIS_MEMORY`.
+ */
+export const ANALYSIS_MEMORY_BOUNDS = {
+  member: 100,
+  learnedDismissals: 100,
+  learnedOther: 50,
+} as const;
+
+/**
+ * The repository's current entries as the pipeline takes them (`AnalysisRequest.memory`): each
+ * group of `ANALYSIS_MEMORY_BOUNDS`, newest first. The pipeline re-checks each one before use.
  */
 export const loadAnalysisMemory = async (
   tx: TenantTx,
   repoId: string,
 ): Promise<AnalysisMemoryEntry[]> => {
-  const entries = await listMemoryEntries(tx, { repoId, limit: MAX_ANALYSIS_MEMORY });
-  return entries.map((entry) => ({
-    id: entry.id,
-    kind: entry.kind,
-    reason: entry.reason,
-    text: entry.text,
-    path: entry.evidence.path,
-    source: memorySourceLabel(entry),
-    confidence: entry.confidence,
+  const { rows } = await tx.query<{
+    id: string;
+    kind: AnalysisMemoryEntry["kind"];
+    origin: AnalysisMemoryEntry["origin"];
+    reason: AnalysisMemoryEntry["reason"];
+    severity: AnalysisMemoryEntry["severity"];
+    content: string;
+    evidence_path: string;
+    source_pr_number: number;
+    confidence: number;
+  }>(
+    `select id, kind, origin, reason, severity, content, evidence_path, source_pr_number,
+            confidence
+       from (select e.*, row_number() over (
+                      partition by case when origin = 'member' then 'member'
+                                        when kind = 'dismissal' then 'dismissal'
+                                        else 'other' end
+                      order by created_at desc, id desc) as n
+               from memory_entries e
+              where org_id = $1 and repo_id = $2 and superseded_by is null) ranked
+      where (origin = 'member' and n <= $3)
+         or (origin = 'learned' and kind = 'dismissal' and n <= $4)
+         or (origin = 'learned' and kind <> 'dismissal' and n <= $5)
+      order by created_at desc, id desc`,
+    [
+      tx.orgId,
+      repoId,
+      ANALYSIS_MEMORY_BOUNDS.member,
+      ANALYSIS_MEMORY_BOUNDS.learnedDismissals,
+      ANALYSIS_MEMORY_BOUNDS.learnedOther,
+    ],
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    kind: row.kind,
+    origin: row.origin,
+    reason: row.reason,
+    severity: row.severity,
+    text: row.content,
+    path: row.evidence_path,
+    source: memorySourceLabel({
+      kind: row.kind,
+      evidence: { pullRequestNumber: row.source_pr_number },
+    }),
+    confidence: row.confidence,
   }));
 };
 
@@ -80,16 +134,25 @@ interface Decided {
  * Learns from one posted review: the drafts it carried (accepted, as is or edited) and the
  * reviewer's dismissed drafts on the same analyses (the analyses the carried drafts came from
  * and the revision's latest finished one). Each decision goes through core `learnedEntry`; at
- * most `MAX_LEARNED_PER_REVIEW` entries per review. For each entry, in order:
+ * most `MAX_LEARNED_PER_REVIEW` entries per review, dismissals first (they are what a later
+ * review acts on). The whole run holds the repository's memory lock, so two learners (a post and
+ * its reconcile, two reviewers) never both store the same entry (fix round, S4).
+ *
+ * A reviewer who wrote the pull request teaches no dismissal from it: an author must not be able
+ * to switch a finding off for the repository by dismissing it on their own PR (fix round, M2).
+ * A dismissal records the dismissed finding's severity, the highest it will cover, and every
+ * learned entry records the reviewer's role. For each entry, in order:
  *
  * 1. an entry already learned from the same evidence (kind, reason, path, sha, lines, PR) is a
  *    repeat: nothing is written (posting twice on a revision teaches once);
- * 2. a current learned entry on the same path with the same kind and subject corroborates it:
- *    the new entry's confidence is raised by a step (`corroboratedConfidence`);
+ * 2. a current learned entry on the same path with the same kind and subject, learned from
+ *    **another** pull request, corroborates it: the new entry's confidence is raised by a step
+ *    (`corroboratedConfidence`). One PR never corroborates itself (fix round, N2);
  * 3. the entry is stored by `createMemoryEntry` as the reviewer (scrubbed with the org's member
  *    logins, the PR author and the reviewer as known people);
  * 4. current learned entries on the same path with the same subject, of any kind, are
- *    superseded by it: the newest human decision about a pattern wins, and history is kept.
+ *    superseded by it, unless a reviewer with a higher role taught them (owner > admin >
+ *    member; fix round, L2): the newest decision about a pattern wins, and history is kept.
  *
  * Member-written entries (P8-3) are never superseded by learning.
  */
@@ -108,10 +171,12 @@ export const learnFromReviewSubmission = async (
     number: number;
     author_login: string | null;
     reviewer_login: string | null;
+    reviewer_role: string | null;
     reviewer_active: boolean | null;
   }>(
     `select s.status, s.submitted_by, s.revision_id, p.repo_id, p.number, p.author_login,
-            m.login as reviewer_login, (m.removed_at is null) as reviewer_active
+            m.login as reviewer_login, m.role as reviewer_role,
+            (m.removed_at is null) as reviewer_active
        from review_submissions s
        join pull_requests p on p.org_id = s.org_id and p.id = s.pull_request_id
        left join members m on m.org_id = s.org_id and m.id = s.submitted_by
@@ -123,6 +188,12 @@ export const learnFromReviewSubmission = async (
   if (submission.status !== "posted") return { outcome: "not_posted" };
   if (submission.reviewer_active !== true) return { outcome: "not_a_member" };
   const reviewer = submission.submitted_by;
+  const role = isLearnerRole(submission.reviewer_role) ? submission.reviewer_role : "member";
+  await lockRepoMemory(tx, submission.repo_id);
+  const ownPullRequest =
+    submission.author_login !== null &&
+    submission.reviewer_login !== null &&
+    submission.author_login.toLowerCase() === submission.reviewer_login.toLowerCase();
 
   // The drafts this review carried, with whether the reviewer edited them.
   const carried = await tx.query<{
@@ -157,12 +228,8 @@ export const learnFromReviewSubmission = async (
       order by analysis_id, finding_id`,
     [tx.orgId, reviewer, analysisIds],
   );
+  // Dismissals first: within the per-review cap they are what a later review acts on (N1).
   const decided: Decided[] = [
-    ...carried.rows.map((r) => ({
-      analysisId: r.analysis_id,
-      findingId: r.finding_id,
-      decision: { kind: "accepted", edited: r.source === "ai_edited" } as const,
-    })),
     ...dismissed.rows.flatMap((r) =>
       isDismissReason(r.reason)
         ? [
@@ -174,6 +241,11 @@ export const learnFromReviewSubmission = async (
           ]
         : [],
     ),
+    ...carried.rows.map((r) => ({
+      analysisId: r.analysis_id,
+      findingId: r.finding_id,
+      decision: { kind: "accepted", edited: r.source === "ai_edited" } as const,
+    })),
   ];
 
   const documents = new Map<string, AnalysisDocument>();
@@ -190,13 +262,15 @@ export const learnFromReviewSubmission = async (
     }
   }
 
-  const candidates: LearnedEntry[] = [];
+  const candidates: { readonly entry: LearnedEntry; readonly severity: Severity | null }[] = [];
   let skipped = 0;
   for (const { analysisId, findingId, decision } of decided) {
     const document = documents.get(analysisId);
     const finding = document?.findings.find((f) => f.id === findingId);
     const learned =
-      document === undefined || finding === undefined
+      document === undefined ||
+      finding === undefined ||
+      (ownPullRequest && decision.kind === "dismissed")
         ? null
         : // The PR as the mirror knows it (the store looks its author up by this number); the
           // commit the finding's lines were read at, from the document.
@@ -205,7 +279,11 @@ export const learnFromReviewSubmission = async (
             headSha: document.provenance.head.sha,
           });
     if (learned === null || candidates.length >= MAX_LEARNED_PER_REVIEW) skipped++;
-    else candidates.push(learned);
+    else
+      candidates.push({
+        entry: learned,
+        severity: learned.kind === "dismissal" ? (finding?.severity ?? null) : null,
+      });
   }
 
   // The logins Rocky saw around these decisions: the PR's author and the reviewer (the store adds
@@ -217,7 +295,7 @@ export const learnFromReviewSubmission = async (
   let created = 0;
   let superseded = 0;
   let repeated = 0;
-  for (const candidate of candidates) {
+  for (const { entry: candidate, severity } of candidates) {
     const { evidence } = candidate;
     const repeat = await tx.query(
       `select 1 from memory_entries
@@ -241,8 +319,15 @@ export const learnFromReviewSubmission = async (
       repeated++;
       continue;
     }
-    const near = await tx.query<{ id: string; kind: string; content: string; confidence: number }>(
-      `select id, kind, content, confidence from memory_entries
+    const near = await tx.query<{
+      id: string;
+      kind: string;
+      content: string;
+      confidence: number;
+      source_pr_number: number;
+      learner_role: string | null;
+    }>(
+      `select id, kind, content, confidence, source_pr_number, learner_role from memory_entries
         where org_id = $1 and repo_id = $2 and evidence_path = $3 and origin = 'learned'
           and superseded_by is null
         order by created_at desc, id desc`,
@@ -250,7 +335,10 @@ export const learnFromReviewSubmission = async (
     );
     const subject = memorySubject(candidate.text);
     const corroborating = near.rows.find(
-      (row) => row.kind === candidate.kind && memorySubject(row.content) === subject,
+      (row) =>
+        row.kind === candidate.kind &&
+        row.source_pr_number !== evidence.pullRequestNumber &&
+        memorySubject(row.content) === subject,
     );
     const result = await createMemoryEntry(tx, {
       authorMemberId: reviewer,
@@ -269,10 +357,17 @@ export const learnFromReviewSubmission = async (
       continue;
     }
     created++;
+    await tx.query(
+      `update memory_entries set severity = $3, learner_role = $4
+        where org_id = $1 and id = $2`,
+      [tx.orgId, result.entry.id, severity, role],
+    );
     // Compared on the stored (scrubbed) texts, so a scrubbed title still matches its older entry.
     const storedSubject = memorySubject(result.entry.text);
     for (const row of near.rows) {
       if (storedSubject === null || memorySubject(row.content) !== storedSubject) continue;
+      // A higher role's decision is not overturned by a lower one's (L2).
+      if (roleRank(row.learner_role) > ROLE_RANK[role]) continue;
       const replaced = await supersedeMemoryEntry(tx, {
         actorMemberId: reviewer,
         entryId: row.id,

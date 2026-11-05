@@ -64,6 +64,8 @@ import {
   WALKTHROUGH_INSTRUCTIONS,
 } from "./instructions.js";
 import {
+  coversSeverity,
+  entryOfHandle,
   memoryKeyOf,
   memoryPart,
   memoryRefOf,
@@ -78,6 +80,7 @@ import {
   FLOWS_OUTPUT,
   GRAPH_OUTPUT,
   MAX_OUTPUT_TOKENS,
+  MAX_REPAIR_ISSUES,
   REVIEW_MEMORY_OUTPUT,
   REVIEW_OUTPUT,
   TRIAGE_OUTPUT,
@@ -86,8 +89,9 @@ import {
   type FlowsAnswer,
   type GraphAnswer,
   type ReviewFinding,
+  type SuppressedFinding,
 } from "./outputs.js";
-import { instructionLeaks } from "./leak.js";
+import { containsPromptCanaryFragment, instructionLeaks } from "./leak.js";
 import { changeMapScope, GRAPH_MAX_INPUT_CHARS } from "./map-scope.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
@@ -101,6 +105,7 @@ import {
 } from "./verdict.js";
 import {
   FileUnits,
+  reusableTriage,
   reusableUnit,
   unitKey,
   type FileUnit,
@@ -227,8 +232,17 @@ export interface AnalysisStats {
   memoryReviews: number;
   /** Entries cited in the stored document (`briefing.memoryApplied`) (P8-2). */
   memoryCited: number;
-  /** Citations of a handle the call was not given, dropped (P8-2). */
+  /**
+   * Handles dropped (P8-2): cited but not given to the call, a dismissal cited as a finding's
+   * backing, or a suppression naming an entry that is not a dismissal the call was given.
+   */
   memoryStripped: number;
+  /** Files whose triage was reused while their review ran again on changed memory (fix round). */
+  triageReused: number;
+  /** Findings a dismissal entry kept out of the review (fix round, M2). */
+  memorySuppressed: number;
+  /** Findings the model suppressed without a covering dismissal, raised as drafts (fix round). */
+  memoryRestored: number;
 }
 
 /**
@@ -365,6 +379,13 @@ const withoutCitations = (
 ): ReviewFinding => {
   const copy: Record<string, unknown> = { ...finding };
   delete copy["memory"];
+  return copy as ReviewFinding;
+};
+
+/** A suppressed finding as a draft: the entry handle is not part of a finding. */
+const withoutEntry = (finding: SuppressedFinding): ReviewFinding => {
+  const copy: Record<string, unknown> = { ...finding };
+  delete copy["entry"];
   return copy as ReviewFinding;
 };
 
@@ -583,6 +604,11 @@ const run = async (
         : plain;
     }
     stats.memoryReviews++;
+    // Suppressed findings are checked like drafts: one that is restored must be a valid one.
+    const asSuppressed = (lines: UnitCheck): UnitCheck =>
+      lines === "unrepairable"
+        ? lines
+        : lines.map((line) => line.replace(/^findings(?=[[:])/u, "suppressed"));
     const cited = await completeWithRepair(
       llm,
       {
@@ -591,29 +617,51 @@ const run = async (
         untrusted: [...parts, memoryPart(selection)],
         output: REVIEW_MEMORY_OUTPUT,
         maxOutputTokens: MAX_OUTPUT_TOKENS.review,
-        check: (answer) => check(answer.findings.map(withoutCitations)),
+        check: (answer) => {
+          const drafts = check(answer.findings.map(withoutCitations));
+          const suppressed = asSuppressed(check(answer.suppressed.map(withoutEntry)));
+          if (drafts === "unrepairable" || suppressed === "unrepairable") return "unrepairable";
+          return [...drafts, ...suppressed].slice(0, MAX_REPAIR_ISSUES);
+        },
       },
       observe("review"),
       unitSignal,
     );
     if (!cited.ok) return cited;
     const resolve = (handles: readonly string[]) => {
-      const { ids, stripped } = resolveHandles(selection, handles);
-      stats.memoryStripped += stripped;
+      // Only conventions and decisions back a finding; a dismissal cited on a raised finding
+      // says nothing about it (fix round, S1).
+      const backing = handles.filter(
+        (handle) => entryOfHandle(selection, handle)?.kind !== "dismissal",
+      );
+      const { ids, stripped } = resolveHandles(selection, backing);
+      stats.memoryStripped += stripped + handles.length - backing.length;
       return ids;
     };
-    return {
-      ok: true,
-      value: {
-        findings: cited.value.findings.map(withoutCitations),
-        memory: {
-          findings: cited.value.findings.map((finding) => resolve(finding.memory)),
-          applied: resolve(cited.value.memoryApplied),
-        },
-      },
-    };
+    const findings = cited.value.findings.map(withoutCitations);
+    const memoryFindings = cited.value.findings.map((finding) => resolve(finding.memory));
+    const applied: string[] = [];
+    // A suppression stands only when the entry it names is a dismissal this call was given and
+    // covers the finding's severity (never a critical one): anything else is raised as a draft,
+    // so neither an invented handle nor a misread entry can make a finding disappear (fix round,
+    // M2/S1, ADR 0037).
+    for (const item of cited.value.suppressed) {
+      const entry = entryOfHandle(selection, item.entry);
+      if (entry !== undefined && coversSeverity(entry, item.severity)) {
+        stats.memorySuppressed++;
+        if (!applied.includes(entry.id)) applied.push(entry.id);
+        continue;
+      }
+      if (entry === undefined || entry.kind !== "dismissal") stats.memoryStripped++;
+      stats.memoryRestored++;
+      findings.push(withoutEntry(item));
+      memoryFindings.push([]);
+    }
+    return { ok: true, value: { findings, memory: { findings: memoryFindings, applied } } };
   };
 
+  /** Entries some file's review was given (or a reused unit was keyed on). */
+  const offeredMemory = new Set<string>();
   const analyseFile = async (
     item: (typeof work)[number],
     unitSignal: AbortSignal,
@@ -621,7 +669,10 @@ const run = async (
     const { file, floor } = item;
     const fileFacts = facts(file);
     const selection = selectMemory(memory.entries, file.path);
+    for (const { entry } of selection) offeredMemory.add(entry.id);
     const key = unitKey(deps.sha256Hex, salt, file, memoryKeyOf(selection));
+    const triageKey = unitKey(deps.sha256Hex, salt, file);
+    const keys = { key, ...(triageKey === key ? {} : { triageKey }) };
     /** Ids of this file's selection only: a citation outside it is never kept. */
     const offered = new Set(selection.map(({ entry }) => entry.id));
     const keep = (ids: readonly string[]) => ids.filter((id) => offered.has(id));
@@ -645,7 +696,7 @@ const run = async (
         ruleFloor: floor,
         unit: {
           path: file.path,
-          key,
+          ...keys,
           reviewMinutes: reused.triage.reviewMinutes,
           ...(applied.length === 0 ? {} : { memoryApplied: applied }),
         },
@@ -654,19 +705,25 @@ const run = async (
     }
     const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
     stats.analysed++;
-    const triaged = await completeWithRepair(
-      llm,
-      {
-        role: "triage",
-        instructions: TRIAGE_INSTRUCTIONS,
-        untrusted: fileParts,
-        output: TRIAGE_OUTPUT,
-        maxOutputTokens: MAX_OUTPUT_TOKENS.triage,
-        check: (answer) => checkTriage(context, answer),
-      },
-      observe("triage"),
-      unitSignal,
-    );
+    // Only the memory changed: the triage stands, the review runs again (fix round, S2).
+    const kept = reusableTriage(previous, fileFacts, triageKey);
+    const keepTriage = kept !== undefined && instructionLeaks(kept, fileParts).length === 0;
+    if (keepTriage) stats.triageReused++;
+    const triaged = keepTriage
+      ? { ok: true as const, value: kept }
+      : await completeWithRepair(
+          llm,
+          {
+            role: "triage",
+            instructions: TRIAGE_INSTRUCTIONS,
+            untrusted: fileParts,
+            output: TRIAGE_OUTPUT,
+            maxOutputTokens: MAX_OUTPUT_TOKENS.triage,
+            check: (answer) => checkTriage(context, answer),
+          },
+          observe("triage"),
+          unitSignal,
+        );
     if (!triaged.ok) {
       return {
         path: file.path,
@@ -677,7 +734,7 @@ const run = async (
     }
     const triage = applyFloor({ ...triaged.value, path: file.path }, floor);
     // The unit keeps the model's minutes; the document's may be scaled to fit (Fix E).
-    const unit = { path: file.path, key, reviewMinutes: triaged.value.reviewMinutes };
+    const unit = { path: file.path, ...keys, reviewMinutes: triaged.value.reviewMinutes };
     if (!REVIEWED_LEVELS.has(triage.level)) {
       return { path: file.path, triage, findings: [], unit };
     }
@@ -1202,10 +1259,23 @@ const run = async (
     { label: "pr_title", text: request.pullRequest.title },
     ...files.map((file) => ({ label: "diff", text: `${file.path}\n${file.patch}` })),
   ];
+  // Project memory (fix round, M1): the review calls were allowed to quote the entries they were
+  // given, so this check allows the same; and the `MemoryRef`s the pipeline built from stored
+  // entries are not model text at all. Entries that each passed `usableMemory` but together read
+  // as a share of the prompt must not fail the analysis: they are left out of the model text and
+  // checked on their own for a canary, the one thing no allowance covers.
+  for (const entry of memory.entries)
+    if (offeredMemory.has(entry.id)) content.push({ label: "memory", text: entry.text });
+  const refs = [
+    ...final.value.briefing.memoryApplied,
+    ...final.value.findings.flatMap((finding) => finding.memory),
+  ];
+  if (refs.some((ref) => containsPromptCanaryFragment(ref.text)))
+    throw new Failed("document_invalid");
   const modelText = {
-    briefing: final.value.briefing,
+    briefing: { ...final.value.briefing, memoryApplied: [] },
     triage: final.value.triage,
-    findings: final.value.findings,
+    findings: final.value.findings.map((finding) => ({ ...finding, memory: [] })),
     graph: final.value.graph,
   };
   if (instructionLeaks(modelText, content).length > 0) throw new Failed("document_invalid");
@@ -1264,6 +1334,9 @@ const newStats = (): AnalysisStats => ({
   memoryReviews: 0,
   memoryCited: 0,
   memoryStripped: 0,
+  triageReused: 0,
+  memorySuppressed: 0,
+  memoryRestored: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

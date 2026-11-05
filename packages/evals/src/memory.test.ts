@@ -65,6 +65,8 @@ describe("the project-memory eval (P8-2)", () => {
           id: "M1",
           kind: "dismissal",
           reason: "intentional",
+          // The learned entry covers up to the dismissed finding's severity (fix round, M2).
+          coversUpTo: MEMORY_RUN_1.pattern.severity,
           path: MEMORY_RUN_1.path,
           text: `Dismissed as intentional: ${MEMORY_RUN_1.pattern.title}`,
         },
@@ -77,8 +79,8 @@ describe("the project-memory eval (P8-2)", () => {
   });
 
   it("fails when the model ignores memory: the eval measures the model, not the plumbing alone", async () => {
-    // The decent model without the memory-aware answer: on a memory call it answers the old
-    // shape, which the memory output refuses, so the file is not analysed and nothing is cited.
+    // The decent model that ignores the memory block: on a memory call it answers in the memory
+    // shape but suppresses nothing, so run 2 raises the pattern again and cites nothing.
     const ignoring = (step: MemoryStep): Script => {
       const pr = step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2;
       const base = fakeModel({
@@ -97,7 +99,7 @@ describe("the project-memory eval (P8-2)", () => {
         if (!call.labels.includes("memory") || !("value" in answer)) return answer;
         const { findings } = answer.value as { findings: object[] };
         return {
-          value: { findings: findings.map((f) => ({ ...f, memory: [] })), memoryApplied: [] },
+          value: { findings: findings.map((f) => ({ ...f, memory: [] })), suppressed: [] },
         };
       };
     };

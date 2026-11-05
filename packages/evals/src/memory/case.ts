@@ -159,10 +159,17 @@ const subjectOf = (text: string): string =>
     .trim()
     .toLowerCase();
 
+/** A finding as a suppressed one carries it: without a suggestion. */
+const withoutSuggestion = <T extends object>(finding: T): Omit<T, "suggestion"> => {
+  const copy: Record<string, unknown> = { ...(finding as Record<string, unknown>) };
+  delete copy["suggestion"];
+  return copy as Omit<T, "suggestion">;
+};
+
 /**
  * The `--fake` model for the memory case: the decent model above, and when a review carries
  * memory it does what the memory instructions ask, by role, labels and parts only: a finding
- * whose title a dismissal entry names is left out and that entry cited in `memoryApplied`.
+ * whose title a dismissal entry names goes in `suppressed` with that entry's id.
  */
 export const memoryFakeScript =
   (pr: MemoryCasePr): Script =>
@@ -174,14 +181,18 @@ export const memoryFakeScript =
     const dismissed = new Map(
       block.entries.filter((e) => e.kind === "dismissal").map((e) => [subjectOf(e.text), e.id]),
     );
-    const findings = (answer.value as { findings: { title: string }[] }).findings;
-    const applied: string[] = [];
-    const kept = findings.filter((finding) => {
-      const id = dismissed.get(finding.title.toLowerCase());
-      if (id !== undefined) applied.push(id);
-      return id === undefined;
-    });
+    const findings = (answer.value as { findings: { title: string; suggestion?: unknown }[] })
+      .findings;
+    const entryOf = (finding: { title: string }) => dismissed.get(finding.title.toLowerCase());
     return {
-      value: { findings: kept.map((f) => ({ ...f, memory: [] })), memoryApplied: applied },
+      value: {
+        findings: findings
+          .filter((finding) => entryOf(finding) === undefined)
+          .map((f) => ({ ...f, memory: [] })),
+        suppressed: findings.flatMap((finding) => {
+          const entry = entryOf(finding);
+          return entry === undefined ? [] : [{ ...withoutSuggestion(finding), entry }];
+        }),
+      },
     };
   };

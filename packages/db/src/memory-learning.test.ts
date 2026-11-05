@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { DraftAction } from "@rocky-reviews/core";
+import { MAX_ANALYSIS_MEMORY, type DraftAction } from "@rocky-reviews/core";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import { createDb, type Db } from "./client.js";
 import { decideDraft } from "./drafts.js";
 import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./memory.js";
 import {
+  ANALYSIS_MEMORY_BOUNDS,
   learnFromReviewSubmission,
   loadAnalysisMemory,
   MemoryLearningError,
@@ -72,10 +73,10 @@ const reset = async (org: SeededOrg, document: AnalysisDocument = DOCUMENT) => {
       org.analysisId,
       JSON.stringify(document),
     ]);
-    await tx.query("update pull_requests set head_sha = $2, author_login = 'alice' where id = $1", [
-      org.pullRequestId,
-      HEAD,
-    ]);
+    await tx.query(
+      "update pull_requests set head_sha = $2, author_login = 'carol', number = 847 where id = $1",
+      [org.pullRequestId, HEAD],
+    );
     await tx.query("update pr_revisions set head_sha = $2 where id = $1", [org.revisionId, HEAD]);
     await tx.query("delete from analyses where revision_id = $1 and id <> $2", [
       org.revisionId,
@@ -83,7 +84,9 @@ const reset = async (org: SeededOrg, document: AnalysisDocument = DOCUMENT) => {
     ]);
     await tx.query("delete from findings_state where analysis_id = $1", [org.analysisId]);
     await tx.query("delete from comments_pending where pull_request_id = $1", [org.pullRequestId]);
-    await tx.query("update members set removed_at = null where id = $1", [org.memberId]);
+    await tx.query("update members set removed_at = null, role = 'admin' where id = $1", [
+      org.memberId,
+    ]);
   });
 };
 
@@ -209,7 +212,7 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     expect(await entriesOf(A, true)).toHaveLength(1);
   });
 
-  it("the same pattern dismissed again on another commit is corroborated: higher confidence, the older entry superseded", async () => {
+  it("the same pattern dismissed again on another commit of the same PR supersedes the older entry, without corroborating it", async () => {
     await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
     await learn(A, await post(A));
     const [older] = await entriesOf(A);
@@ -234,9 +237,82 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 1 });
     const current = await entriesOf(A);
     expect(current).toHaveLength(1);
-    expect(current[0]).toMatchObject({ confidence: 90, evidence: { sha: "d".repeat(40) } });
+    // One pull request never corroborates itself (fix round, N2).
+    expect(current[0]).toMatchObject({ confidence: 80, evidence: { sha: "d".repeat(40) } });
     const all = await entriesOf(A, true);
     expect(all.find((e) => e.id === older!.id)?.supersededBy).toBe(current[0]!.id);
+  });
+
+  it("the same pattern dismissed on another pull request is corroborated: higher confidence", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    await db.withOrg(A.orgId, async (tx) => {
+      await tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]);
+      await tx.query("update pull_requests set number = 848 where id = $1", [A.pullRequestId]);
+    });
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 1 });
+    const current = await entriesOf(A);
+    expect(current).toHaveLength(1);
+    expect(current[0]).toMatchObject({ confidence: 90, evidence: { pullRequestNumber: 848 } });
+  });
+
+  it("records the dismissed finding's severity and the reviewer's role; accepts carry no severity", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" }); // high
+    await decide(A, "F6", { kind: "accept" });
+    await learn(A, await post(A));
+    const { rows } = await superuser.query<{
+      kind: string;
+      severity: string | null;
+      learner_role: string;
+    }>("select kind, severity, learner_role from memory_entries where org_id = $1 order by kind", [
+      A.orgId,
+    ]);
+    expect(rows).toEqual([
+      { kind: "convention", severity: null, learner_role: "admin" },
+      { kind: "dismissal", severity: "high", learner_role: "admin" },
+    ]);
+  });
+
+  it("a reviewer who wrote the pull request teaches no dismissal from it, only conventions", async () => {
+    await db.withOrg(A.orgId, (tx) =>
+      tx.query("update pull_requests set author_login = 'ALICE' where id = $1", [A.pullRequestId]),
+    );
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F5", { kind: "dismiss", reason: "handled_elsewhere" });
+    await decide(A, "F6", { kind: "accept" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, skipped: 2 });
+    expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["convention"]);
+  });
+
+  it("a learned entry taught by a higher role is not superseded by a lower one's decision", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    await superuser.query("update memory_entries set learner_role = 'owner' where org_id = $1", [
+      A.orgId,
+    ]);
+    const rerun = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
+        [A.revisionId, JSON.stringify(DOCUMENT)],
+      );
+      return rows[0]!.id;
+    });
+    await decide(A, "F2", { kind: "accept" }, rerun);
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 0 });
+    expect((await entriesOf(A)).map((e) => e.kind).sort()).toEqual(["convention", "dismissal"]);
+  });
+
+  it("two learners of the same review at once store each entry once (the repository lock)", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F6", { kind: "accept" });
+    const submission = await post(A);
+    const results = await Promise.all([learn(A, submission), learn(A, submission)]);
+    const created = results.reduce((n, r) => n + (r.outcome === "learned" ? r.created : 0), 0);
+    const repeated = results.reduce((n, r) => n + (r.outcome === "learned" ? r.repeated : 0), 0);
+    expect({ created, repeated }).toEqual({ created: 2, repeated: 2 });
+    expect(await entriesOf(A, true)).toHaveLength(2);
   });
 
   it("a later accept of a dismissed pattern supersedes the dismissal: the newest decision wins", async () => {
@@ -395,7 +471,9 @@ describe("loadAnalysisMemory (P8-2)", () => {
       {
         id: expect.any(String),
         kind: "dismissal",
+        origin: "learned",
         reason: "intentional",
+        severity: "high",
         text: "Dismissed as intentional: No permission check: any logged-in user can invite to any org",
         path: "src/api/routes/invitations.ts",
         source: "dismissal · PR #847",
@@ -404,5 +482,32 @@ describe("loadAnalysisMemory (P8-2)", () => {
     ]);
     // Org A cannot read org B's repository's memory, even by its id.
     expect(await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, B.repoId))).toEqual([]);
+  });
+});
+
+describe("loadAnalysisMemory bounds (fix round, M2/S5)", () => {
+  it("member-written entries, learned dismissals and other learned entries are bounded apart", async () => {
+    const insert = (count: number, kind: string, origin: string, offset: number) =>
+      superuser.query(
+        `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
+           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason,
+           created_at)
+         select $1, $2, $3, $4, $3 || ' ' || g, 'src/a.ts', $5, 1, 1, 847, 70,
+                case when $3 = 'dismissal' then 'intentional' end,
+                now() - make_interval(secs => g + $7)
+           from generate_series(1, $6) g`,
+        [A.orgId, A.repoId, kind, origin, DOC_HEAD, count, offset],
+      );
+    // Oldest first: the dismissals, then members' entries, then a burst of newer conventions.
+    await insert(130, "dismissal", "learned", 2000);
+    await insert(120, "decision", "member", 1000);
+    await insert(300, "convention", "learned", 0);
+    const memory = await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
+    const count = (kind: string, origin: string) =>
+      memory.filter((e) => e.kind === kind && e.origin === origin).length;
+    expect(count("convention", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedOther);
+    expect(count("dismissal", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedDismissals);
+    expect(count("decision", "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
+    expect(memory).toHaveLength(MAX_ANALYSIS_MEMORY);
   });
 });

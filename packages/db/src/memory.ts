@@ -130,8 +130,11 @@ const activeRole = async (tx: TenantTx, memberId: string): Promise<string | null
   return rows[0]?.role ?? null;
 };
 
-/** Serialises creates per repository (the cap below is a count then an insert). */
-const lockRepoMemory = (tx: TenantTx, repoId: string) =>
+/**
+ * Serialises creates per repository (the cap below is a count then an insert); learning takes it
+ * for its whole run (P8-2 fix round, S4).
+ */
+export const lockRepoMemory = (tx: TenantTx, repoId: string) =>
   tx.query("select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
     `rocky.memory:${tx.orgId}:${repoId}`,
   ]);

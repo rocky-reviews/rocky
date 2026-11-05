@@ -102,7 +102,9 @@ const memoryCall = (payload: string): ProviderCompletionCall<Verdict> => ({
           {
             id: "00000000-0000-4000-8000-000000000001",
             kind: "convention",
+            origin: "learned",
             reason: null,
+            severity: null,
             text: payload,
             path: "src/jobs/retry.ts",
             source: "convention · PR #1",

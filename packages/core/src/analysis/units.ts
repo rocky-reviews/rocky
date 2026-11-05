@@ -44,6 +44,12 @@ export const FileUnit = z.strictObject({
    * the document. Absent when none: units stored before P8-2 read as before.
    */
   memoryApplied: z.array(z.uuid()).max(MAX_MEMORY_PER_FILE).optional(),
+  /**
+   * The key without project memory, when the review had some (P8-2 fix round, S2): triage never
+   * sees memory, so a unit whose entries changed keeps its triage and only the review runs again.
+   * Absent when it equals `key`.
+   */
+  triageKey: z.string().regex(SHA256_HEX).optional(),
 });
 export type FileUnit = z.output<typeof FileUnit>;
 
@@ -137,4 +143,28 @@ export const reusableUnit = (
       applied: unit.memoryApplied ?? [],
     },
   };
+};
+
+/**
+ * The previous analysis's triage of this file, when only the review must run again: the unit's
+ * key without memory (`triageKey`, or `key` for a unit analysed without memory) matches and the
+ * file's facts are the same (P8-2 fix round, S2).
+ */
+export const reusableTriage = (
+  previous: PreviousAnalysis | undefined,
+  facts: ChangedFile,
+  triageKey: string,
+): TriagedFile | undefined => {
+  if (previous === undefined) return undefined;
+  const { document, units } = previous;
+  const unit = units.find(
+    (candidate) =>
+      candidate.path === facts.path && (candidate.triageKey ?? candidate.key) === triageKey,
+  );
+  if (unit === undefined) return undefined;
+  const before = document.provenance.files.find((file) => file.path === facts.path);
+  if (before === undefined || !sameFacts(before, facts)) return undefined;
+  if (document.provenance.unanalysed.some((file) => file.path === facts.path)) return undefined;
+  const triage = document.triage.files.find((file) => file.path === facts.path);
+  return triage === undefined ? undefined : { ...triage, reviewMinutes: unit.reviewMinutes };
 };

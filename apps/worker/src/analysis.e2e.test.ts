@@ -713,18 +713,32 @@ describe("runAnalysis under prompt injection (P4-4, ADR 0015)", () => {
   });
 });
 
+/** A finding as a suppressed one carries it: without a suggestion. */
+const withoutSuggestion = <T extends object>(finding: T): Omit<T, "suggestion"> => {
+  const copy: Record<string, unknown> = { ...(finding as Record<string, unknown>) };
+  delete copy["suggestion"];
+  return copy as Omit<T, "suggestion">;
+};
+
 describe("project memory in the analysis (P8-2)", () => {
-  /** pr847Script, answering a review that carries memory by citing every entry it was given. */
+  /**
+   * pr847Script, answering a review that carries memory by suppressing its low and medium
+   * findings under the first entry it was given (a dismissal covering up to medium).
+   */
   const citing: Script = async (call) => {
     const answer = await pr847Script(call);
     const memory = call.part("memory");
     if (memory === undefined || !("value" in answer)) return answer;
-    const handles = (JSON.parse(memory) as { entries: { id: string }[] }).entries.map((e) => e.id);
+    const [first] = (JSON.parse(memory) as { entries: { id: string }[] }).entries;
     const value = answer.value as { findings: Record<string, unknown>[] };
+    const covered = (f: Record<string, unknown>) =>
+      f["severity"] === "low" || f["severity"] === "medium";
     return {
       value: {
-        findings: value.findings.map((f) => ({ ...f, memory: [] })),
-        memoryApplied: handles,
+        findings: value.findings.filter((f) => !covered(f)).map((f) => ({ ...f, memory: [] })),
+        suppressed: value.findings
+          .filter(covered)
+          .map((f) => ({ ...withoutSuggestion(f), entry: first!.id })),
       },
     };
   };

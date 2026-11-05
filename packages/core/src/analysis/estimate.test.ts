@@ -195,7 +195,9 @@ describe("project memory in the estimate (P8-2)", () => {
   const entry = {
     id: "00000000-0000-4000-8000-000000000001",
     kind: "dismissal" as const,
+    origin: "learned" as const,
     reason: "intentional" as const,
+    severity: "medium" as const,
     text: "Dismissed as intentional: Retry count is hard-coded",
     path: "src/jobs/retry.ts",
     source: "dismissal · PR #1",

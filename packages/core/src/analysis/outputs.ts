@@ -62,27 +62,37 @@ export type ReviewAnswer = z.output<typeof ReviewAnswer>;
 export const MAX_MEMORY_PER_FILE = 12;
 
 /**
- * The review answer when the file has project-memory entries (P8-2): each finding cites the
- * handles of the entries it relied on, and `memoryApplied` lists the entries that made the model
- * leave a finding out. Handles are `Id`s here; one the call did not offer is dropped by the
- * pipeline, never stored. Both lists are required (no optional field is added to the enforced
- * grammar); empty when nothing applies.
+ * The review answer when the file has project-memory entries (P8-2, ADR 0037). Each finding
+ * cites the handles of the entries it relied on. A finding the model leaves out because of a
+ * dismissal entry is not dropped silently: it goes in `suppressed`, whole (without a
+ * suggestion), with the handle of the entry that covers it. The pipeline keeps it out only when
+ * that entry is a dismissal the call was given and covers the finding's severity; otherwise it is
+ * restored as a draft (fix round, ADR 0037 §4). Handles are `Id`s here; one the call did not
+ * offer is dropped, never stored. Every list is required (no optional field is added to the
+ * enforced grammar); empty when nothing applies.
  */
 export const ReviewMemoryFinding = ReviewFinding.extend({
   memory: z
     .array(Id)
     .max(limits.MAX_MEMORY_REFS_PER_FINDING)
-    .describe("Ids (M1, M2, …) of memory entries this finding relies on."),
+    .describe("Ids (M1, M2, …) of convention or decision entries this finding relies on."),
 });
 export type ReviewMemoryFinding = z.output<typeof ReviewMemoryFinding>;
+
+export const SuppressedFinding = ReviewFinding.omit({ suggestion: true }).extend({
+  entry: Id.describe("Id (M1, M2, …) of the dismissal entry that covers this finding."),
+});
+export type SuppressedFinding = z.output<typeof SuppressedFinding>;
 
 export const ReviewMemoryAnswer = z
   .strictObject({
     findings: z.array(ReviewMemoryFinding).max(MAX_FINDINGS_PER_FILE),
-    memoryApplied: z
-      .array(Id)
-      .max(MAX_MEMORY_PER_FILE)
-      .describe("Ids (M1, M2, …) of memory entries that made you leave a finding out."),
+    suppressed: z
+      .array(SuppressedFinding)
+      .max(MAX_FINDINGS_PER_FILE)
+      .describe(
+        "Findings left out because a dismissal entry covers them, each with that entry's id.",
+      ),
   })
   .describe(
     "Draft review comments for the one changed file in the pr_content blocks, with the project-memory entries they relied on.",

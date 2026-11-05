@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { MEMORY_CANARY, MEMORY_CANARY_MARKER, PROMPT_CANARY_MARKER } from "../prompt.js";
 import { REVIEW_INSTRUCTIONS, REVIEW_MEMORY_INSTRUCTIONS } from "./instructions.js";
-import { instructionLeaks, PROMPT_TEXTS } from "./leak.js";
+import { instructionLeaks, promptShare, PROMPT_TEXTS } from "./leak.js";
 import {
   MAX_ANALYSIS_MEMORY,
   MAX_MEMORY_PER_FILE,
+  coversSeverity,
   memoryPart,
   pathRelevance,
   selectMemory,
@@ -30,7 +31,9 @@ const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0
 const entry = (n: number, overrides: Partial<AnalysisMemoryEntry> = {}): AnalysisMemoryEntry => ({
   id: uuid(n),
   kind: "dismissal",
+  origin: "learned",
   reason: "intentional",
+  severity: "medium",
   text: `Dismissed as intentional: Retry count is hard-coded ${n}`,
   path: "src/jobs/retry.ts",
   source: `dismissal · PR #${n}`,
@@ -74,16 +77,26 @@ const triage = (level: "important" | "low") => ({
 
 interface MemoryBlock {
   marker: string;
-  entries: { id: string; kind: string; reason?: string; path: string; text: string }[];
+  entries: {
+    id: string;
+    kind: string;
+    reason?: string;
+    coversUpTo?: string;
+    path: string;
+    text: string;
+  }[];
 }
 const blockOf = (call: ScriptedCall): MemoryBlock | undefined => {
   const text = call.part("memory");
   return text === undefined ? undefined : (JSON.parse(text) as MemoryBlock);
 };
 
+/** A finding as the model suppresses it (no suggestion; FINDING has none). */
+const SUPPRESSED = FINDING;
+
 /**
- * A model that obeys dismissal entries: it leaves out a finding whose title a dismissal entry
- * ends with and cites that entry; `review` replaces its review answer for a memory call.
+ * A model that obeys dismissal entries: it moves a finding whose title a dismissal entry ends
+ * with to `suppressed`, naming that entry; `review` replaces its review answer for a memory call.
  */
 const script =
   (review?: (call: ScriptedCall, block: MemoryBlock) => unknown): Script =>
@@ -101,8 +114,8 @@ const script =
       return {
         value:
           covering === undefined
-            ? { findings: [{ ...FINDING, memory: [] }], memoryApplied: [] }
-            : { findings: [], memoryApplied: [covering.id] },
+            ? { findings: [{ ...FINDING, memory: [] }], suppressed: [] }
+            : { findings: [], suppressed: [{ ...SUPPRESSED, entry: covering.id }] },
       };
     }
     if (call.role === "review")
@@ -159,6 +172,9 @@ describe("usableMemory: every entry is re-checked before any use", () => {
     ["an unknown kind", { kind: "rule" }],
     ["a dismissal without its reason", { reason: null }],
     ["a convention with a reason", { kind: "convention" }],
+    ["an unknown origin", { origin: "imported" }],
+    ["an unknown severity", { severity: "urgent" }],
+    ["a convention with a severity", { kind: "convention", reason: null }],
     ["a path outside the repository", { path: "../etc/passwd" }],
     ["a confidence out of range", { confidence: 101 }],
     ["two lines of text", { text: "one\ntwo" }],
@@ -195,22 +211,62 @@ describe("selectMemory: the relevance rule", () => {
     expect(pathRelevance("README.md", "src/a/x.ts")).toBe(0);
   });
 
-  it("orders by path, then kind, then confidence, then the given order, and hands out M1…", () => {
+  const convention = (n: number, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(n, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      text: `Accepted in review: rule ${n}`,
+      ...overrides,
+    });
+
+  it("offers only entries on the same top-level directory or closer, under handles in id order", () => {
     const entries = [
-      entry(1, { path: "src/other/z.ts" }),
-      entry(2, { kind: "convention", reason: null, text: "Accepted in review: a", confidence: 90 }),
-      entry(3),
       entry(4, { confidence: 90 }),
-      entry(5, { kind: "decision", reason: null, text: "We keep v1", path: "lib/v1.ts" }),
+      convention(2, { confidence: 90 }),
+      entry(3),
+      entry(1, { path: "src/other/z.ts" }),
+      entry(5, { kind: "decision", reason: null, severity: null, path: "lib/v1.ts" }),
+      entry(6, { path: "README.md" }),
     ];
     const picked = selectMemory(entries, "src/jobs/retry.ts");
     expect(picked.map((p) => [p.handle, p.entry.id])).toEqual([
-      ["M1", uuid(4)],
-      ["M2", uuid(3)],
-      ["M3", uuid(2)],
-      ["M4", uuid(1)],
-      ["M5", uuid(5)],
+      ["M1", uuid(1)],
+      ["M2", uuid(2)],
+      ["M3", uuid(3)],
+      ["M4", uuid(4)],
     ]);
+  });
+
+  it("the selection and its handles do not depend on the order entries came in", () => {
+    const entries = Array.from({ length: 20 }, (_, i) =>
+      entry(i + 1, { confidence: 50 + i, path: i % 2 === 0 ? "src/jobs/retry.ts" : "src/x.ts" }),
+    );
+    const pick = (list: readonly AnalysisMemoryEntry[]) =>
+      selectMemory(list, "src/jobs/retry.ts").map((p) => [p.handle, p.entry.id]);
+    expect(pick([...entries].reverse())).toEqual(pick(entries));
+  });
+
+  it("when more qualify: path, then kind, then member-written, then confidence pick the twelve", () => {
+    const same = Array.from({ length: 6 }, (_, i) =>
+      convention(i + 1, { path: "src/jobs/retry.ts" }),
+    );
+    const dirDismissals = Array.from({ length: 4 }, (_, i) =>
+      entry(i + 11, { path: "src/jobs/x.ts" }),
+    );
+    const dirConventions = [
+      convention(21, { path: "src/jobs/x.ts", origin: "member", confidence: 10 }),
+      convention(22, { path: "src/jobs/x.ts", confidence: 99 }),
+      convention(23, { path: "src/jobs/x.ts", confidence: 98 }),
+    ];
+    const far = [entry(31, { path: "src/x.ts", confidence: 100 })];
+    const picked = selectMemory(
+      [...far, ...dirConventions, ...dirDismissals, ...same],
+      "src/jobs/retry.ts",
+    );
+    expect(picked.map((p) => p.entry.id).sort()).toEqual(
+      [1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 21, 22].map(uuid),
+    );
   });
 
   it("never offers a dismissal outside its own top-level directory", () => {
@@ -235,6 +291,7 @@ describe("memoryPart: one untrusted part, behind the memory canary", () => {
         id: "M1",
         kind: "dismissal",
         reason: "intentional",
+        coversUpTo: "medium",
         path: "src/jobs/retry.ts",
         text: entry(7).text,
       },
@@ -308,13 +365,14 @@ describe("the review stage with project memory (P8-2)", () => {
     const convention = entry(2, {
       kind: "convention",
       reason: null,
+      severity: null,
       text: "Accepted in review: Retries must use the shared backoff",
       source: "convention · PR #2",
     });
     const { outcome } = await analyze(
       script(() => ({
         findings: [{ ...FINDING, memory: ["M1", "M7", "M1"] }],
-        memoryApplied: ["M9"],
+        suppressed: [],
       })),
       { memory: [convention] },
     );
@@ -322,14 +380,14 @@ describe("the review stage with project memory (P8-2)", () => {
     const ref = { entryId: convention.id, text: convention.text, source: convention.source };
     expect(document.findings[0]?.memory).toEqual([ref]);
     expect(document.briefing.memoryApplied).toEqual([ref]);
-    expect(stats.memoryStripped).toBe(2);
+    expect(stats.memoryStripped).toBe(1);
   });
 
   it("an answer that copies the memory canary is repaired, then the file fails closed", async () => {
     const { outcome } = await analyze(
       script((_call, block) => ({
         findings: [{ ...FINDING, title: `See ${block.marker}`, memory: [] }],
-        memoryApplied: [],
+        suppressed: [],
       })),
       { memory: [entry(1)] },
     );
@@ -372,9 +430,12 @@ describe("unit keys and reuse with project memory", () => {
     const first = done((await analyze(script())).outcome);
     const previous = { document: first.document, units: first.units };
     const dismissal = entry(1, { text: `Dismissed as intentional: ${FINDING.title}` });
-    const { outcome } = await analyze(script(), { previous, memory: [dismissal] });
+    const { outcome, calls } = await analyze(script(), { previous, memory: [dismissal] });
     const { document, stats } = done(outcome);
     expect(stats.reused).toBe(1); // docs/notes.md only
+    // Only the review runs again: triage never sees memory (fix round, S2).
+    expect(stats.triageReused).toBe(1);
+    expect(calls.filter((c) => c.role === "triage")).toEqual([]);
     expect(document.findings).toEqual([]);
     expect(document.briefing.memoryApplied.map((r) => r.entryId)).toEqual([dismissal.id]);
   });
@@ -383,12 +444,13 @@ describe("unit keys and reuse with project memory", () => {
     const convention = entry(2, {
       kind: "convention",
       reason: null,
+      severity: null,
       text: "Accepted in review: Retries must use the shared backoff",
     });
     const dismissal = entry(3, { text: "Dismissed as intentional: Something else" });
     const answer = () => ({
-      findings: [{ ...FINDING, memory: ["M2"] }],
-      memoryApplied: ["M1"],
+      findings: [{ ...FINDING, memory: ["M1"] }],
+      suppressed: [{ ...SUPPRESSED, severity: "low", title: "Something else", entry: "M2" }],
     });
     const first = done(
       (await analyze(script(answer), { memory: [dismissal, convention] })).outcome,
@@ -408,5 +470,191 @@ describe("unit keys and reuse with project memory", () => {
       convention.id,
       dismissal.id,
     ]);
+  });
+});
+
+describe("suppression is enforced by the pipeline, not trusted to the model (fix round, M2/S1)", () => {
+  const dismissal = (overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, { text: `Dismissed as intentional: ${FINDING.title}`, ...overrides });
+  const convention = entry(2, {
+    kind: "convention",
+    reason: null,
+    severity: null,
+    text: "Accepted in review: Retries must use the shared backoff",
+  });
+
+  it("a dismissal covers findings up to its severity and never a critical one", () => {
+    const low = dismissal({ severity: "low" });
+    const high = dismissal({ severity: "high" });
+    expect(coversSeverity(low, "low")).toBe(true);
+    expect(coversSeverity(low, "medium")).toBe(false);
+    expect(coversSeverity(high, "high")).toBe(true);
+    expect(coversSeverity(high, "critical")).toBe(false);
+    expect(coversSeverity(dismissal({ severity: null }), "medium")).toBe(true);
+    expect(coversSeverity(dismissal({ severity: null }), "high")).toBe(false);
+    expect(coversSeverity(dismissal({ severity: "critical" }), "critical")).toBe(false);
+    expect(coversSeverity(convention, "low")).toBe(false);
+  });
+
+  it.each([
+    ["above the entry's severity", { severity: "high" }, dismissal({ severity: "medium" }), 0],
+    ["critical", { severity: "critical" }, dismissal({ severity: "high" }), 0],
+  ] as const)(
+    "a suppressed finding %s is restored as a draft",
+    async (_name, override, memoryEntry, stripped) => {
+      const { outcome } = await analyze(
+        script(() => ({
+          findings: [],
+          suppressed: [{ ...SUPPRESSED, ...override, entry: "M1" }],
+        })),
+        { memory: [memoryEntry] },
+      );
+      const { document, stats } = done(outcome);
+      expect(document.findings.map((f) => [f.title, f.severity])).toEqual([
+        [FINDING.title, override.severity],
+      ]);
+      expect(document.briefing.memoryApplied).toEqual([]);
+      expect(stats).toMatchObject({
+        memorySuppressed: 0,
+        memoryRestored: 1,
+        memoryStripped: stripped,
+      });
+    },
+  );
+
+  it.each([
+    ["a handle the call was not given", "M9"],
+    ["a convention", "M2"],
+  ])("a finding suppressed by %s is restored and the handle stripped", async (_name, handle) => {
+    const { outcome } = await analyze(
+      script(() => ({ findings: [], suppressed: [{ ...SUPPRESSED, entry: handle }] })),
+      { memory: [dismissal({ text: "Dismissed as intentional: Something else" }), convention] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryRestored: 1, memoryStripped: 1 });
+  });
+
+  it("a dismissal cited as a raised finding's backing is stripped: only conventions and decisions back a finding", async () => {
+    const { outcome } = await analyze(
+      script(() => ({ findings: [{ ...FINDING, memory: ["M1", "M2"] }], suppressed: [] })),
+      { memory: [dismissal({ text: "Dismissed as intentional: Something else" }), convention] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings[0]?.memory.map((r) => r.entryId)).toEqual([convention.id]);
+    expect(document.briefing.memoryApplied.map((r) => r.entryId)).toEqual([convention.id]);
+    expect(stats.memoryStripped).toBe(1);
+  });
+
+  it("a suppressed finding is checked like a draft: an invalid one is repaired", async () => {
+    let round = 0;
+    const { outcome, calls } = await analyze(
+      script(() => {
+        round++;
+        return {
+          findings: [],
+          suppressed: [
+            {
+              ...SUPPRESSED,
+              range: round === 1 ? { start: 90, end: 90 } : FINDING.range,
+              entry: "M1",
+            },
+          ],
+        };
+      }),
+      { memory: [dismissal()] },
+    );
+    const { stats } = done(outcome);
+    expect(stats.memorySuppressed).toBe(1);
+    const repair = calls.find((c) => c.role === "review" && c.repair);
+    expect(repair?.part("validation_issues")).toContain("suppressed[0]");
+  });
+});
+
+describe("the final check and memory quoted together (fix round, M1)", () => {
+  // Two entries, each under the leak guard's thresholds, built from 6-word chunks of one of
+  // Rocky's prompt texts: together they cover about half of its trigrams.
+  const repair = PROMPT_TEXTS.find((t) => t.startsWith("Your previous answer"))!;
+  const words = repair
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(" ");
+  const chunks: string[] = [];
+  for (let i = 0; i + 6 <= words.length; i += 6) chunks.push(words.slice(i, i + 6).join(" "));
+  const text = (cs: readonly string[]) =>
+    `Accepted in review: ${cs.join(" zq ")}`.slice(0, 300).trim();
+  const a = entry(1, {
+    kind: "convention",
+    reason: null,
+    severity: null,
+    text: text(chunks.slice(0, 4)),
+  });
+  const b = entry(2, {
+    kind: "convention",
+    reason: null,
+    severity: null,
+    text: text(chunks.slice(4, 8)),
+  });
+
+  it("two clean entries cited together do not fail the analysis", async () => {
+    expect(usableMemory([a, b]).entries).toHaveLength(2);
+    // The precondition the fix is about: together they read as a share of the prompt.
+    expect(promptShare({ texts: [a.text, b.text] })).toBeGreaterThanOrEqual(0.3);
+    const { outcome } = await analyze(
+      script(() => ({ findings: [{ ...FINDING, memory: ["M1", "M2"] }], suppressed: [] })),
+      { memory: [a, b] },
+    );
+    const { document } = done(outcome);
+    expect(document.findings[0]?.memory.map((r) => r.entryId)).toEqual([a.id, b.id]);
+    expect(document.briefing.memoryApplied).toHaveLength(2);
+  });
+
+  it("a finding body that quotes the entries it was given passes, as it did at the call", async () => {
+    const { outcome } = await analyze(
+      script(() => ({
+        findings: [{ ...FINDING, body: `${a.text} ${b.text}`, memory: ["M1", "M2"] }],
+        suppressed: [],
+      })),
+      { memory: [a, b] },
+    );
+    expect(done(outcome).document.findings).toHaveLength(1);
+  });
+});
+
+describe("cache churn from memory (fix round, M3/S2)", () => {
+  // Ten files over two top-level directories, all reviewed; one convention is added on src/.
+  const paths = [
+    ...Array.from({ length: 5 }, (_, i) => `src/m${i}.ts`),
+    ...Array.from({ length: 5 }, (_, i) => `lib/m${i}.ts`),
+  ];
+  const diff = paths.map((path) => addedFile(path, ["export const x = 1;"])).join("\n");
+  const all: Script = (call) => {
+    if (call.role === "triage") return { value: triage("important") };
+    if (call.role === "review" && call.part("file_path") !== undefined)
+      return {
+        value:
+          call.part("memory") === undefined ? { findings: [] } : { findings: [], suppressed: [] },
+      };
+    return { status: "refused" };
+  };
+
+  it("an entry re-reviews only the files of its top-level directory, and re-triages none", async () => {
+    const first = done((await analyze(all, { diff })).outcome);
+    const previous = { document: first.document, units: first.units };
+    const added = entry(1, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path: "src/m0.ts",
+      text: "Accepted in review: Exports stay named",
+    });
+    const { outcome, calls } = await analyze(all, { diff, previous, memory: [added] });
+    const { stats } = done(outcome);
+    const perFile = (role: string) =>
+      calls.filter((c) => c.role === role && c.part("file_path") !== undefined && !c.repair).length;
+    expect(perFile("triage")).toBe(0);
+    expect(perFile("review")).toBe(5);
+    expect(stats).toMatchObject({ reused: 5, triageReused: 5, memoryReviews: 5 });
   });
 });

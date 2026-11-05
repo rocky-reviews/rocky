@@ -88,7 +88,10 @@ export const learnedFrom = (
   return {
     id: MEMORY_EVAL_ENTRY_ID,
     kind: draft.kind,
+    origin: "learned",
     reason: draft.reason,
+    // What the learner records on a dismissal: the dismissed finding's severity.
+    severity: draft.kind === "dismissal" ? finding.severity : null,
     text: draft.text,
     path: draft.evidence.path,
     source: memorySourceLabel(draft),
