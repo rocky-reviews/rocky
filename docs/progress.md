@@ -68,6 +68,10 @@ Task log for the project plan. Agents append a row when a task is merged.
 ### H4-15 follow-ups
 
 - `map-styles.e2e.spec.ts` "Flow playback › Play runs to the end" timed out once in a full e2e run with 4 workers (10.6 s; 7 s alone, passed 3/3 alone). A timing flake under load, unrelated to this change; its budget could take the run's CPU into account.
+- Review nit: the sideways scrollers `.seq-scroll` (`change-map/map-styles.css`) and `.map-scroll` (`briefing/briefing.css`) are not positioned, so `sr-only` text inside them (e.g. `FlowPlayback.tsx`) belongs to `#main` and is not clipped by them. A flow wide enough to put a hidden label past `#main`'s right edge would give the main column a small sideways scroll (not reachable with today's data). Add `position: relative` to both.
+- Review nit: the "page overflow" e2e group only opens a diff file; add the briefing with Flow playback at 375 px to cover the sideways map scrollers.
+- Review nit: the comment above `.col` in `shell.css` says the drawers' `position: fixed` still wins; for the review panel the reason differs (`#review-panel` is `.panel`, not `.col`). Reword it.
+- Worktrees that run DB-backed tests at the same time interfere through the one dev database (H4-14 and H4-15 did); a database or schema per worktree would stop it.
 
 ### H4-4 follow-ups
 
