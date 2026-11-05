@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import type { Locator } from "@playwright/test";
 import { expect, type Page, test } from "./test.js";
 import { openFile } from "./diff-support.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
@@ -150,6 +151,192 @@ test.describe("keyboard", () => {
     await expect(
       page.getByRole("button", { name: "Comment on line 1", exact: true }),
     ).toBeInViewport();
+  });
+});
+
+test.describe("pointer clicks keep the scroll (H4-13)", () => {
+  const scrollTop = (page: Page) =>
+    page.locator("#main").evaluate((main) => Math.round(main.scrollTop));
+  /** Scrolls the main column and waits until measured rows stop moving it. */
+  const scrollTo = async (page: Page, top: number) => {
+    await page.locator("#main").evaluate((main, y) => main.scrollTo({ top: y }), top);
+    let last = -1;
+    await expect
+      .poll(async () => {
+        const now = await scrollTop(page);
+        const settled = now === last;
+        last = now;
+        return settled;
+      })
+      .toBe(true);
+    return last;
+  };
+  /** The scroll position a moment after an action, once any reveal would have run. */
+  const settledTop = async (page: Page) => {
+    await page.waitForTimeout(250);
+    return scrollTop(page);
+  };
+  const boxOf = async (locator: Locator) => {
+    const box = await locator.boundingBox();
+    if (box === null) throw new Error("not rendered");
+    return box;
+  };
+  /**
+   * A rendered element of `selector` whose box sits in the middle third of the viewport, with at
+   * least `minText` characters (so a click at its start lands on text).
+   */
+  const midScreen = async (page: Page, selector: string, minText = 10) => {
+    const index = await page.locator(selector).evaluateAll((els, min) => {
+      const main = document.querySelector("#main")?.getBoundingClientRect();
+      if (main === undefined) return -1;
+      const third = main.height / 3;
+      return els.findIndex((el) => {
+        const box = el.getBoundingClientRect();
+        return (
+          box.top > main.top + third &&
+          box.bottom < main.bottom - third &&
+          (el.textContent ?? "").trim().length >= min
+        );
+      });
+    }, minText);
+    expect(index, `a ${selector} in the middle of the screen`).toBeGreaterThan(-1);
+    return page.locator(selector).nth(index);
+  };
+
+  const openLarge = async (page: Page) => {
+    await page.goto("/?fixture=large-diff");
+    await page.locator(`#sidebar button.nav-file[title="${LARGE}"]`).click();
+    await page.locator(".diff .ln").first().waitFor();
+  };
+
+  test("clicks on code, a row's blank space, a hunk header and a flag never scroll", async ({
+    page,
+  }) => {
+    await openLarge(page);
+    const top = await scrollTo(page, 20_000);
+    expect(top).toBeGreaterThan(10_000);
+
+    await (await midScreen(page, ".diff .ln .src")).click({ position: { x: 4, y: 4 } });
+    expect(await settledTop(page)).toBe(top);
+
+    // Blank space at the right end of a short row.
+    const row = await midScreen(page, ".diff .ln");
+    const box = await boxOf(row);
+    await row.click({ position: { x: box.width - 4, y: box.height / 2 } });
+    expect(await settledTop(page)).toBe(top);
+
+    // A hunk header and an AI flag, each found further down and brought to mid-screen first.
+    for (const selector of [".diff .hunk-head", ".diff .inline .flag"]) {
+      for (let y = top; (await page.locator(selector).count()) === 0; y += 1500) {
+        expect(y, `a ${selector} below ${top}`).toBeLessThan(top + 20_000);
+        await scrollTo(page, y);
+      }
+      const at = await page
+        .locator(selector)
+        .last()
+        .evaluate((el) => {
+          const main = el.closest("#main");
+          if (main === null) return 0;
+          return (
+            main.scrollTop +
+            el.getBoundingClientRect().top -
+            main.getBoundingClientRect().top -
+            main.clientHeight / 2
+          );
+        });
+      const before = await scrollTo(page, Math.round(at));
+      await (await midScreen(page, selector)).click({ position: { x: 4, y: 4 } });
+      expect(await settledTop(page), selector).toBe(before);
+    }
+  });
+
+  test("a click after the keyboard moved the active line elsewhere does not jump", async ({
+    page,
+  }) => {
+    await openLarge(page);
+    await page.getByRole("button", { name: "Mark viewed", exact: true }).focus();
+    await page.keyboard.press("Tab");
+    for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowDown");
+    expect(await focusedLabel(page)).toBe("Comment on line 6");
+    const top = await scrollTo(page, 30_000);
+
+    await (await midScreen(page, ".diff .ln .src")).click({ position: { x: 4, y: 4 } });
+    expect(await settledTop(page)).toBe(top);
+    // A second click, now that the list itself holds focus, is just as still.
+    await (await midScreen(page, ".diff .ln .src")).click({ position: { x: 4, y: 4 } });
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  /** The new-side line of the row holding `locator`. */
+  const lineOf = (locator: Locator) =>
+    locator.evaluate((el) => el.closest(".ln")?.querySelector("button[data-line]")?.textContent);
+
+  test("after a click on code, Tab focuses the clicked line in place", async ({ page }) => {
+    await openLarge(page);
+    // Line 1 is the active line (pinned, far above), so Tab used to jump back to it.
+    const top = await scrollTo(page, 20_000);
+    const code = await midScreen(page, ".diff .ln:not(.del) .src");
+    const line = await lineOf(code);
+    await code.click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press("Tab");
+    expect(await focusedLabel(page)).toBe(`Comment on line ${line}`);
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  test("after a click on code, ArrowDown moves from the clicked line", async ({ page }) => {
+    await openLarge(page);
+    const top = await scrollTo(page, 20_000);
+    const code = await midScreen(page, ".diff .ln:not(.del) .src");
+    const line = Number(await lineOf(code));
+    await code.click({ position: { x: 4, y: 4 } });
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedLabel(page)).toBe(`Comment on line ${line + 1}`);
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  test("dragging across code still selects text, without scrolling", async ({ page }) => {
+    await openLarge(page);
+    const top = await scrollTo(page, 20_000);
+    const code = await midScreen(page, ".diff .ln .src");
+    const box = await boxOf(code);
+    // Along the first visual line (a wrapped line's box is taller than its first line).
+    await page.mouse.move(box.x + 2, box.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 120, box.y + 8, { steps: 5 });
+    await page.mouse.up();
+    expect((await page.evaluate(() => String(window.getSelection()))).length).toBeGreaterThan(3);
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  test("clicking a line number opens the composer without scrolling", async ({ page }) => {
+    await openLarge(page);
+    const top = await scrollTo(page, 20_000);
+    const number = await midScreen(page, ".diff .ln button.no", 1);
+    const line = await number.getAttribute("data-line");
+    await number.click();
+    await expect(page.getByRole("textbox", { name: `Your comment on line ${line}` })).toBeFocused();
+    expect(await settledTop(page)).toBe(top);
+  });
+
+  test("Tab into a scrolled diff lands on the first line on screen, without scrolling", async ({
+    page,
+  }) => {
+    await openLarge(page);
+    // Line 1 is active; scroll it far outside the rendered window.
+    const top = await scrollTo(page, 20_000);
+    await page.getByRole("button", { name: "Mark viewed", exact: true }).focus();
+    await page.keyboard.press("Tab");
+    await expect.poll(() => focusedLabel(page)).toMatch(/^Comment on line \d+$/);
+    const focused = page.locator(":focus");
+    await expect(focused).toBeInViewport();
+    expect(await settledTop(page)).toBe(top);
+    // It is the first line wholly below the sticky file header.
+    const first = await page.locator(".diff .ln button.no").evaluateAll((els) => {
+      const header = document.querySelector(".file-head")?.getBoundingClientRect().bottom ?? 0;
+      return els.find((el) => (el.closest(".ln")?.getBoundingClientRect().top ?? 0) >= header - 1)
+        ?.textContent;
+    });
+    expect(await focused.textContent()).toBe(first);
   });
 });
 

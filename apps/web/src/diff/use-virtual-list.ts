@@ -16,7 +16,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { HeightIndex, type Range, visibleRange } from "./windowing.js";
+import { firstFrom, HeightIndex, type Range, visibleRange } from "./windowing.js";
 
 /** Pixels rendered beyond each edge of the viewport, so fast scrolling rarely shows a gap. */
 const OVERSCAN = 800;
@@ -31,6 +31,16 @@ const scrollParent = (el: HTMLElement): HTMLElement => {
   return document.scrollingElement instanceof HTMLElement
     ? document.scrollingElement
     : document.documentElement;
+};
+
+/** The viewport in client coordinates, its top below the list's sticky file header. */
+const viewOf = (list: HTMLElement, scroller: HTMLElement) => {
+  const view =
+    scroller === document.scrollingElement
+      ? { top: 0, bottom: window.innerHeight }
+      : scroller.getBoundingClientRect();
+  const header = list.closest("article")?.querySelector(".file-head")?.clientHeight ?? 0;
+  return { top: view.top + header, bottom: view.bottom };
 };
 
 /** What to render, in order: spacers standing in for rows, and runs of rows `[start, end)`. */
@@ -82,6 +92,8 @@ export type VirtualList = {
    * element when it is rendered: its measured box is exact, the index may still hold estimates.
    */
   reveal: (i: number, el?: HTMLElement) => void;
+  /** H4-13: the first row whose top is on screen, below the sticky file header. */
+  firstOnScreen: () => number;
 };
 
 export const useVirtualList = (
@@ -182,18 +194,22 @@ export const useVirtualList = (
       const box = el?.getBoundingClientRect();
       const rowTop = box?.top ?? list.getBoundingClientRect().top + heights.offsetOf(i);
       const rowBottom = box?.bottom ?? rowTop + heights.get(i);
-      const view =
-        scroller === document.scrollingElement
-          ? { top: 0, bottom: window.innerHeight }
-          : scroller.getBoundingClientRect();
-      // Leave room for the sticky file header at the top.
-      const header = list.closest("article")?.querySelector(".file-head")?.clientHeight ?? 0;
-      if (rowTop < view.top + header) scroller.scrollTop -= view.top + header - rowTop;
+      const view = viewOf(list, scroller);
+      if (rowTop < view.top) scroller.scrollTop -= view.top - rowTop;
       else if (rowBottom > view.bottom) scroller.scrollTop += rowBottom - view.bottom;
       update();
     },
     [update],
   );
+
+  const firstOnScreen = useCallback(() => {
+    const list = listRef.current;
+    const scroller = scrollerRef.current;
+    if (list === null || scroller === null) return 0;
+    const y = viewOf(list, scroller).top - list.getBoundingClientRect().top;
+    // Rounded up: a row hidden by a fraction of a pixel under the header is not on screen.
+    return firstFrom(latest.current.index, Math.ceil(y));
+  }, []);
 
   return {
     listRef,
@@ -201,5 +217,6 @@ export const useVirtualList = (
     range,
     parts: layoutParts(index, range, pinned),
     reveal,
+    firstOnScreen,
   };
 };
