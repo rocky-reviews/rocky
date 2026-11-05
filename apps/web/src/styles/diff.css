@@ -183,6 +183,8 @@
   color: var(--muted);
   text-align: right;
   padding: 0 var(--space-2) 0 0;
+  /* Never copied with the code (H4-17: WebKit still needs the prefix). */
+  -webkit-user-select: none;
   user-select: none;
   font-size: var(--text-sm);
   font-family: inherit;
@@ -203,6 +205,8 @@
 }
 .ln .sign {
   color: var(--muted);
+  /* H4-17: holds the screen-reader sign word too, so neither is copied with the code. */
+  -webkit-user-select: none;
   user-select: none;
   text-align: center;
 }

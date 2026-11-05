@@ -464,11 +464,12 @@ const Suggestion = ({
       <div className="suggestion-lines">
         {rows.map((row, i) => (
           <div key={i} className={`ln ${row.kind}`}>
-            <span className="sign" aria-hidden="true">
-              {sign[row.kind]}
+            {/* H4-17: announced from the unselectable sign column, not copied with the code. */}
+            <span className="sign">
+              <span aria-hidden="true">{sign[row.kind]}</span>
+              {word[row.kind] !== "" && <span className="sr-only">{word[row.kind]}</span>}
             </span>
             <code className="src">
-              {word[row.kind] !== "" && <span className="sr-only">{word[row.kind]}</span>}
               <Code text={row.text} language={language} />
             </code>
           </div>

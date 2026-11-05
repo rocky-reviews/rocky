@@ -417,6 +417,133 @@ test.describe("diff content", () => {
   });
 });
 
+test.describe("copied code is only code (H4-17)", () => {
+  /** What a reader would copy: each row's code, without any screen-reader text. */
+  const codeOf = (rows: Locator) =>
+    rows.evaluateAll((els) =>
+      els.map((row) => {
+        const src = row.querySelector(".src")?.cloneNode(true) as HTMLElement | undefined;
+        src?.querySelectorAll(".sr-only").forEach((el) => el.remove());
+        return src?.textContent ?? "";
+      }),
+    );
+
+  /** Selects from the start of `first`'s code to the end of `last`'s, like Shift+arrows. */
+  const selectRows = async (page: Page, first: Locator, last: Locator) =>
+    page.evaluate(
+      ([a, b]) => {
+        const start = a?.querySelector(".src");
+        const end = b?.querySelector(".src");
+        if (!start || !end) throw new Error("no code");
+        window.getSelection()?.setBaseAndExtent(start, 0, end, end.childNodes.length);
+      },
+      [await first.elementHandle(), await last.elementHandle()] as const,
+    );
+
+  const selection = (page: Page) => page.evaluate(() => String(window.getSelection()));
+
+  const chromium = (page: Page) => page.context().browser()?.browserType().name() === "chromium";
+
+  /**
+   * Copies the selection with the keyboard and checks the clipboard. Only Chromium lets a test
+   * read the clipboard; elsewhere (a manual WebKit or Firefox run) the selection is the check.
+   */
+  const copiedIsOnlyCode = async (page: Page, code: readonly string[]) => {
+    if (!chromium(page)) return;
+    await page.keyboard.press("ControlOrMeta+c");
+    onlyCode(await page.evaluate(() => navigator.clipboard.readText()), code);
+  };
+
+  /** No sign words or AI marker; the code lines appear whole and in order. */
+  const onlyCode = (text: string, code: readonly string[]) => {
+    expect(text).not.toMatch(/added:|removed:/);
+    expect(text).not.toContain("(AI)");
+    const lines = text.split("\n");
+    let at = 0;
+    // An empty line has no text to select, so it adds no line break (as before H4-17).
+    for (const line of code.filter((l) => l !== "")) {
+      const found = lines.indexOf(line, at);
+      expect(found, `"${line}" in the copied text`).toBeGreaterThanOrEqual(at);
+      at = found + 1;
+    }
+    // Nothing before the first line of code.
+    expect(text.replace(/^\n+/, "").split("\n")[0]).toBe(code.find((l) => l !== ""));
+  };
+
+  test.beforeEach(async ({ context, page }) => {
+    if (chromium(page)) await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  });
+
+  test("context and added lines: the selection and the clipboard hold only the code", async ({
+    page,
+  }) => {
+    await openShell(page);
+    await openFile(page, "src/api/index.ts");
+    const rows = page.locator(".diff .ln");
+    const first = rows.first();
+    const last = rows.nth(3);
+    await expect(page.locator(".diff .ln.add").first()).toBeVisible();
+    const code = await codeOf(rows);
+    const picked = code.slice(0, 4);
+    await selectRows(page, first, last);
+    onlyCode(await selection(page), picked);
+    await copiedIsOnlyCode(page, picked);
+    // No line numbers either (they were never copied: the number columns are unselectable).
+    expect(await selection(page)).not.toMatch(/^\s*\d+\s/m);
+  });
+
+  test("removed lines: the raw diff of a noise file copies without sign words", async ({
+    page,
+  }) => {
+    await openShell(page);
+    await openFile(page, "pnpm-lock.yaml", { noise: true });
+    await page.getByRole("button", { name: /Show raw diff/ }).click();
+    await page.locator(".diff .ln.del").first().waitFor();
+    const rows = page.locator(".diff .ln");
+    const code = await codeOf(rows);
+    await selectRows(page, rows.first(), rows.last());
+    expect(await page.locator(".diff .ln.del").count()).toBeGreaterThan(0);
+    onlyCode(await selection(page), code);
+    await copiedIsOnlyCode(page, code);
+  });
+
+  test("a mouse drag across added lines and an AI flag copies no sign words or AI marker", async ({
+    page,
+  }) => {
+    await openShell(page);
+    await openFile(page, "src/auth/invitations.ts");
+    const row = (n: number) =>
+      page.locator(".diff .ln", { has: page.locator(`button[data-line="${n}"]`) });
+    await expect(page.locator(".flag.ok")).toBeVisible();
+    const code = await codeOf(page.locator(".diff .ln").filter({ has: page.locator("button.no") }));
+    const from = await row(8).locator(".src").boundingBox();
+    const to = await row(12).locator(".src").boundingBox();
+    if (from === null || to === null) throw new Error("not rendered");
+    // Along each line's first visual line (a wrapped line's box is taller).
+    await page.mouse.move(from.x + 1, from.y + 8);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width - 2, to.y + 8, { steps: 8 });
+    await page.mouse.up();
+    // The flag under line 10 is in the middle of the selection.
+    const text = await selection(page);
+    expect(text).toContain("Checked");
+    onlyCode(text, code.slice(7, 12));
+    await copiedIsOnlyCode(page, code.slice(7, 12));
+  });
+
+  test("a suggested change in a draft copies without sign words", async ({ page }) => {
+    await openShell(page);
+    await openFile(page, "src/auth/invitations.ts");
+    const rows = page.locator(".suggestion .ln").filter({ has: page.locator(".src") });
+    await rows.first().waitFor();
+    const lines = page.locator(".suggestion").first().locator(".ln");
+    const code = await codeOf(lines);
+    await selectRows(page, lines.first(), lines.last());
+    onlyCode(await selection(page), code);
+    await copiedIsOnlyCode(page, code);
+  });
+});
+
 test.describe("virtualisation", () => {
   test("a 5,000-line file keeps a bounded number of rows in the DOM", async ({ page }) => {
     await page.goto("/?fixture=large-diff");

@@ -102,6 +102,20 @@ describe("an undecided draft", () => {
     );
   });
 
+  it("H4-17: a suggested line's sign word is announced from the sign column, not its code", () => {
+    const figure = html.split('<figure class="suggestion">')[1]?.split("</figure>")[0] ?? "";
+    expect(figure).toContain(
+      '<span class="sign"><span aria-hidden="true">+</span><span class="sr-only">added: </span></span>',
+    );
+    expect(figure).toContain(
+      '<span class="sign"><span aria-hidden="true">−</span><span class="sr-only">removed: </span></span>',
+    );
+    // The code elements hold only the code.
+    const code = [...figure.matchAll(/<code class="src">(.*?)<\/code>/g)].map((m) => m[1] ?? "");
+    expect(code).toHaveLength(3);
+    for (const c of code) expect(c).not.toMatch(/sr-only|added|removed/);
+  });
+
   it("offers Accept, Edit, Dismiss and Send to agent", () => {
     expect(text(html.split('class="draft-actions"')[1] ?? "")).toBe(
       "> Accept Edit Dismiss Send to agent ↗",
