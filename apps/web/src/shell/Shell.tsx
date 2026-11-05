@@ -39,6 +39,8 @@ import { useTheme } from "./use-theme.js";
 import type { Mode } from "../theme.js";
 import { trapTab } from "./focus-trap.js";
 import { reviewOrder } from "../diff/annotations.js";
+import { preloadsDiff } from "../diff/diff-loader.js";
+import { useDiff } from "../diff/DiffProvider.js";
 import { KeyboardContext, type KeyboardContextValue } from "../keyboard/KeyboardContext.js";
 import { readSingleKeys, saveSingleKeys } from "../keyboard/keymap.js";
 import { DraftOnScreenProvider } from "../keyboard/draft-on-screen.js";
@@ -113,6 +115,12 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
     [data.analysis],
   );
   const cover = coverage(groups, viewed);
+  // H4-16: the diff starts loading as the briefing is shown, so the first file opens at once.
+  const { preload } = useDiff();
+  const preloading = preloadsDiff(data.analysis, data.pull.headSha);
+  useEffect(() => {
+    if (preloading) preload();
+  }, [preloading, preload]);
   const order = useMemo(
     () => (data.analysis === null ? [] : reviewOrder(data.analysis)),
     [data.analysis],

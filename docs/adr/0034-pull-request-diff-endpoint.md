@@ -114,7 +114,8 @@ is shared with the worker's mirror and the analysis. Three bounds, all documente
 
 - **Per-member rate limit** `diff`: 10 per minute, keyed by member id (HMAC'd like every key,
   ADR 0025 §3), consumed before any query or GitHub call, cache hits included. A page loads the
-  diff once per PR; ten a minute is a human reloading, not a script.
+  diff once per PR (since H4-16 as soon as the PR is shown, §5); ten a minute is a human
+  reloading, not a script.
 - **Per-org rate limit** `diff.org`: 15 per minute, keyed by org id, spent only by reads that
   go to GitHub (the reader asks `beforeForge` right before opening a session; hits and joined
   reads never spend it). This is the bound on the installation's quota: at most 15 × 4 = 60
@@ -154,6 +155,23 @@ in with GitHub" (back to this page) for `signed_out`, nothing from the answer. A
 apart by its body's `error`, matched against the two fixed codes only (SF3). `parseDiffData` stays the one validator (strict reader, 20 M character bound), now
 also of `truncation`. ADR 0023 §3's head rule is unchanged: drafts and own comments are shown
 only when the diff's head is the analysis's.
+
+**Preload (H4-16).** A cold read takes seconds (GitHub), a warm one tens of milliseconds, so the
+real PR page no longer waits for the first file opened: `DiffProvider` (`preload`, server
+source only) starts the one load as soon as the briefing is shown (`Shell`, `preloadsDiff`):
+when the PR has an analysis for its current head that lists a file to open (triaged, noise or
+not analysed). With no analysis, no such file, or an analysis for an older push, the page loads
+the diff on the first file opened, as before. The load is still made once per
+page and shared by every file view (`diff/diff-loader.ts`). A preload failure shows nothing on
+the briefing; a lasting one (`signed_out`, `not_found`, `head_moved`, `commits_unavailable`,
+`too_large`, `unavailable`) is shown when a file is opened, without asking again; a passing one
+(`forge_failed`, `rate_limited`, `failed`) is tried once more when the first file is opened, so
+the file view shows a fresh answer rather than one from before. A load a file view waited on is
+never retried. Fixture pages and a signed-out page do not preload. **Rate-limit cost:** opening
+a PR page now spends one read of the member's `diff` limit (10/min) even when no file is
+opened, and, on a cold cache, one of the org's `diff.org` budget (15/min of reads that reach
+GitHub); a retried preload spends one more. Reopening the same PR within the cache's minute
+spends only the member's limit.
 
 ## Threat model
 

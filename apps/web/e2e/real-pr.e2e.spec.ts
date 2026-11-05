@@ -39,6 +39,10 @@ const showCard = async (page: Page, id: string) => {
   await card(page, id).scrollIntoViewIfNeeded();
 };
 
+/** H4-16: the diff endpoint has answered (the preload, made once the briefing is shown). */
+const diffAnswered = (page: Page) =>
+  page.waitForResponse((r) => new URL(r.url()).pathname === REAL_PR_DIFF_API);
+
 /** Opens the file without waiting for diff lines (the diff may be in another state). */
 const openFileHead = async (page: Page) => {
   const width = page.viewportSize()?.width ?? 1440;
@@ -57,10 +61,11 @@ test.describe("a real PR address reads the server", () => {
       "Team invitations with expiring links",
     );
     await expect(page.locator("#briefing-title")).toBeVisible();
-    // StrictMode loads twice in development; every request is the one GET.
-    expect(new Set(api.requests.map((r) => `${r.method()} ${new URL(r.url()).pathname}`))).toEqual(
-      new Set([`GET ${REAL_PR_API}`]),
-    );
+    // StrictMode loads twice in development; every request is one of the two GETs (H4-16: the
+    // diff is preloaded with the briefing).
+    await expect
+      .poll(() => new Set(api.requests.map((r) => `${r.method()} ${new URL(r.url()).pathname}`)))
+      .toEqual(new Set([`GET ${REAL_PR_API}`, `GET ${REAL_PR_DIFF_API}`]));
     const bar = page.locator("header.topbar");
     await expect(bar).toContainText("acme/rocky-app");
     await expect(bar).toContainText("+215 −3 · 9 files");
@@ -101,6 +106,92 @@ test.describe("a real PR address reads the server", () => {
       new Set([`GET ${REAL_PR_API}`, `GET ${REAL_PR_DIFF_API}`]),
     );
     expect(api.requests.every((r) => r.headers()["accept"] === "application/json")).toBe(true);
+  });
+
+  test("H4-16: the diff is preloaded with the briefing; the first file opens without loading", async ({
+    page,
+  }) => {
+    const api = await mockPullApi(page);
+    const diffReads = () =>
+      api.requests.filter((r) => new URL(r.url()).pathname === REAL_PR_DIFF_API).length;
+    const preloaded = diffAnswered(page);
+    await openRealPr(page);
+    await expect(page.locator("#briefing-title")).toBeVisible();
+    // Nothing on the briefing says the diff is loading.
+    await expect(page.locator(".diff-status")).toHaveCount(0);
+    await (await preloaded).finished();
+    // Exactly one preload (StrictMode's second effect run shares it).
+    expect(diffReads()).toBe(1);
+    const before = diffReads();
+    // Record every status the file view shows from here on.
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { diffStatuses: string[] }).diffStatuses = seen;
+      new MutationObserver(() => {
+        for (const el of document.querySelectorAll(".diff-status")) seen.push(el.textContent);
+      }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    });
+    await openFile(page, FILE);
+    await expect(page.locator("#main")).toContainText("INVITE_TTL_MS");
+    expect(
+      await page.evaluate(() => (window as unknown as { diffStatuses: string[] }).diffStatuses),
+    ).toEqual([]);
+    // Opening files asks nothing more.
+    await openFile(page, "src/api/routes/invitations.ts");
+    expect(diffReads()).toBe(before);
+  });
+
+  test("H4-16: a preload GitHub failed shows nothing on the briefing; opening a file tries once more", async ({
+    page,
+  }) => {
+    let diff: Answer = { status: 502, body: { error: "forge_unavailable" } };
+    const api = await mockPullApi(page, undefined, () => diff);
+    const diffReads = () =>
+      api.requests.filter((r) => new URL(r.url()).pathname === REAL_PR_DIFF_API).length;
+    const preloaded = diffAnswered(page);
+    await openRealPr(page);
+    await expect(page.locator("#briefing-title")).toBeVisible();
+    await preloaded;
+    await expect(page.locator("#main [role='alert']")).toHaveCount(0);
+    const before = diffReads();
+    diff = { status: 200, body: serverDiffData() };
+    await openFile(page, FILE);
+    await expect(page.locator("#main")).toContainText("INVITE_TTL_MS");
+    expect(diffReads()).toBe(before + 1);
+  });
+
+  test("H4-16: no preload on a PR with no analysis (no files to open)", async ({ page }) => {
+    const api = await mockPullApi(page, {
+      status: 200,
+      body: serverShellData({ analysis: null, analysisId: null, analysisRun: { status: "none" } }),
+    });
+    await openRealPr(page);
+    await expect(page.locator("#main")).toContainText("No analysis yet");
+    // Past the effects of the render that showed it (a preload would have been asked by then).
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 200))),
+    );
+    expect(api.requests.map((r) => new URL(r.url()).pathname)).not.toContain(REAL_PR_DIFF_API);
+  });
+
+  test("H4-16: no preload on an older push's analysis; the first file opened reads the diff", async ({
+    page,
+  }) => {
+    const pull = serverShellData().pull;
+    const api = await mockPullApi(page, {
+      status: 200,
+      body: serverShellData({
+        pull: { ...pull, headSha: "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d" },
+      }),
+    });
+    await openRealPr(page);
+    await expect(page.locator("#briefing-title")).toBeVisible();
+    // The drafts have loaded: the page has settled with the briefing on screen.
+    await reviewReady(page);
+    expect(api.requests.map((r) => new URL(r.url()).pathname)).not.toContain(REAL_PR_DIFF_API);
+    await openFileHead(page);
+    await expect(page.locator(".diff .ln").first()).toBeVisible();
+    expect(api.requests.map((r) => new URL(r.url()).pathname)).toContain(REAL_PR_DIFF_API);
   });
 
   test("the status pill shows the review the server says the person posted", async ({ page }) => {
@@ -309,8 +400,8 @@ test.describe("H4-3: reviewing a real PR end to end", () => {
 
   test("loading: a status until the server answers the diff", async ({ page }) => {
     const api = await mockPullApi(page);
+    const release = api.hold("diff");
     await openRealPr(page);
-    const release = api.hold();
     await openFileHead(page);
     await expect(page.locator(".diff-status")).toHaveText("Loading the diff…");
     release();
@@ -390,9 +481,10 @@ test.describe("inbox and fixtures", () => {
       .click();
     await expect(page).toHaveURL(REAL_PR_PATH);
     await expect(page.locator("#briefing-title")).toBeVisible();
-    expect(new Set(pulls.requests.map((r) => new URL(r.url()).pathname))).toEqual(
-      new Set([REAL_PR_API]),
-    );
+    // The PR, and its diff, preloaded with the briefing (H4-16).
+    await expect
+      .poll(() => new Set(pulls.requests.map((r) => new URL(r.url()).pathname)))
+      .toEqual(new Set([REAL_PR_API, REAL_PR_DIFF_API]));
   });
 
   test("`/` goes to the inbox; the fixtures need their explicit switch", async ({ page }) => {

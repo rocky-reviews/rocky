@@ -30,6 +30,7 @@ const context = (
 ): DiffContextValue => ({
   load,
   request: () => {},
+  preload: () => {},
   pull,
   ...(returnTo === undefined ? {} : { returnTo }),
 });
