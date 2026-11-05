@@ -130,8 +130,8 @@ export const pr847Script = (call: ScriptedCall): ScriptedAnswer => {
   }
   if (call.role === "review" && path !== undefined) return reviewAnswer(path, call.repair);
   if (call.role === "review") {
-    const { summary, verdict, reviewPath, checkedOk } = PR847.briefing;
-    return { value: { summary, verdict, reviewPath, checkedOk } };
+    const { tldr, verdict, reviewPath, checkedOk } = PR847.briefing;
+    return { value: { tldr, verdict, reviewPath, checkedOk } };
   }
   if (call.role === "graph") {
     const stage = stageOf(call);

@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "./test.js";
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { MODES, openShell, settle, WIDTHS } from "./support.js";
+import { MODES, openShell, settle, showLowerRisk, WIDTHS } from "./support.js";
 
 /**
  * P6-1 acceptance: the shell at 375/1024/1440 px x light/dark, against the POC's landing state
@@ -22,6 +22,8 @@ type State = {
 
 const STATES: State[] = [
   { id: "pr-shell", widths: [375, 1024, 1440], run: async () => {} },
+  // H4-9: the Normal, Low and noise groups opened with their toggle.
+  { id: "pr-shell-lower-risk", widths: [1024, 1440], run: showLowerRisk },
   {
     id: "pr-files-drawer",
     widths: [375],

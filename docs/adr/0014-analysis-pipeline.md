@@ -533,3 +533,44 @@ the graph pushed the enforced grammar over its limit (H4-4). H4-6 builds their U
   diffs: on the order of 12–30K input tokens per call (the mapped diffs plus the outline and
   the schema's cached system block) and 1–3K output tokens each, on top of H4-5's map call;
   a repair round doubles a call. The estimate and the per-PR limit count them (§5 above).
+
+## Amendment (H4-8): the briefing is a short TL;DR
+
+**Context.** Dogfooding: the briefing's `summary` was one paragraph of about 600 characters that
+listed every scaffolding detail, and `verdict.reason` was a second paragraph. The reviewer asked
+for a TL;DR of at most four sentences that is easier to scan than a paragraph.
+
+**Decision.**
+
+1. **The briefing call answers with `tldr`** (schema 1.4, `docs/schema/analysis-document.md`):
+   two to four one-line bullets of at most 160 characters. `BriefingAnswer` (`outputs.ts`)
+   requires it and no longer has `summary`; the AI briefing is stored without a summary.
+   Rocky's fallback briefing (§2, ADR 0015 §6) keeps its fixed summary paragraph, so its
+   document stays a 1.1 document.
+2. **The verdict reason is one short sentence.** The answer schema holds it to
+   `MAX_VERDICT_REASON_ANSWER_LENGTH` (200); the document keeps `MAX_REASON_LENGTH` (500) so
+   two-sentence reasons in older documents still read. Rocky's own reasons (`RAISED_FOR_*`,
+   `FALLBACK_REASON`) are written by the pipeline, not answered, and keep the document limit.
+3. **`BRIEFING_INSTRUCTIONS`** ask for the first bullet to say what the PR does in plain words,
+   the others for what matters most to the reviewer (the riskiest thing, the key finding by its
+   id, where to start), no lists of files or tools, at most four sentences, paths and
+   identifiers in backticks. The instructions stay a `rockyInstructions` literal in
+   `PROMPT_TEXTS`; inputs are unchanged. The briefing is not a unit, so `PIPELINE_VERSION` is
+   unchanged.
+4. **Readers.** The web shows the verdict, then a "TL;DR" list; a document without a TL;DR shows
+   the summary paragraph as before. The CLI prints a TL;DR block or the summary. The answer
+   schema goes through the SDK transform in `wire-schema.test.ts` (no `$defs`, no combinator;
+   the array and length limits move into descriptions as for every role).
+5. **Rollout.** The briefing call always answers with a TL;DR, so almost every AI-briefed
+   document is stamped 1.4; only Rocky's fallback briefing stays 1.1. A server or web build that
+   only reads up to 1.3 refuses a 1.4 document (UNSUPPORTED_SCHEMA_VERSION), so the readers
+   (server and web) must be deployed before the worker that writes 1.4.
+
+**Threat model.** No new input or side effect: the TL;DR is model text like the summary it
+replaces, validated as single-line text (no control, bidi or invisible characters, no newline, tab,
+U+2028 or U+2029, so a bullet cannot fake a second line), checked by
+the leak guard with the rest of the document (`pipeline.test.ts` H4-8, `injection.test.ts`'s
+adversary now writes TL;DR bullets), rendered through `InlineText` in a `<bdi>`
+(`Briefing.test.tsx` "untrusted model output") and through the CLI's gutter (`render.test.ts`).
+A bullet can name a finding id that does not exist; it is a draft for a human (R2), and a check
+is a follow-up in `docs/progress.md`.

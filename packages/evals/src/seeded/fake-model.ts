@@ -27,7 +27,8 @@ export interface FakeFinding {
 export interface FakeModelSpec {
   readonly triage: Readonly<Record<string, FakeTriage>>;
   readonly findings: Readonly<Record<string, readonly FakeFinding[]>>;
-  readonly summary: string;
+  /** The briefing's TL;DR (H4-8): two to four one-sentence bullets. */
+  readonly tldr: readonly string[];
   readonly verdict: { readonly level: RiskLevel; readonly reason: string };
 }
 
@@ -79,7 +80,7 @@ export const fakeModel =
       );
       return {
         value: {
-          summary: spec.summary,
+          tldr: spec.tldr,
           verdict: spec.verdict,
           reviewPath: triaged.map((p) => ({ path: p, why: "In order of risk." })),
           checkedOk: [],

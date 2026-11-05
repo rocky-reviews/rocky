@@ -90,6 +90,13 @@ describe("Inbox (static render)", () => {
     expect(html.match(/href="/g)).toHaveLength(2); // skip link + the row's title
   });
 
+  it("shows no review-time estimate on any row (H4-9)", () => {
+    expect(inbox.items.some((i) => i.estimatedMinutes !== null)).toBe(true);
+    const html = render();
+    expect(html).not.toContain("inbox-minutes");
+    expect(html).not.toMatch(/~\d+ min\b/);
+  });
+
   it("says why there is nothing to offer", () => {
     const html = render(inbox.items.filter((i) => !i.bulkApproval.eligible));
     expect(html).toContain("Nothing to bulk-approve right now.");

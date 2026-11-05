@@ -37,7 +37,12 @@ test.describe("axe", () => {
 });
 
 test.describe("layout", () => {
-  for (const pr of [STATE_PULLS.main, STATE_PULLS.graphUnavailable, STATE_PULLS.awaitingApproval]) {
+  for (const pr of [
+    STATE_PULLS.main,
+    STATE_PULLS.graphUnavailable,
+    STATE_PULLS.awaitingApproval,
+    STATE_PULLS.summaryOnly,
+  ]) {
     test(`no horizontal page scroll at 375 px (PR ${pr})`, async ({ page }) => {
       await page.setViewportSize({ width: 375, height: 812 });
       await openBriefing(page, pr);
@@ -52,6 +57,27 @@ test.describe("layout", () => {
       expect(mainOverflow).toBeLessThanOrEqual(0);
     });
   }
+
+  test("the TL;DR is a list named by its heading, after the verdict; an older document shows its summary (H4-8)", async ({
+    page,
+  }) => {
+    await openBriefing(page, STATE_PULLS.main);
+    const tldr = page.getByRole("list", { name: "TL;DR" });
+    await expect(tldr.getByRole("listitem")).toHaveCount(4);
+    await expect(tldr.getByRole("listitem").first()).toContainText(
+      "Adds email invitations to orgs",
+    );
+    await expect(page.locator(".brief-summary")).toHaveCount(0);
+    const [verdictTop, listTop] = await Promise.all([
+      page.locator(".verdict").evaluate((el) => el.getBoundingClientRect().top),
+      tldr.evaluate((el) => el.getBoundingClientRect().top),
+    ]);
+    expect(verdictTop).toBeLessThan(listTop);
+
+    await openBriefing(page, STATE_PULLS.summaryOnly);
+    await expect(page.locator(".brief-summary")).toContainText("An admin creates an invite");
+    await expect(page.getByRole("list", { name: "TL;DR" })).toHaveCount(0);
+  });
 
   test("the risk table stacks at 375 px (POC defect 1)", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });

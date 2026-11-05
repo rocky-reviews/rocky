@@ -49,7 +49,7 @@ const answer = (call: ScriptedCall) => {
   if (call.role === "review") {
     return {
       value: {
-        summary: "Adds a.",
+        tldr: ["Adds a.", "Start with `src/a.ts`."],
         verdict: { level: "high", reason: "A high finding." },
         reviewPath: [{ path: "src/a.ts", why: "First." }],
         checkedOk: [],

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { BASE_SCHEMA_VERSION, limits, SCHEMA_VERSION } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
 import { LlmCallError, type LlmCompletionRole } from "../llm.js";
 import {
@@ -138,7 +139,7 @@ const walkthroughFor = (call: ScriptedCall): ScriptedAnswer => {
 };
 
 const BRIEFING = {
-  summary: "Adds a session module.",
+  tldr: ["Adds a session module.", "Start with `src/auth/session.ts`."],
   verdict: { level: "low", reason: "Small change." },
   reviewPath: [] as { path: string; why: string }[],
   checkedOk: [],
@@ -1084,7 +1085,12 @@ describe("A23 the leak guard keeps instruction text out of the document (P4-4, A
 
     const briefing = script((call) =>
       is("review")(call) && call.part("file_path") === undefined
-        ? { value: { ...briefingFor(call), summary: prompt(call).slice(0, 1000) } }
+        ? {
+            value: {
+              ...briefingFor(call),
+              tldr: ["Adds a module.", `Marker ${PROMPT_CANARY_MARKER}.`],
+            },
+          }
         : undefined,
     );
     const { outcome } = await analyze(briefing);
@@ -1237,6 +1243,84 @@ describe("A26 a briefing that fails is replaced by Rocky's own (P4-4 review roun
         ),
       ),
     ).rejects.toMatchObject({ kind: "overloaded" });
+  });
+});
+
+describe("H4-8 the briefing is a short TL;DR", () => {
+  it("the AI briefing is stored as its TL;DR, without a summary paragraph, stamped 1.4", async () => {
+    const { document } = done((await analyze()).outcome);
+    expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
+    expect(document.briefing.summary).toBeUndefined();
+    expect(document.provenance.briefingUnavailable).toBeUndefined();
+    expect(document.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it.each([
+    [
+      "the old summary paragraph instead",
+      { summary: "Adds a session module." },
+      "tldr: invalid_type",
+    ],
+    ["one bullet", { tldr: ["Adds a session module."] }, "tldr: too_small"],
+    ["five bullets", { tldr: ["1.", "2.", "3.", "4.", "5."] }, "tldr: too_big"],
+    [
+      "a bullet over the limit",
+      { tldr: ["x".repeat(limits.MAX_TLDR_ITEM_LENGTH + 1), "Two."] },
+      "tldr[0]: too_big",
+    ],
+    ["a bullet of two lines", { tldr: ["One.\nTwo.", "Three."] }, "tldr[0]: custom"],
+    [
+      "a verdict reason over one short sentence",
+      {
+        verdict: {
+          level: "low",
+          reason: "x".repeat(limits.MAX_VERDICT_REASON_ANSWER_LENGTH + 1),
+        },
+      },
+      "verdict.reason: too_big",
+    ],
+  ] as const)(
+    "%s goes back for repair, and a fixed answer is stored",
+    async (_name, change, issue) => {
+      const { outcome, calls } = await analyze(
+        script((call) => {
+          if (!briefingCall(call) || call.repair) return undefined;
+          const answer: Record<string, unknown> = { ...briefingFor(call), ...change };
+          if ("summary" in change) delete answer["tldr"];
+          return { value: answer };
+        }),
+      );
+      const repairs = calls.filter((call) => briefingCall(call) && call.repair);
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]!.part("validation_issues")).toContain(issue);
+      const { document } = done(outcome);
+      expect(document.provenance.briefingUnavailable).toBeUndefined();
+      expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
+    },
+  );
+
+  it("the briefing's limits are the schema's: 2 to 4 bullets of 160 characters, a 200-character reason", () => {
+    expect(limits.MIN_TLDR_ITEMS).toBe(2);
+    expect(limits.MAX_TLDR_ITEMS).toBe(4);
+    expect(limits.MAX_TLDR_ITEM_LENGTH).toBe(160);
+    expect(limits.MAX_VERDICT_REASON_ANSWER_LENGTH).toBe(200);
+    // The document keeps the older, longer limit so documents before 1.4 still read.
+    expect(limits.MAX_REASON_LENGTH).toBeGreaterThan(limits.MAX_VERDICT_REASON_ANSWER_LENGTH);
+  });
+
+  it("the instructions ask for a TL;DR led by what the PR does, at most four sentences, and a one-sentence reason", () => {
+    const text = BRIEFING_INSTRUCTIONS.text;
+    expect(text).toContain(
+      "tldr is a TL;DR of two to four bullets, at most four sentences in total",
+    );
+    expect(text).toContain("The first bullet says what the pull request does, in plain words");
+    expect(text).toMatch(
+      /the riskiest thing in the change, the key finding by its id \(for example F1\)/,
+    );
+    expect(text).toContain("where to start reading");
+    expect(text).toContain("Do not list every file, tool or dependency");
+    expect(text).toContain("verdict.reason says why in one short sentence.");
+    expect(text).not.toMatch(/summary says|one or two sentences/);
   });
 });
 
@@ -1410,7 +1494,7 @@ describe("H4-5 the change map shows logic only", () => {
     expect(stats.calls.graph).toBe(0);
     // The rest of the review is whole: every file triaged, the briefing written.
     expect(document.triage.files).toHaveLength(3);
-    expect(document.briefing.summary).toBe(BRIEFING.summary);
+    expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
   });
 
   it("a test-only pull request is mapped from its tests", async () => {
@@ -1558,21 +1642,32 @@ describe("H4-5 the change map shows logic only", () => {
   });
 
   it("documents are stamped with the lowest schema minor they need (S7)", async () => {
+    // The AI briefing's TL;DR is a 1.4 field (H4-8), so every AI-briefed document is 1.4.0.
     const drawn = done((await analyze(script(), { diff: mixed.join("\n") })).outcome);
-    expect(drawn.document.schemaVersion).toBe("1.1.0");
-    const docsOnly = done((await analyze(script(), { diff: addedFile(DOC, LINES) })).outcome);
+    expect(drawn.document.briefing.tldr).toEqual(BRIEFING.tldr);
+    expect(drawn.document.schemaVersion).toBe(SCHEMA_VERSION);
+    // Rocky's fallback briefing has the summary paragraph only: the map decides the stamp.
+    const fallback = (call: ScriptedCall): ScriptedAnswer | undefined =>
+      briefingCall(call) ? { status: "refused" } : undefined;
+    const plain = done((await analyze(script(fallback), { diff: mixed.join("\n") })).outcome);
+    expect(plain.document.briefing.tldr).toBeUndefined();
+    expect(plain.document.briefing.summary).toBe(FALLBACK_SUMMARY);
+    expect(plain.document.schemaVersion).toBe(BASE_SCHEMA_VERSION);
+    const docsOnly = done(
+      (await analyze(script(fallback), { diff: addedFile(DOC, LINES) })).outcome,
+    );
     expect(docsOnly.document.provenance.graphUnavailable).toEqual({ reason: "no-logic" });
     expect(docsOnly.document.schemaVersion).toBe("1.2.0");
     const failed = done(
       (
         await analyze(
-          script((call) => (stageOf(call) === "graph" ? { status: "refused" } : undefined)),
+          script((call) => (stageOf(call) === "graph" ? { status: "refused" } : fallback(call))),
           { diff: mixed.join("\n") },
         )
       ).outcome,
     );
     expect(failed.document.provenance.graphUnavailable).toEqual({ reason: "analysis-failed" });
-    expect(failed.document.schemaVersion).toBe("1.1.0");
+    expect(failed.document.schemaVersion).toBe(BASE_SCHEMA_VERSION);
   });
 
   it("the graph answer is lanes, nodes and edges only: flows, views or a walkthrough are invalid output", async () => {
@@ -1881,7 +1976,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
     expect(document.graph?.views).toEqual([]);
     expect(document.provenance.flowsUnavailable).toBeUndefined();
     expect(document.provenance.walkthroughUnavailable).toBeUndefined();
-    expect(document.schemaVersion).toBe("1.1.0");
+    expect(document.schemaVersion).toBe(SCHEMA_VERSION);
     expect(stats).toMatchObject({
       graph: "drawn",
       flows: "drawn",
@@ -1967,8 +2062,9 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       expect(document.graph?.walkthrough?.steps).toHaveLength(3);
       expect(document.provenance.walkthroughUnavailable).toBeUndefined();
       expect(document.triage.files).toHaveLength(4);
-      expect(document.briefing.summary).toBe(BRIEFING.summary);
-      expect(document.schemaVersion).toBe("1.3.0");
+      expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
+      // The AI briefing's TL;DR makes the document 1.4 (H4-8); the 1.3 stamp alone is v1-3.test.ts.
+      expect(document.schemaVersion).toBe(SCHEMA_VERSION);
       expect(stats.flows).toBe(reason);
       expect(stats.walkthrough).toBe("drawn");
       // A call that throws never reaches the observer (nor metering's result), as for the graph.
@@ -1995,7 +2091,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       expect(document.provenance.walkthroughUnavailable).toEqual({ reason });
       expect(document.graph?.flows).toHaveLength(1);
       expect(document.provenance.flowsUnavailable).toBeUndefined();
-      expect(document.schemaVersion).toBe("1.3.0");
+      expect(document.schemaVersion).toBe(SCHEMA_VERSION);
       expect(stats.walkthrough).toBe(reason);
       expect(stats.flows).toBe("drawn");
     },
@@ -2015,7 +2111,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
     expect(document.graph?.walkthrough).toBeUndefined();
     expect(document.provenance.flowsUnavailable).toEqual({ reason: "analysis-failed" });
     expect(document.provenance.walkthroughUnavailable).toEqual({ reason: "analysis-failed" });
-    expect(document.briefing.summary).toBe(BRIEFING.summary);
+    expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
     expect(stats).toMatchObject({ flows: "analysis-failed", walkthrough: "analysis-failed" });
     for (const stage of ["flows", "walkthrough"] as const) {
       const llm = scriptedRoles(
@@ -2176,7 +2272,8 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       walkthrough: "skipped",
     });
     expect(done(docsOnly.outcome).document.provenance.flowsUnavailable).toBeUndefined();
-    expect(done(docsOnly.outcome).document.schemaVersion).toBe("1.2.0");
+    // The TL;DR makes it 1.4 (H4-8); the no-logic stamp on its own is checked in S7 above.
+    expect(done(docsOnly.outcome).document.schemaVersion).toBe(SCHEMA_VERSION);
 
     const lines = Array.from({ length: 1_500 }, (_, i) => `const line${i} = "${"x".repeat(100)}";`);
     const tooLarge = await analyze(mapped(), {

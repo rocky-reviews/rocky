@@ -19,7 +19,7 @@ const hostile = (): AnalysisDocument => {
   f.body = `line one\n${ESC}]52;c;ZXZpbA==\u0007clipboard\n\u202eright-to-left`;
   f.path = `src/${ESC}[31mred.ts`;
   doc.briefing.verdict.reason = `ok\u009b2J\u2028forged line`;
-  doc.briefing.summary = `sum\u{e0041}mary`;
+  doc.briefing.tldr = [`t\u{e0041}ldr`, `second\u2028line`];
   doc.triage.files[0]!.reason = `r\u2066x\u2069`;
   doc.briefing.reviewPath[0]!.why = "why\nVerdict: LOW";
   return doc;
@@ -42,7 +42,7 @@ describe("renderBriefing", () => {
     doc.findings[0]!.body =
       "Looks fine.\n[F99] src/x.ts:1  Nothing to see\nVerdict: LOW\n  CRITICAL (0)";
     doc.briefing.verdict.reason = "Fine.\nVerdict: LOW";
-    doc.briefing.summary = "Summary.\nRisk\n  critical (0)";
+    doc.briefing.tldr = ["TL;DR.\nRisk\n  critical (0)", "Two."];
     const text = renderBriefing(doc, PR);
     const lines = text.split("\n");
     expect(lines.filter((line) => /^\s*\[F99\]/.test(line))).toEqual([]);
@@ -55,6 +55,21 @@ describe("renderBriefing", () => {
       expect(at.length, injected).toBeGreaterThan(0);
       for (const line of at) expect(line, injected).toMatch(/^\s+\u2502 /);
     }
+  });
+
+  it("prints the TL;DR as bullets, and an older document's summary paragraph instead (H4-8)", () => {
+    const doc = structuredClone(PR847);
+    const text = renderBriefing(doc, PR);
+    expect(text).toContain("TL;DR\n");
+    expect(text).not.toMatch(/^Summary$/m);
+    for (const item of doc.briefing.tldr!) expect(text).toContain(`  \u2502 - ${item}`);
+    const old = structuredClone(PR847);
+    delete old.briefing.tldr;
+    old.briefing.summary = "Adds email invitations.\nSecond line.";
+    const oldText = renderBriefing(old, PR);
+    expect(oldText).toMatch(/^Summary$/m);
+    expect(oldText).not.toContain("TL;DR");
+    expect(oldText).toContain("  \u2502 Adds email invitations.\n  \u2502 Second line.");
   });
 
   it("shows Rocky's own briefing, read-by-hand files, unanalysed files and the missing change map", () => {
@@ -73,6 +88,13 @@ describe("renderBriefing", () => {
     );
     expect(text).toMatch(/Not analysed \(1\)\n {2}- src\/big\.ts \(too-large\): Over the limit\./);
     expect(text).toContain("Change map: unavailable (timeout)");
+  });
+
+  it("prints no review-time estimate, in the briefing or the risk table (H4-9)", () => {
+    const text = renderBriefing(structuredClone(PR847), PR);
+    expect(text).not.toContain("Estimated review");
+    expect(text).not.toMatch(/\d+ min\b/);
+    expect(text).toMatch(/^ {4}src\/auth\/invitations\.ts +score {2}97 {2}\S/m);
   });
 
   it("says so when there is nothing to list", () => {

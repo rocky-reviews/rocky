@@ -14,6 +14,22 @@ export const loadFixture = (name: FixtureName): unknown =>
 /** A fresh, mutable copy of the pr-847 fixture, typed as what a producer would send. */
 export const pr847 = (): AnalysisDocumentInput => loadFixture("pr-847") as AnalysisDocumentInput;
 
+/** The summary paragraph pr-847 carried before schema 1.4 gave it a TL;DR (H4-8). */
+export const PR847_SUMMARY =
+  "Adds **email invitations to orgs**. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.";
+
+/**
+ * pr-847 as a document written before 1.4: the summary paragraph instead of the TL;DR, so it
+ * needs nothing newer than 1.1. For tests about the other version stamps.
+ */
+export const pr847WithSummary = (): AnalysisDocumentInput => {
+  const doc = pr847();
+  delete doc.briefing.tldr;
+  doc.briefing.summary = PR847_SUMMARY;
+  doc.schemaVersion = "1.1.0";
+  return doc;
+};
+
 /**
  * Asserts the input is rejected and that at least one issue carries the code (and, when
  * given, the exact JSON path). Returns the issues so tests can look further.

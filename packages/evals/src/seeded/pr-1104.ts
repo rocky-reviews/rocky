@@ -127,7 +127,10 @@ export const PR1104: SeededPr = {
         { severity: "critical", lines: 10, title: "CSV sent without Content-Disposition: XSS" },
       ],
     },
-    summary: "Adds a CSV export of an org's invoices.",
+    tldr: [
+      "Adds a CSV export of an org's invoices.",
+      "Riskiest: the export does not check that the caller belongs to the org.",
+    ],
     verdict: { level: "critical", reason: "User input reaches SQL and the export crosses orgs." },
   }),
 };

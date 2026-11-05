@@ -20,6 +20,23 @@ import { fakeFetch, OTHER_KEY, TEST_KEY } from "./test-support.js";
 
 const STAGES = Object.entries(STAGE_CALLS);
 
+/** Optional parameters in a sent schema, the API's published limit being 24 (ADR 0013 H4-4). */
+const optionalCount = (sent: unknown): number => {
+  let optional = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (typeof node !== "object" || node === null) return;
+    const schema = node as { properties?: Record<string, unknown>; required?: string[] };
+    if (schema.properties !== undefined) {
+      const required = new Set(schema.required ?? []);
+      optional += Object.keys(schema.properties).filter((key) => !required.has(key)).length;
+    }
+    Object.values(node).forEach(walk);
+  };
+  walk(sent);
+  return optional;
+};
+
 describe("every role's output schema goes through the SDK's structured-output transform (H4-4)", () => {
   it.each(STAGES)("%s", (_stage, template) => {
     expect(() => jsonSchemaOutputFormat(template.output.jsonSchema as never)).not.toThrow();
@@ -89,23 +106,6 @@ describe("which roles the provider enforces (H4-4, H4-5)", () => {
     });
   });
 
-  /** Optional parameters in a sent schema, the API's published limit being 24 (ADR 0013 H4-4). */
-  const optionalCount = (sent: unknown): number => {
-    let optional = 0;
-    const walk = (node: unknown): void => {
-      if (Array.isArray(node)) return node.forEach(walk);
-      if (typeof node !== "object" || node === null) return;
-      const schema = node as { properties?: Record<string, unknown>; required?: string[] };
-      if (schema.properties !== undefined) {
-        const required = new Set(schema.required ?? []);
-        optional += Object.keys(schema.properties).filter((key) => !required.has(key)).length;
-      }
-      Object.values(node).forEach(walk);
-    };
-    walk(sent);
-    return optional;
-  };
-
   it("the graph schema stays inside the API's published complexity limits (H4-5)", () => {
     // ADR 0013 amendment H4-4: at most 24 optional parameters and no recursive definition. The
     // grammar-size limit has no offline oracle; the real run is its evidence (docs/progress.md).
@@ -131,6 +131,26 @@ describe("which roles the provider enforces (H4-4, H4-5)", () => {
     ).length;
     expect(JSON.stringify(flows).length).toBeLessThan(graphBytes);
     expect(JSON.stringify(walkthrough).length).toBeLessThan(graphBytes / 4);
+  });
+});
+
+describe("the briefing's TL;DR schema (H4-8)", () => {
+  it("compiles through the SDK's transform with the TL;DR required, the summary gone and the limits kept", () => {
+    const sent = jsonSchemaOutputFormat(STAGE_CALLS.briefing.output.jsonSchema as never).schema as {
+      required: string[];
+      properties: Record<string, { description?: string; items?: { description?: string } }>;
+    };
+    expect(optionalCount(sent)).toBeLessThanOrEqual(24);
+    expect(sent.required).toEqual(expect.arrayContaining(["tldr", "verdict", "reviewPath"]));
+    expect(Object.keys(sent.properties)).not.toContain("summary");
+    // The SDK strips the array and string limits into the description, where the model reads them.
+    const tldr = sent.properties["tldr"]!;
+    expect(tldr.description).toMatch(/two to four one-sentence bullets/);
+    expect(tldr.description).toContain("maxItems: 4");
+    expect(tldr.description).toContain("minItems: 2");
+    expect(tldr.items?.description).toContain("maxLength: 160");
+    expect(JSON.stringify(sent.properties["verdict"])).toContain("maxLength: 200");
+    expect(JSON.stringify(sent)).not.toMatch(/anyOf|"\$defs"/);
   });
 });
 

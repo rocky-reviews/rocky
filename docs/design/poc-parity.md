@@ -23,18 +23,19 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 
 ## Sidebar (triage)
 
-- [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, minutes of high-risk code left, "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); minutes from `triage.files[].reviewMinutes` (defect 6)
+- [x] P6-1 · Coverage card: "Critical + Important reviewed n/m", progress bar, high-risk files left (H4-9: "N high-risk files left", a count; the minutes are hidden), "all reviewed ✓" state — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-2 · "Briefing & change map" entry — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); built with the P6-1 sidebar, returns to the briefing (`briefing.e2e.spec.ts` "the Briefing & change map entry returns to the briefing")
 - [x] P6-1 · Files grouped by risk level (Critical, Important, Normal, Low) with counts — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Per file: viewed checkbox, path (truncated from the left), severity dots per finding (faded when decided), risk score badge — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); faded dots once decided (P6-4): [drafts-dismissed-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismissed-1024-dark.png)
 - [x] P6-1 · Viewed files struck through — `shell.e2e.spec.ts` "viewed checkboxes update coverage and strike the file through"
 - [x] P6-1 · Noise group: collapsed summary box with "Trust & mark viewed" and "Show" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Noise files listed once shown or trusted — `shell.e2e.spec.ts` "noise: Show lists the files, Trust marks them viewed"
+- [x] H4-9 · Normal, Low and noise collapsed by default (headers and counts only) behind one "Show N lower-risk files" / "Hide lower-risk files" toggle, remembered per browser (`rocky-sidebar-lower-risk`); a selected file's group always shows its rows — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-lower-risk-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-light.png), [pr-shell-lower-risk-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-lower-risk-1440-dark.png); `Sidebar.test.tsx`, `shell.e2e.spec.ts` "lower-risk files: …"
 
 ## Briefing (P6-2)
 
-- [x] "✦ AI briefing · est. ~N min review" header — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-1440-dark](../../apps/web/e2e/__screenshots__/brief-1440-dark.png); "Briefing by Rocky" when the pipeline wrote it ([brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png))
-- [x] Summary paragraph (intent of the PR) — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png); `**bold**` and `` `code` `` render as elements, the rest as text (`inline-text.test.tsx`)
+- [x] "✦ AI briefing" header (H4-9: the POC's "· est. ~N min review" is hidden until the estimate is deterministic) — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-1440-dark](../../apps/web/e2e/__screenshots__/brief-1440-dark.png); "Briefing by Rocky" when the pipeline wrote it ([brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png))
+- [x] Summary paragraph (intent of the PR) — H4-8: a schema 1.4 document opens with the verdict and a "TL;DR" list of 2–4 one-line bullets ([brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-375-dark](../../apps/web/e2e/__screenshots__/brief-375-dark.png)); an older document keeps the paragraph above the verdict ([brief-summary-only-1440-light](../../apps/web/e2e/__screenshots__/brief-summary-only-1440-light.png), [brief-by-rocky-1440-light](../../apps/web/e2e/__screenshots__/brief-by-rocky-1440-light.png)); `**bold**` and `` `code` `` render as elements, the rest as text (`inline-text.test.tsx`)
 - [x] Risk verdict box (level + why) — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-375-dark](../../apps/web/e2e/__screenshots__/brief-375-dark.png)
 - [x] Risk table: Critical "need your attention", Important "worth a careful look", Normal "to skim", Ignore "don't matter" (low + noise), with clickable file names — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), stacked at phone width [brief-375-light](../../apps/web/e2e/__screenshots__/brief-375-light.png); a click selects the file in the sidebar and main column (`briefing.e2e.spec.ts` "clickable files"); a "Not analysed" row when `provenance.unanalysed` is not empty ([brief-map-unavailable-1024-light](../../apps/web/e2e/__screenshots__/brief-map-unavailable-1024-light.png))
 - [x] Change map (P5-1/P5-3): lanes, cards coloured by delta, hero edges animated, edge labels, finding-count badges by worst severity, click card → file, legend. The renderer's map in the briefing ([brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png), [brief-1024-dark](../../apps/web/e2e/__screenshots__/brief-1024-dark.png), scrolling in its box at [brief-375-light](../../apps/web/e2e/__screenshots__/brief-375-light.png)); P5-3: a card opens its file and, beyond the POC, a finding badge opens its worst finding at its line ([file-at-finding-1440-light](../../apps/web/e2e/__screenshots__/file-at-finding-1440-light.png), [file-at-finding-375-dark](../../apps/web/e2e/__screenshots__/file-at-finding-375-dark.png)); cards and badges are keyboard buttons with a visible focus ring, which the POC lacked ([map-focus-card-1024-light](../../apps/web/e2e/__screenshots__/map-focus-card-1024-light.png), [map-focus-badge-1440-dark](../../apps/web/e2e/__screenshots__/map-focus-badge-1440-dark.png)); `e2e/change-map.e2e.spec.ts`. The hero animation is paused in screenshots (`animations: "disabled"`)
@@ -145,7 +146,7 @@ Found while capturing the P0-8 screenshots.
 3. **Change-map edge labels overlap cards** ("POST /accept", "read token", "grant role"). P5-1 must place labels in free space. Done in the renderer (P5-1): labels are pills placed clear of cards, badges and lane headers, tested in `packages/renderer/src/render.test.ts`; see [`change-map/compare-light.png`](change-map/compare-light.png).
 4. **Ambiguous file names** in the risk table: two files show as `invitations.ts`. Show the parent folder when names collide.
 5. **No way to reach Ask or the drafts list below 1180 px**. Add a drawer or tab.
-6. **Coverage minutes** are computed from additions only; the real estimate comes from the analysis (`triage.files[].reviewMinutes`, H2 #9).
+6. **Coverage minutes** are computed from additions only; the real estimate comes from the analysis (`triage.files[].reviewMinutes`, H2 #9). H4-9 hides every review-time estimate; the card counts high-risk files left.
 
 Status (P6-1): defect 5 is fixed for the shell, the right panel and the sidebar open as drawers
 below their breakpoints ([pr-panel-drawer-375-light](../../apps/web/e2e/__screenshots__/pr-panel-drawer-375-light.png)). Defect 1 is fixed for the shell (no
@@ -165,6 +166,10 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   (POC level colour on tint, 3.2–4.1:1 in light mode); the "Commented"/"Closed" status pill
   uses `--text` on `--low-bg`; "✦ AI briefing" keeps the cyan mark and sets the label in
   `--text` (POC `--ai` at 3.7:1). axe reports 0 serious issues at all widths and modes.
+- **Lower-risk files collapsed (H4-9).** The POC lists every group open. The app opens only
+  Critical and Important; Normal, Low and noise show their headers and counts behind one toggle
+  (always shown, with no toggle, when nothing is Critical or Important). The choice is kept
+  per browser.
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".

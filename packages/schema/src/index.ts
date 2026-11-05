@@ -78,7 +78,16 @@ export {
   type FindingInput,
 } from "./findings.js";
 
-export { Briefing, ReviewPathStep, RiskLevel, Verdict, type BriefingInput } from "./briefing.js";
+export {
+  Briefing,
+  BriefingFields,
+  ReviewPathStep,
+  RiskLevel,
+  Tldr,
+  TldrItem,
+  Verdict,
+  type BriefingInput,
+} from "./briefing.js";
 
 export {
   ChangedFile,
@@ -112,6 +121,7 @@ export {
   SCHEMA_VERSION,
   BASE_SCHEMA_VERSION,
   NO_LOGIC_SCHEMA_VERSION,
+  MAP_SECTIONS_SCHEMA_VERSION,
   requiredSchemaVersion,
   type StampedSchemaVersion,
   SchemaVersionField,

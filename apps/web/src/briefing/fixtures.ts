@@ -18,6 +18,7 @@ export const BRIEFING_FIXTURE_PULLS = {
   reanalysing: 855,
   outOfDate: 856,
   noTour: 857,
+  summaryOnly: 858,
 } as const;
 
 /** A push after the analysed commit: the PR's head in the re-analysing and out-of-date states. */
@@ -34,10 +35,21 @@ const variant = (number: number, change: (doc: Doc) => void): Doc => {
   return doc;
 };
 
+/** A briefing with the summary paragraph instead of the TL;DR, as before schema 1.4 (H4-8). */
+const withSummary = (doc: Doc, summary: string) => {
+  const briefing = doc.briefing as Partial<Doc["briefing"]> & { summary?: string };
+  delete briefing.tldr;
+  briefing.summary = summary;
+};
+
 /** The briefing as `analyzePullRequest` writes it when the AI briefing fails (P4-4). */
 const briefingUnavailable = variant(BRIEFING_FIXTURE_PULLS.briefingUnavailable, (doc) => {
-  doc.briefing.summary =
-    "Rocky could not produce an AI briefing for this pull request. The level below comes from Rocky's rules, the triage and the draft findings. Read the files in the order shown.";
+  // Rocky's own briefing has the summary paragraph; its document is stamped 1.1.
+  doc.schemaVersion = "1.1.0";
+  withSummary(
+    doc,
+    "Rocky could not produce an AI briefing for this pull request. The level below comes from Rocky's rules, the triage and the draft findings. Read the files in the order shown.",
+  );
   doc.briefing.verdict.reason =
     "Set by Rocky from its rules, the triage and the draft findings, because the AI briefing was unavailable.";
   doc.briefing.reviewPath = doc.briefing.reviewPath.map((step) => {
@@ -72,6 +84,20 @@ const noTour = variant(BRIEFING_FIXTURE_PULLS.noTour, (doc) => {
   graph.flows = [];
   // The view that named the flow keeps its nodes and edges.
   graph.views = [];
+});
+
+/**
+ * H4-8: a document written before schema 1.4, with the summary paragraph and a two-sentence
+ * reason instead of the TL;DR. The briefing shows it as it always did.
+ */
+const summaryOnly = variant(BRIEFING_FIXTURE_PULLS.summaryOnly, (doc) => {
+  doc.schemaVersion = "1.3.0";
+  withSummary(
+    doc,
+    "Adds **email invitations to orgs**. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.",
+  );
+  doc.briefing.verdict.reason =
+    "This PR adds a **new way to gain membership in an org**. Rocky drafted 1 critical and 3 high findings, all on the auth path. The UI and wiring look routine.";
 });
 
 const n = BRIEFING_FIXTURE_PULLS;
@@ -112,6 +138,7 @@ export const briefingFixtures = (base: object): RawShellData[] => {
       analysisRun: { status: "done" },
     },
     { pull: pull(n.noTour), myReview: null, analysis: noTour },
+    { pull: pull(n.summaryOnly), myReview: null, analysis: summaryOnly },
     {
       pull: pull(n.superseded),
       myReview: null,

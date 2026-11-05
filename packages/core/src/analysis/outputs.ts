@@ -7,11 +7,12 @@
  *   the rules make a file noise);
  * - review: no `id`, `path` or `memory` (the pipeline assigns ids and the file; project memory is
  *   P8), so a finding can never land on a file other than the one reviewed;
- * - briefing: no `estimatedReviewMinutes` or `memoryApplied` (computed by the pipeline).
+ * - briefing: no `estimatedReviewMinutes` or `memoryApplied` (computed by the pipeline), and the
+ *   TL;DR instead of the summary paragraph (H4-8).
  */
 import { z } from "zod";
 import {
-  Briefing,
+  BriefingFields,
   Finding,
   FLOW_MESSAGE_RULE,
   Flow,
@@ -21,7 +22,9 @@ import {
   Graph,
   Id,
   limits,
+  Tldr,
   TriagedFile,
+  Verdict,
   WalkthroughStep,
 } from "@rocky-reviews/schema";
 import type { LlmOutputSchema, LlmParseResult } from "../llm.js";
@@ -132,12 +135,25 @@ export const WalkthroughAnswer = z
   .describe("An ordered tour of the change map in the pr_content blocks, for a reviewer.");
 export type WalkthroughAnswer = z.output<typeof WalkthroughAnswer>;
 
-export const BriefingAnswer = Briefing.pick({
-  summary: true,
-  verdict: true,
+/**
+ * The briefing call (H4-8) answers with the TL;DR, required here though optional in the
+ * document (documents before 1.4 carry the summary paragraph instead), and a verdict whose
+ * reason is one short sentence: `MAX_VERDICT_REASON_ANSWER_LENGTH`, tighter than the document's
+ * `MAX_REASON_LENGTH`, which stays so older documents still read.
+ */
+export const BriefingAnswer = BriefingFields.pick({
   reviewPath: true,
   checkedOk: true,
-}).describe("What a reviewer reads before the diff.");
+})
+  .extend({
+    tldr: Tldr,
+    verdict: Verdict.extend({
+      reason: Verdict.shape.reason
+        .max(limits.MAX_VERDICT_REASON_ANSWER_LENGTH)
+        .describe("One short sentence: what makes this PR this risky."),
+    }).describe("The one-line risk call for the whole PR."),
+  })
+  .describe("What a reviewer reads before the diff.");
 export type BriefingAnswer = z.output<typeof BriefingAnswer>;
 
 /** `findings[0].range: too_small` from a Zod issue: a schema path and a code, never a value. */

@@ -3,9 +3,9 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-01T23:12:48.573Z",
+  "createdAt": "2026-11-02T00:13:06.587Z",
   "pipelineVersion": "p4-4.2",
-  "promptHash": "c3ef20852e74441d33c2a0833732192b923544c9ffb026bfa4581de933bb09ee",
+  "promptHash": "4002f160fb7d24174aad538ba6c61046ad5ddeae73b5b9cd2a6526e4ea7e8e65",
   "models": {
     "triage": {
       "provider": "scripted",
@@ -40,8 +40,8 @@
       },
       "review": {
         "calls": 390,
-        "inputTokens": 202274,
-        "outputTokens": 59376,
+        "inputTokens": 211289,
+        "outputTokens": 58702,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-review"]
@@ -55,7 +55,7 @@
         "models": ["scripted-graph"]
       }
     },
-    "totalTokens": 980611,
+    "totalTokens": 988952,
     "capped": false
   },
   "prs": [

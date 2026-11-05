@@ -157,7 +157,10 @@ export const PR1205: SeededPr = {
         { severity: "high", lines: 7, title: "deliver() is not awaited; all marked delivered" },
       ],
     },
-    summary: "Adds retries for failed webhook deliveries.",
+    tldr: [
+      "Adds retries for failed webhook deliveries.",
+      "Riskiest: requests can reach arbitrary URLs.",
+    ],
     verdict: { level: "high", reason: "Requests reach arbitrary URLs and failures are hidden." },
   }),
 };
