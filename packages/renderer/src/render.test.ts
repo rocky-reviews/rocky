@@ -441,10 +441,12 @@ describe("purity", () => {
     };
     const started = Date.now();
     const first = renderChangeMap(source).svg;
-    expect(Date.now() - started).toBeLessThan(5000);
+    // A blow-up (quadratic layout, runaway routing) takes far longer; one render under coverage
+    // on a CI runner already takes ~5 s, so a 5 s budget failed by milliseconds.
+    expect(Date.now() - started).toBeLessThan(12_000);
     expect(renderChangeMap(source).svg).toBe(first);
     expect(first.match(/class="cm-card"/g)).toHaveLength(256);
     expect(first.match(/data-edge="e\d+" d=/g)).toHaveLength(512);
-    // Two renders under coverage on a CI runner take ~7 s; the budget above is per render.
+    // Two renders under coverage on a CI runner take ~10 s; the budget above is per render.
   }, 30_000);
 });

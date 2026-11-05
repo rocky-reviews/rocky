@@ -308,7 +308,13 @@ code,
   grid-template-columns: 290px minmax(0, 1fr) 370px;
   min-height: 0;
 }
+/*
+ * H4-15: each scrolling column is the containing block of what it holds, so absolutely
+ * positioned text (.sr-only) scrolls and clips with it instead of stretching the page. The
+ * drawers' position: fixed below (more specific, later) still wins.
+ */
 .col {
+  position: relative;
   min-height: 0;
   overflow: auto;
 }
@@ -609,6 +615,7 @@ code,
   margin-bottom: -1px;
 }
 .panel-body {
+  position: relative;
   overflow: auto;
   padding: var(--space-3);
   flex: 1;

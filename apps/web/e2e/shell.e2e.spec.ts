@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "./test.js";
+import { openFile } from "./diff-support.js";
 import { MODES, openShell, showLowerRisk, WIDTHS } from "./support.js";
 
 /** P6-1: accessibility, keyboard paths, layout limits and the theme rules. */
@@ -91,6 +92,77 @@ test.describe("layout", () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await expect(sidebar).toBeHidden();
     await expect(filesToggle).toBeVisible();
+  });
+});
+
+/**
+ * H4-15: scrolling a column to its end never makes the window itself scroll. Visually hidden
+ * text (.sr-only, position: absolute) deep in a column used to take the initial containing
+ * block, escape the column's overflow and stretch the document below the viewport.
+ */
+test.describe("page overflow", () => {
+  const scrollToEnd = (page: Page, selector: string) =>
+    page.locator(selector).evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+
+  /** The document is no taller than the viewport and the window cannot be scrolled. */
+  const expectNoPageScroll = async (page: Page) => {
+    const doc = await page.evaluate(() => {
+      window.scrollTo(0, 100_000);
+      return {
+        scrollHeight: document.documentElement.scrollHeight,
+        innerHeight: window.innerHeight,
+        scrollY: window.scrollY,
+      };
+    });
+    expect(doc.scrollHeight).toBeLessThanOrEqual(doc.innerHeight);
+    expect(doc.scrollY).toBe(0);
+  };
+
+  for (const size of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 900 },
+  ]) {
+    test(`a long file scrolled to the end at ${size.width} px`, async ({ page }) => {
+      await page.setViewportSize(size);
+      await openShell(page);
+      await openFile(page, "src/auth/invitations.ts");
+      await scrollToEnd(page, "#main");
+      await scrollToEnd(page, "#sidebar");
+      if (size.width > 1180) await scrollToEnd(page, "#review-panel .panel-body");
+      await expectNoPageScroll(page);
+    });
+  }
+
+  test("a long file scrolled to the end at 1024 px with the panel drawer open", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await openShell(page);
+    await openFile(page, "src/auth/invitations.ts");
+    await scrollToEnd(page, "#main");
+    await page.getByRole("button", { name: "Review panel", exact: true }).click();
+    await scrollToEnd(page, "#review-panel .panel-body");
+    await expectNoPageScroll(page);
+  });
+
+  test("a long file scrolled to the end at 375 px, drawers closed and open", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await openShell(page);
+    await openFile(page, "src/auth/invitations.ts");
+    await expect(page.locator("#sidebar")).toBeHidden();
+    await scrollToEnd(page, "#main");
+    await expectNoPageScroll(page);
+
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await scrollToEnd(page, "#sidebar");
+    await expectNoPageScroll(page);
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Review panel", exact: true }).click();
+    await scrollToEnd(page, "#review-panel .panel-body");
+    await expectNoPageScroll(page);
   });
 });
 
