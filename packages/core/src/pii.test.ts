@@ -35,6 +35,8 @@ const counts = (text: string, people: readonly string[] = PEOPLE): ScrubReport =
  * machine. The fastest run is used so GC pauses and a busy runner do not count.
  */
 const TIMING_CEILING_MS = 5000;
+/** Each timing test scrubs several times (fastest of three); give it far more than the 5 s default. */
+const TIMING_TEST_TIMEOUT_MS = 120_000;
 const fastest = (fn: () => void, runs = 3): number => {
   let best = Number.POSITIVE_INFINITY;
   for (let run = 0; run < runs; run++) {
@@ -337,80 +339,95 @@ describe("known people", () => {
     );
   });
 
-  it("stays fast at the cap with realistic multi-word display names (fix rounds 3 and 5)", () => {
-    // 50 000 three-word names: 50 000 whole names plus their parts examined (200 000, the
-    // entries cap fits them). Bound per call (index + scrub of a 300-character text).
-    const names = Array.from(
-      { length: MAX_KNOWN_PEOPLE },
-      (_, i) => `First${i} Middle${i % 977} Last${i}`,
-    );
-    const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 Last7 agreed`;
-    expect(scrub(text, names).endsWith("[person] agreed")).toBe(true);
-    // Linear in the list: ten times the names costs about ten times the time plus the fixed
-    // work (the regex alternation scaled ~500×: ~2 ms at 5 000, ~1.1 s at 50 000). Measured
-    // ~16 ms vs ~230 ms on a laptop, a ratio of ~15; the bound leaves 2× headroom.
-    const small = fastest(() => scrub(text, names.slice(0, MAX_KNOWN_PEOPLE / 10)));
-    const large = fastest(() => scrub(text, names));
-    expect(large).toBeLessThan(TIMING_CEILING_MS);
-    expect(large / Math.max(small, 1)).toBeLessThan(30);
-  });
+  it(
+    "stays fast at the cap with realistic multi-word display names (fix rounds 3 and 5)",
+    { timeout: TIMING_TEST_TIMEOUT_MS },
+    () => {
+      // 50 000 three-word names: 50 000 whole names plus their parts examined (200 000, the
+      // entries cap fits them). Bound per call (index + scrub of a 300-character text).
+      const names = Array.from(
+        { length: MAX_KNOWN_PEOPLE },
+        (_, i) => `First${i} Middle${i % 977} Last${i}`,
+      );
+      const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 Last7 agreed`;
+      expect(scrub(text, names).endsWith("[person] agreed")).toBe(true);
+      // Linear in the list: ten times the names costs about ten times the time plus the fixed
+      // work (the regex alternation scaled ~500×: ~2 ms at 5 000, ~1.1 s at 50 000). Measured
+      // ~16 ms vs ~230 ms on a laptop, a ratio of ~15; the bound leaves 2× headroom.
+      const small = fastest(() => scrub(text, names.slice(0, MAX_KNOWN_PEOPLE / 10)));
+      const large = fastest(() => scrub(text, names));
+      expect(large).toBeLessThan(TIMING_CEILING_MS);
+      expect(large / Math.max(small, 1)).toBeLessThan(30);
+    },
+  );
 
-  it("refuses, quickly, lists whose names and parts exceed the entries cap (fix round 5)", () => {
-    // The refusal is the guarantee (it fails if the cap goes); the ceiling only rules out a
-    // refusal that first does the whole work (measured 100–350 ms on a laptop).
-    const bound = (people: string[]) => {
-      const time = fastest(() => expect(() => scrub("plain text", people)).toThrow(RangeError), 1);
-      expect(time).toBeLessThan(TIMING_CEILING_MS);
-    };
-    // Twelve hyphenated parts: 1 + 12 + 24 entries per name.
-    bound(
-      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
-        Array.from({ length: 12 }, (_, w) => `A${w}-b${i % 7}`).join(" "),
-      ),
-    );
-    // Twelve plain words (short enough to stay under the 100-character name cap).
-    bound(
-      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
-        Array.from({ length: 12 }, (_, w) => `W${w}n${i % 997}`).join(" "),
-      ),
-    );
-    // Fifty one-letter words, mostly duplicates: examined parts count, not only indexed ones.
-    bound(
-      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
-        Array.from({ length: 50 }, (_, w) => String.fromCharCode(97 + ((i + w) % 26))).join(" "),
-      ),
-    );
-    expect(MAX_KNOWN_PEOPLE_ENTRIES).toBeGreaterThanOrEqual(4 * MAX_KNOWN_PEOPLE);
-  });
+  it(
+    "refuses, quickly, lists whose names and parts exceed the entries cap (fix round 5)",
+    { timeout: TIMING_TEST_TIMEOUT_MS },
+    () => {
+      // The refusal is the guarantee (it fails if the cap goes); the ceiling only rules out a
+      // refusal that first does the whole work (measured 100–350 ms on a laptop).
+      const bound = (people: string[]) => {
+        const time = fastest(
+          () => expect(() => scrub("plain text", people)).toThrow(RangeError),
+          1,
+        );
+        expect(time).toBeLessThan(TIMING_CEILING_MS);
+      };
+      // Twelve hyphenated parts: 1 + 12 + 24 entries per name.
+      bound(
+        Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+          Array.from({ length: 12 }, (_, w) => `A${w}-b${i % 7}`).join(" "),
+        ),
+      );
+      // Twelve plain words (short enough to stay under the 100-character name cap).
+      bound(
+        Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+          Array.from({ length: 12 }, (_, w) => `W${w}n${i % 997}`).join(" "),
+        ),
+      );
+      // Fifty one-letter words, mostly duplicates: examined parts count, not only indexed ones.
+      bound(
+        Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+          Array.from({ length: 50 }, (_, w) => String.fromCharCode(97 + ((i + w) % 26))).join(" "),
+        ),
+      );
+      expect(MAX_KNOWN_PEOPLE_ENTRIES).toBeGreaterThanOrEqual(4 * MAX_KNOWN_PEOPLE);
+    },
+  );
 
-  it("stays fast when 50 000 names share their first two words over 2 000 characters (fix round 5)", () => {
-    const shared = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `John Smith Last${i}`);
-    const weak = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Go Go Last${i}`);
-    for (const [people, unit, expected] of [
-      [shared, "john smith ", "[person] [person] "],
-      // `Go` is weak (dictionary, two letters): bare occurrences stay.
-      [weak, "go go ", "go go "],
-    ] as const) {
-      const long = unit.repeat(180);
-      expect(scrub(long, people)).toBe(expected.repeat(180));
-      // The index build dominates, so ten times the occurrences of the shared prefix cost
-      // about the same (a scan of the shared candidates per occurrence, the two-word-key
-      // version, made the long text ~5× slower than the short one). 3× headroom.
-      const short = fastest(() => scrub(unit.repeat(18), people));
-      const longer = fastest(() => scrub(long, people));
-      expect(longer).toBeLessThan(TIMING_CEILING_MS);
-      expect(longer / Math.max(short, 1)).toBeLessThan(3);
-    }
-    // More than MAX_KNOWN_PEOPLE_PER_KEY names sharing three words is refused, not scanned.
-    const prefix = Array.from(
-      { length: MAX_KNOWN_PEOPLE_PER_KEY + 1 },
-      (_, i) => `John Smith Jr ${i}`,
-    );
-    expect(() => scrub("x", prefix)).toThrow(RangeError);
-    expect(scrub("john smith jr 3 said", prefix.slice(0, MAX_KNOWN_PEOPLE_PER_KEY))).toBe(
-      "[person] said",
-    );
-  });
+  it(
+    "stays fast when 50 000 names share their first two words over 2 000 characters (fix round 5)",
+    { timeout: TIMING_TEST_TIMEOUT_MS },
+    () => {
+      const shared = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `John Smith Last${i}`);
+      const weak = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Go Go Last${i}`);
+      for (const [people, unit, expected] of [
+        [shared, "john smith ", "[person] [person] "],
+        // `Go` is weak (dictionary, two letters): bare occurrences stay.
+        [weak, "go go ", "go go "],
+      ] as const) {
+        const long = unit.repeat(180);
+        expect(scrub(long, people)).toBe(expected.repeat(180));
+        // The index build dominates, so ten times the occurrences of the shared prefix cost
+        // about the same (a scan of the shared candidates per occurrence, the two-word-key
+        // version, made the long text ~5× slower than the short one). 3× headroom.
+        const short = fastest(() => scrub(unit.repeat(18), people));
+        const longer = fastest(() => scrub(long, people));
+        expect(longer).toBeLessThan(TIMING_CEILING_MS);
+        expect(longer / Math.max(short, 1)).toBeLessThan(3);
+      }
+      // More than MAX_KNOWN_PEOPLE_PER_KEY names sharing three words is refused, not scanned.
+      const prefix = Array.from(
+        { length: MAX_KNOWN_PEOPLE_PER_KEY + 1 },
+        (_, i) => `John Smith Jr ${i}`,
+      );
+      expect(() => scrub("x", prefix)).toThrow(RangeError);
+      expect(scrub("john smith jr 3 said", prefix.slice(0, MAX_KNOWN_PEOPLE_PER_KEY))).toBe(
+        "[person] said",
+      );
+    },
+  );
 
   describe("short or common-word logins match only in person positions (S2)", () => {
     const logins = ["go", "api", "dev", "test", "main", "pat", "Mark Brown"];
@@ -526,18 +543,24 @@ describe("known people", () => {
     }
   });
 
-  it("stays fast when 50 000 names share a first word and the text repeats it (fix round 4)", () => {
-    const names = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Shared Last${i}`);
-    const text = "Shared ".repeat(280);
-    // `Shared` alone is a part of every name, so every occurrence is a person.
-    expect(scrub(text, names).trim()).toBe(Array.from({ length: 280 }, () => "[person]").join(" "));
-    // As above: more occurrences of the shared word must not multiply the time (the
-    // one-word-key version scanned 50 000 candidates per occurrence).
-    const short = fastest(() => scrub("Shared ".repeat(28), names));
-    const long = fastest(() => scrub(text, names));
-    expect(long).toBeLessThan(TIMING_CEILING_MS);
-    expect(long / Math.max(short, 1)).toBeLessThan(3);
-  });
+  it(
+    "stays fast when 50 000 names share a first word and the text repeats it (fix round 4)",
+    { timeout: TIMING_TEST_TIMEOUT_MS },
+    () => {
+      const names = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Shared Last${i}`);
+      const text = "Shared ".repeat(280);
+      // `Shared` alone is a part of every name, so every occurrence is a person.
+      expect(scrub(text, names).trim()).toBe(
+        Array.from({ length: 280 }, () => "[person]").join(" "),
+      );
+      // As above: more occurrences of the shared word must not multiply the time (the
+      // one-word-key version scanned 50 000 candidates per occurrence).
+      const short = fastest(() => scrub("Shared ".repeat(28), names));
+      const long = fastest(() => scrub(text, names));
+      expect(long).toBeLessThan(TIMING_CEILING_MS);
+      expect(long / Math.max(short, 1)).toBeLessThan(3);
+    },
+  );
 
   it("matches names with punctuation literally", () => {
     expect(scrub("a.b+c (d) said hi", ["a.b+c (d)"])).toBe("[person] said hi");
