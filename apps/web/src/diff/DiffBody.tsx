@@ -16,6 +16,7 @@ import {
   type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
+  type MouseEvent,
   memo,
   useCallback,
   useEffect,
@@ -154,7 +155,11 @@ export const DiffBody = ({
     () => [activeItem, composerItem, editingItem],
     [activeItem, composerItem, editingItem],
   );
-  const { listRef, measureRef, range, parts, reveal } = useVirtualList(keys, estimate, pinned);
+  const { listRef, measureRef, range, parts, reveal, firstOnScreen } = useVirtualList(
+    keys,
+    estimate,
+    pinned,
+  );
   // Drafts by line, kept here so they outlive the composer element.
   const [drafts, setDrafts] = useState<ReadonlyMap<number, string>>(() => new Map());
   const setDraft = useCallback(
@@ -268,9 +273,11 @@ export const DiffBody = ({
     }
   }, [jump, doneJump, findings, keys, reveal, path, focusLine]);
 
+  // From a focused line, or from the list itself after a click on code (H4-13).
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    if (!target.matches("button[data-line]") || activeIndex === -1) return;
+    const onList = target === event.currentTarget;
+    if ((!onList && !target.matches("button[data-line]")) || activeIndex === -1) return;
     const to: Record<string, number> = {
       ArrowDown: activeIndex + 1,
       ArrowUp: activeIndex - 1,
@@ -287,10 +294,36 @@ export const DiffBody = ({
   };
 
   // Tabbing in while the active line is scrolled away: start from the first line on screen.
+  // H4-13: only for keyboard focus. A click or tap on code also focuses the list (it is
+  // focusable), and moving focus to a line from there would scroll and drop a text selection;
+  // the browser's :focus-visible heuristic tells the two apart.
   const onFocusList = (event: FocusEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
-    const first = lines.find((l) => l.i >= range.start && l.i < range.end);
+    if (!event.currentTarget.matches(":focus-visible")) return;
+    const from = firstOnScreen();
+    // Nothing on screen: the last rendered line before the window's end, never the overscan
+    // above (that would scroll up).
+    const first =
+      lines.find((l) => l.i >= from && l.i < range.end) ??
+      lines.findLast((l) => l.i >= range.start && l.i < range.end);
     if (first) focusLine(first.n);
+  };
+
+  // H4-13: a click on code (or a row's blank space, a hunk header, a flag) makes the nearest
+  // line active, so Tab and the arrows start there. Only the roving tab stop moves: no focus,
+  // no scroll, and a drag's text selection is left alone. Buttons, links, text boxes and cards
+  // keep their own behaviour.
+  const onClickList = (event: MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, a, textarea, input, .draft, .mine, .compose") !== null) return;
+    const key = target.closest<HTMLElement>("[data-vkey]")?.dataset.vkey;
+    const at = key === undefined ? -1 : keys.indexOf(key);
+    if (at === -1) return;
+    const nearest = lines.reduce<{ n: number; i: number } | undefined>(
+      (best, l) => (best === undefined || Math.abs(l.i - at) < Math.abs(best.i - at) ? l : best),
+      undefined,
+    );
+    if (nearest) setActive(nearest.n);
   };
 
   const compose = useCallback(
@@ -353,6 +386,7 @@ export const DiffBody = ({
       tabIndex={activeRendered ? -1 : 0}
       onKeyDown={onKeyDown}
       onFocus={onFocusList}
+      onClick={onClickList}
     >
       {/* One flat keyed list: a row keeps its element (and focus) when runs merge or split. */}
       {parts.flatMap((part) =>

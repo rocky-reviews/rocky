@@ -158,7 +158,9 @@ test.describe("files by risk (H4-10)", () => {
     await page.keyboard.press("Home");
     await expect(tab("Critical 3 files")).toBeFocused();
     await expect(tab("Critical 3 files")).toHaveAttribute("aria-selected", "true");
-    // Tab leaves the tab list for the panel's first file.
+    // Tab leaves the tab list for "View as tree" (H4-12), then the panel's first file.
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "View as tree" })).toBeFocused();
     await page.keyboard.press("Tab");
     expect(await focusedName(page)).toBe("Open src/auth/invitations.ts");
   });
@@ -262,6 +264,9 @@ test.describe("keyboard", () => {
 
     await page.keyboard.press("Tab");
     expect(await focusedName(page)).toBe("risk-tab-critical");
+    // H4-12: "View as tree" ends the chips.
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "View as tree" })).toBeFocused();
     await page.keyboard.press("Tab");
     expect(await focusedName(page)).toBe("Open src/auth/invitations.ts");
     const ring = await page.evaluate(() => {
@@ -298,17 +303,19 @@ test.describe("keyboard", () => {
           if (el.classList.contains("map-btn")) return "map control";
           // H4-10: the risk chips are one tab stop, the selected (Critical) chip.
           if (el.getAttribute("role") === "tab") return "risk chip";
+          // H4-12: "View as tree" after the chips.
+          if (el.classList.contains("tree-link")) return "tree link";
           return dataset.path ?? dataset.node ?? dataset.findings ?? "";
         }),
       );
     }
-    expect(names[0]).toBe("risk chip");
-    expect(names.slice(4, 7)).toEqual(["map control", "map control", "map control"]);
-    names.splice(4, 3);
-    // The selected risk chip and its 3 Critical files, 5 map cards backed by a PR file, each
-    // followed by its finding badge (P5-3), the start button (H4-11: no path steps).
-    expect(names).toHaveLength(15);
-    expect(names.slice(4, 14)).toEqual([
+    expect(names.slice(0, 2)).toEqual(["risk chip", "tree link"]);
+    expect(names.slice(5, 8)).toEqual(["map control", "map control", "map control"]);
+    names.splice(5, 3);
+    // The selected risk chip, View as tree and the 3 Critical files, 5 map cards backed by a PR
+    // file, each followed by its finding badge (P5-3), the start button (H4-11: no path steps).
+    expect(names).toHaveLength(16);
+    expect(names.slice(5, 15)).toEqual([
       "page",
       "F9",
       "route",

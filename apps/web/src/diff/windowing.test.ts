@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HeightIndex, visibleRange } from "./windowing.js";
+import { firstFrom, HeightIndex, visibleRange } from "./windowing.js";
 
 describe("HeightIndex", () => {
   it("sums heights before an item and in total", () => {
@@ -91,5 +91,20 @@ describe("visibleRange (virtualisation windowing)", () => {
     const mixed = new HeightIndex([20, 20, 300, 20, 20, 20]);
     expect(visibleRange(mixed, 50, 100, 0)).toEqual({ start: 2, end: 3 });
     expect(visibleRange(mixed, 330, 50, 0)).toEqual({ start: 2, end: 5 });
+  });
+});
+
+describe("firstFrom (H4-13: where a keyboard Tab-in lands)", () => {
+  const index = new HeightIndex([10, 20, 30, 40]);
+
+  it("is the first item that starts at or below the offset", () => {
+    expect([-5, 0, 1, 10, 11, 30, 59, 60].map((y) => firstFrom(index, y))).toEqual([
+      0, 0, 1, 1, 2, 2, 3, 3,
+    ]);
+  });
+
+  it("is the size when no item starts below the offset, and 0 for an empty list", () => {
+    expect(firstFrom(index, 61)).toBe(4);
+    expect(firstFrom(new HeightIndex([]), 10)).toBe(0);
   });
 });

@@ -91,3 +91,10 @@ export const visibleRange = (
   if (from >= index.total) return { start: index.size, end: index.size };
   return { start: index.indexAt(Math.max(from, 0)), end: index.indexAt(to - 1) + 1 };
 };
+
+/** The first item that starts at or below offset `y` (`index.size` when none does). H4-13. */
+export const firstFrom = (index: HeightIndex, y: number): number => {
+  if (index.size === 0 || y <= 0) return 0;
+  const i = index.indexAt(y);
+  return index.offsetOf(i) < y ? i + 1 : i;
+};

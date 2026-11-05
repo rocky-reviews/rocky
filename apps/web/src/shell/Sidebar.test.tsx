@@ -123,3 +123,41 @@ describe("lower-risk files in the sidebar (H4-9)", () => {
     expect(html).not.toContain("lower-risk-toggle");
   });
 });
+
+describe("the change tree button (H4-12)", () => {
+  const withTree = (): string =>
+    renderToStaticMarkup(
+      <SidebarContent
+        groups={groups}
+        noise={noise}
+        coverage={coverage(groups, new Set())}
+        selection={{ kind: "briefing" }}
+        viewed={new Set()}
+        onSelect={() => undefined}
+        onToggleViewed={() => undefined}
+        onMarkViewed={() => undefined}
+        storage={stored(null)}
+        onOpenTree={() => undefined}
+      />,
+    );
+
+  it("sits under the coverage card, before the briefing entry, with its t hint", () => {
+    const html = withTree();
+    const button = /<button[^>]*class="btn btn-sm btn-ghost tree-btn"[^>]*>.*?<\/button>/s.exec(
+      html,
+    )?.[0];
+    expect(button).toContain('aria-haspopup="dialog"');
+    expect(button).toContain('aria-keyshortcuts="t"');
+    expect(button).toContain('aria-label="Change tree"');
+    expect(button).toMatch(/<\/svg>Tree/);
+    // The hint beside the button, so the name contains all of the button's visible text.
+    expect(button).not.toContain("<kbd");
+    expect(html).toContain('</svg>Tree</button><kbd aria-hidden="true">t</kbd></div>');
+    expect(html.indexOf("tree-btn")).toBeGreaterThan(html.indexOf("coverage-note"));
+    expect(html.indexOf("tree-btn")).toBeLessThan(html.indexOf("nav-brief"));
+  });
+
+  it("is left out when the shell offers no tree", () => {
+    expect(render()).not.toContain("tree-btn");
+  });
+});

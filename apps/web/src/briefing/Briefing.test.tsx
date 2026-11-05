@@ -188,6 +188,30 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(markup).toContain('aria-labelledby="risk-tab-unanalysed"');
   });
 
+  it('H4-12: ends the chips with a "View as tree" link, outside the tab list, when the shell offers it', () => {
+    const doc = main.analysis;
+    if (doc === null) throw new Error("pr-847 has an analysis");
+    const markup = renderToStaticMarkup(
+      <BriefingView
+        analysis={doc}
+        run={{ status: "done" }}
+        headSha={main.pull.headSha}
+        onOpenFile={() => {}}
+        onOpenTree={() => {}}
+      />,
+    );
+    const bar = markup.slice(
+      markup.indexOf('<div class="risk-chips-bar">'),
+      markup.indexOf('role="tabpanel"'),
+    );
+    const tablistEnd = bar.indexOf("</div>");
+    const link = bar.indexOf(
+      '<button type="button" class="tree-link" aria-haspopup="dialog">View as tree</button>',
+    );
+    expect(link).toBeGreaterThan(tablistEnd);
+    expect(html).not.toContain("tree-link");
+  });
+
   it("says so when the document lists no files", () => {
     const doc = main.analysis;
     if (doc === null) throw new Error("pr-847 has an analysis");
