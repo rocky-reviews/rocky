@@ -6,13 +6,21 @@
  * - the patch of every file left after rules pre-triage (noise excluded), except binary and
  *   too-large files (never sent) and files whose unit the previous analysis will be reused for:
  *   ASCII at CHARS_PER_TOKEN, any other text one token per UTF-8 byte (`patchTokens`);
- * - a fixed overhead per file call (instructions, labels, the answer) and per stage.
+ * - the patch of every file the change map's calls read again (H4-7, review round 1): the map
+ *   scope's files (`changeMapScope`, the same deterministic rule the pipeline applies), once per
+ *   call on the graph role (the map, its flows, its walkthrough), reused units included, since
+ *   those calls run on every push; nothing when there is nothing to map or the mapped diff is
+ *   over the map's input budget, because then no call on the graph role is made;
+ * - a fixed overhead per file call (instructions, labels, the answer) and per stage: the unit
+ *   stages (triage, review, briefing) always, the map's stages only when there is a map.
  *
- * It is a size, not a bill: the review and the change map read parts of the diff again, so spend
- * is a small multiple of it. The worker compares it with the per-PR limit; over the limit the
- * analysis waits for a person ("Analyze anyway") and no model is called.
+ * It is a size, not a bill: the review reads a critical or important file's patch again, and a
+ * repair round repeats a call (a PR author can force one per call, so the graph-role re-reads
+ * can double), so spend is a small multiple of it. The worker compares it with the per-PR limit;
+ * over the limit the analysis waits for a person ("Analyze anyway") and no model is called.
  */
 import { parseUnifiedDiff } from "./diff.js";
+import { changeMapScope, GRAPH_MAX_INPUT_CHARS, type ScopedFile } from "./map-scope.js";
 import { preTriage } from "./rules.js";
 import { unitKey, type PreviousAnalysis, type Sha256Hex } from "./units.js";
 
@@ -51,9 +59,15 @@ export const patchTokens = (text: string): number => {
 };
 /** One triage call's instructions, labels and answer, on top of the file's patch. */
 export const FILE_CALL_OVERHEAD_TOKENS = 2_000;
-/** Per stage (triage, review, graph, briefing): instructions, preamble and the stage's answer. */
+/** Per stage: instructions, preamble and the stage's answer. */
 export const STAGE_OVERHEAD_TOKENS = 4_000;
-export const ANALYSIS_STAGES = 4;
+/** The stages every analysed PR runs: triage, review, briefing. */
+export const UNIT_STAGES = 3;
+/** The stages a PR with a map runs on top: the map, its flows, its walkthrough (H4-7). */
+export const MAP_STAGES = 3;
+export const ANALYSIS_STAGES = UNIT_STAGES + MAP_STAGES;
+/** Calls on the graph role, each of which reads the mapped diffs: one per map stage. */
+export const GRAPH_ROLE_CALLS = MAP_STAGES;
 /**
  * The default per-PR limit (`ROCKY_ANALYSIS_TOKEN_LIMIT`): about 450 KB of code sent, far beyond
  * a reviewable pull request, well below a 200k-token one.
@@ -73,6 +87,8 @@ export interface TokenEstimate {
   readonly skipped: number;
   /** Files the previous analysis's units cover (same path and key). */
   readonly reused: number;
+  /** Files the change map's calls read again (the map scope), each `GRAPH_ROLE_CALLS` times. */
+  readonly mapped: number;
 }
 
 export interface EstimateOptions {
@@ -103,12 +119,22 @@ export const estimateAnalysisTokens = (
   let noise = 0;
   let skipped = 0;
   let reused = 0;
+  /** Every file the rules leave to the AI, mappable when a model could be given it (S5). */
+  const candidates: ScopedFile[] = [];
+  const patchOf = new Map<string, string>();
   for (const file of parsed.files) {
     if (preTriage(file.path).kind === "noise") {
       noise++;
-    } else if (file.binary || file.tooLarge) {
+      continue;
+    }
+    const mappable = !file.binary && !file.tooLarge;
+    candidates.push({ path: file.path, mappable });
+    if (!mappable) {
       skipped++;
-    } else if (
+      continue;
+    }
+    patchOf.set(file.path, file.patch);
+    if (
       sha256Hex !== undefined &&
       keys.size > 0 &&
       keys.has(`${file.path}\0${unitKey(sha256Hex, salt, file)}`)
@@ -119,12 +145,21 @@ export const estimateAnalysisTokens = (
       patch += patchTokens(file.patch);
     }
   }
+  // The map's calls read the mapped diffs again, on every push, unless there is no map.
+  const scope = changeMapScope(candidates);
+  const mappedPaths = scope.kind === "logic" || scope.kind === "tests" ? scope.paths : [];
+  const mappedPatches = mappedPaths.map((path) => patchOf.get(path) ?? "");
+  const mappedChars = mappedPatches.reduce((sum, text) => sum + text.length, 0);
+  const mapped = mappedChars > GRAPH_MAX_INPUT_CHARS ? [] : mappedPatches;
+  const reread = mapped.reduce((sum, text) => sum + patchTokens(text), 0) * GRAPH_ROLE_CALLS;
+  const stages = UNIT_STAGES + (mapped.length > 0 ? MAP_STAGES : 0);
   return {
-    tokens: patch + sent * FILE_CALL_OVERHEAD_TOKENS + ANALYSIS_STAGES * STAGE_OVERHEAD_TOKENS,
+    tokens: patch + reread + sent * FILE_CALL_OVERHEAD_TOKENS + stages * STAGE_OVERHEAD_TOKENS,
     files: parsed.files.length,
     sent,
     noise,
     skipped,
     reused,
+    mapped: mapped.length,
   };
 };

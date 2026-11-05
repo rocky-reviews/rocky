@@ -60,7 +60,12 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   structured output and produced data nothing shows. The document schema keeps those fields,
   empty or absent; when their UI is built, each comes back as **its own model call with its own
   output schema** (flows and views compile separately; the walkthrough alone pushed the grammar
-  over its limit, H4-4), validated by the same document schema and integrity pass.
+  over its limit, H4-4), validated by the same document schema and integrity pass. H4-7 built
+  the flows and the walkthrough calls ([ADR 0014](0014-analysis-pipeline.md) amendment H4-7):
+  stored documents may now carry flows (without payloads) and a walkthrough whose steps focus
+  nodes and edges, and `provenance.flowsUnavailable` / `walkthroughUnavailable` (schema 1.3)
+  when a call failed. This renderer still draws the architecture view only; the web's map
+  styles are H4-6.
 - **The map shows code with behaviour** (ADR 0014 amendment H4-5): the pipeline sends the graph
   role only the pull request's logic files (or its tests, for a test-only pull request), and a
   card may be backed only by one of them, with a line range only inside that file's changed
@@ -76,3 +81,11 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   of the code: the rules are heuristics (security review, H4-5). The pipeline's `detail` is
   still never drawn, and the briefing's Retry button does not apply to this reason (a retry
   would classify the same paths the same way).
+
+## Amendment (H4-6): motion and focus
+
+Two options, both off by default so the static map and its goldens are unchanged: `motion`
+(classes the stylesheet animates and a copy of each traffic edge's route for travelling dots)
+and `focus` (a walkthrough step's lanes, cards and edges lit, the rest dimmed, and the area they
+cover returned as `focusBox`). `trafficEdgeIds` is exported. See
+[ADR 0035](0035-change-map-styles-and-motion.md).

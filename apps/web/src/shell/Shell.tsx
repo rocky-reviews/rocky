@@ -40,6 +40,13 @@ import { ShortcutKeys } from "../keyboard/ShortcutKeys.js";
 import { ShortcutsDialog } from "../keyboard/ShortcutsDialog.js";
 import { LoginContext } from "../drafts/Author.js";
 import type { AnalysisRun } from "../briefing/analysis-run.js";
+import {
+  type MapStyle,
+  MapStyleContext,
+  type MapStyleSetting,
+  readMapStyle,
+  saveMapStyle,
+} from "../change-map/map-style.js";
 
 type Props = {
   data: ShellData;
@@ -129,6 +136,22 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
     [singleKeys],
   );
   const closeHelp = useCallback(() => setHelp(false), []);
+  // H4-6: the change map's style, remembered in this browser like the theme (ADR 0035).
+  const [mapStyle, setMapStyleState] = useState<MapStyle>(() =>
+    typeof window === "undefined" ? "live" : readMapStyle(storage),
+  );
+  const [mapStyleRemembered, setMapStyleRemembered] = useState(true);
+  const mapStyleSetting = useMemo<MapStyleSetting>(
+    () => ({
+      style: mapStyle,
+      remembered: mapStyleRemembered,
+      setStyle: (style) => {
+        setMapStyleRemembered(saveMapStyle(storage, style));
+        setMapStyleState(style);
+      },
+    }),
+    [mapStyle, mapStyleRemembered],
+  );
   useEffect(() => {
     if (help || helpReturn.current === null) return;
     const back = helpReturn.current;
@@ -266,130 +289,141 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
 
   return (
     <KeyboardContext value={keyboard}>
-      <LoginContext value={login}>
-        <ReviewProvider
-          source={review}
-          analysisId={data.analysis === null ? null : data.analysisId}
-          analysisHead={data.analysis?.provenance.head.sha ?? null}
-          findings={data.analysis?.findings ?? NO_FINDINGS}
-          onOpenFile={jumpToFile}
-        >
-          <ShortcutKeys
-            active={!modal}
-            singleKeys={singleKeys}
-            current={selection.kind === "file" ? selection.path : null}
-            order={order}
-            onOpen={(path) => {
-              select(path === null ? { kind: "briefing" } : { kind: "file", path });
-              focusMain();
-            }}
-            onToggleViewed={toggleViewed}
-            onToggleMode={toggle}
-            onHelp={keyboard.openHelp}
-            onAsk={() => toast(NOT_YET.ask)}
-            onFinish={openFinish}
-          />
-          <div className="app">
-            <div className="topbar-wrap" inert={modal}>
-              <a className="skip-link" href="#main">
-                Skip to main content
-              </a>
-              <FinishButtonBar
-                data={data}
-                myReview={submitted ?? data.myReview}
-                now={now}
-                mode={mode}
-                onToggleMode={toggle}
-                drawer={drawer}
-                onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
-                onFinish={openFinish}
-              />
-            </div>
-            <div className="body">
-              <nav
-                id="sidebar"
-                className="col sidebar"
-                tabIndex={-1}
-                {...(overlay === "files"
-                  ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-files" }
-                  : { "aria-label": "Files" })}
-                data-open={drawer === "files"}
-                inert={(overlay !== null && overlay !== "files") || help || finish}
-              >
-                {drawer === "files" && (
-                  <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
-                )}
-                {data.analysis === null ? (
-                  <p className="placeholder">{sidebarPlaceholder(data.analysisRun)}</p>
-                ) : (
-                  <SidebarContent
-                    groups={groups}
-                    noise={noise}
-                    unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
-                    coverage={cover}
-                    selection={selection}
-                    viewed={viewed}
-                    onSelect={select}
-                    onToggleViewed={toggleViewed}
-                    onMarkViewed={markViewed}
-                  />
-                )}
-              </nav>
-              <main id="main" className="col main" tabIndex={-1} inert={modal}>
-                <MainContent
-                  selection={selection}
-                  analysis={data.analysis}
-                  run={data.analysisRun}
-                  headSha={data.pull.headSha}
-                  onOpenFile={openFile}
-                  files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+      <MapStyleContext value={mapStyleSetting}>
+        <LoginContext value={login}>
+          <ReviewProvider
+            source={review}
+            analysisId={data.analysis === null ? null : data.analysisId}
+            analysisHead={data.analysis?.provenance.head.sha ?? null}
+            findings={data.analysis?.findings ?? NO_FINDINGS}
+            onOpenFile={jumpToFile}
+          >
+            <ShortcutKeys
+              active={!modal}
+              singleKeys={singleKeys}
+              current={selection.kind === "file" ? selection.path : null}
+              order={order}
+              onOpen={(path) => {
+                select(path === null ? { kind: "briefing" } : { kind: "file", path });
+                focusMain();
+              }}
+              onToggleViewed={toggleViewed}
+              onToggleMode={toggle}
+              onHelp={keyboard.openHelp}
+              onAsk={() => toast(NOT_YET.ask)}
+              onFinish={openFinish}
+            />
+            <div className="app">
+              <div className="topbar-wrap" inert={modal}>
+                <a className="skip-link" href="#main">
+                  Skip to main content
+                </a>
+                <FinishButtonBar
+                  data={data}
+                  myReview={submitted ?? data.myReview}
+                  now={now}
+                  mode={mode}
+                  onToggleMode={toggle}
+                  drawer={drawer}
+                  onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
+                  onFinish={openFinish}
                 />
-              </main>
-              <aside
-                id="review-panel"
-                className="panel"
-                tabIndex={-1}
-                {...(overlay === "panel"
-                  ? { role: "dialog", "aria-modal": true, "aria-labelledby": "drawer-title-panel" }
-                  : { "aria-label": "Review panel" })}
-                data-open={drawer === "panel"}
-                inert={(overlay !== null && overlay !== "panel") || help || finish}
-              >
-                {drawer === "panel" && (
-                  <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
-                )}
-                <RightPanelContent />
-              </aside>
+              </div>
+              <div className="body">
+                <nav
+                  id="sidebar"
+                  className="col sidebar"
+                  tabIndex={-1}
+                  {...(overlay === "files"
+                    ? {
+                        role: "dialog",
+                        "aria-modal": true,
+                        "aria-labelledby": "drawer-title-files",
+                      }
+                    : { "aria-label": "Files" })}
+                  data-open={drawer === "files"}
+                  inert={(overlay !== null && overlay !== "files") || help || finish}
+                >
+                  {drawer === "files" && (
+                    <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
+                  )}
+                  {data.analysis === null ? (
+                    <p className="placeholder">{sidebarPlaceholder(data.analysisRun)}</p>
+                  ) : (
+                    <SidebarContent
+                      groups={groups}
+                      noise={noise}
+                      unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
+                      coverage={cover}
+                      selection={selection}
+                      viewed={viewed}
+                      onSelect={select}
+                      onToggleViewed={toggleViewed}
+                      onMarkViewed={markViewed}
+                    />
+                  )}
+                </nav>
+                <main id="main" className="col main" tabIndex={-1} inert={modal}>
+                  <MainContent
+                    selection={selection}
+                    analysis={data.analysis}
+                    run={data.analysisRun}
+                    headSha={data.pull.headSha}
+                    onOpenFile={openFile}
+                    files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
+                  />
+                </main>
+                <aside
+                  id="review-panel"
+                  className="panel"
+                  tabIndex={-1}
+                  {...(overlay === "panel"
+                    ? {
+                        role: "dialog",
+                        "aria-modal": true,
+                        "aria-labelledby": "drawer-title-panel",
+                      }
+                    : { "aria-label": "Review panel" })}
+                  data-open={drawer === "panel"}
+                  inert={(overlay !== null && overlay !== "panel") || help || finish}
+                >
+                  {drawer === "panel" && (
+                    <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
+                  )}
+                  <RightPanelContent />
+                </aside>
+              </div>
+              {overlay !== null && (
+                <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
+              )}
+              {help && (
+                <ShortcutsDialog
+                  singleKeys={singleKeys}
+                  remembered={remembered}
+                  onSingleKeys={keyboard.setSingleKeys}
+                  mode={mode}
+                  onToggleMode={toggle}
+                  mapStyle={mapStyleSetting}
+                  onClose={closeHelp}
+                />
+              )}
+              {finish && (
+                <FinishReview
+                  pullRequestId={data.pullRequestId}
+                  pull={data.pull}
+                  login={login}
+                  posting={posting}
+                  groups={groups}
+                  viewed={viewed}
+                  now={now}
+                  onClose={closeFinish}
+                  onPosted={onPosted}
+                />
+              )}
             </div>
-            {overlay !== null && (
-              <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
-            )}
-            {help && (
-              <ShortcutsDialog
-                singleKeys={singleKeys}
-                remembered={remembered}
-                onSingleKeys={keyboard.setSingleKeys}
-                mode={mode}
-                onToggleMode={toggle}
-                onClose={closeHelp}
-              />
-            )}
-            {finish && (
-              <FinishReview
-                pullRequestId={data.pullRequestId}
-                pull={data.pull}
-                login={login}
-                posting={posting}
-                groups={groups}
-                viewed={viewed}
-                now={now}
-                onClose={closeFinish}
-                onPosted={onPosted}
-              />
-            )}
-          </div>
-        </ReviewProvider>
-      </LoginContext>
+          </ReviewProvider>
+        </LoginContext>
+      </MapStyleContext>
     </KeyboardContext>
   );
 };

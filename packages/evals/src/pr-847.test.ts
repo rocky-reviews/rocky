@@ -98,9 +98,11 @@ describe("pr-847 through the pipeline (P4-3)", () => {
     expect(document.briefing.verdict.level).toBe("critical");
     expect(document.briefing.estimatedReviewMinutes).toBe(7);
     // H4-5: the model is asked for lanes, nodes and edges only, backed by mapped files only
-    // (the `mem` context node loses its reference to a file outside the PR); flows, views and
-    // the walkthrough come back with their UI.
-    expect(document.graph).toEqual({
+    // (the `mem` context node loses its reference to a file outside the PR). H4-7: the flows
+    // and the walkthrough come from their own calls: the fixture's flow without its payloads,
+    // the fixture's steps as a focus of node and edge ids; views stay empty.
+    const { flows, walkthrough, ...drawn } = document.graph!;
+    expect(drawn).toEqual({
       lanes: PR847.graph!.lanes,
       nodes: PR847.graph!.nodes.map((node) => ({
         ...node,
@@ -109,9 +111,32 @@ describe("pr-847 through the pipeline (P4-3)", () => {
         ),
       })),
       edges: PR847.graph!.edges,
-      flows: [],
       views: [],
     });
+    expect(flows).toEqual(
+      PR847.graph!.flows.map((flow) => ({
+        ...flow,
+        messages: flow.messages.map((message) =>
+          Object.fromEntries(Object.entries(message).filter(([key]) => key !== "payload")),
+        ),
+      })),
+    );
+    expect(walkthrough?.steps.map((step) => [step.id, step.focus])).toEqual([
+      [
+        "s1",
+        {
+          kind: "selection",
+          lanes: [],
+          nodes: ["page", "route"],
+          edges: ["page-route"],
+          messages: [],
+        },
+      ],
+      ["s2", { kind: "selection", lanes: [], nodes: ["auth", "mem"], edges: [], messages: [] }],
+      ["s3", { kind: "all" }],
+    ]);
+    expect(document.provenance.flowsUnavailable).toBeUndefined();
+    expect(document.provenance.walkthroughUnavailable).toBeUndefined();
     expect(document.provenance.unanalysed).toEqual([]);
     expect(document.provenance.generator.roles.map((r) => r.role)).toEqual([
       "triage",

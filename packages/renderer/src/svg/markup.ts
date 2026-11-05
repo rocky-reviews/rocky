@@ -169,6 +169,8 @@ const MARKER_REFERENCE = /^url\(#([a-z][a-z0-9-]*)\)$/;
 const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 const DELTAS = ["added", "modified", "removed", "unchanged"] as const;
 const ARROW_TONES = [...DELTAS, "hero"] as const;
+/** H4-6: the lane-by-lane stagger, capped (index.ts MAX_WAVE). */
+const WAVES = [0, 1, 2, 3, 4, 5] as const;
 
 /**
  * Every class the map writes. A token outside this list (a delta or severity the schema would
@@ -190,6 +192,15 @@ const CLASS_TOKENS = new Set([
   "cm-hero",
   "cm-muted",
   "cm-animated",
+  // H4-6 (ADR 0035): the animated styles and the walkthrough's focus.
+  "cm-motion",
+  "cm-traffic",
+  "cm-traffic-end",
+  "cm-pulses",
+  "cm-pulse",
+  "cm-focus",
+  "cm-dim",
+  ...WAVES.map((wave) => `cm-wave-${wave}`),
   "cm-nodes",
   "cm-node",
   "cm-card",
@@ -255,6 +266,8 @@ const ATTRIBUTES: Readonly<Record<string, (value: string) => boolean>> = {
   "data-node": (value) => ID.test(value),
   "data-edge": (value) => ID.test(value),
   "data-findings": (value) => ID_LIST.test(value),
+  // H4-6: the travelling dots measure their route as 100, whatever its length.
+  pathLength: fixed("100"),
 };
 
 const checkElement = (name: string): ElementName => {

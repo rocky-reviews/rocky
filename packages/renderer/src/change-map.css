@@ -276,3 +276,215 @@
 .cm-badge[role="button"]:focus:not(:focus-visible) {
   outline: none;
 }
+
+/*
+ * H4-6 (ADR 0035): the animated map styles. The renderer writes these classes only with its
+ * `motion` and `focus` options, so the static map above is unchanged. Everything that moves is
+ * inside `prefers-reduced-motion: no-preference`: with reduced motion the arrows, the hero
+ * colour and the focus highlight stay, and nothing travels, rises, pulses or fades.
+ */
+
+/* The travelling dots are decoration: never a target, never in the way of a click. */
+.cm-pulses {
+  pointer-events: none;
+}
+
+.cm-pulse {
+  display: none;
+  fill: none;
+  stroke: var(--ai);
+  stroke-width: 7;
+  stroke-linecap: round;
+  /* Every route measures 100 (pathLength): two dots, half a route apart. */
+  stroke-dasharray: 0 50;
+}
+
+/*
+ * A walkthrough step: what it is about stays lit, the rest steps back. Lines, fills and
+ * outlines fade; text never does (it keeps its 4.5:1): a dimmed card's title turns --muted, and
+ * badges (findings) do not dim at all.
+ */
+.cm-edge.cm-dim {
+  opacity: 0.3;
+}
+
+.cm-label.cm-dim .cm-pill,
+.cm-node.cm-dim .cm-card {
+  opacity: 0.35;
+}
+
+.cm-node.cm-dim .cm-node-title {
+  fill: var(--muted);
+}
+
+.cm-lane.cm-dim .cm-lane-bg {
+  opacity: 0.55;
+}
+
+/* `.cm` lifts it over `.cm-edge.cm-animated`'s dashes. */
+.cm .cm-edge.cm-focus {
+  stroke: var(--ai);
+  stroke-width: 2.4;
+  stroke-dasharray: none;
+}
+
+.cm-node.cm-focus .cm-card {
+  stroke: var(--ai);
+  stroke-width: 2.2;
+}
+
+.cm-lane.cm-focus .cm-lane-bg {
+  stroke: var(--ai);
+  stroke-width: 1.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cm-pulse {
+    display: inline;
+    animation: cm-travel 2.4s linear infinite;
+  }
+
+  /* Ordinary edges: slow dashes, in the direction of travel. */
+  .cm-motion .cm-edge:not(.cm-hero, .cm-removed, .cm-focus) {
+    stroke-dasharray: 4 5;
+    animation: cm-dash 1.8s linear infinite;
+  }
+
+  /* Hero edges: solid, the dots show the direction. */
+  .cm-motion .cm-edge.cm-hero {
+    stroke-dasharray: none;
+    animation: none;
+  }
+
+  /*
+   * Cards rise in lane by lane, then the edges and their labels fade in. `backwards`, not
+   * `both`: once it has played, the animation lets go, so a dimmed card's opacity applies.
+   */
+  .cm-motion .cm-node {
+    animation: cm-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  }
+
+  .cm-motion .cm-wave-1 {
+    animation-delay: 0.15s;
+  }
+
+  .cm-motion .cm-wave-2 {
+    animation-delay: 0.3s;
+  }
+
+  .cm-motion .cm-wave-3 {
+    animation-delay: 0.45s;
+  }
+
+  .cm-motion .cm-wave-4 {
+    animation-delay: 0.6s;
+  }
+
+  .cm-motion .cm-wave-5 {
+    animation-delay: 0.75s;
+  }
+
+  .cm-motion .cm-edges,
+  .cm-motion .cm-labels,
+  .cm-motion .cm-pulses {
+    animation: cm-fade 0.5s ease-out 0.75s backwards;
+  }
+
+  /*
+   * A ring on the card a dot arrives at, in step with the dots (one arrives every 2.4 s). A
+   * focused card keeps its focus ring: the animation would override it.
+   */
+  .cm-motion .cm-traffic-end:not(:focus-visible) .cm-card {
+    animation: cm-ping 2.4s ease-out 1.2s infinite;
+  }
+
+  /* Finding badges pulse, without moving their target. */
+  .cm-motion .cm-badge {
+    animation: cm-fade 0.4s ease-out 0.9s backwards;
+  }
+
+  .cm-motion .cm-badge-bg {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: cm-badge 2.2s ease-in-out 1.2s infinite;
+  }
+
+  /* A walkthrough step lights up and dims smoothly. */
+  .cm-edge {
+    transition:
+      opacity 0.5s ease,
+      stroke 0.5s ease;
+  }
+
+  .cm-pill {
+    transition: opacity 0.5s ease;
+  }
+
+  .cm-card,
+  .cm-lane-bg {
+    transition:
+      opacity 0.5s ease,
+      stroke 0.5s ease,
+      stroke-width 0.5s ease;
+  }
+}
+
+@keyframes cm-travel {
+  to {
+    stroke-dashoffset: -50;
+  }
+}
+
+@keyframes cm-dash {
+  from {
+    stroke-dashoffset: 18;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes cm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes cm-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes cm-ping {
+  0% {
+    stroke: var(--ai);
+    stroke-width: 3.5;
+  }
+
+  45% {
+    stroke-width: 1.5;
+  }
+}
+
+@keyframes cm-badge {
+  0%,
+  100% {
+    transform: none;
+  }
+
+  50% {
+    transform: scale(1.15);
+  }
+}

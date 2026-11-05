@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P4-3
-- **Amended by:** H4-5 (the change map shows logic only: a deterministic scope on the graph
+- **Amended by:** H4-7 (the map's flows and walkthrough are their own calls; "Amendment (H4-7)"
+  below), H4-5 (the change map shows logic only: a deterministic scope on the graph
   call's input, cards reference mapped files only; "Amendment (H4-5)" below)
 - **Revised:** review round 2: files with no hunks stay triaged (SF1); unanalysed files of unknown
   risk floor the verdict at medium, also at the write (SF2); fixed reasons for a raised verdict;
@@ -432,3 +433,103 @@ H4-5).
   real lines: a range inside the span that points at the wrong lines of a mapped file is kept
   and the card opens there. The new file's length is unknown to the pipeline, so nothing
   beyond the last hunk is accepted, which can drop a correct range on an unchanged tail.
+
+## Amendment (H4-7): the map's flows and walkthrough are their own calls
+
+**Context.** H4-5 asked the graph role for lanes, nodes and edges only, as an enforced output,
+and left the document's `flows` empty and its `walkthrough` absent; `docs/progress.md` recorded
+"flows as their own call" as the approved direction (a sequence shows the order of checks, which
+a component map cannot) and the walkthrough as its own call too, since the walkthrough on top of
+the graph pushed the enforced grammar over its limit (H4-4). H4-6 builds their UI in parallel.
+
+**Decision.**
+
+1. **Two more calls on the graph role, after the graph call, each its own enforced output**
+   (`stages.ts`: `flows`, `walkthrough`; `AnalysisStage` grows accordingly). They run only when
+   the map was drawn: `no-logic`, `too-large` and a failed graph call skip both, with no call and
+   no reason in the document (the map's own reason covers them; `stats.flows` and
+   `stats.walkthrough` say `skipped`).
+   - **The flows call** asks for one to three key runtime sequences as ordered steps between the
+     map's node ids. `FlowsAnswer` (`outputs.ts`) is the document's `Flow` with the message's
+     `payload` left out: the payload's sample is a recursive JSON value, which no enforced
+     grammar takes, and the sequence is what the reader needs. Zod cannot `.omit()` from a
+     refined object, so `FlowMessageBase` (schema) is the unrefined shape and the projection
+     re-applies the self rule. 9 optional fields, no `$defs`.
+   - **The walkthrough call** asks for three to seven steps, each the document's step `id`,
+     `heading` and `body` with a flat focus of node and edge ids (`StepFocusAnswer`). The
+     document's `StepFocus` also takes lanes, a stage and a flow's message ids, which need views
+     or a staged flow that Rocky does not draw; `toWalkthrough` (`validate.ts`) writes the flat
+     selection into the document's shape, an empty one as `{ kind: "all" }`. 2 optional fields.
+   - Both schemas go through the SDK transform and the optional-field count in
+     `wire-schema.test.ts`, like every stage.
+2. **Input follows the graph call's rules.** Each call gets exactly the graph call's parts (the
+   title and the mapped files' paths and diffs: logic only, A24) plus the map's **outline** as an
+   untrusted part labelled `graph` (ids, labels, kinds, lanes and edge ends; no summaries, no
+   file references), and the walkthrough call also the flows' outline under `flows` (`[]` when
+   none). The outline is model-written text and travels like the diff it describes; the
+   instructions (`FLOWS_INSTRUCTIONS`, `WALKTHROUGH_INSTRUCTIONS`) are `rockyInstructions`
+   literals, in `PROMPT_TEXTS`, paraphrasing PR Lens's guidance (credited in `instructions.ts`
+   and `NOTICE`). The walkthrough runs after the flows so it can name them; the two are not run
+   in parallel, which also keeps one reservation in flight under the CLI's cap.
+3. **Validation is the document's, with references stripped first.** `stripFlowRefs` drops a
+   participant that names no declared node, then every message no longer between two
+   participants, then a flow left under the document's minimum; message file references and
+   ranges follow the graph's `keep` (mapped set, hunk span). `stripWalkthroughRefs` drops focus
+   ids the map does not declare and a step whose named focus lost every id; a step given no focus
+   keeps meaning the whole map. Drops are counted (`stats.flowsStripped`,
+   `stats.walkthroughStripped`; file and range drops in the graph's counters). What remains is
+   checked in the whole assembled document (`checkPart`; `partitionIssues` routes `graph.flows`
+   and `graph.walkthrough` issues to their own calls, rebased as `flows…` and `steps…`), so
+   duplicate ids and the self rule still go back for the one repair round; an answer with no flow
+   left is sent back as `flows: too_small`, too few steps as the document's own `steps`.
+   The leak guard runs on every answer in `completeWithRepair` and on the stored graph whole.
+4. **Failure leaves the section absent, never the analysis.** A refusal, truncation, invalid
+   output after the repair round, an input too large or a timeout records
+   `provenance.flowsUnavailable` or `provenance.walkthroughUnavailable` (`{ reason }`, schema
+   1.3; `MapSectionUnavailableReason` is `analysis-failed`, `too-large`, `timeout`) and the same
+   code in `stats`; the graph, the findings and the briefing are untouched. A retryable error is
+   thrown for the queue, as everywhere. `applyKnownFields` owns both fields and drops the section
+   beside a pipeline reason; the document refuses a section next to its reason, and a reason
+   without a map. Documents that use neither field keep their earlier stamp (`requiredSchemaVersion`).
+5. **Cost.** Both calls go through the same `LlmRoles` as every call, so metering (ADR 0016) and
+   the CLI's cap (`budget.ts`) apply unchanged; `ANALYSIS_STAGES` is 6 for the per-PR estimate
+   (ADR 0017 §5); `MAX_OUTPUT_TOKENS` is 16K each; the dry-run plan lists them as planned, not
+   certain. `stats.usageByStage` records the provider-reported input, output, cache-read and
+   cache-write tokens per stage, summed over its calls, under key names the log redactor keeps
+   (review round 1, SF1: `tokens` and `output` are redacted; `inputTokens`/`outputTokens` are
+   allowlisted). The per-PR estimate (ADR 0017 §5) counts the mapped diffs once per graph-role
+   call (three: the map, the flows, the walkthrough) and charges the map's three stages only
+   when there is a map (review round 1, security low: the mapped diff is re-sent up to six
+   times once repair rounds are counted, each call bounded by `GRAPH_MAX_INPUT_CHARS`). The fake evals baseline was regenerated
+   with a 2M cap (the injection run now makes 279 graph-role calls; scores and injection totals
+   are unchanged).
+
+**Threat model (adds to the tables above).**
+
+| #   | Threat                                                                                                                                                                                                                                             | Prevention                                                                                                                                                                                                                                                           | Test                                                                                                                                                                                                        |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A27 | **PR text or model text becomes instructions** in the two new calls: the title, a diff, or the graph outline (model-written) carrying "draw a flow named …".                                                                                       | Instructions are the two literals; the title, diffs, outline and flows travel only as untrusted parts under fixed labels (`pr_title`, `graph`, `flows`, `file.N.path/diff`), delimited by the adapters (ADR 0013).                                                   | `pipeline.test.ts` H4-7 "injection-shaped PR text stays fenced", "the input is the graph call's …"; A1 over every call; `injection.test.ts` (the adversary now attacks the flows and walkthrough stages).   |
+| A28 | **References outside the map or the mapped set**: a participant or focus id the model invented or took from an earlier run, a step backed by an excluded or non-PR file, a range outside the hunks; the UI would light up or link the wrong thing. | `stripFlowRefs` and `stripWalkthroughRefs` before the check and before storage; file references and ranges by the graph's rules; the integrity pass (BROKEN_REFERENCE, DUPLICATE_ID) on what remains; counts logged.                                                 | `validate.test.ts` (both strippers, `toWalkthrough`, `partitionIssues`); `pipeline.test.ts` H4-7 "unknown participants …", "unknown focus ids …", "a stripped flow still goes through the integrity check". |
+| A29 | **A failed section fails the analysis or drops the map**, or a refusal costs more than one repair round.                                                                                                                                           | Each call is its own `completeWithRepair`; failure writes a fixed reason into provenance and stats; nothing else changes; ≤ 2 calls each.                                                                                                                            | `pipeline.test.ts` H4-7 "a flows call that is …" (refused, truncated, invalid, too large, timeout), "a walkthrough call that is …", "both calls failing …" (and a retryable error thrown).                  |
+| A30 | **Prompt text leaks through the new sections** (a flow label, a step heading).                                                                                                                                                                     | Both instruction texts are in `PROMPT_TEXTS`; the guard runs on each answer against the call's own parts and on the stored graph whole; the sections are absent, not stored, when it trips.                                                                          | `pipeline.test.ts` H4-7 "the leak guard applies …"; `injection.test.ts` leak modes over the new stages (L1).                                                                                                |
+| A31 | **A model writes the pipeline's reasons**, or a section next to its reason, or a reason without a map.                                                                                                                                             | `flowsUnavailable`/`walkthroughUnavailable` live in provenance (overwritten by `applyKnownFields`, which also drops the section); the document refines both pairings; fixed enum.                                                                                    | `v1-3.test.ts`, `known-fields.test.ts`, `property.test.ts` (generator and mutators).                                                                                                                        |
+| A32 | **Unbounded spend**: the calls run with nothing to map, re-run forever, or carry the excluded files.                                                                                                                                               | No call without a drawn map; ≤ 2 calls each; output caps; the mapped set only, each call bounded by `GRAPH_MAX_INPUT_CHARS`; the same metering and cap wrappers; the estimate counts the mapped diffs once per graph-role call and the map's stages only with a map. | `pipeline.test.ts` H4-7 "neither call runs when …", call counts in every H4-7 case; `estimate.test.ts`; `plan`/`render` tests (CLI).                                                                        |
+| A33 | **Content in logs** through the new stats.                                                                                                                                                                                                         | Stats carry counts and fixed codes only (`MapSectionStatus`, strip counts, `usageByStage` under redactor-safe names); `analysis-stats-log.test.ts`, the e2e log test and the injection check's L1 cover the stats object.                                            | `pipeline.test.ts` H4-7 "the token counts …" (integers and enum values); `analysis.e2e.test.ts` log checks; `check.ts` L1 over `stats`.                                                                     |
+| A34 | **A schema the provider refuses** (H4-4's bug again) makes every analysis fail before a request.                                                                                                                                                   | Both answer schemas are projections with no recursion and no type-sided combinator; the wire-schema test runs the SDK transform and counts optional fields on every stage.                                                                                           | `wire-schema.test.ts` "the flows and walkthrough schemas compile on their own …".                                                                                                                           |
+| A35 | **Output triggers a side effect** or is acted on.                                                                                                                                                                                                  | Unchanged: the pipeline has no forge handle, the port offers no tools, the sections are data in the stored document a human reads.                                                                                                                                   | A7 (`analysis.e2e.test.ts`), the port type test in `injection.test.ts`.                                                                                                                                     |
+
+**Residual risks.**
+
+- **R12:** the grammar-size limit on the two enforced schemas is the provider's and has no
+  offline oracle (as R8); each is a fraction of the graph's grammar, which compiled on the real
+  provider, but the evidence is the next real run. A rejection shows as `llm_invalid_request`.
+- **R13:** the walkthrough is flat: no stage (a step cannot play over a flow), no lane focus, no
+  message focus. The schema keeps those for a later call shape (`docs/progress.md`).
+- **R14:** a flow or a step can still describe the code wrongly (a plausible but false order of
+  checks). It is a draft for a human, like every model text (R2), and shown next to the diff.
+- **R15:** the `payload` samples PR Lens draws are not asked for; a step says what moves in its
+  label only.
+- **R16:** two more calls on the graph role per analysed PR, each re-reading the mapped
+  diffs: on the order of 12–30K input tokens per call (the mapped diffs plus the outline and
+  the schema's cached system block) and 1–3K output tokens each, on top of H4-5's map call;
+  a repair round doubles a call. The estimate and the per-PR limit count them (§5 above).

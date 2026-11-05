@@ -49,7 +49,11 @@ The renderer was adapted from upstream commit
 which files were adapted and what changed. The change-map instructions in
 packages/core/src/analysis/instructions.ts (GRAPH_INSTRUCTIONS) paraphrase
 the writer's guidance of the PR Lens skill (granularity, context nodes,
-lanes, hero edges, edge labels, badges); the worked example there is Rocky's
+lanes, hero edges, edge labels, badges), and FLOWS_INSTRUCTIONS and
+WALKTHROUGH_INSTRUCTIONS in the same file paraphrase its guidance on flows
+(a few key sequences between declared nodes, steps in execution order, the
+risky step called out) and walkthroughs (a short tour in reading order, each
+step a heading, a line and a focus); the worked examples there are Rocky's
 own.
 
     MIT License

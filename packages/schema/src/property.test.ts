@@ -11,7 +11,11 @@ import type { FindingInput, Severity } from "./findings.js";
 import type { GraphInput } from "./graph.js";
 import { MAX_FILE_REVIEW_MINUTES, MAX_LINE_NUMBER, SCORE_BANDS } from "./limits.js";
 import { parseAnalysisDocument } from "./parse.js";
-import { type ChangedFile, GraphUnavailableReason } from "./provenance.js";
+import {
+  type ChangedFile,
+  GraphUnavailableReason,
+  MapSectionUnavailableReason,
+} from "./provenance.js";
 import type { TriagedFileLevel, TriageInput } from "./triage.js";
 
 const RUNS = { seed: 847, numRuns: 150 };
@@ -128,6 +132,13 @@ const arbParams = fc.record({
   checkedOk: fc.array(text(40), { maxLength: 3 }),
   graph: fc.option(arbGraphParams, { nil: undefined }),
   graphUnavailable: fc.option(fc.constantFrom(...GraphUnavailableReason.options), {
+    nil: undefined,
+  }),
+  // Schema 1.3: a drawn map may record why a section drawn by its own call is missing.
+  flowsUnavailable: fc.option(fc.constantFrom(...MapSectionUnavailableReason.options), {
+    nil: undefined,
+  }),
+  walkthroughUnavailable: fc.option(fc.constantFrom(...MapSectionUnavailableReason.options), {
     nil: undefined,
   }),
   summary: text(200),
@@ -369,8 +380,13 @@ const buildDocument = (params: Params): AnalysisDocumentInput => {
     findings,
   };
   const graph = buildGraph(params, files);
-  if (graph) doc.graph = graph;
-  else if (params.graphUnavailable !== undefined)
+  if (graph) {
+    doc.graph = graph;
+    if (params.flowsUnavailable !== undefined && (graph.flows ?? []).length === 0)
+      doc.provenance.flowsUnavailable = { reason: params.flowsUnavailable };
+    if (params.walkthroughUnavailable !== undefined && graph.walkthrough === undefined)
+      doc.provenance.walkthroughUnavailable = { reason: params.walkthroughUnavailable };
+  } else if (params.graphUnavailable !== undefined)
     doc.provenance.graphUnavailable = { reason: params.graphUnavailable, detail: "Pipeline." };
   return doc;
 };
@@ -569,6 +585,29 @@ const MUTATORS: Mutator[] = [
       reason: ["failed", "", "Timeout", "<script>"][pick % 4],
     });
     return { code: "INVALID_SHAPE", path: "provenance.graphUnavailable.reason" };
+  },
+  // Schema 1.3: a section's reason next to the section, a reason that is not Rocky's, or a
+  // reason without a map. Two mutators with broad preconditions (a map, no map), so the fixed
+  // seed exercises both.
+  (doc, pick) => {
+    if (!doc.graph) return undefined;
+    if (doc.graph.flows.length > 0) {
+      doc.provenance.flowsUnavailable = { reason: "timeout" };
+      return { code: "INVALID_SHAPE", path: "provenance.flowsUnavailable" };
+    }
+    if (doc.graph.walkthrough) {
+      doc.provenance.walkthroughUnavailable = { reason: "analysis-failed" };
+      return { code: "INVALID_SHAPE", path: "provenance.walkthroughUnavailable" };
+    }
+    const field = pick % 2 === 0 ? "flowsUnavailable" : "walkthroughUnavailable";
+    set(doc.provenance, field, { reason: ["no-logic", "", "Timeout", "<b>x</b>"][pick % 4] });
+    return { code: "INVALID_SHAPE", path: `provenance.${field}.reason` };
+  },
+  (doc, pick) => {
+    if (doc.graph) return undefined;
+    const field = pick % 2 === 0 ? "flowsUnavailable" : "walkthroughUnavailable";
+    set(doc.provenance, field, { reason: "timeout" });
+    return { code: "INVALID_SHAPE", path: `provenance.${field}` };
   },
   (doc) => {
     if (doc.triage.files.length === 0) return undefined;
@@ -854,6 +893,8 @@ describe("property: valid documents", () => {
     const seen = {
       graph: 0,
       graphUnavailable: 0,
+      flowsUnavailable: 0,
+      walkthroughUnavailable: 0,
       flow: 0,
       walkthrough: 0,
       noise: 0,
@@ -864,6 +905,8 @@ describe("property: valid documents", () => {
       fc.property(arbDocument, (doc) => {
         if (doc.graph) seen.graph += 1;
         if (doc.provenance.graphUnavailable) seen.graphUnavailable += 1;
+        if (doc.provenance.flowsUnavailable) seen.flowsUnavailable += 1;
+        if (doc.provenance.walkthroughUnavailable) seen.walkthroughUnavailable += 1;
         if (doc.graph?.flows?.length) seen.flow += 1;
         if (doc.graph?.walkthrough) seen.walkthrough += 1;
         if (doc.triage.noise?.length) seen.noise += 1;
