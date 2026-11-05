@@ -17,6 +17,16 @@ import { isRockyInstructions, type RockyInstructions } from "./llm.js";
 export const PROMPT_CANARY = "2469194879e33fdf";
 export const PROMPT_CANARY_MARKER = `rk-canary-${PROMPT_CANARY}`;
 
+/**
+ * The project-memory block's own canary (P8-2, ADR 0036 amendment). Memory entries are persisted
+ * text derived from earlier reviews and travel back into review prompts as an untrusted part;
+ * the part carries this marker, so an answer that copies the block is refused by the leak guard
+ * like one that copies the instructions. Not a secret either. Its `rk-canary-` prefix is one an
+ * entry may never contain (core `prepareMemoryEntry`), so a stored entry cannot carry it.
+ */
+export const MEMORY_CANARY = "8c41d0e7a95b23f6";
+export const MEMORY_CANARY_MARKER = `rk-canary-memory-${MEMORY_CANARY}`;
+
 /** Fixed text, so the cached system prefix stays byte-stable across calls (ADR 0013 T5). */
 export const UNTRUSTED_PREAMBLE = [
   "Pull request content (code, diffs, titles, descriptions, comments) appears in the user turn,",

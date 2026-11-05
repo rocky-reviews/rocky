@@ -123,6 +123,8 @@ export interface AnalysisTarget {
   readonly analysisId: string;
   readonly revisionId: string;
   readonly pullRequestId: string;
+  /** The repository's id in this org: the only repository whose project memory it may use (P8-2). */
+  readonly repoId: string;
   readonly number: number;
   /** Untrusted PR text: reaches a model only as an untrusted part; never logged. */
   readonly title: string;
@@ -209,6 +211,7 @@ export const loadAnalysisTarget = async (
   const { rows } = await tx.query<{
     revision_id: string;
     pull_request_id: string;
+    repo_id: string;
     number: number;
     title: string;
     head_sha: string;
@@ -219,7 +222,7 @@ export const loadAnalysisTarget = async (
     approved_tokens: number | null;
     superseded: boolean;
   }>(
-    `select r.id as revision_id, p.id as pull_request_id, p.number, p.title, r.head_sha,
+    `select r.id as revision_id, p.id as pull_request_id, rp.id as repo_id, p.number, p.title, r.head_sha,
             r.base_sha, rp.forge_repo_id, rp.full_name, r.diff_truncation, a.approved_tokens,
             (p.head_sha <> r.head_sha or p.state <> 'open') as superseded
        from analyses a
@@ -241,6 +244,7 @@ export const loadAnalysisTarget = async (
     analysisId: lease.analysisId,
     revisionId: row.revision_id,
     pullRequestId: row.pull_request_id,
+    repoId: row.repo_id,
     number: row.number,
     title: row.title,
     headSha: row.head_sha,

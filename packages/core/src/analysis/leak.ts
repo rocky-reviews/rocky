@@ -4,8 +4,8 @@
  * integrity check, in `completeWithRepair`, and the whole document is checked once more before it
  * is returned. A string (or an object key) leaks when it holds:
  *
- * - the canary planted in every system prompt (`PROMPT_CANARY`), however it is spaced, cased or
- *   punctuated; or
+ * - the canary planted in every system prompt (`PROMPT_CANARY`) or in the project-memory block
+ *   (`MEMORY_CANARY`, P8-2), however it is spaced, cased or punctuated; or
  * - a run of `LEAK_NGRAM_WORDS` consecutive words of instruction text that the call's PR content
  *   does not itself contain (a review of a PR that edits Rocky's prompts may quote them).
  *
@@ -21,6 +21,7 @@ import type { LlmUntrustedText } from "../llm.js";
 import {
   FINAL_INSTRUCTION,
   FINAL_INSTRUCTION_PROMPT_SCHEMA,
+  MEMORY_CANARY,
   PROMPT_CANARY,
   SCHEMA_PREAMBLE,
   UNTRUSTED_PREAMBLE,
@@ -31,6 +32,7 @@ import {
   GRAPH_INSTRUCTIONS,
   REPAIR_INSTRUCTIONS,
   REVIEW_INSTRUCTIONS,
+  REVIEW_MEMORY_INSTRUCTIONS,
   TRIAGE_INSTRUCTIONS,
   WALKTHROUGH_INSTRUCTIONS,
 } from "./instructions.js";
@@ -51,6 +53,7 @@ export const PROMPT_TEXTS: readonly string[] = Object.freeze([
   ...[
     TRIAGE_INSTRUCTIONS,
     REVIEW_INSTRUCTIONS,
+    REVIEW_MEMORY_INSTRUCTIONS,
     GRAPH_INSTRUCTIONS,
     FLOWS_INSTRUCTIONS,
     WALKTHROUGH_INSTRUCTIONS,
@@ -316,7 +319,8 @@ export const createLeakDetector = (options: LeakDetectorOptions): LeakDetector =
 
 const PROMPT_LEAKS = createLeakDetector({
   texts: PROMPT_TEXTS,
-  canaries: [PROMPT_CANARY],
+  // The memory block's canary too (P8-2): an answer that copies the block is refused.
+  canaries: [PROMPT_CANARY, MEMORY_CANARY],
   ngramWords: LEAK_NGRAM_WORDS,
   shareThreshold: PROMPT_SHARE_THRESHOLD,
 });

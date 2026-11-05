@@ -190,3 +190,37 @@ describe("estimateAnalysisTokens (P4-6)", () => {
     expect(estimateAnalysisTokens("")).toBeUndefined();
   });
 });
+
+describe("project memory in the estimate (P8-2)", () => {
+  const entry = {
+    id: "00000000-0000-4000-8000-000000000001",
+    kind: "dismissal" as const,
+    reason: "intentional" as const,
+    text: "Dismissed as intentional: Retry count is hard-coded",
+    path: "src/jobs/retry.ts",
+    source: "dismissal · PR #1",
+    confidence: 80,
+  };
+  const diff = fileOf("src/jobs/retry.ts", 800);
+
+  it("counts the memory part a file's review would carry", () => {
+    const plain = estimateAnalysisTokens(diff)!;
+    const withMemory = estimateAnalysisTokens(diff, { memory: [entry] })!;
+    expect(withMemory.tokens).toBeGreaterThan(plain.tokens);
+    // An entry offered to no file costs nothing.
+    const elsewhere = estimateAnalysisTokens(diff, { memory: [{ ...entry, path: "lib/x.ts" }] })!;
+    expect(elsewhere.tokens).toBe(plain.tokens);
+  });
+
+  it("a unit stored without memory is not counted as reused once memory applies to the file", () => {
+    const parsed = parseUnifiedDiff(diff);
+    if (!parsed.ok) throw new Error("diff");
+    const file = parsed.files[0]!;
+    const previous = {
+      document: {} as PreviousAnalysis["document"],
+      units: [{ path: file.path, key: unitKey(sha256Hex, "", file), reviewMinutes: 1 }],
+    };
+    expect(estimateAnalysisTokens(diff, { previous, sha256Hex })!.reused).toBe(1);
+    expect(estimateAnalysisTokens(diff, { previous, sha256Hex, memory: [entry] })!.reused).toBe(0);
+  });
+});

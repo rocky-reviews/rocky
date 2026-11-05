@@ -165,6 +165,8 @@ export {
   FINAL_INSTRUCTION_PROMPT_SCHEMA,
   PROMPT_CANARY,
   PROMPT_CANARY_MARKER,
+  MEMORY_CANARY,
+  MEMORY_CANARY_MARKER,
   SCHEMA_PREAMBLE,
   systemPrompt,
   systemPromptWithSchema,
@@ -237,6 +239,16 @@ export {
   type ScopedFile,
   type PreviousAnalysis,
   type Sha256Hex,
+  MAX_ANALYSIS_MEMORY,
+  MAX_MEMORY_PER_FILE,
+  MEMORY_LABEL,
+  memoryPart,
+  pathRelevance,
+  REVIEW_MEMORY_OUTPUT,
+  selectMemory,
+  usableMemory,
+  type AnalysisMemoryEntry,
+  type SelectedMemory,
 } from "./analysis/index.js";
 export {
   assessPullRequest,
@@ -329,3 +341,14 @@ export {
   type ScrubReport,
   type ScrubResult,
 } from "./pii.js";
+export {
+  CORROBORATION_STEP,
+  corroboratedConfidence,
+  LEARNED_CONFIDENCE,
+  learnedEntry,
+  MAX_LEARNED_CONFIDENCE,
+  MAX_LEARNED_PER_REVIEW,
+  memorySubject,
+  type LearnedEntry,
+  type ReviewDecision,
+} from "./memory-learning.js";

@@ -17,11 +17,13 @@ import {
   completeAnalysis,
   failAnalysis,
   holdAnalysis,
+  loadAnalysisMemory,
   loadAnalysisTarget,
   loadPreviousAnalysis,
   recordLlmUsage,
   releaseAnalysis,
   requeueAnalysis,
+  touchMemoryEntries,
   type ClaimedAnalysis,
   type Db,
 } from "@rocky-reviews/db";
@@ -51,6 +53,10 @@ import type { Logger } from "@rocky-reviews/log";
  *   then the failure code is stored. Everything else stores a failure code at once.
  * - Every write needs the claim's lease: a run whose lease expired (and was reclaimed by another
  *   worker) writes nothing (`lease_lost`).
+ * - Project memory (P8-2): the current entries of the analysed repository (only that one, in the
+ *   org's tenant transaction) go to the pipeline, which sends the relevant ones to each review
+ *   as untrusted text; the entries the stored document cites get `last_used_at` in the same
+ *   transaction that stores it. Logs carry their counts only.
  * - Metering (P4-5, ADR 0016): the pipeline only ever sees the roles wrapped by `meterRoles`, so
  *   every call writes its `llm_usage` rows (in its own short tenant transaction, before its result
  *   is used) for this org and analysis. A usage write that fails for good stops the run: the
@@ -250,16 +256,22 @@ export const runAnalysis = async (
     const text = decode(diff);
     if (text === undefined) throw new RunFailed("diff_not_utf8");
 
-    const previous = await db.withOrg(orgId, (tx) =>
-      loadPreviousAnalysis(tx, target.pullRequestId, analysisId),
-    );
+    const { previous, memory } = await db.withOrg(orgId, async (tx) => ({
+      previous: await loadPreviousAnalysis(tx, target.pullRequestId, analysisId),
+      memory: await loadAnalysisMemory(tx, target.repoId),
+    }));
 
     // The per-PR token limit, before any model call. A truncated diff is refused by the pipeline
     // itself (no model call), so it is not held for approval first.
     const tokenLimit = deps.tokenLimit ?? DEFAULT_ANALYSIS_TOKEN_LIMIT;
     const estimate = diff.truncated
       ? undefined
-      : estimateAnalysisTokens(text, { previous, sha256Hex, unitKeySalt: deps.unitKeySalt });
+      : estimateAnalysisTokens(text, {
+          previous,
+          sha256Hex,
+          unitKeySalt: deps.unitKeySalt,
+          memory,
+        });
     if (
       estimate !== undefined &&
       estimate.tokens > Math.max(tokenLimit, target.approvedTokens ?? 0)
@@ -293,6 +305,7 @@ export const runAnalysis = async (
         diff: text,
         diffTruncated: diff.truncated,
         previous,
+        memory,
         signal: options.signal,
       },
       {
@@ -323,9 +336,17 @@ export const runAnalysis = async (
     );
     if (llm.failed) return await fail("metering_failed");
     if (outcome.status === "failed") return await fail(outcome.code, outcome.diagnostic);
-    const stored = await db.withOrg(orgId, (tx) =>
-      completeAnalysis(tx, claim, outcome.document, outcome.units),
-    );
+    // Defence in depth: only ids of the entries loaded for this repository above.
+    const loaded = new Set(memory.map((entry) => entry.id));
+    const cited = outcome.document.briefing.memoryApplied
+      .map((ref) => ref.entryId)
+      .filter((id) => loaded.has(id));
+    const stored = await db.withOrg(orgId, async (tx) => {
+      const written = await completeAnalysis(tx, claim, outcome.document, outcome.units);
+      // Only for a document that was stored, and only ids the pipeline took from `memory`.
+      if (written && cited.length > 0) await touchMemoryEntries(tx, cited);
+      return written;
+    });
     // The lease expired and another worker holds the row now: nothing of ours was written.
     return stored ? { outcome: "done" } : lost();
   } catch (error) {

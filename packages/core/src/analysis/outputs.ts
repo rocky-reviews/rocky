@@ -5,8 +5,10 @@
  *
  * - triage: no `path` (the pipeline knows which file it asked about) and no `noise` level (only
  *   the rules make a file noise);
- * - review: no `id`, `path` or `memory` (the pipeline assigns ids and the file; project memory is
- *   P8), so a finding can never land on a file other than the one reviewed;
+ * - review: no `id`, `path` or `memory` (the pipeline assigns ids and the file), so a finding can
+ *   never land on a file other than the one reviewed. With project memory (P8-2) the model cites
+ *   entries by the per-call handles it was given (`M1`, …), never by stored id or text: the
+ *   pipeline resolves handles to `MemoryRef`s from the stored entries and drops unknown ones;
  * - briefing: no `estimatedReviewMinutes` or `memoryApplied` (computed by the pipeline), and the
  *   TL;DR instead of the summary paragraph (H4-8).
  */
@@ -55,6 +57,37 @@ export const ReviewAnswer = z
   })
   .describe("Draft review comments for the one changed file in the pr_content blocks.");
 export type ReviewAnswer = z.output<typeof ReviewAnswer>;
+
+/** Most project-memory entries one review call is given (P8-2; `selectMemory`). */
+export const MAX_MEMORY_PER_FILE = 12;
+
+/**
+ * The review answer when the file has project-memory entries (P8-2): each finding cites the
+ * handles of the entries it relied on, and `memoryApplied` lists the entries that made the model
+ * leave a finding out. Handles are `Id`s here; one the call did not offer is dropped by the
+ * pipeline, never stored. Both lists are required (no optional field is added to the enforced
+ * grammar); empty when nothing applies.
+ */
+export const ReviewMemoryFinding = ReviewFinding.extend({
+  memory: z
+    .array(Id)
+    .max(limits.MAX_MEMORY_REFS_PER_FINDING)
+    .describe("Ids (M1, M2, …) of memory entries this finding relies on."),
+});
+export type ReviewMemoryFinding = z.output<typeof ReviewMemoryFinding>;
+
+export const ReviewMemoryAnswer = z
+  .strictObject({
+    findings: z.array(ReviewMemoryFinding).max(MAX_FINDINGS_PER_FILE),
+    memoryApplied: z
+      .array(Id)
+      .max(MAX_MEMORY_PER_FILE)
+      .describe("Ids (M1, M2, …) of memory entries that made you leave a finding out."),
+  })
+  .describe(
+    "Draft review comments for the one changed file in the pr_content blocks, with the project-memory entries they relied on.",
+  );
+export type ReviewMemoryAnswer = z.output<typeof ReviewMemoryAnswer>;
 
 /**
  * The graph call asks only for what the page draws (H4-5, ADR 0021): lanes, nodes and edges.
@@ -200,6 +233,8 @@ export const outputSchema = <S extends z.ZodType>(
 
 export const TRIAGE_OUTPUT = outputSchema("rocky_triage", TriageAnswer);
 export const REVIEW_OUTPUT = outputSchema("rocky_review", ReviewAnswer);
+/** The review with project memory (P8-2): only sent when the file has entries to apply. */
+export const REVIEW_MEMORY_OUTPUT = outputSchema("rocky_review_memory", ReviewMemoryAnswer);
 /**
  * Enforced like the other roles (H4-5). The full graph could not be (H4-4: recursive `View` and
  * `JsonValue` definitions, more than 24 optional fields, a grammar too large with flows, views and

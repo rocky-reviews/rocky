@@ -1,6 +1,7 @@
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import {
   isLlmCallError,
+  REVIEW_MEMORY_OUTPUT,
   rockyInstructions,
   STAGE_CALLS,
   type LlmOutputSchema,
@@ -89,6 +90,18 @@ describe("every role's output schema goes through the SDK's structured-output tr
       walk(sent, template.output.name);
       expect(seen).toEqual([]);
     }
+  });
+});
+
+describe("the review with project memory (P8-2)", () => {
+  it("compiles through the SDK's transform as an enforced output, inside the optional-field limit", () => {
+    expect(REVIEW_MEMORY_OUTPUT.mode).toBe("structured");
+    const sent = jsonSchemaOutputFormat(REVIEW_MEMORY_OUTPUT.jsonSchema as never).schema;
+    expect(optionalCount(sent)).toBeLessThanOrEqual(24);
+    expect(optionalCount(sent)).toBe(
+      optionalCount(jsonSchemaOutputFormat(STAGE_CALLS.review.output.jsonSchema as never).schema),
+    );
+    expect(JSON.stringify(sent)).toMatch(/"memoryApplied"/);
   });
 });
 

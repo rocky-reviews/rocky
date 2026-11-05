@@ -26,6 +26,18 @@ export {
   type MapCategory,
   type ScopedFile,
 } from "./map-scope.js";
+export {
+  MAX_ANALYSIS_MEMORY,
+  MAX_MEMORY_PER_FILE,
+  MEMORY_LABEL,
+  memoryPart,
+  pathRelevance,
+  selectMemory,
+  usableMemory,
+  type AnalysisMemoryEntry,
+  type SelectedMemory,
+} from "./memory.js";
+export { REVIEW_MEMORY_OUTPUT } from "./outputs.js";
 export { MAX_REPAIR_ROUNDS } from "./repair.js";
 export { preTriage, type PreTriage } from "./rules.js";
 export {
