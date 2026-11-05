@@ -26,6 +26,25 @@ const scrub = (text: string, people: readonly string[] = PEOPLE) =>
 const counts = (text: string, people: readonly string[] = PEOPLE): ScrubReport =>
   scrubPersonalIdentifiers(text, { people }).replaced;
 
+/**
+ * Timing tests (fix rounds 3–5, CI): a CI runner with coverage instrumentation is 3–5× slower
+ * than a laptop, so no test asserts a tight absolute time. Each asserts **scaling** (the fastest
+ * of three runs at two sizes stays near linear, which the regex alternation this replaced
+ * failed: ~2 ms at 5 000 names, 1–2.6 s at 50 000, out of memory beyond) and a generous
+ * **ceiling** (`TIMING_CEILING_MS`) that still fails a return to multi-second calls on any
+ * machine. The fastest run is used so GC pauses and a busy runner do not count.
+ */
+const TIMING_CEILING_MS = 5000;
+const fastest = (fn: () => void, runs = 3): number => {
+  let best = Number.POSITIVE_INFINITY;
+  for (let run = 0; run < runs; run++) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+};
+
 interface Case {
   readonly name: string;
   readonly input: string;
@@ -326,22 +345,22 @@ describe("known people", () => {
       (_, i) => `First${i} Middle${i % 977} Last${i}`,
     );
     const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 Last7 agreed`;
-    const runs: number[] = [];
-    let out = "";
-    for (let run = 0; run < 3; run++) {
-      const started = performance.now();
-      out = scrub(text, names);
-      runs.push(performance.now() - started);
-    }
-    expect(out.endsWith("[person] agreed")).toBe(true);
-    expect(Math.min(...runs)).toBeLessThan(1000);
+    expect(scrub(text, names).endsWith("[person] agreed")).toBe(true);
+    // Linear in the list: ten times the names costs about ten times the time plus the fixed
+    // work (the regex alternation scaled ~500×: ~2 ms at 5 000, ~1.1 s at 50 000). Measured
+    // ~16 ms vs ~230 ms on a laptop, a ratio of ~15; the bound leaves 2× headroom.
+    const small = fastest(() => scrub(text, names.slice(0, MAX_KNOWN_PEOPLE / 10)));
+    const large = fastest(() => scrub(text, names));
+    expect(large).toBeLessThan(TIMING_CEILING_MS);
+    expect(large / Math.max(small, 1)).toBeLessThan(30);
   });
 
   it("refuses, quickly, lists whose names and parts exceed the entries cap (fix round 5)", () => {
+    // The refusal is the guarantee (it fails if the cap goes); the ceiling only rules out a
+    // refusal that first does the whole work (measured 100–350 ms on a laptop).
     const bound = (people: string[]) => {
-      const started = performance.now();
-      expect(() => scrub("plain text", people)).toThrow(RangeError);
-      expect(performance.now() - started).toBeLessThan(1000);
+      const time = fastest(() => expect(() => scrub("plain text", people)).toThrow(RangeError), 1);
+      expect(time).toBeLessThan(TIMING_CEILING_MS);
     };
     // Twelve hyphenated parts: 1 + 12 + 24 entries per name.
     bound(
@@ -367,14 +386,20 @@ describe("known people", () => {
   it("stays fast when 50 000 names share their first two words over 2 000 characters (fix round 5)", () => {
     const shared = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `John Smith Last${i}`);
     const weak = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Go Go Last${i}`);
-    for (const [people, text, expected] of [
-      [shared, "john smith ".repeat(181), "[person] [person] ".repeat(181)],
+    for (const [people, unit, expected] of [
+      [shared, "john smith ", "[person] [person] "],
       // `Go` is weak (dictionary, two letters): bare occurrences stay.
-      [weak, "go go ".repeat(333), "go go ".repeat(333)],
+      [weak, "go go ", "go go "],
     ] as const) {
-      const started = performance.now();
-      expect(scrub(text, people)).toBe(expected);
-      expect(performance.now() - started).toBeLessThan(1000);
+      const long = unit.repeat(180);
+      expect(scrub(long, people)).toBe(expected.repeat(180));
+      // The index build dominates, so ten times the occurrences of the shared prefix cost
+      // about the same (a scan of the shared candidates per occurrence, the two-word-key
+      // version, made the long text ~5× slower than the short one). 3× headroom.
+      const short = fastest(() => scrub(unit.repeat(18), people));
+      const longer = fastest(() => scrub(long, people));
+      expect(longer).toBeLessThan(TIMING_CEILING_MS);
+      expect(longer / Math.max(short, 1)).toBeLessThan(3);
     }
     // More than MAX_KNOWN_PEOPLE_PER_KEY names sharing three words is refused, not scanned.
     const prefix = Array.from(
@@ -504,10 +529,14 @@ describe("known people", () => {
   it("stays fast when 50 000 names share a first word and the text repeats it (fix round 4)", () => {
     const names = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Shared Last${i}`);
     const text = "Shared ".repeat(280);
-    const started = performance.now();
     // `Shared` alone is a part of every name, so every occurrence is a person.
     expect(scrub(text, names).trim()).toBe(Array.from({ length: 280 }, () => "[person]").join(" "));
-    expect(performance.now() - started).toBeLessThan(1500);
+    // As above: more occurrences of the shared word must not multiply the time (the
+    // one-word-key version scanned 50 000 candidates per occurrence).
+    const short = fastest(() => scrub("Shared ".repeat(28), names));
+    const long = fastest(() => scrub(text, names));
+    expect(long).toBeLessThan(TIMING_CEILING_MS);
+    expect(long / Math.max(short, 1)).toBeLessThan(3);
   });
 
   it("matches names with punctuation literally", () => {
