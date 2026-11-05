@@ -81,3 +81,11 @@ to allow inline styles. Labels come from a model, so the output also has to be i
   of the code: the rules are heuristics (security review, H4-5). The pipeline's `detail` is
   still never drawn, and the briefing's Retry button does not apply to this reason (a retry
   would classify the same paths the same way).
+
+## Amendment (H4-6): motion and focus
+
+Two options, both off by default so the static map and its goldens are unchanged: `motion`
+(classes the stylesheet animates and a copy of each traffic edge's route for travelling dots)
+and `focus` (a walkthrough step's lanes, cards and edges lit, the rest dimmed, and the area they
+cover returned as `focusBox`). `trafficEdgeIds` is exported. See
+[ADR 0035](0035-change-map-styles-and-motion.md).

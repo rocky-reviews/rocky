@@ -38,6 +38,12 @@ dismissed drafts off the badges.
 - **Edge labels** as opaque pills on their line, placed clear of cards, badges, lane headers and
   each other. A label that needs a corridor widens it, so labels never cover a card (POC defect 3).
 - Long text is cut with an ellipsis from a fixed width table; the full text is in `<title>`.
+- **Motion and focus** (H4-6, ADR 0035), both off by default: `motion: true` adds `cm-motion`,
+  `cm-wave-<lane>` on cards, `cm-traffic` on the edges that carry dots (`trafficEdgeIds`: the
+  hero edges, else the animated ones), `cm-traffic-end` on the cards they reach, and a
+  `cm-pulses` group of route copies (`cm-pulse`, `pathLength="100"`) the stylesheet turns into
+  travelling dots. `focus: { lanes, nodes, edges }` adds `cm-focus` / `cm-dim` and returns
+  `focusBox`. Everything that moves is inside `prefers-reduced-motion: no-preference`.
 
 ## Determinism
 
@@ -58,8 +64,9 @@ Labels are model output and treated as hostile (ADR 0022, threat table in `THREA
 Every element and attribute is built by `src/svg/markup.ts`, which:
 
 - allows only `svg`, `defs`, `marker`, `path`, `g`, `rect`, `text`, `title`, and only the
-  attributes the map writes, each with a value shape (numbers, fixed values, `cm-*` class tokens
-  from a list, prefixed ids, `url(#id)` markers, schema ids in `data-*`);
+  attributes the map writes, each with a value shape (numbers, fixed values such as
+  `pathLength="100"`, `cm-*` class tokens from a list, prefixed ids, `url(#id)` markers, schema
+  ids in `data-*`);
 - normalises every text: line breaks become spaces; control, bidi, zero-width, tag and other
   invisible characters, lone surrogates and non-characters are dropped (ZWNJ, ZWJ, VS15, VS16 are
   kept only where they join something, at most 32 per string and one joiner per two drawn

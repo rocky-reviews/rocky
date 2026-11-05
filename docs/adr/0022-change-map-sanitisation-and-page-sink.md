@@ -147,3 +147,11 @@ stylesheet to have coloured the cards.
   and files are opened from the document's paths, not from the drawn text.
 - The Playwright CSP test runs with `pnpm test:e2e`, not in `pnpm verify`; the structural CSP
   checks (`packages/renderer/src/csp.test.ts`) do run in `pnpm verify`.
+
+## Amendment (H4-6): motion classes and `pathLength`
+
+The class allowlist gains `cm-motion`, `cm-pulses`, `cm-pulse`, `cm-traffic`, `cm-traffic-end`,
+`cm-focus`, `cm-dim` and `cm-wave-0`…`cm-wave-5`, each allowed by `inspect.ts` only on its
+element; the attribute allowlist gains `pathLength` with the single value `100` (also in
+`SafeSvg.ts`). Still no `style`, no animating element and no new URL. Threat row R17 in
+`packages/renderer/THREATS.md`; [ADR 0035](0035-change-map-styles-and-motion.md).

@@ -478,12 +478,14 @@ test("when the browser cannot save the switch, the dialog says so", async ({ pag
   });
   await open(page);
   await page.getByRole("button", { name: "Keyboard shortcuts" }).click();
-  await expect(dialog(page)).toContainText("Remembered in this browser.");
+  // H4-6: the map style setting has its own note; this is the single-key switch's.
+  const setting = dialog(page).locator(".shortcuts-setting");
+  await expect(setting).toContainText("Remembered in this browser.");
   await dialog(page).getByRole("switch", { name: "Single-key shortcuts" }).press("Space");
-  await expect(dialog(page)).toContainText(
+  await expect(setting).toContainText(
     "This browser could not save the choice, so it lasts until you reload the page.",
   );
-  await expect(dialog(page)).not.toContainText("Remembered in this browser.");
+  await expect(setting).not.toContainText("Remembered in this browser.");
   // It still applies for this page.
   await press(page, "Escape");
   await press(page, "k");

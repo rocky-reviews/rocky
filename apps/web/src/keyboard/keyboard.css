@@ -155,3 +155,47 @@ kbd {
   gap: 6px 10px;
   flex-wrap: wrap;
 }
+
+/* H4-6: the change map style, with the theme toggle, at every width. */
+.map-style-setting {
+  border-top: 1px solid var(--border);
+}
+.map-style-setting fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.map-style-setting legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+.map-style-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.map-style-option input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--you);
+}
+.map-style-label {
+  display: block;
+  font-weight: 550;
+}
+.map-style-hint {
+  display: block;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.map-style-setting .note {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
