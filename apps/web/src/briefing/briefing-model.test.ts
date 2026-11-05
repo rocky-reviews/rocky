@@ -8,7 +8,6 @@ import {
   failureText,
   graphState,
   readByHand,
-  reviewPathRows,
   type RiskChoice,
   type RiskLevelKey,
   riskLevels,
@@ -160,25 +159,6 @@ describe("shortNames", () => {
   it("uses the base name, widening only the colliding paths until unique", () => {
     const names = shortNames(["a/x/f.ts", "b/x/f.ts", "c/g.ts", "f.ts"]);
     expect([...names.values()]).toEqual(["a/x/f.ts", "b/x/f.ts", "g.ts", "f.ts"]);
-  });
-});
-
-describe("reviewPathRows", () => {
-  it("numbers the suggested path with each file's score and level", () => {
-    expect(reviewPathRows(doc).slice(0, 2)).toEqual([
-      {
-        path: "src/auth/invitations.ts",
-        why: "New path that grants org membership and sets the member's role.",
-        score: 97,
-        level: "critical",
-      },
-      {
-        path: "src/api/routes/invitations.ts",
-        why: "Public API surface that touches org permissions.",
-        score: 91,
-        level: "critical",
-      },
-    ]);
   });
 });
 

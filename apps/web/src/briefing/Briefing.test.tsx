@@ -226,12 +226,11 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(map).not.toMatch(/ on[a-z]+=| style=/i);
   });
 
-  it("numbers the suggested path with why and score, each a button", () => {
-    const path = section(html, "Suggested review path");
-    expect(path.match(/<li\b/g)).toHaveLength(4);
-    expect(text(path)).toContain(
-      "src/auth/invitations.ts New path that grants org membership and sets the member's role. risk score 97",
-    );
+  it("has no suggested review path section (H4-11)", () => {
+    expect(t).not.toContain("Suggested review path");
+    expect(t).not.toContain("No suggested order");
+    expect(html).not.toContain("path-list");
+    expect(html).not.toContain("New path that grants org membership");
   });
 
   it("lists the project memory applied with its source", () => {
@@ -284,12 +283,12 @@ describe("briefing the pipeline wrote itself (provenance.briefingUnavailable)", 
     expect(t).toContain("AI briefing unavailable: The AI's briefing did not pass Rocky's checks.");
   });
 
-  it("still shows the verdict, risk table and path", () => {
+  it("still shows the verdict, risk table and the start button", () => {
     expect(html).toContain('<p class="brief-summary"><bdi>Rocky could not produce');
     expect(html).not.toContain("TL;DR");
     expect(t).toContain("Critical risk");
     expect(t).toContain("Critical 3 files");
-    expect(t).toContain("Suggested review path");
+    expect(t).toContain("Start with the riskiest file");
   });
 
   it("says memory and checks are not available without the AI briefing", () => {
@@ -311,7 +310,7 @@ describe("change map unavailable (provenance.graphUnavailable)", async () => {
 
   it("keeps the rest of the briefing", () => {
     expect(t).toContain("AI briefing");
-    expect(t).toContain("Suggested review path");
+    expect(t).toContain("Project memory applied");
   });
 
   it("lists the files the AI could not analyse and the ones to read by hand", () => {
@@ -348,7 +347,7 @@ describe("a document that is not the latest word", () => {
     const t = text(render(await fixture("outOfDate")));
     expect(t).toContain("This briefing is out of date");
     expect(t).toContain("an earlier commit, 9b4e1d7; the pull request's head is now 1c2d3e4.");
-    expect(t).toContain("Suggested review path");
+    expect(t).toContain("Critical 3 files");
   });
 });
 

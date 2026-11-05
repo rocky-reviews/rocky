@@ -1,9 +1,10 @@
 /**
  * The briefing (P6-2, POC `renderBrief`): the risk verdict and the TL;DR (H4-8; an older
  * document's summary paragraph instead), the files by risk (H4-10: a chip per level, the
- * selected level's files clickable below), the change map slot, the suggested path, project
- * memory applied and what the AI checked. Without a document it shows where the analysis stands
- * instead (`BriefingState`).
+ * selected level's files clickable below), the change map slot, project memory applied and what
+ * the AI checked. H4-11 removed the suggested review path section; the document's review path
+ * still orders "Start with the riskiest file", k and j. Without a document it shows where the
+ * analysis stands instead (`BriefingState`).
  *
  * Everything from the document is untrusted text: model prose goes through `InlineText`, paths
  * and labels sit in `<bdi>`, and the fixed text for pipeline reasons comes from briefing-model.
@@ -19,7 +20,6 @@ import {
   failureText,
   nameOf,
   readByHand,
-  reviewPathRows,
   type RiskChoice,
   type RiskLevelGroup,
   type RiskLevelKey,
@@ -34,7 +34,6 @@ import { reviewOrder } from "../diff/annotations.js";
 import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import { ChangeMapSlot } from "./ChangeMap.js";
 import { InlineText } from "./inline-text.js";
-import { PathText } from "../lib/path-text.js";
 
 type Props = {
   analysis: AnalysisDocument | null;
@@ -91,7 +90,6 @@ const Briefing = ({
   const fallback = provenance.briefingUnavailable;
   const name = nameOf(doc);
   const byHand = readByHand(doc);
-  const path = reviewPathRows(doc);
   const start = startFile(doc);
   // P6-5: k opens the first file in review order; the hint shows only when that is this file.
   const startKey = useKeyShortcut(start !== undefined && reviewOrder(doc)[0] === start ? "k" : "");
@@ -158,41 +156,6 @@ const Briefing = ({
         </section>
 
         <ChangeMapSlot doc={doc} onOpenFile={onOpenFile} />
-
-        <section className="section" aria-labelledby="path-title">
-          <h3 className="h-eyebrow" id="path-title">
-            Suggested review path
-          </h3>
-          {path.length === 0 ? (
-            <p className="empty-note">No suggested order for this pull request.</p>
-          ) : (
-            <ol className="path-list">
-              {path.map((step) => (
-                <li key={step.path}>
-                  <button
-                    type="button"
-                    className={`r-${step.level}`}
-                    data-path={step.path}
-                    onClick={() => onOpenFile(step.path)}
-                  >
-                    <span className="path-text">
-                      <code>
-                        <PathText path={step.path} />
-                      </code>
-                      <span className="why">
-                        <InlineText text={step.why} />
-                      </span>
-                    </span>
-                    <span className="score">
-                      <span className="sr-only">risk score </span>
-                      {step.score}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-        </section>
 
         <section className="section two">
           <div>
