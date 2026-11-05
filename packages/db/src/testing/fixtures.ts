@@ -168,7 +168,14 @@ export const seedOrg = async (
         .values({
           repoId: repo.id,
           kind: "convention",
+          origin: "member",
           content: "Use the shared validator for emails.",
+          evidencePath: "src/invite.ts",
+          evidenceSha: "a".repeat(40),
+          evidenceStart: 10,
+          evidenceEnd: 12,
+          sourcePrNumber: 847,
+          confidence: 80,
           createdBy: member.id,
         })
         .returning({ id: schema.memoryEntries.id }),

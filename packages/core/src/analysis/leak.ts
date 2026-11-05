@@ -133,6 +133,36 @@ export const foldForLeaks = (text: string): string =>
 const words = (text: string): string[] => foldForLeaks(text).split(NON_WORD).filter(Boolean);
 const squash = (text: string): string => foldForLeaks(text).replace(NON_ALNUM, "");
 
+const SQUASHED_CANARY = squash(PROMPT_CANARY);
+/**
+ * Whether `text` carries the prompt canary in any spelling the leak guard would flag (spaced,
+ * cased, punctuated, other scripts' digits, look-alikes). Stored text that a later answer may
+ * quote (project memory, P8-1) is refused when this is true, or every review citing it would
+ * fail the guard.
+ */
+export const containsPromptCanary = (text: string): boolean =>
+  squash(text).includes(SQUASHED_CANARY);
+
+/** Every run of `length` consecutive canary characters. */
+const canaryFragments = (length: number): string[] => {
+  const out: string[] = [];
+  for (let i = 0; i + length <= SQUASHED_CANARY.length; i++) {
+    out.push(SQUASHED_CANARY.slice(i, i + length));
+  }
+  return out;
+};
+export const CANARY_FRAGMENT_LENGTH = 8;
+const CANARY_FRAGMENTS = canaryFragments(CANARY_FRAGMENT_LENGTH);
+/**
+ * Like `containsPromptCanary`, but any run of `CANARY_FRAGMENT_LENGTH` (8) or more canary
+ * characters counts: two stored texts holding halves of the canary, quoted together, would
+ * otherwise rebuild it in one answer.
+ */
+export const containsPromptCanaryFragment = (text: string): boolean => {
+  const squashed = squash(text);
+  return CANARY_FRAGMENTS.some((fragment) => squashed.includes(fragment));
+};
+
 const ngrams = (list: readonly string[], n: number): string[] => {
   const out: string[] = [];
   for (let i = 0; i + n <= list.length; i++) out.push(list.slice(i, i + n).join(" "));

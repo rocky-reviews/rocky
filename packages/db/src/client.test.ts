@@ -55,9 +55,7 @@ describe("withOrg", () => {
 
   const contentsOf = async (orgId: OrgId): Promise<string[]> =>
     db.withOrg(orgId, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+      (await tx.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs)).map((r) => r.c),
     );
 
   it("scopes Drizzle and raw queries to the org", async () => {
@@ -80,18 +78,16 @@ describe("withOrg", () => {
 
   it("commits on success and rolls back when fn throws", async () => {
     await db.withOrg(orgA, async (tx) => {
-      await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "committed" });
+      await tx.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "committed" });
     });
     await expect(
       db.withOrg(orgA, async (tx) => {
-        await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "rolled back" });
+        await tx.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "rolled back" });
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
     const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+      (await tx.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs)).map((r) => r.c),
     );
     expect(contents).toContain("committed");
     expect(contents).not.toContain("rolled back");
@@ -112,15 +108,13 @@ describe("withOrg", () => {
   it("aborts the transaction if code inside it switches tenant", async () => {
     await expect(
       db.withOrg(orgA, async (tx) => {
-        await tx.db.insert(schema.memoryEntries).values({ kind: "note", content: "pre-switch" });
+        await tx.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "pre-switch" });
         await tx.query("select set_config('app.org_id', $1, true)", [orgB]);
         return "should not commit";
       }),
     ).rejects.toThrow(TenantContextError);
     const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+      (await tx.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs)).map((r) => r.c),
     );
     expect(contents).not.toContain("pre-switch");
     // RESET inside the transaction is a switch too (to "no tenant").
@@ -144,12 +138,12 @@ describe("withOrg", () => {
   it("joins a nested withOrg for the same org: one transaction, same tenant handle (re-review F)", async () => {
     await withTimeout(
       db.withOrg(orgA, async (outer) => {
-        await outer.db.insert(schema.memoryEntries).values({ kind: "note", content: "outer" });
+        await outer.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "outer" });
         await db.withOrg(orgA, async (inner) => {
           expect(inner.orgId).toBe(orgA);
-          const rows = await inner.db.select().from(schema.memoryEntries);
-          expect(rows.map((r) => r.content)).toContain("outer");
-          await inner.db.insert(schema.memoryEntries).values({ kind: "note", content: "inner" });
+          const rows = await inner.db.select().from(schema.jobs);
+          expect(rows.map((r) => r.idempotencyKey)).toContain("outer");
+          await inner.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "inner" });
         });
       }),
     );
@@ -161,12 +155,12 @@ describe("withOrg", () => {
       withTimeout(
         db.withOrg(orgA, async (outer) => {
           await outer.db
-            .insert(schema.memoryEntries)
-            .values({ kind: "note", content: "uncaught-outer" });
+            .insert(schema.jobs)
+            .values({ kind: "note", idempotencyKey: "uncaught-outer" });
           await db.withOrg(orgA, async (inner) => {
             await inner.db
-              .insert(schema.memoryEntries)
-              .values({ kind: "note", content: "uncaught-inner" });
+              .insert(schema.jobs)
+              .values({ kind: "note", idempotencyKey: "uncaught-inner" });
             throw new Error("inner boom");
           });
         }),
@@ -180,25 +174,19 @@ describe("withOrg", () => {
   it("leaves the outer transaction usable when the caller catches a nested failure; the nested writes stay (re-review F)", async () => {
     await withTimeout(
       db.withOrg(orgA, async (outer) => {
-        await outer.db
-          .insert(schema.memoryEntries)
-          .values({ kind: "note", content: "caught-outer" });
+        await outer.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "caught-outer" });
         await expect(
           db.withOrg(orgA, async (inner) => {
             await inner.db
-              .insert(schema.memoryEntries)
-              .values({ kind: "note", content: "caught-inner" });
+              .insert(schema.jobs)
+              .values({ kind: "note", idempotencyKey: "caught-inner" });
             throw new Error("inner boom");
           }),
         ).rejects.toThrow("inner boom");
         // REQUIRED propagation: no savepoint, so what the nested call wrote is still in this
         // transaction, and the transaction itself is fine.
-        await outer.db
-          .insert(schema.memoryEntries)
-          .values({ kind: "note", content: "after-catch" });
-        const rows = await outer.db
-          .select({ c: schema.memoryEntries.content })
-          .from(schema.memoryEntries);
+        await outer.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "after-catch" });
+        const rows = await outer.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs);
         expect(rows.map((r) => r.c)).toContain("caught-inner");
       }),
     );
@@ -258,9 +246,7 @@ describe("withOrg", () => {
         await Promise.all(
           [1, 2, 3].map((n) =>
             db.withOrg(orgA, async (tx) => {
-              await tx.db
-                .insert(schema.memoryEntries)
-                .values({ kind: "note", content: `par-${n}` });
+              await tx.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: `par-${n}` });
               await sleep(5);
             }),
           ),
@@ -275,7 +261,7 @@ describe("withOrg", () => {
       db.withOrg(orgA, (l1) =>
         db.withOrg(orgA, (l2) =>
           db.withOrg(orgA, async (l3) => {
-            await l3.db.insert(schema.memoryEntries).values({ kind: "note", content: "depth-3" });
+            await l3.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "depth-3" });
             const rows = await l3.query<{ v: number }>("select 3 as v");
             expect(l1.orgId).toBe(orgA);
             expect(l2.orgId).toBe(orgA);
@@ -289,14 +275,12 @@ describe("withOrg", () => {
     await expect(
       withTimeout(
         db.withOrg(orgA, async (l1) => {
-          await l1.db
-            .insert(schema.memoryEntries)
-            .values({ kind: "note", content: "depth-1-lost" });
+          await l1.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "depth-1-lost" });
           await db.withOrg(orgA, () =>
             db.withOrg(orgA, async (l3) => {
               await l3.db
-                .insert(schema.memoryEntries)
-                .values({ kind: "note", content: "depth-3-lost" });
+                .insert(schema.jobs)
+                .values({ kind: "note", idempotencyKey: "depth-3-lost" });
               throw new Error("depth-3 boom");
             }),
           );
@@ -336,12 +320,12 @@ describe("withOrg", () => {
     const seenByB = await withTimeout(
       db.withOrg(orgB, async (outer) => {
         await db.withOrg(orgB, async (inner) => {
-          await inner.db.insert(schema.memoryEntries).values({ kind: "note", content: "b-nested" });
+          await inner.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "b-nested" });
         });
         await sleep(80);
-        return (
-          await outer.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)
-        ).map((r) => r.c);
+        return (await outer.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs)).map(
+          (r) => r.c,
+        );
       }),
     );
     expect(seenByB).toContain("b-nested");
@@ -359,16 +343,14 @@ describe("withOrg", () => {
           db.withOrg(orgA, (l2) =>
             db.withOrg(orgA, async (l3) => {
               await l3.db
-                .insert(schema.memoryEntries)
-                .values({ kind: "note", content: "branch-deep" });
+                .insert(schema.jobs)
+                .values({ kind: "note", idempotencyKey: "branch-deep" });
               expect(l2.orgId).toBe(orgA);
               return "deep";
             }),
           ),
           db.withOrg(orgA, async (l2) => {
-            await l2.db
-              .insert(schema.memoryEntries)
-              .values({ kind: "note", content: "branch-flat" });
+            await l2.db.insert(schema.jobs).values({ kind: "note", idempotencyKey: "branch-flat" });
             return "flat";
           }),
           db.withOrg(orgA, () =>
@@ -379,9 +361,7 @@ describe("withOrg", () => {
     );
     expect(results).toEqual(["deep", "flat", "deeper"]);
     const contents = await db.withOrg(orgA, async (tx) =>
-      (await tx.db.select({ c: schema.memoryEntries.content }).from(schema.memoryEntries)).map(
-        (r) => r.c,
-      ),
+      (await tx.db.select({ c: schema.jobs.idempotencyKey }).from(schema.jobs)).map((r) => r.c),
     );
     expect(contents).toEqual(expect.arrayContaining(["branch-deep", "branch-flat"]));
   });
@@ -428,7 +408,7 @@ describe("withOrg", () => {
       expect(
         (
           await tx.query(
-            "insert into memory_entries (kind, content) values ('note', 'conflict') on conflict do nothing",
+            "insert into repos (forge_repo_id, full_name) values (777001, 'org/conflict') on conflict do nothing",
           )
         ).rowCount,
       ).toBe(1);
