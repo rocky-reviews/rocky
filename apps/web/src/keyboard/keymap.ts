@@ -1,11 +1,14 @@
 /**
  * Keyboard shortcuts on the PR page (P6-5, ADR 0030, POC `keydown`): which key does what, when a
- * key counts as a shortcut, and where k/j and n/p move. Pure, so it is tested without a DOM.
+ * key counts as a shortcut, and where k/j and i/u move. Pure, so it is tested without a DOM.
  *
- * - Single-character keys (k j n p a e d v / b t m ?) fire only with no Ctrl, ⌘ or Alt, never
- *   while typing, and can be turned off (WCAG 2.1.4); the choice is remembered per browser.
+ * - Single-character keys (k j i u a e d v / b t m ?, and 1–4 among a draft's dismiss reasons)
+ *   fire only with no Ctrl, ⌘ or Alt, never while typing, and can be turned off (WCAG 2.1.4);
+ *   the choice is remembered per browser.
  * - ⌘/Ctrl+Enter (finish) has a modifier, so it stays on; it too is ignored while typing, where
  *   text fields give it their own meaning (save the comment).
+ * - H4-14: ↑/↓ with nothing focused scroll the main column (they are not single-character keys,
+ *   so they stay on).
  */
 
 export type ShortcutAction =
@@ -27,8 +30,9 @@ export type ShortcutAction =
 const SINGLE_KEYS: Readonly<Record<string, ShortcutAction>> = {
   k: "nextFile",
   j: "prevFile",
-  n: "nextDraft",
-  p: "prevDraft",
+  // H4-14: i/u, beside j/k (n/p before).
+  i: "nextDraft",
+  u: "prevDraft",
   a: "accept",
   e: "edit",
   d: "dismiss",
@@ -90,6 +94,37 @@ export const shortcutFor = (event: KeyInput, singleKeys: boolean): ShortcutActio
   return action;
 };
 
+/**
+ * H4-14: 1–4 pick a dismiss reason while the reasons are shown: the index, or null. The digit
+ * row or the keypad; on a layout whose digit row needs Shift (AZERTY), the physical key.
+ */
+export const reasonIndexFor = (event: KeyInput, singleKeys: boolean): number | null => {
+  if (!singleKeys || event.defaultPrevented || event.isComposing || event.repeat) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey) return null;
+  if (/^[1-4]$/.test(event.key)) return Number(event.key) - 1;
+  const physical = /^(?:Digit|Numpad)([1-4])$/.exec(event.code);
+  return physical !== null && !event.shiftKey && !/^\d$/.test(event.key)
+    ? Number(physical[1]) - 1
+    : null;
+};
+
+/** Pixels ↑/↓ scroll by: the browser's own step for a focused scroller. */
+export const SCROLL_STEP = 40;
+
+/**
+ * H4-14: ↑/↓ with focus on the page itself (body) scroll the main column, which is the scroller
+ * the browser would not pick (the page does not scroll). Anywhere else the focused control or
+ * the browser handles them (a line in the diff moves the active line; the main column, a card
+ * and the sidebar scroll their own box). Returns the pixels to scroll by, or null.
+ */
+export const scrollStepFor = (event: KeyInput, onPage: boolean): number | null => {
+  if (!onPage || event.defaultPrevented || event.isComposing) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return null;
+  if (event.key === "ArrowDown") return SCROLL_STEP;
+  if (event.key === "ArrowUp") return -SCROLL_STEP;
+  return null;
+};
+
 /** Input types that take no typed text: a letter pressed on them is still a shortcut. */
 const NOT_TEXT = new Set([
   "checkbox",
@@ -135,17 +170,17 @@ export const stepFile = (
 };
 
 /**
- * n/p: the undecided drafts by severity, or every draft once none is left (POC `cycleFinding`);
+ * i/u: the undecided drafts in the Review panel's order (H4-14: the open file's first), or every draft once none is left (POC `cycleFinding`);
  * from the focused one, wrapping; from none (or a decided one), the first or the last.
  */
 export const stepDraft = (
-  bySeverity: readonly string[],
+  order: readonly string[],
   undecided: (id: string) => boolean,
   focused: string | null,
   dir: 1 | -1,
 ): string | undefined => {
-  const open = bySeverity.filter(undecided);
-  const pool = open.length > 0 ? open : bySeverity;
+  const open = order.filter(undecided);
+  const pool = open.length > 0 ? open : order;
   if (pool.length === 0) return undefined;
   const at = focused === null ? -1 : pool.indexOf(focused);
   if (at === -1) return dir > 0 ? pool[0] : pool.at(-1);
@@ -154,17 +189,23 @@ export const stepDraft = (
 
 /** The help dialog's rows, in the POC's order. `keys` are shown as separate <kbd>s. */
 export const HELP_ROWS: readonly { keys: readonly string[]; label: string; single: boolean }[] = [
-  { keys: ["k", "j"], label: "Next / previous file (in risk order)", single: true },
-  { keys: ["n", "p"], label: "Next / previous AI draft", single: true },
-  { keys: ["a"], label: "Accept the focused draft as your comment", single: true },
-  { keys: ["e"], label: "Edit the focused draft", single: true },
-  { keys: ["d"], label: "Dismiss the focused draft", single: true },
+  { keys: ["j", "k"], label: "Previous & next file (in risk order)", single: true },
+  { keys: ["u", "i"], label: "Previous & next AI draft (this file's first)", single: true },
+  { keys: ["a"], label: "Accept the focused draft as your comment (when on screen)", single: true },
+  { keys: ["e"], label: "Edit the focused draft (when on screen)", single: true },
+  { keys: ["d"], label: "Dismiss the focused draft (when on screen)", single: true },
+  {
+    keys: ["1", "2", "3", "4"],
+    label: "Dismiss reason: not a real issue, intentional, not worth it, handled elsewhere",
+    single: true,
+  },
   { keys: ["v"], label: "Toggle viewed on the current file", single: true },
   { keys: ["/"], label: "Ask about the PR (not available yet)", single: true },
   { keys: ["b"], label: "Back to the briefing", single: true },
   { keys: ["t"], label: "Change tree: what changed where", single: true },
   { keys: ["m"], label: "Toggle light / dark", single: true },
   { keys: ["?"], label: "This list", single: true },
+  { keys: ["↑", "↓"], label: "Scroll the file", single: false },
   { keys: ["finish"], label: "Finish review", single: false },
   { keys: ["Esc"], label: "Close / cancel", single: false },
 ];

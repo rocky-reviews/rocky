@@ -1,15 +1,27 @@
 /**
  * The page's one keydown listener for shortcuts (P6-5, ADR 0030). Rendered inside the review
- * provider so n/p and a/e/d go through the same paths as the mouse: n/p are the right panel's
- * jump to a draft, and a/e/d press the focused draft card's own Accept/Edit/Dismiss button, so
- * whatever guards the card has (a disabled or missing button) apply to the key too. Like the
- * panel, they do nothing until the review state is loaded or when the drafts are hidden because
- * the diff is from a newer push than the analysis.
+ * provider so i/u and a/e/d go through the same paths as the mouse: i/u are the right panel's
+ * jump to a draft, in the panel's order (H4-14: the open file's first), and a/e/d press the
+ * focused draft card's own Accept/Edit/Dismiss button, so whatever guards the card has (a
+ * disabled or missing button) apply to the key too. H4-14: a/e/d act only while that card is on
+ * screen; off screen they do nothing (their hints are hidden then too). Like the panel, they do
+ * nothing until the review state is loaded or when the drafts are hidden because the diff is
+ * from a newer push than the analysis.
+ *
+ * H4-14: ↑/↓ with focus on the page itself scroll the main column (`scrollStepFor`).
  */
 import { useEffect, useRef } from "react";
-import { bySeverity } from "../drafts/ReviewPanel.js";
+import { panelOrder } from "../drafts/ReviewPanel.js";
 import { type ReviewContextValue, useReview } from "../drafts/ReviewProvider.js";
-import { isTextEntry, type ShortcutAction, shortcutFor, stepDraft, stepFile } from "./keymap.js";
+import { cardOnScreen } from "./draft-on-screen.js";
+import {
+  isTextEntry,
+  scrollStepFor,
+  type ShortcutAction,
+  shortcutFor,
+  stepDraft,
+  stepFile,
+} from "./keymap.js";
 
 type Props = {
   /** False while a modal (drawer, dialog) is open: nothing fires behind it. */
@@ -53,7 +65,7 @@ export const ShortcutKeys = (props: Props) => {
         case "nextDraft":
         case "prevDraft": {
           if (!draftsShown(r)) return true;
-          const ids = bySeverity(r.findings).map((f) => f.id);
+          const ids = panelOrder(r.findings, p.current).map((f) => f.id);
           const undecided = (id: string) =>
             r.decisionOf(id).state === "draft" && r.postedOf(id) === null;
           const to = stepDraft(ids, undecided, r.focused, action === "nextDraft" ? 1 : -1);
@@ -67,12 +79,8 @@ export const ShortcutKeys = (props: Props) => {
           const finding = r.findings.find((f) => f.id === r.focused);
           if (finding === undefined || finding.path !== p.current) return true;
           const card = document.querySelector(`[data-finding="${CSS.escape(finding.id)}"]`);
-          if (card === null) {
-            // Scrolled out of the (virtualised) diff: bring it back; the next press acts.
-            if (r.decisionOf(finding.id).state === "draft" && r.postedOf(finding.id) === null)
-              r.jumpToFinding(finding.id);
-            return true;
-          }
+          // H4-14: the reviewer must see the draft they decide; off screen the key does nothing.
+          if (card === null || !cardOnScreen(card)) return true;
           // No such button (the card is being edited or dismissed): the key does nothing.
           const button = card.querySelector<HTMLButtonElement>(`[data-role="${ROLE[action]}"]`);
           if (button !== null && !button.disabled) button.click();
@@ -104,6 +112,14 @@ export const ShortcutKeys = (props: Props) => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (isTextEntry(target)) return;
+      const onPage =
+        target === null || target === document.body || target === document.documentElement;
+      const step = scrollStepFor(event, onPage);
+      if (step !== null) {
+        event.preventDefault();
+        document.getElementById("main")?.scrollBy({ top: step });
+        return;
+      }
       const action = shortcutFor(event, latest.current.props.singleKeys);
       if (action !== null && run(action)) event.preventDefault();
     };

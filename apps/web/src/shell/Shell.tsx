@@ -41,6 +41,7 @@ import { trapTab } from "./focus-trap.js";
 import { reviewOrder } from "../diff/annotations.js";
 import { KeyboardContext, type KeyboardContextValue } from "../keyboard/KeyboardContext.js";
 import { readSingleKeys, saveSingleKeys } from "../keyboard/keymap.js";
+import { DraftOnScreenProvider } from "../keyboard/draft-on-screen.js";
 import { ShortcutKeys } from "../keyboard/ShortcutKeys.js";
 import { ShortcutsDialog } from "../keyboard/ShortcutsDialog.js";
 import { LoginContext } from "../drafts/Author.js";
@@ -286,9 +287,12 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
     return () => document.removeEventListener("keydown", onKey);
   }, [overlay, closeDrawer, tree]);
 
-  const select = (next: Selection) => {
+  // H4-14: a file picked in the sidebar with the mouse takes the focus, so the keys that scroll
+  // (↑/↓, Space, Page Down) scroll it; picked with the keyboard, focus stays in the list.
+  const select = (next: Selection, pointer = false) => {
     setSelection(next);
     if (overlay === "files") closeDrawer();
+    else if (pointer) document.getElementById("main")?.focus({ preventScroll: true });
   };
 
   // A file opened from the briefing (P6-2): the content under focus is replaced, so focus moves
@@ -341,140 +345,150 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
             findings={data.analysis?.findings ?? NO_FINDINGS}
             onOpenFile={jumpToFile}
           >
-            <ShortcutKeys
-              active={!modal}
-              singleKeys={singleKeys}
-              current={selection.kind === "file" ? selection.path : null}
-              order={order}
-              onOpen={(path) => {
-                select(path === null ? { kind: "briefing" } : { kind: "file", path });
-                focusMain();
-              }}
-              onToggleViewed={toggleViewed}
-              onToggleMode={toggle}
-              onHelp={keyboard.openHelp}
-              onTree={openTree}
-              onAsk={() => toast(NOT_YET.ask)}
-              onFinish={openFinish}
-            />
-            <div className="app">
-              <div className="topbar-wrap" inert={modal}>
-                <a className="skip-link" href="#main">
-                  Skip to main content
-                </a>
-                <FinishButtonBar
-                  data={data}
-                  myReview={submitted ?? data.myReview}
-                  now={now}
-                  mode={mode}
-                  onToggleMode={toggle}
-                  drawer={drawer}
-                  onToggleDrawer={(which) => (drawer === which ? closeDrawer() : setDrawer(which))}
-                  onFinish={openFinish}
-                />
-              </div>
-              <div className="body">
-                <nav
-                  id="sidebar"
-                  className="col sidebar"
-                  tabIndex={-1}
-                  {...(overlay === "files"
-                    ? {
-                        role: "dialog",
-                        "aria-modal": true,
-                        "aria-labelledby": "drawer-title-files",
-                      }
-                    : { "aria-label": "Files" })}
-                  data-open={drawer === "files"}
-                  inert={(overlay !== null && overlay !== "files") || help || finish || tree}
-                >
-                  {drawer === "files" && (
-                    <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
-                  )}
-                  {data.analysis === null ? (
-                    <p className="placeholder">{sidebarPlaceholder(data.analysisRun)}</p>
-                  ) : (
-                    <SidebarContent
-                      groups={groups}
-                      noise={noise}
-                      unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
-                      coverage={cover}
+            <DraftOnScreenProvider>
+              <ShortcutKeys
+                active={!modal}
+                singleKeys={singleKeys}
+                current={selection.kind === "file" ? selection.path : null}
+                order={order}
+                onOpen={(path) => {
+                  select(path === null ? { kind: "briefing" } : { kind: "file", path });
+                  focusMain();
+                }}
+                onToggleViewed={toggleViewed}
+                onToggleMode={toggle}
+                onHelp={keyboard.openHelp}
+                onTree={openTree}
+                onAsk={() => toast(NOT_YET.ask)}
+                onFinish={openFinish}
+              />
+              <div className="app">
+                <div className="topbar-wrap" inert={modal}>
+                  <a className="skip-link" href="#main">
+                    Skip to main content
+                  </a>
+                  <FinishButtonBar
+                    data={data}
+                    myReview={submitted ?? data.myReview}
+                    now={now}
+                    mode={mode}
+                    onToggleMode={toggle}
+                    drawer={drawer}
+                    onToggleDrawer={(which) =>
+                      drawer === which ? closeDrawer() : setDrawer(which)
+                    }
+                    onFinish={openFinish}
+                  />
+                </div>
+                <div className="body">
+                  <nav
+                    id="sidebar"
+                    className="col sidebar"
+                    tabIndex={-1}
+                    {...(overlay === "files"
+                      ? {
+                          role: "dialog",
+                          "aria-modal": true,
+                          "aria-labelledby": "drawer-title-files",
+                        }
+                      : { "aria-label": "Files" })}
+                    data-open={drawer === "files"}
+                    inert={(overlay !== null && overlay !== "files") || help || finish || tree}
+                  >
+                    {drawer === "files" && (
+                      <DrawerHead title="Files" which="files" onClose={() => closeDrawer()} />
+                    )}
+                    {data.analysis === null ? (
+                      <p className="placeholder">{sidebarPlaceholder(data.analysisRun)}</p>
+                    ) : (
+                      <SidebarContent
+                        groups={groups}
+                        noise={noise}
+                        unanalysed={data.analysis.provenance.unanalysed.map((f) => f.path)}
+                        coverage={cover}
+                        selection={selection}
+                        viewed={viewed}
+                        onSelect={select}
+                        onToggleViewed={toggleViewed}
+                        onMarkViewed={markViewed}
+                        onOpenTree={openTree}
+                      />
+                    )}
+                  </nav>
+                  <main id="main" className="col main" tabIndex={-1} inert={modal}>
+                    <MainContent
                       selection={selection}
-                      viewed={viewed}
-                      onSelect={select}
-                      onToggleViewed={toggleViewed}
-                      onMarkViewed={markViewed}
+                      analysis={data.analysis}
+                      run={data.analysisRun}
+                      headSha={data.pull.headSha}
+                      onOpenFile={openFile}
+                      files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
                       onOpenTree={openTree}
                     />
-                  )}
-                </nav>
-                <main id="main" className="col main" tabIndex={-1} inert={modal}>
-                  <MainContent
-                    selection={selection}
-                    analysis={data.analysis}
-                    run={data.analysisRun}
-                    headSha={data.pull.headSha}
-                    onOpenFile={openFile}
-                    files={{ viewed, onToggleViewed: toggleViewed, onSelect: select }}
-                    onOpenTree={openTree}
+                  </main>
+                  <aside
+                    id="review-panel"
+                    className="panel"
+                    tabIndex={-1}
+                    {...(overlay === "panel"
+                      ? {
+                          role: "dialog",
+                          "aria-modal": true,
+                          "aria-labelledby": "drawer-title-panel",
+                        }
+                      : { "aria-label": "Review panel" })}
+                    data-open={drawer === "panel"}
+                    inert={(overlay !== null && overlay !== "panel") || help || finish || tree}
+                  >
+                    {drawer === "panel" && (
+                      <DrawerHead
+                        title="Review panel"
+                        which="panel"
+                        onClose={() => closeDrawer()}
+                      />
+                    )}
+                    <RightPanelContent
+                      current={selection.kind === "file" ? selection.path : null}
+                    />
+                  </aside>
+                </div>
+                {overlay !== null && (
+                  <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
+                )}
+                {help && (
+                  <ShortcutsDialog
+                    singleKeys={singleKeys}
+                    remembered={remembered}
+                    onSingleKeys={keyboard.setSingleKeys}
+                    mode={mode}
+                    onToggleMode={toggle}
+                    mapStyle={mapStyleSetting}
+                    onClose={closeHelp}
                   />
-                </main>
-                <aside
-                  id="review-panel"
-                  className="panel"
-                  tabIndex={-1}
-                  {...(overlay === "panel"
-                    ? {
-                        role: "dialog",
-                        "aria-modal": true,
-                        "aria-labelledby": "drawer-title-panel",
-                      }
-                    : { "aria-label": "Review panel" })}
-                  data-open={drawer === "panel"}
-                  inert={(overlay !== null && overlay !== "panel") || help || finish || tree}
-                >
-                  {drawer === "panel" && (
-                    <DrawerHead title="Review panel" which="panel" onClose={() => closeDrawer()} />
-                  )}
-                  <RightPanelContent />
-                </aside>
+                )}
+                {tree && treeModel !== null && (
+                  <ChangeTreeDialog
+                    tree={treeModel}
+                    selected={selection.kind === "file" ? selection.path : null}
+                    onOpenFile={openFromTree}
+                    onClose={closeTree}
+                  />
+                )}
+                {finish && (
+                  <FinishReview
+                    pullRequestId={data.pullRequestId}
+                    pull={data.pull}
+                    login={login}
+                    posting={posting}
+                    groups={groups}
+                    viewed={viewed}
+                    now={now}
+                    onClose={closeFinish}
+                    onPosted={onPosted}
+                  />
+                )}
               </div>
-              {overlay !== null && (
-                <div className="scrim" aria-hidden="true" onClick={() => closeDrawer()} />
-              )}
-              {help && (
-                <ShortcutsDialog
-                  singleKeys={singleKeys}
-                  remembered={remembered}
-                  onSingleKeys={keyboard.setSingleKeys}
-                  mode={mode}
-                  onToggleMode={toggle}
-                  mapStyle={mapStyleSetting}
-                  onClose={closeHelp}
-                />
-              )}
-              {tree && treeModel !== null && (
-                <ChangeTreeDialog
-                  tree={treeModel}
-                  selected={selection.kind === "file" ? selection.path : null}
-                  onOpenFile={openFromTree}
-                  onClose={closeTree}
-                />
-              )}
-              {finish && (
-                <FinishReview
-                  pullRequestId={data.pullRequestId}
-                  pull={data.pull}
-                  login={login}
-                  posting={posting}
-                  groups={groups}
-                  viewed={viewed}
-                  now={now}
-                  onClose={closeFinish}
-                  onPosted={onPosted}
-                />
-              )}
-            </div>
+            </DraftOnScreenProvider>
           </ReviewProvider>
         </LoginContext>
       </MapStyleContext>

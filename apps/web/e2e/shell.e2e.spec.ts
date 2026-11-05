@@ -368,7 +368,7 @@ test.describe("keyboard", () => {
       close: "Close review panel",
       width: 1024,
       // P6-4: the panel's last control is the last draft to decide.
-      last: "Missing tests for the two riskiest behavioursinvitations.test.ts:18✦ draft, Low severity",
+      last: "Missing tests for the two riskiest behavioursinvitations.test.ts:18Low severity",
     },
   ] as const;
 

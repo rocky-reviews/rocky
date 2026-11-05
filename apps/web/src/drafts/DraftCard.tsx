@@ -5,7 +5,7 @@
  *   title, body, suggested change, project-memory evidence, and Accept / Edit / Dismiss /
  *   Send to agent;
  * - editing: the body in a textarea, "Save as my comment" (⌘/Ctrl+Enter) or Cancel (Escape);
- * - dismissing: the four reasons or Cancel (Escape);
+ * - dismissing: the four reasons (1–4, H4-14) or Cancel (Escape);
  * - accepted: the reviewer's pending comment, "from AI draft" or "edited from AI draft", Undo;
  *   once posted to GitHub (P6-6): "Posted" instead of "Pending" and no Undo (it stands);
  * - dismissed: one collapsed line with the reason, Undo;
@@ -23,8 +23,9 @@ import { Code } from "../diff/Code.js";
 import { Prose } from "../diff/Prose.js";
 import type { PostedState } from "../diff/diff-model.js";
 import type { Language } from "../diff/tokenize.js";
+import { useDraftOnScreen, useReportOnScreen } from "../keyboard/draft-on-screen.js";
 import { Kbd, useKeyboard } from "../keyboard/KeyboardContext.js";
-import { isMac } from "../keyboard/keymap.js";
+import { isMac, reasonIndexFor } from "../keyboard/keymap.js";
 import { useReview } from "./ReviewProvider.js";
 import { Author } from "./Author.js";
 
@@ -75,7 +76,14 @@ export const DraftCard = ({ finding, original, language }: Props) => {
   const root = useRef<HTMLElement>(null);
   const titleId = `draft-${finding.id}-title`;
   // P6-5: a/e/d press these buttons on the focused draft; the hints go when shortcuts are off.
+  // H4-14: and while the focused draft is off screen (the keys do nothing then), and on any
+  // other draft (the keys never act on it).
   const keys = useKeyboard().singleKeys;
+  const actions =
+    status === "ready" && decision.state === "draft" && posted === null && !editing && !dismissing;
+  useReportOnScreen(root, finding.id, actions && focused === finding.id);
+  const onScreen = useDraftOnScreen() === finding.id && focused === finding.id;
+  const actionKey = (k: string) => (keys && onScreen ? k : undefined);
 
   // Focus follows the decision made here: to Undo after a decision, to Accept after an undo, to
   // the first reason or the textarea when those open.
@@ -247,9 +255,16 @@ export const DraftCard = ({ finding, original, language }: Props) => {
           role="group"
           aria-labelledby={`${titleId}-why`}
           onKeyDown={(event: KeyboardEvent) => {
-            if (event.key !== "Escape") return;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              then('[data-role="dismiss"]', () => setMode(null));
+              return;
+            }
+            // H4-14: 1–4 pick a reason, while focus is among them.
+            const reason = REASONS[reasonIndexFor(event.nativeEvent, keys) ?? -1];
+            if (reason === undefined) return;
             event.preventDefault();
-            then('[data-role="dismiss"]', () => setMode(null));
+            then('[data-role="undo"]', () => void act(finding, { kind: "dismiss", reason }));
           }}
         >
           <span className="lead" id={`${titleId}-why`}>
@@ -261,11 +276,12 @@ export const DraftCard = ({ finding, original, language }: Props) => {
               type="button"
               className="btn btn-sm"
               data-role={i === 0 ? "first-reason" : undefined}
+              aria-keyshortcuts={keys ? String(i + 1) : undefined}
               onClick={() =>
                 then('[data-role="undo"]', () => void act(finding, { kind: "dismiss", reason }))
               }
             >
-              {REASON_LABEL[reason]}
+              {REASON_LABEL[reason]} <Kbd k={String(i + 1)} />
             </button>
           ))}
           <button
@@ -292,38 +308,38 @@ export const DraftCard = ({ finding, original, language }: Props) => {
               type="button"
               className="btn btn-sm btn-primary"
               data-role="accept"
-              aria-keyshortcuts={keys ? "a" : undefined}
+              aria-keyshortcuts={actionKey("a")}
               onClick={() =>
                 then('[data-role="undo"]', () => void act(finding, { kind: "accept" }))
               }
             >
-              Accept <Kbd k="a" on />
+              Accept {onScreen && <Kbd k="a" on />}
             </button>
             <button
               type="button"
               className="btn btn-sm"
               data-role="edit"
-              aria-keyshortcuts={keys ? "e" : undefined}
+              aria-keyshortcuts={actionKey("e")}
               onClick={() =>
                 then("textarea", () =>
                   setMode({ kind: "edit", findingId: finding.id, text: finding.body }),
                 )
               }
             >
-              Edit <Kbd k="e" />
+              Edit {onScreen && <Kbd k="e" />}
             </button>
             <button
               type="button"
               className="btn btn-sm"
               data-role="dismiss"
-              aria-keyshortcuts={keys ? "d" : undefined}
+              aria-keyshortcuts={actionKey("d")}
               onClick={() =>
                 then('[data-role="first-reason"]', () =>
                   setMode({ kind: "dismiss", findingId: finding.id }),
                 )
               }
             >
-              Dismiss <Kbd k="d" />
+              Dismiss {onScreen && <Kbd k="d" />}
             </button>
             <span className="spacer" />
             {copiedAt !== null && <span className="copied-note">✓ Fix prompt copied</span>}

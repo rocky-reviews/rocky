@@ -4,7 +4,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { OwnComment } from "../diff/diff-model.js";
-import { bySeverity, ReviewPanelContent, shorten } from "./ReviewPanel.js";
+import { bySeverity, panelOrder, ReviewPanelContent, shorten } from "./ReviewPanel.js";
 import { NO_REVIEW, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
 
@@ -14,10 +14,10 @@ const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("fixture invalid");
 const findings = parsed.value.findings;
 
-const render = (value: ReviewContextValue) =>
+const render = (value: ReviewContextValue, current: string | null = null) =>
   renderToStaticMarkup(
     <ReviewContext value={value}>
-      <ReviewPanelContent />
+      <ReviewPanelContent current={current} />
     </ReviewContext>,
   );
 const panel = (decisions: Record<string, DraftDecision> = {}, comments: OwnComment[] = []) =>
@@ -46,7 +46,14 @@ describe("review panel", () => {
     const titles = [...list.matchAll(/<span class="t"><bdi>([^<]+)<\/bdi>/g)].map((m) => m[1]);
     expect(titles[0]).toBe("Invitee can choose their own role, e.g. admin");
     expect(titles).toHaveLength(10);
-    expect(text(list)).toContain("invitations.ts :28 ✦ draft , Critical severity");
+    // H4-14: the severity in words where the "✦ draft" badge was.
+    expect(text(list)).toContain("invitations.ts :28 Critical severity");
+    expect(list).toContain('<span class="sev critical">Critical<span class="sr-only"> severity');
+    expect(list).not.toContain("draft</span>");
+    expect(list).not.toContain('class="dot');
+    // On the briefing: one list, no group labels.
+    expect(html).not.toContain("sub-group");
+    expect(text(html)).toContain("To decide Invitee");
     expect(bySeverity(findings).map((f) => f.severity)).toEqual([
       "critical",
       "high",
@@ -59,6 +66,51 @@ describe("review panel", () => {
       "low",
       "low",
     ]);
+  });
+
+  it("H4-14: the open file's drafts first under This file, then Other files, each by severity", () => {
+    const auth = "src/auth/invitations.ts";
+    const html = render(reviewWith(findings), auth);
+    const section = (html.split('id="to-decide"')[1] ?? "").split("</section>")[0] ?? "";
+    const group = (id: string) =>
+      [
+        ...((section.split(`id="${id}"`)[1] ?? "").split("</ul>")[0] ?? "").matchAll(
+          /<span class="t"><bdi>([^<]+)<\/bdi>/g,
+        ),
+      ].map((m) => findings.find((f) => f.title === text(m[1] ?? ""))?.id);
+    expect(text(section)).toMatch(/^>To decide This file Invitee/);
+    expect(group("to-decide-here")).toEqual(["F1", "F3", "F8"]);
+    expect(group("to-decide-elsewhere")).toEqual(["F2", "F4", "F5", "F6", "F7", "F9", "F10"]);
+    expect(panelOrder(findings, auth).map((f) => f.id)).toEqual([
+      "F1",
+      "F3",
+      "F8",
+      "F2",
+      "F4",
+      "F5",
+      "F6",
+      "F7",
+      "F9",
+      "F10",
+    ]);
+    expect(panelOrder(findings, null)).toEqual(bySeverity(findings));
+  });
+
+  it("H4-14: no group labels when only one group has drafts to decide", () => {
+    // A file without drafts: all of them are elsewhere.
+    expect(render(reviewWith(findings), "src/api/index.ts")).not.toContain("sub-group");
+    // Every other draft decided: only this file's are left.
+    const others = Object.fromEntries(
+      findings
+        .filter((f) => f.path !== "src/auth/invitations.ts")
+        .map((f) => [f.id, { state: "dismissed", reason: "not_an_issue" } as const]),
+    );
+    const html = render(reviewWith(findings, others), "src/auth/invitations.ts");
+    expect(html).not.toContain("sub-group");
+    // Decided ones keep their dot and status badge.
+    const decided = (html.split('id="decided"')[1] ?? "").split("</ul>")[0] ?? "";
+    expect(decided).toContain('class="dot high"');
+    expect(text(decided)).toContain("dismissed , High severity");
   });
 
   it("moves decided drafts to Decided, counts them, and notes kept dismissal reasons", () => {

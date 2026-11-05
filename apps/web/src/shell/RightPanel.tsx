@@ -5,9 +5,10 @@
 import { ReviewPanelContent } from "../drafts/ReviewPanel.js";
 import { ShortcutStrip } from "../keyboard/ShortcutStrip.js";
 
-export const RightPanelContent = () => (
+/** `current`: the file on screen, or null on the briefing (H4-14: its drafts are listed first). */
+export const RightPanelContent = ({ current }: { current: string | null }) => (
   <>
-    <ReviewPanelContent />
+    <ReviewPanelContent current={current} />
     <ShortcutStrip />
   </>
 );

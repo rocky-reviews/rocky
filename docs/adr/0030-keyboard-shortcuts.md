@@ -83,3 +83,36 @@ briefing's "View as tree". It follows every rule above: no modifiers, not while 
 key repeat, off with the single-key switch, and nothing while a modal is open (so `t` does not
 fire inside the tree itself). The help dialog lists it after `b`. While the tree is open over the
 Files drawer, the drawer's own Escape and Tab handling stand down, so Escape closes only the tree.
+
+## Amendment H4-14: i/u for drafts, a/e/d only on screen, reason keys, ↑/↓ scroll
+
+A dogfooding round changed four things; the rules above (no modifiers, not while typing, off
+with the switch, nothing behind a modal) apply to each.
+
+- **i/u replace n/p.** `i` is the next AI draft and `u` the previous, beside j/k; `n` and `p`
+  do nothing now. The help and the Review panel's strip list them as "j/k previous & next file"
+  and "u/i previous & next AI draft" (previous first). They walk the drafts in the Review
+  panel's order, which now puts the open file's drafts first (by severity), then the other
+  files' (by severity); on the briefing it is severity alone (`panelOrder`). The order follows
+  the open file, so a walk that leaves a file regroups the list around the next one; drafts
+  skipped without a decision can come round again before later files (deciding removes them).
+- **a/e/d only while the focused draft is on screen.** "On screen" is some of the card inside
+  the main column, below the sticky file header (`cardOnScreen`, checked when the key is
+  pressed). Off screen the keys do nothing: the earlier "bring it back, the next press acts" is
+  gone, because a decision should be made on a draft the reviewer can see. The hints follow the
+  same rule: the focused card watches itself with one IntersectionObserver and reports to a small
+  provider of its own (`DraftOnScreenProvider`), so its a/e/d `<kbd>` hints and
+  `aria-keyshortcuts`, and the strip's a/e/d items, show only while it is on screen. Other cards
+  show no a/e/d hints (the keys never act on them).
+- **1–4 pick a dismiss reason** (Not a real issue, Intentional, Not worth it here, Already
+  handled elsewhere) while focus is among the reasons, which is where `d` and the Dismiss button
+  put it. Each reason button carries its digit as an `aria-hidden` `<kbd>` and
+  `aria-keyshortcuts`. The digit row or the keypad; where the digit row needs Shift (AZERTY) the
+  physical key stands in. Not on key repeat. Escape still cancels.
+- **↑/↓ scroll the file.** With focus on the page itself (`body`), ↑/↓ scroll the main column by
+  40 px, the browser's own step (`scrollStepFor`). Everywhere else the focused element keeps
+  them: a diff line or the diff list moves the active line (ADR 0023, H4-13), the main column
+  and a card scroll natively, the sidebar and tab lists keep theirs. A file picked in the
+  sidebar with the mouse now moves focus to the main column (picked with Enter or Space, focus
+  stays in the list), so ↑/↓, Space and Page Down scroll the file that was just opened. Arrows
+  are not character keys, so the single-key switch does not turn them off.

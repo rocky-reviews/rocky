@@ -276,7 +276,8 @@ describe("keyboard shortcuts (P6-5)", () => {
   it("shows the shortcut strip under the Review panel", () => {
     const panel = html.split('id="review-panel"')[1] ?? "";
     expect(text(panel.split('class="shortcut-strip"')[1] ?? "")).toContain(
-      "k / j next/prev file n / p drafts a accept e edit d dismiss v viewed ? all shortcuts",
+      // H4-14: no a/e/d while no draft is focused on screen.
+      "j / k previous & next file u / i previous & next AI draft v viewed ? all shortcuts",
     );
   });
 
