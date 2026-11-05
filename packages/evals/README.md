@@ -119,8 +119,9 @@ as a constant in the job file, `src/jobs/`), each with one real bug (`src/memory
 3. **apply:** pr-1302 is analysed with the entry.
 
 The result (`memory` in the report) holds booleans only: `run1Raised`, `learned`,
-`controlRaised`, `run2Raised` (must be false), `run2Cited` (the briefing's `memoryApplied` cites
-the entry), `run2BugFound` (memory hid nothing else) and `pass` (all of them, every analysis
+`controlRaised`, `run2Raised` (must be false), `run2Cited` (the model put the pattern in
+`suppressed` under the entry, the pipeline accepted it, and the briefing's `memoryApplied` cites
+it), `run2BugFound` (memory hid nothing else) and `pass` (all of them, every analysis
 stored). With `--fake` the model is scripted to obey the memory block, so the result checks the
 plumbing (learning, selection, the untrusted part, citations); `memory.test.ts` also shows that a
 model which ignores memory fails it. Live, it measures whether the model follows the memory
@@ -131,8 +132,16 @@ failed.
 **Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
 A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.
 
-`memory-injection.test.ts` plants every corpus payload as a stored entry and runs every adversary
-on it (ADR 0015 §2: a new channel runs the corpus).
+**What the CI gate proves, and what it does not.** The harness job runs the memory eval on the
+`--fake` model, so it proves the plumbing only. Whether a real model follows the memory
+instructions is measured by a live run, `pnpm evals run --memory` with a provider key: a
+**needs-human step before a change to project memory merges**, and its `memory` result is the
+evidence for the P8-2 criterion (ADR 0037).
+
+`memory-injection.test.ts` plants every corpus payload in stored entries (a convention, a
+dismissal, and several entries cited together) and runs every adversary on it (ADR 0015 §2: a new
+channel runs the corpus). An adversary given a dismissal suppresses every finding; the test
+checks that the high and critical ones are stored anyway.
 
 ## Report
 
@@ -213,7 +222,8 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 **What a PR cannot change on its own.** On a pull request both gates compare against the
 **base branch's** baseline (`git show HEAD^1:…`, the merge commit's base parent), and the job
 fails if the PR changes the files that decide a score without the maintainer label
-`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/memory/**`, `src/score.ts`,
+`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/memory/**`,
+`src/memory.test.ts`, `src/injection/check.ts`, `src/score.ts`,
 `src/run/**`, `scripts/evals.ts`, `.github/workflows/evals.yml` and `.github/CODEOWNERS`. With the
 label (a maintainer reviewed the change, for example a regenerated baseline), the PR's own
 baseline is used. `CODEOWNERS` names the owner of those files.
