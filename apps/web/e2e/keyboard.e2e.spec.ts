@@ -3,7 +3,7 @@ import { expect, type Page, test } from "./test.js";
 import { FIXTURE_NOW, MODES, openShell, WIDTHS } from "./support.js";
 import pr847 from "../../../packages/schema/fixtures/pr-847.json" with { type: "json" };
 
-const F2_BODY = pr847.findings.find((f) => f.id === "F2")?.body ?? "";
+const F3_BODY = pr847.findings.find((f) => f.id === "F3")?.body ?? "";
 
 /**
  * P6-5 acceptance criterion: "keyboard-only e2e completes a full review". The first test uses
@@ -61,7 +61,7 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   // ? opens the help, Escape closes it.
   await press(page, "?");
   await expect(dialog(page)).toBeVisible();
-  await expect(dialog(page)).toContainText("Next / previous file");
+  await expect(dialog(page)).toContainText("Previous & next file");
   await press(page, "Escape");
   await expect(dialog(page)).toHaveCount(0);
 
@@ -82,15 +82,15 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await expect(viewedButton).toHaveCount(0);
   await press(page, "v");
 
-  // n / p walk the undecided drafts by severity (F1 critical, then F2, F3, F4 high…).
-  await press(page, "n");
+  // i / u walk the undecided drafts in the panel's order (H4-14): this file's by severity (F1
+  // critical, F3 high, F8 low), then the other files' by severity.
+  await press(page, "i");
   await expect(card(page, "F1")).toBeFocused();
-  await press(page, "n");
-  await expect(card(page, "F2")).toBeFocused();
-  await expect(fileTitle(page)).toHaveText(ROUTES);
-  await press(page, "p");
-  await expect(card(page, "F1")).toBeFocused();
+  await press(page, "i");
+  await expect(card(page, "F3")).toBeFocused();
   await expect(fileTitle(page)).toHaveText(AUTH);
+  await press(page, "u");
+  await expect(card(page, "F1")).toBeFocused();
 
   // a accepts the focused draft.
   await press(page, "a");
@@ -98,54 +98,55 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await expect.poll(() => reviewApi.decision("F1").state).toBe("accepted");
 
   // e edits the next one; the letters typed go into the text box, ⌘/Ctrl+Enter saves.
-  await press(page, "n");
-  await expect(card(page, "F2")).toBeFocused();
+  await press(page, "i");
+  await expect(card(page, "F3")).toBeFocused();
   await press(page, "e");
   const box = page.getByRole("textbox", { name: "Your comment, edited from the AI draft" });
   await expect(box).toBeFocused();
   // The editor starts from the draft's text; the letters below replace it.
-  await expect(box).toHaveValue(F2_BODY);
+  await expect(box).toHaveValue(F3_BODY);
   await page.keyboard.press("ControlOrMeta+a");
-  await page.keyboard.type("Check the caller is an org admin (k, j, n, v).");
-  await expect(fileTitle(page)).toHaveText(ROUTES);
+  await page.keyboard.type("Mark the invite used in the same statement (k, j, i, u, v).");
+  await expect(fileTitle(page)).toHaveText(AUTH);
   await press(page, "ControlOrMeta+Enter");
   await expect
-    .poll(() => reviewApi.decision("F2"))
+    .poll(() => reviewApi.decision("F3"))
     .toEqual({
       state: "accepted",
       edited: true,
-      body: "Check the caller is an org admin (k, j, n, v).",
+      body: "Mark the invite used in the same statement (k, j, i, u, v).",
     });
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   // d dismisses with a reason picked by keyboard.
-  await press(page, "n");
-  await expect(card(page, "F3")).toBeFocused();
+  await press(page, "i");
+  await expect(card(page, "F8")).toBeFocused();
   await press(page, "d");
-  await expect(card(page, "F3").getByRole("button", { name: "Not a real issue" })).toBeFocused();
+  await expect(card(page, "F8").getByRole("button", { name: "Not a real issue" })).toBeFocused();
   await press(page, "Tab");
   await press(page, "Enter");
   await expect
-    .poll(() => reviewApi.decision("F3"))
+    .poll(() => reviewApi.decision("F8"))
     .toEqual({
       state: "dismissed",
       reason: "intentional",
     });
 
-  // The rest: accept or dismiss each, until every draft has a decision.
+  // The rest: accept or dismiss each (a reason by its number, H4-14), until every draft has a
+  // decision. Each file's drafts come first once i lands in it (F2, then F7 in the routes).
   for (const [id, key] of [
-    ["F4", "a"],
-    ["F5", "a"],
-    ["F6", "d"],
+    ["F2", "a"],
     ["F7", "a"],
-    ["F8", "d"],
-    ["F9", "a"],
+    ["F4", "a"],
+    ["F5", "d"],
+    ["F6", "a"],
+    ["F9", "d"],
     ["F10", "a"],
   ] as const) {
-    await press(page, "n");
+    await press(page, "i");
     await expect(card(page, id)).toBeFocused();
     await press(page, key);
-    if (key === "d") await press(page, "Enter");
+    if (key === "d") await press(page, "1");
     await expect.poll(() => reviewApi.decision(id).state).not.toBe("draft");
   }
   await expect(page.locator("#review-panel")).toContainText("Every AI draft has a decision.");
@@ -174,6 +175,7 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   expect(reviewApi.decision("F1").state).toBe("accepted");
   expect(reviewApi.decision("F10").state).toBe("accepted");
   expect(reviewApi.decision("F8").state).toBe("dismissed");
+  expect(reviewApi.decision("F5")).toEqual({ state: "dismissed", reason: "not_an_issue" });
 
   // ⌘/Ctrl+Enter opens Finish review (P6-6): focus starts inside, single keys are off.
   await press(page, "ControlOrMeta+Enter");
@@ -228,10 +230,10 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
     body: "Four auth issues to fix before merge; smaller items inline (k, j).",
   });
   expect(reviewApi.posted()[0]?.comments).toHaveLength(7);
-  // Focus is back on the page, and the posted drafts are read-only: n finds nothing to decide,
+  // Focus is back on the page, and the posted drafts are read-only: i finds nothing to decide,
   // a does nothing.
   expect(await page.evaluate(() => document.activeElement?.id)).toBe("main");
-  await press(page, "n");
+  await press(page, "i");
   await press(page, "a");
   expect(reviewApi.posted()).toHaveLength(1);
 });
@@ -243,8 +245,8 @@ test.describe("shortcuts never fire while typing", () => {
     await page.getByRole("button", { name: "Comment on line 10", exact: true }).click();
     const box = page.getByRole("textbox", { name: "Your comment on line 10" });
     await expect(box).toBeFocused();
-    await page.keyboard.type("kjnpaedvbm?/");
-    await expect(box).toHaveValue("kjnpaedvbm?/");
+    await page.keyboard.type("kjiuaedvbm1?/");
+    await expect(box).toHaveValue("kjiuaedvbm1?/");
     await expect(fileTitle(page)).toHaveText(AUTH);
     await expect(dialog(page)).toHaveCount(0);
     // ⌘/Ctrl+Enter in the composer adds the comment, it does not finish the review.
@@ -304,7 +306,7 @@ test("a, e and d act only on the focused draft of the file on screen", async ({
   await press(page, "a");
   expect(reviewApi.requests.filter((r) => r.startsWith("POST"))).toEqual([]);
   // Focused on F1, then moved to another file: F1 is no longer on screen.
-  await press(page, "n");
+  await press(page, "i");
   await expect(card(page, "F1")).toBeFocused();
   await press(page, "k");
   await expect(fileTitle(page)).toHaveText(ROUTES);
@@ -318,7 +320,7 @@ test("while a draft is being dismissed or edited, a/e/d leave its focus alone", 
 }) => {
   await open(page);
   await press(page, "k");
-  await press(page, "n");
+  await press(page, "i");
   await press(page, "d");
   const reason = card(page, "F1").getByRole("button", { name: "Not a real issue" });
   await expect(reason).toBeFocused();
@@ -436,11 +438,11 @@ test("shortcuts are off while a drawer is open, and work at phone width", async 
   await press(page, "Escape");
   await press(page, "k");
   await expect(fileTitle(page)).toHaveText(AUTH);
-  await press(page, "n");
+  await press(page, "i");
   expect(await activeFinding(page)).toBe("F1");
 });
 
-test("on a diff from a newer push, n and p do nothing (the drafts are hidden)", async ({
+test("on a diff from a newer push, i and u do nothing (the drafts are hidden)", async ({
   page,
   reviewApi,
 }) => {
@@ -451,7 +453,7 @@ test("on a diff from a newer push, n and p do nothing (the drafts are hidden)", 
   await expect(fileTitle(page)).toHaveText(AUTH);
   await expect(page.locator("main")).toContainText("hidden on this diff");
   const before = await page.evaluate(() => document.activeElement?.id);
-  for (const key of ["n", "p", "a", "e", "d"]) await press(page, key);
+  for (const key of ["i", "u", "n", "p", "a", "e", "d"]) await press(page, key);
   await expect(fileTitle(page)).toHaveText(AUTH);
   expect(await page.evaluate(() => document.activeElement?.id)).toBe(before);
   await expect(page.locator(".f-item.focus")).toHaveCount(0);
@@ -495,7 +497,7 @@ test("when the browser cannot save the switch, the dialog says so", async ({ pag
 test("key hints do not make small buttons taller", async ({ page }) => {
   await open(page);
   await press(page, "k");
-  await press(page, "n");
+  await press(page, "i");
   const height = (role: string) =>
     card(page, "F1")
       .locator(`[data-role="${role}"]`)
@@ -511,7 +513,7 @@ test("the key hints are on the buttons they trigger", async ({ page }) => {
   await expect(page.locator(".brief-start kbd")).toHaveText("k");
   await press(page, "k");
   await expect(page.locator(".file-head button")).toHaveAttribute("aria-keyshortcuts", "v");
-  await press(page, "n");
+  await press(page, "i");
   for (const [role, key] of [
     ["accept", "a"],
     ["edit", "e"],
@@ -523,5 +525,235 @@ test("the key hints are on the buttons they trigger", async ({ page }) => {
   }
   // The kbd hint is not part of the button's name.
   await expect(card(page, "F1").getByRole("button", { name: "Accept", exact: true })).toBeVisible();
-  await expect(page.locator("#review-panel .shortcut-strip")).toContainText("next/prev file");
+  await expect(page.locator("#review-panel .shortcut-strip")).toContainText("previous & next file");
+});
+
+/* ---------- H4-14 ---------- */
+
+const mainScroll = (page: Page) => page.evaluate(() => document.getElementById("main")?.scrollTop);
+const strip = (page: Page) => page.locator("#review-panel .shortcut-strip");
+const stripItems = (page: Page) => strip(page).locator(":scope > span");
+const toDecide = (page: Page) => page.locator('#review-panel section[aria-labelledby="to-decide"]');
+
+test("H4-14: n and p do nothing now; the help and the strip read j/k and u/i", async ({ page }) => {
+  await open(page);
+  await press(page, "k");
+  await press(page, "n");
+  await press(page, "p");
+  expect(await activeFinding(page)).toBeUndefined();
+  await expect(page.locator(".f-item.focus")).toHaveCount(0);
+  await expect(stripItems(page)).toHaveText([
+    "j/k previous & next file",
+    "u/i previous & next AI draft",
+    "v viewed",
+    "? all shortcuts",
+  ]);
+  await press(page, "?");
+  await expect(dialog(page).locator("dt").nth(0)).toHaveText("j / k");
+  await expect(dialog(page).locator("dd").nth(0)).toHaveText(
+    "Previous & next file (in risk order)",
+  );
+  await expect(dialog(page).locator("dt").nth(1)).toHaveText("u / i");
+  await expect(dialog(page).locator("dd").nth(1)).toHaveText(
+    "Previous & next AI draft (this file's first)",
+  );
+  await expect(dialog(page)).toContainText("1 / 2 / 3 / 4");
+});
+
+test("H4-14: To decide lists this file's drafts first, and i/u follow it", async ({ page }) => {
+  await open(page);
+  // On the briefing: one list by severity, no groups.
+  await expect(toDecide(page).locator(".sub-group")).toHaveCount(0);
+  await expect(toDecide(page).locator(".f-item").first()).toContainText("Critical");
+  await expect(toDecide(page)).not.toContainText("✦ draft");
+  await press(page, "k");
+  await expect(toDecide(page).locator(".sub-group")).toHaveText(["This file", "Other files"]);
+  const here = page.locator('#review-panel ul[aria-labelledby="to-decide-here"] .f-item .loc');
+  await expect(here).toHaveText(["invitations.ts:28", "invitations.ts:23", "invitations.ts:31"]);
+  for (const id of ["F1", "F3", "F8", "F2"]) {
+    await press(page, "i");
+    await expect(card(page, id)).toBeFocused();
+  }
+  // In the routes file now: its drafts lead the list, and i goes on to the next one there.
+  await expect(fileTitle(page)).toHaveText(ROUTES);
+  await expect(here).toHaveText(["invitations.ts:13", "invitations.ts:19"]);
+  await press(page, "i");
+  await expect(card(page, "F7")).toBeFocused();
+  // Then the next file in the sidebar's order (the migration), not back to the first file.
+  await press(page, "i");
+  await expect(card(page, "F4")).toBeFocused();
+  await expect(fileTitle(page)).toHaveText(MIGRATION);
+  for (const id of ["F5", "F6", "F9", "F10", "F1"]) {
+    await press(page, "i");
+    await expect(card(page, id)).toBeFocused();
+  }
+  // u retraces i: back over the file boundaries.
+  for (const id of ["F10", "F9", "F6", "F5", "F4", "F7", "F2", "F8"]) {
+    await press(page, "u");
+    await expect(card(page, id)).toBeFocused();
+  }
+});
+
+test("H4-14: a, e and d act only while the focused draft is on screen, and hint only then", async ({
+  page,
+  reviewApi,
+}) => {
+  await open(page);
+  await press(page, "k");
+  await press(page, "i");
+  await expect(card(page, "F1")).toBeFocused();
+  const accept = card(page, "F1").locator('[data-role="accept"]');
+  await expect(accept.locator("kbd")).toHaveText("a");
+  await expect(accept).toHaveAttribute("aria-keyshortcuts", "a");
+  await expect(stripItems(page)).toContainText(["a accept", "e edit", "d dismiss"]);
+  // Scrolled away (focus stays on the card): no hints, and the keys do nothing.
+  await page.setViewportSize({ width: 1440, height: 500 });
+  const away = await card(page, "F1").evaluate((el) => {
+    const main = el.closest("#main");
+    if (main === null) return -1;
+    main.scrollTop += el.getBoundingClientRect().bottom - main.getBoundingClientRect().top + 40;
+    return main.scrollTop;
+  });
+  await expect(strip(page)).not.toContainText("accept");
+  await expect(accept.locator("kbd")).toHaveCount(0);
+  await expect(accept).not.toHaveAttribute("aria-keyshortcuts", /.?/);
+  for (const key of ["a", "e", "d"]) await press(page, key);
+  expect(reviewApi.requests.filter((r) => r.startsWith("POST"))).toEqual([]);
+  // Not brought back into view either (before H4-14 the first press scrolled to it).
+  expect(await mainScroll(page)).toBe(away);
+  await expect(card(page, "F1")).toHaveClass(/draft /);
+  // Back on screen: the hints return and a accepts.
+  await card(page, "F1").evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await expect(stripItems(page)).toContainText(["a accept"]);
+  await expect(accept.locator("kbd")).toHaveText("a");
+  await press(page, "a");
+  await expect.poll(() => reviewApi.decision("F1").state).toBe("accepted");
+  // Decided: nothing left for a/e/d on the focused card.
+  await expect(strip(page)).not.toContainText("accept");
+});
+
+test("H4-14: 1–4 pick a dismiss reason, each with its key hint; Escape still cancels", async ({
+  page,
+  reviewApi,
+}) => {
+  await open(page);
+  await press(page, "k");
+  await press(page, "i");
+  await press(page, "d");
+  const reasons = card(page, "F1").locator(".dismiss-reasons button");
+  await expect(reasons.locator("kbd")).toHaveText(["1", "2", "3", "4"]);
+  await expect(card(page, "F1").getByRole("button", { name: "Intentional" })).toHaveAttribute(
+    "aria-keyshortcuts",
+    "2",
+  );
+  // Held or with a modifier, a digit does nothing.
+  await press(page, "Alt+2");
+  await press(page, "Escape");
+  await expect(card(page, "F1").getByRole("button", { name: "Dismiss" })).toBeFocused();
+  // Opened with the mouse too.
+  await card(page, "F1").getByRole("button", { name: "Dismiss" }).click();
+  await press(page, "3");
+  await expect
+    .poll(() => reviewApi.decision("F1"))
+    .toEqual({ state: "dismissed", reason: "not_worth_it" });
+  await expect(card(page, "F1").getByRole("button", { name: "Undo" })).toBeFocused();
+  // Again with shortcuts off: no hints, and the digits do nothing.
+  await press(page, "Enter");
+  await expect(card(page, "F1").locator('[data-role="accept"]')).toBeFocused();
+  await press(page, "?");
+  await dialog(page).getByRole("switch", { name: "Single-key shortcuts" }).press("Space");
+  await press(page, "Escape");
+  await card(page, "F1").getByRole("button", { name: "Dismiss" }).click();
+  await expect(reasons.locator("kbd")).toHaveCount(0);
+  await press(page, "2");
+  await expect(card(page, "F1").getByRole("button", { name: "Not a real issue" })).toBeFocused();
+  expect(reviewApi.decision("F1").state).toBe("draft");
+});
+
+test.describe("H4-14: ↑/↓ scroll the open file", () => {
+  test("after picking it in the sidebar with the mouse", async ({ page }) => {
+    await open(page);
+    await page.locator(`#sidebar button.nav-file[title="${AUTH}"]`).click();
+    await expect(fileTitle(page)).toHaveText(AUTH);
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe("main");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBeGreaterThan(0);
+  });
+
+  test("with nothing focused (the page itself)", async ({ page }) => {
+    await open(page);
+    await press(page, "k");
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await press(page, "ArrowDown");
+    await press(page, "ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBe(80);
+    await press(page, "ArrowUp");
+    await expect.poll(() => mainScroll(page)).toBe(40);
+  });
+
+  test("picked with the keyboard, focus stays in the sidebar, and ↓ there scrolls the file", async ({
+    page,
+  }) => {
+    await open(page);
+    const file = page.locator(`#sidebar button.nav-file[title="${AUTH}"]`);
+    await file.focus();
+    await press(page, "Enter");
+    await expect(fileTitle(page)).toHaveText(AUTH);
+    await expect(file).toBeFocused();
+    await press(page, "ArrowDown");
+    await press(page, "ArrowDown");
+    await expect(file).toBeFocused();
+    await expect.poll(() => mainScroll(page)).toBe(80);
+    await press(page, "ArrowUp");
+    await expect.poll(() => mainScroll(page)).toBe(40);
+  });
+
+  test("from the Review panel and the top bar too", async ({ page }) => {
+    await open(page);
+    await press(page, "k");
+    await page.locator("#review-panel .f-item").first().focus();
+    await press(page, "ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBe(40);
+    await page.getByRole("button", { name: "Keyboard shortcuts" }).focus();
+    await press(page, "ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBe(80);
+  });
+
+  test("a focused diff line keeps its own arrows: the next line takes focus", async ({ page }) => {
+    await open(page);
+    await press(page, "k");
+    await page.locator("#main .diff button[data-line]").first().focus();
+    const first = await page.evaluate(() => document.activeElement?.getAttribute("data-line"));
+    await press(page, "ArrowDown");
+    const next = await page.evaluate(() => document.activeElement?.getAttribute("data-line"));
+    expect(Number(next)).toBeGreaterThan(Number(first));
+  });
+
+  test("the risk chips (a tab list) keep their own arrows", async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const main = document.getElementById("main");
+      if (main === null) return;
+      const calls = { n: 0 };
+      (window as unknown as { scrollCalls: typeof calls }).scrollCalls = calls;
+      // Counts the shortcut's own scrolls (the only caller of scrollBy on the main column).
+      main.scrollBy = () => {
+        calls.n++;
+      };
+    });
+    const chips = page.locator(".risk-chips [role=tab]");
+    await chips.first().focus();
+    await press(page, "ArrowRight");
+    await expect(chips.nth(1)).toBeFocused();
+    await expect(chips.nth(1)).toHaveAttribute("aria-selected", "true");
+    await press(page, "ArrowDown");
+    await press(page, "ArrowUp");
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { scrollCalls: { n: number } }).scrollCalls.n,
+      ),
+    ).toBe(0);
+  });
 });

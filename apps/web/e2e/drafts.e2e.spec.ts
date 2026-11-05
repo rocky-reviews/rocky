@@ -125,11 +125,12 @@ test.describe("every transition, and a refresh keeps it", () => {
     await open(page);
     await card(page).getByRole("button", { name: "Dismiss" }).click();
     const reasons = card(page).getByRole("group", { name: /Why\?/ });
+    // H4-14: each reason with its key (1–4).
     await expect(reasons.getByRole("button")).toHaveText([
-      "Not a real issue",
-      "Intentional",
-      "Not worth it here",
-      "Already handled elsewhere",
+      "Not a real issue 1",
+      "Intentional 2",
+      "Not worth it here 3",
+      "Already handled elsewhere 4",
       "Cancel",
     ]);
     await reasons.getByRole("button", { name: "Intentional" }).click();

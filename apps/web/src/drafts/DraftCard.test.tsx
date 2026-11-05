@@ -3,6 +3,7 @@ import { type Finding, parseAnalysisDocument } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { DraftOnScreenContext } from "../keyboard/draft-on-screen.js";
 import { DraftCard } from "./DraftCard.js";
 import { type DraftMode, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
@@ -30,6 +31,8 @@ const render = (
     saving?: boolean;
     status?: ReviewContextValue["status"];
     posted?: "posting" | "posted";
+    /** H4-14: the draft the on-screen tracker reports. */
+    onScreen?: string;
   } = {},
 ) => {
   const value = reviewWith(
@@ -55,13 +58,15 @@ const render = (
     Object.assign(value, { state: { ...value.state, drafts } });
   }
   return renderToStaticMarkup(
-    <ReviewContext value={value}>
-      <DraftCard
-        finding={finding}
-        original={["    role: requestedRole ?? invite.role,"]}
-        language="js"
-      />
-    </ReviewContext>,
+    <DraftOnScreenContext value={{ onScreen: options.onScreen ?? null, report: () => {} }}>
+      <ReviewContext value={value}>
+        <DraftCard
+          finding={finding}
+          original={["    role: requestedRole ?? invite.role,"]}
+          language="js"
+        />
+      </ReviewContext>
+    </DraftOnScreenContext>,
   );
 };
 
@@ -98,19 +103,36 @@ describe("an undecided draft", () => {
   });
 
   it("offers Accept, Edit, Dismiss and Send to agent", () => {
-    const actions = text(html.split('class="draft-actions"')[1] ?? "");
-    // P6-5: each with its key hint (hidden from the accessible name) and aria-keyshortcuts.
+    expect(text(html.split('class="draft-actions"')[1] ?? "")).toBe(
+      "> Accept Edit Dismiss Send to agent ↗",
+    );
+    // P6-5: focused and on screen (H4-14), each with its key hint (hidden from the accessible
+    // name) and aria-keyshortcuts.
+    const shown = render(F1, { focused: "F1", onScreen: "F1" });
+    const actions = text(shown.split('class="draft-actions"')[1] ?? "");
     expect(actions).toBe("> Accept a Edit e Dismiss d Send to agent ↗");
     for (const [role, key] of [
       ["accept", "a"],
       ["edit", "e"],
       ["dismiss", "d"],
     ])
-      expect(html).toMatch(
+      expect(shown).toMatch(
         new RegExp(
           `data-role="${role}" aria-keyshortcuts="${key}">[^<]+<kbd[^>]*aria-hidden="true">${key}</kbd>`,
         ),
       );
+  });
+
+  it("H4-14: no a/e/d hints unless it is the focused draft and on screen", () => {
+    for (const html of [
+      render(F1),
+      render(F1, { focused: "F1" }),
+      render(F1, { onScreen: "F1" }),
+      render(F1, { focused: "F2", onScreen: "F2" }),
+    ]) {
+      expect(html).not.toContain("aria-keyshortcuts");
+      expect(html.split('class="draft-actions"')[1]).not.toContain("<kbd");
+    }
   });
 
   it("shows the project-memory evidence with its source", () => {
@@ -151,7 +173,11 @@ describe("editing and dismissing", () => {
     const html = render(F1, { mode: { kind: "dismiss", findingId: "F1" } });
     expect(html).toMatch(/role="group" aria-labelledby="draft-F1-title-why"/);
     expect(text(html.split('id="draft-F1-title-why">')[1] ?? "")).toBe(
-      "Why? Rocky keeps your reason so future reviews can learn from it. Not a real issue Intentional Not worth it here Already handled elsewhere Cancel",
+      "Why? Rocky keeps your reason so future reviews can learn from it. Not a real issue 1 Intentional 2 Not worth it here 3 Already handled elsewhere 4 Cancel",
+    );
+    // H4-14: each reason with its key, hidden from its name.
+    expect(html).toMatch(
+      /aria-keyshortcuts="2">Intentional <kbd aria-hidden="true">2<\/kbd><\/button>/,
     );
   });
 

@@ -1,6 +1,7 @@
 /**
  * The right panel's Review tab (P6-4, POC `renderPanel`): how many AI drafts are left to decide,
- * the tally (to decide / your comments / dismissed), the drafts to decide by severity, then the
+ * the tally (to decide / your comments / dismissed), the drafts to decide (H4-14: the open file's
+ * first, by severity, then the other files' by severity; i/u walk them in this order), then the
  * decided ones, the note about dismissals, and the reviewer's own comments. Every item jumps to
  * its draft (or line) in the diff. Ask (P9-2) gets its own tab later.
  */
@@ -31,7 +32,42 @@ export const bySeverity = (findings: readonly Finding[]): Finding[] =>
     )
     .map((x) => x.finding);
 
-export const ReviewPanelContent = () => {
+/**
+ * H4-14: the open file's drafts first, then the other files' in the sidebar's order (`files`)
+ * starting after the open file and wrapping round; each file's drafts by severity. Every open
+ * file sees a rotation of one cycle, so i/u walking it (and opening each draft's file) visit
+ * every draft once, and u undoes i. Files outside `files` follow, in severity order of their
+ * first draft. On the briefing (no file open): by severity alone.
+ */
+export const panelOrder = (
+  findings: readonly Finding[],
+  current: string | null,
+  files: readonly string[] = [],
+): Finding[] => {
+  const sorted = bySeverity(findings);
+  if (current === null) return sorted;
+  const all = [...files];
+  for (const f of sorted) if (!all.includes(f.path)) all.push(f.path);
+  const at = all.indexOf(current);
+  const key = (path: string) =>
+    path === current ? -1 : (all.indexOf(path) - at - 1 + all.length) % all.length;
+  // A stable sort: each file's drafts keep their severity order.
+  return sorted
+    .map((finding) => ({ finding, k: key(finding.path) }))
+    .sort((a, b) => a.k - b.k)
+    .map((x) => x.finding);
+};
+
+type Props = {
+  /** The file on screen, or null on the briefing. */
+  current?: string | null;
+  /** The sidebar's file order (k/j's), which the other files' drafts follow. */
+  files?: readonly string[];
+};
+
+const NO_FILES: readonly string[] = [];
+
+export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) => {
   const {
     status,
     stale,
@@ -43,12 +79,15 @@ export const ReviewPanelContent = () => {
     jumpToFinding,
     jumpToComment,
   } = useReview();
-  const sorted = bySeverity(findings);
+  const sorted = panelOrder(findings, current, files);
   // A draft whose content was already posted (from a re-run of this commit) is decided for
   // every purpose here: nothing can be done with it (P6-6).
   const open = (f: Finding) => decisionOf(f.id).state === "draft" && postedOf(f.id) === null;
   const undecided = sorted.filter(open);
+  // The same order as To decide, which is what i/u walk once every draft is decided.
   const decided = sorted.filter((f) => !open(f));
+  const here = undecided.filter((f) => f.path === current);
+  const elsewhere = undecided.filter((f) => f.path !== current);
   const accepted = decided.filter((f) => decisionOf(f.id).state === "accepted").length;
   const dismissed = decided.length - accepted;
   const yours = accepted + state.comments.length;
@@ -56,23 +95,22 @@ export const ReviewPanelContent = () => {
   const item = (finding: Finding) => {
     const decision = decisionOf(finding.id);
     const posted = postedOf(finding.id);
+    const toDecide = open(finding);
     const badge =
       posted !== null && decision.state !== "dismissed"
         ? "posted"
-        : decision.state === "draft"
-          ? "✦ draft"
-          : decision.state === "accepted"
-            ? "yours"
-            : "dismissed";
+        : decision.state === "accepted"
+          ? "yours"
+          : "dismissed";
     return (
       <li key={finding.id}>
         <button
           type="button"
-          className={`f-item st-${posted !== null && decision.state === "draft" ? "accepted" : decision.state}${focused === finding.id ? " focus" : ""}`}
+          className={`f-item st-${posted !== null && decision.state === "draft" ? "accepted" : decision.state}${toDecide ? " has-sev" : ""}${focused === finding.id ? " focus" : ""}`}
           disabled={stale}
           onClick={() => jumpToFinding(finding.id)}
         >
-          <span className={`dot ${finding.severity}`} aria-hidden="true" />
+          {!toDecide && <span className={`dot ${finding.severity}`} aria-hidden="true" />}
           <span className="f-text">
             <span className="t">
               <bdi>{finding.title}</bdi>
@@ -81,8 +119,18 @@ export const ReviewPanelContent = () => {
               <bdi>{baseName(finding.path)}</bdi>:{finding.range.end}
             </span>
           </span>
-          <span className={`st-badge is-${decision.state}`}>{badge}</span>
-          <span className="sr-only">, {SEVERITY_LABEL[finding.severity]} severity</span>
+          {toDecide ? (
+            // H4-14: the severity in words and colour, where the "✦ draft" badge was.
+            <span className={`sev ${finding.severity}`}>
+              {SEVERITY_LABEL[finding.severity]}
+              <span className="sr-only"> severity</span>
+            </span>
+          ) : (
+            <>
+              <span className={`st-badge is-${decision.state}`}>{badge}</span>
+              <span className="sr-only">, {SEVERITY_LABEL[finding.severity]} severity</span>
+            </>
+          )}
         </button>
       </li>
     );
@@ -164,9 +212,26 @@ export const ReviewPanelContent = () => {
             {undecided.length > 0 ? (
               <section aria-labelledby="to-decide">
                 <h3 className="sub-h" id="to-decide">
-                  To decide · by severity
+                  To decide
                 </h3>
-                <ul className="f-list">{undecided.map(item)}</ul>
+                {here.length > 0 && elsewhere.length > 0 ? (
+                  <>
+                    <h4 className="sub-group" id="to-decide-here">
+                      This file
+                    </h4>
+                    <ul className="f-list" aria-labelledby="to-decide-here">
+                      {here.map(item)}
+                    </ul>
+                    <h4 className="sub-group" id="to-decide-elsewhere">
+                      Other files
+                    </h4>
+                    <ul className="f-list" aria-labelledby="to-decide-elsewhere">
+                      {elsewhere.map(item)}
+                    </ul>
+                  </>
+                ) : (
+                  <ul className="f-list">{undecided.map(item)}</ul>
+                )}
               </section>
             ) : (
               findings.length > 0 && <p className="good">✓ Every AI draft has a decision.</p>

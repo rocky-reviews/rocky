@@ -45,14 +45,14 @@ const STATES: State[] = [
     },
   },
   {
-    // k then n: the riskiest file, its critical draft focused, with the a/e/d hints.
+    // k then i: the riskiest file, its critical draft focused, with the a/e/d hints.
     id: "keys-draft-focus",
     poc: "02-file-critical",
     run: async (page) => {
       await ready(page);
       await press(page, "k");
       await page.locator(".diff .ln").first().waitFor();
-      await press(page, "n");
+      await press(page, "i");
       await expect(page.locator('[data-finding="F1"]')).toBeFocused();
       // The card at the top of the main column, as a jump leaves it on a short screen.
       await page.locator('[data-finding="F1"]').evaluate((el) => {
@@ -70,7 +70,7 @@ const STATES: State[] = [
       await ready(page);
       await press(page, "k");
       await page.locator(".diff .ln").first().waitFor();
-      await press(page, "n");
+      await press(page, "i");
       await page.locator('[data-finding="F1"] [data-role="accept"]').focus();
       await page.keyboard.press("Shift+Tab");
       await page.keyboard.press("Tab");

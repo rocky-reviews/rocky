@@ -3,8 +3,10 @@ import { parseAnalysisDocument } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { reviewOrder } from "../diff/annotations.js";
 import type { OwnComment } from "../diff/diff-model.js";
-import { bySeverity, ReviewPanelContent, shorten } from "./ReviewPanel.js";
+import { stepDraft } from "../keyboard/keymap.js";
+import { bySeverity, panelOrder, ReviewPanelContent, shorten } from "./ReviewPanel.js";
 import { NO_REVIEW, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
 
@@ -13,11 +15,12 @@ import { reviewWith } from "./testing.js";
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("fixture invalid");
 const findings = parsed.value.findings;
+const files = reviewOrder(parsed.value);
 
-const render = (value: ReviewContextValue) =>
+const render = (value: ReviewContextValue, current: string | null = null) =>
   renderToStaticMarkup(
     <ReviewContext value={value}>
-      <ReviewPanelContent />
+      <ReviewPanelContent current={current} files={files} />
     </ReviewContext>,
   );
 const panel = (decisions: Record<string, DraftDecision> = {}, comments: OwnComment[] = []) =>
@@ -46,7 +49,14 @@ describe("review panel", () => {
     const titles = [...list.matchAll(/<span class="t"><bdi>([^<]+)<\/bdi>/g)].map((m) => m[1]);
     expect(titles[0]).toBe("Invitee can choose their own role, e.g. admin");
     expect(titles).toHaveLength(10);
-    expect(text(list)).toContain("invitations.ts :28 ✦ draft , Critical severity");
+    // H4-14: the severity in words where the "✦ draft" badge was.
+    expect(text(list)).toContain("invitations.ts :28 Critical severity");
+    expect(list).toContain('<span class="sev critical">Critical<span class="sr-only"> severity');
+    expect(list).not.toContain("draft</span>");
+    expect(list).not.toContain('class="dot');
+    // On the briefing: one list, no group labels.
+    expect(html).not.toContain("sub-group");
+    expect(text(html)).toContain("To decide Invitee");
     expect(bySeverity(findings).map((f) => f.severity)).toEqual([
       "critical",
       "high",
@@ -59,6 +69,122 @@ describe("review panel", () => {
       "low",
       "low",
     ]);
+  });
+
+  it("H4-14: the open file's drafts first under This file, then Other files, each by severity", () => {
+    const auth = "src/auth/invitations.ts";
+    const html = render(reviewWith(findings), auth);
+    const section = (html.split('id="to-decide"')[1] ?? "").split("</section>")[0] ?? "";
+    const group = (id: string) =>
+      [
+        ...((section.split(`id="${id}"`)[1] ?? "").split("</ul>")[0] ?? "").matchAll(
+          /<span class="t"><bdi>([^<]+)<\/bdi>/g,
+        ),
+      ].map((m) => findings.find((f) => f.title === text(m[1] ?? ""))?.id);
+    expect(text(section)).toMatch(/^>To decide This file Invitee/);
+    expect(group("to-decide-here")).toEqual(["F1", "F3", "F8"]);
+    // The other files in the sidebar's order after this one, each by severity.
+    expect(group("to-decide-elsewhere")).toEqual(["F2", "F7", "F4", "F5", "F6", "F9", "F10"]);
+    expect(panelOrder(findings, auth, files).map((f) => f.id)).toEqual([
+      "F1",
+      "F3",
+      "F8",
+      "F2",
+      "F7",
+      "F4",
+      "F5",
+      "F6",
+      "F9",
+      "F10",
+    ]);
+    // Rotated: from the routes file, the auth file comes last.
+    expect(panelOrder(findings, "src/api/routes/invitations.ts", files).map((f) => f.id)).toEqual([
+      "F2",
+      "F7",
+      "F4",
+      "F5",
+      "F6",
+      "F9",
+      "F10",
+      "F1",
+      "F3",
+      "F8",
+    ]);
+    // Without the sidebar's order, files follow their most severe draft.
+    expect(panelOrder(findings, auth).map((f) => f.id)).toEqual([
+      "F1",
+      "F3",
+      "F8",
+      "F2",
+      "F7",
+      "F4",
+      "F5",
+      "F6",
+      "F9",
+      "F10",
+    ]);
+    expect(panelOrder(findings, null)).toEqual(bySeverity(findings));
+  });
+
+  it("H4-14: i visits every undecided draft once, opening each one's file, and u undoes it", () => {
+    const undecided = () => true;
+    const fileOf = (id: string) => findings.find((f) => f.id === id)?.path ?? null;
+    const step = (at: { current: string | null; focused: string | null }, dir: 1 | -1) => {
+      const to = stepDraft(
+        panelOrder(findings, at.current, files).map((f) => f.id),
+        undecided,
+        at.focused,
+        dir,
+      );
+      return { current: to === undefined ? at.current : fileOf(to), focused: to ?? null };
+    };
+    for (const start of [null, ...files]) {
+      let at = { current: start, focused: null as string | null };
+      const seen: string[] = [];
+      for (let n = 0; n < findings.length; n++) {
+        const next = step(at, 1);
+        // u from where i landed goes back to where it was (once a draft is focused).
+        if (at.focused !== null) expect(step(next, -1).focused).toBe(at.focused);
+        at = next;
+        seen.push(at.focused ?? "");
+      }
+      expect(new Set(seen).size).toBe(findings.length);
+      // One more i comes round to the first again.
+      expect(step(at, 1).focused).toBe(seen[0]);
+    }
+  });
+
+  it("H4-14: Decided follows the same order (i/u walk it once all are decided)", () => {
+    const all = Object.fromEntries(
+      findings.map((f) => [f.id, { state: "dismissed", reason: "not_an_issue" } as const]),
+    );
+    const html = render(reviewWith(findings, all), "src/api/routes/invitations.ts");
+    const decided = (html.split('id="decided"')[1] ?? "").split("</ul>")[0] ?? "";
+    const locs = [...decided.matchAll(/<span class="loc"><bdi>([^<]+)<\/bdi>:(\d+)/g)].map(
+      (m) => `${m[1]}:${m[2]}`,
+    );
+    expect(locs.slice(0, 3)).toEqual([
+      "invitations.ts:13",
+      "invitations.ts:19",
+      "20261020_add_invitations.sql:6",
+    ]);
+  });
+
+  it("H4-14: no group labels when only one group has drafts to decide", () => {
+    // A file without drafts: all of them are elsewhere.
+    expect(render(reviewWith(findings), "src/api/index.ts")).not.toContain("sub-group");
+    // Every other draft decided: only this file's are left.
+    const others = Object.fromEntries(
+      findings
+        .filter((f) => f.path !== "src/auth/invitations.ts")
+        .map((f) => [f.id, { state: "dismissed", reason: "not_an_issue" } as const]),
+    );
+    const html = render(reviewWith(findings, others), "src/auth/invitations.ts");
+    expect(html).not.toContain("sub-group");
+    // Decided ones keep their dot and status badge.
+    const decided = (html.split('id="decided"')[1] ?? "").split("</ul>")[0] ?? "";
+    expect(decided).toContain('class="dot high"');
+    expect(text(decided)).toContain("dismissed , High severity");
   });
 
   it("moves decided drafts to Decided, counts them, and notes kept dismissal reasons", () => {
@@ -130,7 +256,7 @@ describe("review panel", () => {
 
   it("marks the focused draft", () => {
     const html = render(reviewWith(findings, {}, [], { focused: "F2" }));
-    expect(html).toMatch(/class="f-item st-draft focus"/);
+    expect(html).toMatch(/class="f-item st-draft has-sev focus"/);
   });
 });
 

@@ -31,7 +31,8 @@ type Props = {
   coverage: Coverage;
   selection: Selection;
   viewed: ReadonlySet<string>;
-  onSelect: (selection: Selection) => void;
+  /** `pointer`: picked with a mouse or touch (H4-14: the shell then moves focus to the file). */
+  onSelect: (selection: Selection, pointer?: boolean) => void;
   onToggleViewed: (path: string) => void;
   onMarkViewed: (paths: readonly string[]) => void;
   /** Where the lower-risk choice is kept; tests pass their own. */
@@ -130,7 +131,7 @@ export const SidebarContent = ({
               level={file.level}
               viewed={viewed.has(file.path)}
               selected={isSelected(selection, file.path)}
-              onSelect={() => onSelect({ kind: "file", path: file.path })}
+              onSelect={(pointer) => onSelect({ kind: "file", path: file.path }, pointer)}
               onToggleViewed={() => onToggleViewed(file.path)}
               extra={
                 <>
@@ -251,7 +252,7 @@ export const SidebarContent = ({
                 level="unanalysed"
                 viewed={viewed.has(path)}
                 selected={isSelected(selection, path)}
-                onSelect={() => onSelect({ kind: "file", path })}
+                onSelect={(pointer) => onSelect({ kind: "file", path }, pointer)}
                 onToggleViewed={() => onToggleViewed(path)}
               />
             ))}
@@ -275,7 +276,7 @@ export const SidebarContent = ({
                     level="low"
                     viewed={viewed.has(file.path)}
                     selected={isSelected(selection, file.path)}
-                    onSelect={() => onSelect({ kind: "file", path: file.path })}
+                    onSelect={(pointer) => onSelect({ kind: "file", path: file.path }, pointer)}
                     onToggleViewed={() => onToggleViewed(file.path)}
                   />
                 ))}
@@ -324,7 +325,7 @@ type RowProps = {
   level: SidebarFile["level"] | "unanalysed";
   viewed: boolean;
   selected: boolean;
-  onSelect: () => void;
+  onSelect: (pointer: boolean) => void;
   onToggleViewed: () => void;
   extra?: ReactNode;
 };
@@ -344,7 +345,8 @@ const FileRow = ({ path, level, viewed, selected, onSelect, onToggleViewed, extr
       className="nav-file"
       title={path}
       aria-current={selected ? "page" : undefined}
-      onClick={onSelect}
+      // A click has a count; Enter or Space on the button has none.
+      onClick={(event) => onSelect(event.detail > 0)}
     >
       <span className="name">
         <bdi>{path}</bdi>
