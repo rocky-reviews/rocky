@@ -94,6 +94,15 @@ Task log for the project plan. Agents append a row when a task is merged.
   `De'Andre`, `McDonald`, `DeShawn`; the ADR's guarantee, the `Mark the field` example and the
   50 000 note were corrected, and the own-line CamelCase handle and brand-after-cue false
   positives listed.
+- Fix round 4 applied: every display-name part is indexed, trimmed of punctuation, with
+  hyphenated sub-parts; the index is keyed by the first two words (the shared-first-word worst
+  case); the ADR's guarantee and timings follow the verifier's measurements.
+- Scrubber nits (not fixed): `alice'S` leaves `'S` (only a lower-case possessive is absorbed);
+  the Cyrillic look-alike folding differs by case (`ИВАН` and `Иван` fold differently, so a
+  listed `Ivan` matches one but not the other); `ilker`/`İlker` and `STRAUSS`/`Strauß` do not
+  match (dotted İ and ß do not case-fold to the ASCII forms); CJK names without word boundaries
+  (`李雷说` is one word to the tokeniser, so a listed `李雷` inside it is missed); heuristic
+  false positives `MacBook said` / `VanDyke said` (the Mac/Van name prefixes).
 - Security L2: chat-template tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, …) are not refused at
   storage; P8-2 must pass entries only as untrusted text (`LlmUntrustedText`), never
   concatenated into instructions.

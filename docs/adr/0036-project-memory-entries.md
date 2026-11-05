@@ -90,9 +90,11 @@ to Latin for matching only):
    and the caller's list after; more than `MAX_KNOWN_PEOPLE` (50 000) distinct folded names is
    refused (`too_many_people`), never scrubbed with a shortened list. People are matched by
    **word lookup**, not by a compiled pattern: the text is split into words once, each word is
-   looked up in an index of the names and of each display name's space-separated parts (up to
-   eight per name), and a multi-word name must match word by word with the same text in
-   between. Everything is case-insensitive: logins, whole display names and their parts
+   looked up in an index (keyed by the first two words) of the names and of every
+   space-separated part of a display name, trimmed of punctuation, with hyphenated sub-parts
+   (`Smith` of `Smith, Alice`, `Ally` of `Alice "Ally" Smith`, `Smith` and `Jones` of `Alice
+Smith-Jones`; a login's hyphenated words such as `the` in `bob-the-builder` are not parts),
+   and a multi-word name must match word by word with the same text in between. Everything is case-insensitive: logins, whole display names and their parts
    (`smith`, `SMITH` and `Smith` of `Alice Smith`). A name or part is matched **wherever it
    appears as a word** unless it is "weak" (`matchesAsBareWord`): an ASCII word in a small
    dictionary of common words and word-names (`go`, `api`, `main`, `test`, `Mark`, `Brown`),
@@ -123,11 +125,12 @@ Each class is replaced by a fixed placeholder (`[person]`, `[email]`, `[user]`, 
 `[address]`); the result reports counts per class, which is all a log may carry.
 
 **What the scrubber guarantees:** the known people (member logins, display names passed by the
-caller, the PR author, and each space-separated part of a display name) are never stored
-wherever they appear as a word, in any case, possessive, NFKC or look-alike spelling, with
-invisible characters inside or inside inline code, **except** a name or part that is a
-dictionary or stop-list word or at most two letters, which is removed only in person positions
-(after `@`, a cue, in a trailer, before a speech verb; inside inline code too); email addresses,
+caller, the PR author, and every space-separated or hyphenated part of a display name, trimmed
+of punctuation) are never stored wherever they appear as a word, in any case, possessive, NFKC
+or look-alike spelling, with invisible characters inside or inside inline code, **except** a
+name or part that is a dictionary or stop-list word or at most two letters, which is removed
+only in person positions (after `@`, a cue, in a trailer, before a speech verb; inside inline
+code too); email addresses,
 URL credentials, `@handles`, trailer values, phone numbers and IPv4 addresses of the listed
 shapes are never stored; no entry carries the prompt canary or any eight-character run of it.
 The output is NFKC without invisible characters, which also removes the hidden-text channel into
@@ -237,11 +240,14 @@ reviewers' prompts; a leaver whose name must not remain; anyone reading an expor
   ADR 0024's decision, not this one's.
 - The per-repository cap is a ceiling, not a budget: P8-4 decides what to keep.
 - `MAX_KNOWN_PEOPLE` (50 000 distinct folded names, a constant with a timing test) bounds the
-  scrub's people list. Each name adds up to eight parts to the word index, so the index holds
-  at most 450 000 entries; it is rebuilt per call, in time linear in the list (measured: 50 000
-  five-word names index and scrub a 300-character text in about 230 ms on a laptop, 50 000
-  twelve-word names in about 160 ms, 50 000 logins in about 40 ms; the regex alternation this
-  replaced took seconds and ran out of memory at that size). The repository always passes every member login of the org, so an org
+  scrub's people list. Every part of a display name is indexed (names are at most 100
+  characters, so parts are bounded); the index is rebuilt per call, in time linear in the list.
+  Measured with 50 000 random names per run on a 300-character text: one-word names about
+  75 ms, two-word about 200 ms, three-word about 280 ms, five-word about 410 ms, twelve-word
+  about 745 ms, with 150–400 MB of transient heap. The index is keyed by the first two words,
+  so 50 000 names sharing a first word over a text that repeats it (the worst case, bounded by
+  the 2 000-character input cap) stays well under a second. The regex alternation this replaced
+  took seconds and ran out of memory at that size.
   with more members than that gets `too_many_people` on every create (audited nowhere, answered
   to the caller) until the constant is raised; nothing is scrubbed with a shortened list. No
   GitHub organization Rocky targets is near that size; the way out is a code change with the
