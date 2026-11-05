@@ -50,7 +50,10 @@ code,
   white-space: nowrap;
   border: 0;
 }
-/* H4-17: screen-reader text inside copyable content (the diff) stays out of a copied selection. */
+/*
+ * H4-17: screen-reader text inside copyable content (the diff) stays out of a copied selection.
+ * Only for invisible text (with .sr-only): visible text marked so could no longer be selected.
+ */
 .no-copy {
   -webkit-user-select: none;
   user-select: none;

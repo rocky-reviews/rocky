@@ -174,6 +174,17 @@ Task log for the project plan. Agents append a row when a task is merged.
 - An empty code line has no text to select, so a copied selection loses it (no blank line).
 - The e2e suite runs Chromium only; the WebKit and Firefox copy checks were a one-off run. A
   small cross-browser project for `diff.e2e.spec.ts` "copied code is only code" would keep them.
+- Review: Safari's real clipboard is unverified. Only `getSelection().toString()` was checked in
+  WebKit (Playwright cannot read its clipboard); the maintainer checks it by hand. If Safari's
+  copy still carries the sign words, the robust option is to draw the visible +/− as CSS
+  `::before` content and keep the word in the sign column only for screen readers.
+- Review: other `sr-only` text could be copied when a selection crosses it. The PostedPill's
+  " to GitHub, read-only" (`DraftCard.tsx`) is now `no-copy` (fix round); the composer's
+  `sr-only` label "Your comment on line N" (`DiffBody.tsx`) is not yet. `.no-copy` is only for
+  invisible text (its CSS comment says so).
+- Review nit: the e2e drag test picks lines by index (`code.slice(7, 12)` for lines 8–12 of
+  `src/auth/invitations.ts`); a fixture change would break it. Selecting by `data-line` and
+  reading those rows' code would not.
 
 ### H4-15 follow-ups
 

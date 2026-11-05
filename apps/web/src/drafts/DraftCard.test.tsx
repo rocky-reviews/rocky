@@ -256,6 +256,8 @@ describe("decided drafts", () => {
     expect(posted).not.toContain('data-role="undo"');
     expect(posted).toContain('data-posted="posted"');
     expect(posted).toContain('class="pending posted"');
+    // H4-17: its screen-reader words are not copied with a selection across the diff.
+    expect(posted).toContain('<span class="sr-only no-copy"> to GitHub, read-only</span>');
     const posting = render(F1, { decision, posted: "posting" });
     expect(text(posting)).toContain("you Posting… , read-only");
     expect(posting).not.toContain("<button");

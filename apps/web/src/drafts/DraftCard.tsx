@@ -374,7 +374,7 @@ export const PostedPill = ({ posted }: { posted: PostedState }) =>
   ) : (
     <span className="pending posted">
       {posted === "posted" ? "Posted" : "Posting…"}
-      <span className="sr-only">
+      <span className="sr-only no-copy">
         {posted === "posted" ? " to GitHub, read-only" : ", read-only"}
       </span>
     </span>
