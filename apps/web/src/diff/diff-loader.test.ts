@@ -3,6 +3,8 @@ import type { DiffDataSource, RawDiffData } from "../data/diff-data.js";
 import { createFixtureDiffSource } from "../data/diff-fixture-source.js";
 import { DiffLoadError, type DiffLoadReason } from "../data/diff-http-source.js";
 import { DEFAULT_PULL } from "../data/fixture-source.js";
+import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
+import { type AnalysisDocument, parseAnalysisDocument } from "@rocky-reviews/schema";
 import { createDiffLoader, type DiffLoad, preloadsDiff } from "./diff-loader.js";
 
 /**
@@ -176,13 +178,42 @@ describe("diff loader", () => {
 });
 
 describe("preloadsDiff", () => {
-  const head = "a".repeat(40);
-  it("preloads when the analysis is for the PR's head: its files are about to be opened", () => {
-    expect(preloadsDiff(head, head)).toBe(true);
+  const parsed = parseAnalysisDocument(pr847);
+  if (!parsed.ok) throw new Error("fixture invalid");
+  const doc: AnalysisDocument = parsed.value;
+  const head = doc.provenance.head.sha;
+  const triage = doc.triage;
+  /** The document with only these openable files (the shape `preloadsDiff` reads). */
+  const only = (
+    files: Partial<Pick<AnalysisDocument["triage"], "files" | "noise">>,
+    unanalysed: AnalysisDocument["provenance"]["unanalysed"] = [],
+  ): AnalysisDocument => ({
+    ...doc,
+    triage: { ...triage, files: [], noise: [], ...files },
+    provenance: { ...doc.provenance, unanalysed },
   });
 
-  it("does not when there is no analysis (no files to open) or it is for an older push", () => {
+  it("preloads when the analysis is for the PR's head and has files to open", () => {
+    expect(preloadsDiff(doc, head)).toBe(true);
+  });
+
+  it("does not when there is no analysis or it is for an older push", () => {
     expect(preloadsDiff(null, head)).toBe(false);
-    expect(preloadsDiff("b".repeat(40), head)).toBe(false);
+    expect(preloadsDiff(doc, "b".repeat(40))).toBe(false);
+  });
+
+  it("does not when the analysis has no file a reviewer can open", () => {
+    expect(preloadsDiff(only({}), head)).toBe(false);
+  });
+
+  it("does for any openable file: triaged, noise (its raw diff) or not analysed", () => {
+    expect(preloadsDiff(only({ files: triage.files.slice(0, 1) }), head)).toBe(true);
+    expect(preloadsDiff(only({ noise: triage.noise.slice(0, 1) }), head)).toBe(true);
+    const failed = {
+      path: "src/x.ts",
+      reason: "analysis-failed",
+      detail: "Repair failed.",
+    } as const;
+    expect(preloadsDiff(only({}, [failed]), head)).toBe(true);
   });
 });

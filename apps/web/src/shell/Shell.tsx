@@ -117,7 +117,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
   const cover = coverage(groups, viewed);
   // H4-16: the diff starts loading as the briefing is shown, so the first file opens at once.
   const { preload } = useDiff();
-  const preloading = preloadsDiff(data.analysis?.provenance.head.sha ?? null, data.pull.headSha);
+  const preloading = preloadsDiff(data.analysis, data.pull.headSha);
   useEffect(() => {
     if (preloading) preload();
   }, [preloading, preload]);

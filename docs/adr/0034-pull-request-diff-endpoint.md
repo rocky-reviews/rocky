@@ -159,8 +159,9 @@ only when the diff's head is the analysis's.
 **Preload (H4-16).** A cold read takes seconds (GitHub), a warm one tens of milliseconds, so the
 real PR page no longer waits for the first file opened: `DiffProvider` (`preload`, server
 source only) starts the one load as soon as the briefing is shown (`Shell`, `preloadsDiff`):
-when the PR has an analysis for its current head. With no analysis, or one for an older push,
-the page loads the diff on the first file opened, as before. The load is still made once per
+when the PR has an analysis for its current head that lists a file to open (triaged, noise or
+not analysed). With no analysis, no such file, or an analysis for an older push, the page loads
+the diff on the first file opened, as before. The load is still made once per
 page and shared by every file view (`diff/diff-loader.ts`). A preload failure shows nothing on
 the briefing; a lasting one (`signed_out`, `not_found`, `head_moved`, `commits_unavailable`,
 `too_large`, `unavailable`) is shown when a file is opened, without asking again; a passing one

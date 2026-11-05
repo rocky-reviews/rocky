@@ -8,6 +8,7 @@
  * before. Any other failure, and a failure the file view was already waiting on, is shown as
  * today and never retried.
  */
+import type { AnalysisDocument } from "@rocky-reviews/schema";
 import { type DiffData, type DiffDataSource, parseDiffData } from "../data/diff-data.js";
 import { DiffLoadError, type DiffLoadReason } from "../data/diff-http-source.js";
 import type { PullRef } from "../data/shell-data.js";
@@ -80,9 +81,15 @@ export const createDiffLoader = (
 };
 
 /**
- * Whether the page preloads the diff: only when there are analysed files to open and the
- * analysis is for the PR's head. On an older push's analysis the diff stays unread until a file
- * is opened, as before H4-16 (the drafts stay shown until then).
+ * Whether the page preloads the diff: only when the analysis is for the PR's head and lists a
+ * file a reviewer can open from the sidebar (triaged, noise, whose raw diff is on request, or not
+ * analysed). With no analysis, none of those files, or an older push's analysis, the diff stays
+ * unread until a file is opened, as before H4-16 (on an older push the drafts stay shown until
+ * then).
  */
-export const preloadsDiff = (analysisHead: string | null, pullHead: string): boolean =>
-  analysisHead !== null && analysisHead === pullHead;
+export const preloadsDiff = (analysis: AnalysisDocument | null, pullHead: string): boolean =>
+  analysis !== null &&
+  analysis.provenance.head.sha === pullHead &&
+  (analysis.triage.files.length > 0 ||
+    analysis.triage.noise.length > 0 ||
+    analysis.provenance.unanalysed.length > 0);

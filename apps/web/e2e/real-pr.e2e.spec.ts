@@ -120,6 +120,8 @@ test.describe("a real PR address reads the server", () => {
     // Nothing on the briefing says the diff is loading.
     await expect(page.locator(".diff-status")).toHaveCount(0);
     await (await preloaded).finished();
+    // Exactly one preload (StrictMode's second effect run shares it).
+    expect(diffReads()).toBe(1);
     const before = diffReads();
     // Record every status the file view shows from here on.
     await page.evaluate(() => {
@@ -156,6 +158,20 @@ test.describe("a real PR address reads the server", () => {
     await openFile(page, FILE);
     await expect(page.locator("#main")).toContainText("INVITE_TTL_MS");
     expect(diffReads()).toBe(before + 1);
+  });
+
+  test("H4-16: no preload on a PR with no analysis (no files to open)", async ({ page }) => {
+    const api = await mockPullApi(page, {
+      status: 200,
+      body: serverShellData({ analysis: null, analysisId: null, analysisRun: { status: "none" } }),
+    });
+    await openRealPr(page);
+    await expect(page.locator("#main")).toContainText("No analysis yet");
+    // Past the effects of the render that showed it (a preload would have been asked by then).
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 200))),
+    );
+    expect(api.requests.map((r) => new URL(r.url()).pathname)).not.toContain(REAL_PR_DIFF_API);
   });
 
   test("H4-16: no preload on an older push's analysis; the first file opened reads the diff", async ({
