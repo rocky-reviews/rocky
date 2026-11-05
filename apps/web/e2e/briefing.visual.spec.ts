@@ -48,3 +48,27 @@ for (const state of STATES) {
     }
   }
 }
+
+/**
+ * H4-10: the files by risk with a chip other than the default selected (Normal), by mouse, the
+ * pointer moved off so no hover is caught. Only the briefing's first section is taken.
+ */
+for (const size of WIDTHS) {
+  for (const mode of MODES) {
+    const name = `brief-risk-chip-${size.width}-${mode}`;
+    test(name, async ({ page }) => {
+      await page.setViewportSize(size);
+      await page.emulateMedia({ colorScheme: mode });
+      await openBriefing(page, STATE_PULLS.main);
+      await settle(page);
+      await page.getByRole("tab", { name: "Normal 2 files" }).click();
+      await page.mouse.move(0, 0);
+      await expect(page.locator("html")).toHaveAttribute("data-mode", mode);
+
+      const head = page.locator(".brief > .section").first();
+      await expect(head).toHaveScreenshot(`${name}.png`);
+      await mkdir(OUT, { recursive: true });
+      await head.screenshot({ path: join(OUT, `${name}.png`) });
+    });
+  }
+}

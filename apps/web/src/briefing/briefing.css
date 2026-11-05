@@ -90,57 +90,74 @@
   white-space: nowrap;
 }
 
-/* ---------- risk table ---------- */
-.risk-table {
-  width: 100%;
-  border-collapse: collapse;
+/* ---------- files by risk (H4-10: count chips) ---------- */
+/* POC: a risk table with a sentence per level; here a chip per level with its count, and the
+   selected level's files below. The level is a dot in its colour (as the risk labels' tints and
+   the sidebar); chip text stays --text/--muted (AA). The selected chip takes the "you" tint. */
+.risk-levels {
   margin-top: 14px;
-  font-size: 13px;
 }
-.risk-table th,
-.risk-table td {
-  padding: 7px 10px;
-  border-top: 1px solid var(--border);
-  vertical-align: middle;
-  text-align: left;
-  font-weight: inherit;
+.risk-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: var(--space-2) 0 10px;
 }
-.risk-table tr:first-child > * {
-  border-top: 0;
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-base);
+  cursor: pointer;
 }
-.rt-label,
-.rt-text {
-  width: 1%;
-  white-space: nowrap;
+.risk-chip b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
-.rt-files {
+.risk-chip:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+.risk-chip[aria-selected="true"] {
+  background: var(--you-bg);
+  border-color: var(--you);
+  color: var(--text);
+}
+.risk-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+/* Ignore is a ring, so it differs from Normal's grey by shape (H4-10 mockup). */
+.r-ignore > .risk-dot {
+  background: transparent;
+  border: 1.5px solid var(--muted);
+}
+.r-critical > .risk-dot {
+  background: var(--crit);
+}
+.r-important > .risk-dot {
+  background: var(--high);
+}
+.r-normal > .risk-dot {
+  background: var(--low);
+}
+.r-unanalysed > .risk-dot {
+  background: var(--med);
+}
+.risk-files {
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-}
-/* POC: level colour on its tint (3.2-4.1:1 in light mode); the tint carries the level. */
-.risk-table .risk-label {
-  font-size: var(--text-xs);
-  font-weight: 700;
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--panel-2);
-  color: var(--text);
-}
-.risk-table .risk-label.r-critical {
-  background: var(--crit-bg);
-}
-.risk-table .risk-label.r-important {
-  background: var(--high-bg);
-}
-.risk-table .risk-label.r-normal {
-  background: var(--low-bg);
-}
-.risk-table .risk-label.r-ignore {
-  color: var(--muted);
-}
-.risk-table .risk-label.r-unanalysed {
-  background: var(--med-bg);
+  line-height: 1.7;
 }
 .file-link {
   border: 0;
@@ -368,35 +385,9 @@
   color: var(--muted);
 }
 
-/* The risk table stacks at phone width (POC defect 1: it overflowed at 375 px). */
+/* At phone width the verdict and the two lists stack; the risk chips wrap (POC defect 1: the
+   risk table overflowed at 375 px). */
 @media (max-width: 760px) {
-  .risk-table,
-  .risk-table tbody,
-  .risk-table tr,
-  .risk-table th,
-  .risk-table td {
-    display: block;
-    width: auto;
-  }
-  .risk-table tr {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: center;
-    padding: var(--space-2) 0;
-    border-top: 1px solid var(--border);
-  }
-  .risk-table tr:first-child {
-    border-top: 0;
-  }
-  .risk-table th,
-  .risk-table td {
-    border-top: 0;
-    padding: 2px 10px 2px 0;
-    white-space: normal;
-  }
-  .risk-table .rt-files {
-    grid-column: 1 / -1;
-  }
   .verdict {
     flex-direction: column;
     gap: var(--space-1);

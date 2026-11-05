@@ -4,38 +4,44 @@ import { describe, expect, it } from "vitest";
 import {
   briefingBanner,
   briefingLead,
+  defaultRiskLevel,
   failureText,
   graphState,
   readByHand,
   reviewPathRows,
-  riskRows,
+  type RiskChoice,
+  type RiskLevelKey,
+  riskLevels,
+  selectedRiskLevel,
   shortNames,
   startFile,
+  tabKeyTarget,
 } from "./briefing-model.js";
 
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("pr-847 fixture is invalid");
 const doc: AnalysisDocument = parsed.value;
 
-describe("riskRows", () => {
-  const rows = riskRows(doc);
+describe("riskLevels (H4-10: count chips)", () => {
+  const levels = riskLevels(doc);
 
-  it("has the POC's four rows: critical, important, normal and ignore (low + noise)", () => {
-    expect(rows.map((r) => [r.key, r.label, r.text])).toEqual([
-      ["critical", "Critical", "3 files need your attention"],
-      ["important", "Important", "1 file worth a careful look"],
-      ["normal", "Normal", "2 files to skim"],
-      ["ignore", "Ignore", "3 files don't matter"],
+  it("has critical, important, normal and ignore (low + noise), each with its count", () => {
+    expect(levels.map((l) => [l.key, l.label, l.files.length])).toEqual([
+      ["critical", "Critical", 3],
+      ["important", "Important", 1],
+      ["normal", "Normal", 2],
+      ["ignore", "Ignore", 3],
     ]);
+    expect(levels.every((l) => !("text" in l))).toBe(true);
   });
 
-  it("lists files riskiest first, with low files before noise in the ignore row", () => {
-    expect(rows[0]?.files.map((f) => f.path)).toEqual([
+  it("lists files riskiest first, with low files before noise in the ignore level", () => {
+    expect(levels[0]?.files.map((f) => f.path)).toEqual([
       "src/auth/invitations.ts",
       "src/api/routes/invitations.ts",
       "db/migrations/20261020_add_invitations.sql",
     ]);
-    expect(rows[3]?.files.map((f) => f.path)).toEqual([
+    expect(levels[3]?.files.map((f) => f.path)).toEqual([
       "src/api/index.ts",
       "pnpm-lock.yaml",
       "src/generated/api-types.ts",
@@ -43,20 +49,24 @@ describe("riskRows", () => {
   });
 
   it("shows the parent folder when two file names collide (POC defect 4)", () => {
-    const names = rows.flatMap((r) => r.files.map((f) => f.name));
+    const names = levels.flatMap((l) => l.files.map((f) => f.name));
     expect(names).toContain("auth/invitations.ts");
     expect(names).toContain("routes/invitations.ts");
     expect(names).toContain("20261020_add_invitations.sql");
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("singularises the critical row", () => {
-    const one = { ...doc, triage: { ...doc.triage, files: doc.triage.files.slice(0, 1) } };
-    expect(riskRows(one)[0]?.text).toBe("1 file needs your attention");
+  it("drops levels with no files", () => {
+    const onlyNormal: AnalysisDocument = {
+      ...doc,
+      triage: { files: doc.triage.files.filter((f) => f.level === "normal"), noise: [] },
+    };
+    expect(riskLevels(onlyNormal).map((l) => l.key)).toEqual(["normal"]);
+    expect(riskLevels({ ...doc, triage: { files: [], noise: [] } })).toEqual([]);
   });
 
-  it("adds a row for files the AI could not analyse, only when there are some", () => {
-    expect(rows.some((r) => r.key === "unanalysed")).toBe(false);
+  it("adds a Not analysed level, above Ignore, only when the AI could not analyse some files", () => {
+    expect(levels.some((l) => l.key === "unanalysed")).toBe(false);
     const withUnanalysed: AnalysisDocument = {
       ...doc,
       provenance: {
@@ -64,9 +74,85 @@ describe("riskRows", () => {
         unanalysed: [{ path: "src/api/index.ts", reason: "too-large" }],
       },
     };
-    const row = riskRows(withUnanalysed).at(-1);
-    expect(row).toMatchObject({ key: "unanalysed", label: "Not analysed" });
-    expect(row?.text).toBe("1 file the AI couldn't analyse: read it yourself");
+    expect(riskLevels(withUnanalysed).map((l) => l.key)).toEqual([
+      "critical",
+      "important",
+      "normal",
+      "unanalysed",
+      "ignore",
+    ]);
+    const level = riskLevels(withUnanalysed).at(-2);
+    expect(level).toMatchObject({ key: "unanalysed", label: "Not analysed" });
+    expect(level?.files.map((f) => f.path)).toEqual(["src/api/index.ts"]);
+  });
+});
+
+describe("defaultRiskLevel", () => {
+  const level = (key: RiskLevelKey) => ({ key, label: key, files: [] });
+
+  it("picks the highest-risk level present", () => {
+    expect(defaultRiskLevel(riskLevels(doc))).toBe("critical");
+    expect(defaultRiskLevel([level("important"), level("normal")])).toBe("important");
+    expect(defaultRiskLevel([level("normal"), level("ignore")])).toBe("normal");
+    expect(defaultRiskLevel([level("ignore")])).toBe("ignore");
+  });
+
+  it("ranks Not analysed below Normal and above Ignore", () => {
+    expect(defaultRiskLevel([level("normal"), level("unanalysed")])).toBe("normal");
+    expect(defaultRiskLevel([level("unanalysed"), level("ignore")])).toBe("unanalysed");
+    expect(defaultRiskLevel([level("unanalysed")])).toBe("unanalysed");
+  });
+
+  it("has none when there are no levels", () => {
+    expect(defaultRiskLevel([])).toBeUndefined();
+  });
+});
+
+describe("selectedRiskLevel", () => {
+  const levels = riskLevels(doc);
+  const head = doc.provenance.head.sha;
+  const key = (choice?: RiskChoice, at = head) => selectedRiskLevel(levels, at, choice)?.key;
+
+  it("is the default until the reviewer picks a level", () => {
+    expect(key()).toBe("critical");
+  });
+
+  it("is the picked level on the document it was picked on", () => {
+    expect(key({ head, key: "normal" })).toBe("normal");
+  });
+
+  it("resets to the riskiest level when the head commit changes", () => {
+    expect(key({ head, key: "normal" }, "1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d")).toBe(
+      "critical",
+    );
+  });
+
+  it("falls back to the default when the picked level has no files", () => {
+    expect(key({ head, key: "unanalysed" })).toBe("critical");
+  });
+
+  it("is none without levels", () => {
+    expect(selectedRiskLevel([], head, { head, key: "normal" })).toBeUndefined();
+  });
+});
+
+describe("tabKeyTarget (WAI-ARIA tabs keys)", () => {
+  it("moves right and left, wrapping at the ends", () => {
+    expect(tabKeyTarget(4, 0, "ArrowRight")).toBe(1);
+    expect(tabKeyTarget(4, 3, "ArrowRight")).toBe(0);
+    expect(tabKeyTarget(4, 2, "ArrowLeft")).toBe(1);
+    expect(tabKeyTarget(4, 0, "ArrowLeft")).toBe(3);
+  });
+
+  it("goes to the first and last tab with Home and End", () => {
+    expect(tabKeyTarget(4, 2, "Home")).toBe(0);
+    expect(tabKeyTarget(4, 1, "End")).toBe(3);
+  });
+
+  it("ignores every other key", () => {
+    expect(tabKeyTarget(4, 1, "ArrowDown")).toBeUndefined();
+    expect(tabKeyTarget(4, 1, "Enter")).toBeUndefined();
+    expect(tabKeyTarget(4, 1, "a")).toBeUndefined();
   });
 });
 
@@ -241,12 +327,5 @@ describe("briefingBanner", () => {
       title: "The latest push could not be analysed",
       code: "llm_refused",
     });
-  });
-});
-
-describe("riskRows grammar", () => {
-  it("says 1 file doesn't matter", () => {
-    const one = { ...doc, triage: { ...doc.triage, noise: [] } };
-    expect(riskRows(one)[3]?.text).toBe("1 file doesn't matter");
   });
 });

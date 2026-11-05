@@ -43,6 +43,19 @@ const section = (html: string, title: string): string => {
   return html.slice(start, end < 0 ? undefined : end);
 };
 
+/** The risk level chips (`role="tab"` buttons), in order. */
+const tabs = (html: string): string[] =>
+  [...html.matchAll(/<button type="button" role="tab"(?:(?!<\/button>).)*<\/button>/gs)].map(
+    (m) => m[0],
+  );
+
+/** The one tab panel: the selected level's files. */
+const riskPanel = (html: string): string =>
+  html.slice(
+    html.indexOf('role="tabpanel"'),
+    html.indexOf("</div>", html.indexOf('role="tabpanel"')),
+  );
+
 const main = await load(DEFAULT_PULL.number);
 
 describe("briefing from the pr-847 analysis document", () => {
@@ -67,9 +80,9 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(list).toContain("<li><bdi>Adds <strong>email invitations to orgs</strong>:");
     expect(list).toContain("<code>src/auth/invitations.ts</code>");
     expect(text(list)).toContain("admin included (F1).");
-    // The verdict sits above the TL;DR, and the risk table after it.
+    // The verdict sits above the TL;DR, and the files by risk after it.
     expect(html.indexOf('class="verdict v-critical"')).toBeLessThan(html.indexOf("tldr-title"));
-    expect(html.indexOf("tldr-title")).toBeLessThan(html.indexOf('class="risk-table"'));
+    expect(html.indexOf("tldr-title")).toBeLessThan(html.indexOf('role="tablist"'));
   });
 
   it("shows the risk verdict: level and why", () => {
@@ -78,20 +91,116 @@ describe("briefing from the pr-847 analysis document", () => {
     expect(text(verdict)).toContain("This PR adds a new way to gain membership in an org");
   });
 
-  it("has a risk table with critical, important, normal and ignore rows", () => {
-    expect(t).toContain("Critical 3 files need your attention");
-    expect(t).toContain("Important 1 file worth a careful look");
-    expect(t).toContain("Normal 2 files to skim");
-    expect(t).toContain("Ignore 3 files don't matter");
-    expect(html.match(/<tr\b/g)).toHaveLength(4);
+  it('heads the risk levels with "Files by risk" and shows one chip per level with its count (H4-10)', () => {
+    const files = section(html, "Files by risk");
+    expect(html).toContain('<h3 class="h-eyebrow" id="risk-title">Files by risk</h3>');
+    expect(html).not.toContain("risk-table");
+    const chips = tabs(html);
+    expect(chips.map((c) => text(c))).toEqual([
+      "Critical 3 files",
+      "Important 1 file",
+      "Normal 2 files",
+      "Ignore 3 files",
+    ]);
+    // The count is visible; "files" is for screen readers only.
+    expect(chips[0]).toContain('Critical <b>3</b><span class="sr-only"> files</span>');
+    expect(chips[0]).toContain('<span class="risk-dot" aria-hidden="true"></span>');
+    // The old sentences are gone.
+    for (const gone of ["need your attention", "worth a careful look", "to skim", "don't matter"])
+      expect(text(files)).not.toContain(gone);
   });
 
-  it("makes every file in the risk table a button named by its full path", () => {
-    const table = html.slice(html.indexOf("<table"), html.indexOf("</table>"));
-    expect(table.match(/<button\b/g)).toHaveLength(9);
-    expect(table).toContain('aria-label="Open src/auth/invitations.ts"');
-    expect(table).toContain("<bdi>auth/invitations.ts</bdi>");
-    expect(table).toContain('aria-label="Open pnpm-lock.yaml"');
+  it("is a WAI-ARIA tablist: the selected tab is the highest risk level and controls the one panel", () => {
+    expect(html).toMatch(/<div class="risk-chips" role="tablist" aria-labelledby="risk-title">/);
+    const chips = tabs(html);
+    for (const chip of chips) {
+      expect(chip).toMatch(/^<button type="button" role="tab"/);
+      expect(chip).toContain('aria-controls="risk-panel"');
+    }
+    expect(chips.map((c) => /aria-selected="(\w+)"/.exec(c)?.[1])).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+    // Roving tabindex: only the selected tab is in the Tab order.
+    expect(chips.map((c) => /tabindex="(-?\d)"/.exec(c)?.[1])).toEqual(["0", "-1", "-1", "-1"]);
+    expect(chips[0]).toContain('id="risk-tab-critical"');
+    expect(chips[0]).toContain('class="risk-chip r-critical"');
+    expect(html.match(/role="tabpanel"/g)).toHaveLength(1);
+    expect(html).toMatch(
+      /<div class="risk-files" role="tabpanel" id="risk-panel" aria-labelledby="risk-tab-critical">/,
+    );
+  });
+
+  it("lists the selected level's files as buttons named by their full path", () => {
+    const panel = riskPanel(html);
+    expect(panel.match(/<button\b/g)).toHaveLength(3);
+    expect(panel).toContain('aria-label="Open src/auth/invitations.ts"');
+    expect(panel).toContain("<bdi>auth/invitations.ts</bdi>");
+    expect(panel).not.toContain('aria-label="Open pnpm-lock.yaml"');
+  });
+
+  it("selects the highest risk level present by default", async () => {
+    const data = await fixture("graphUnavailable");
+    const doc = data.analysis;
+    if (doc === null) throw new Error("PR 849 has an analysis");
+    const noCritical = {
+      ...doc,
+      triage: { ...doc.triage, files: doc.triage.files.filter((f) => f.level !== "critical") },
+    };
+    const markup = renderToStaticMarkup(
+      <BriefingView
+        analysis={noCritical}
+        run={{ status: "done" }}
+        headSha={data.pull.headSha}
+        onOpenFile={() => {}}
+      />,
+    );
+    const chips = tabs(markup);
+    expect(chips.map((c) => text(c).split(" ")[0])).toEqual([
+      "Important",
+      "Normal",
+      "Not",
+      "Ignore",
+    ]);
+    expect(chips[0]).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-labelledby="risk-tab-important"');
+  });
+
+  it("opens on Not analysed when only Ignore and Not analysed have files", async () => {
+    const data = await fixture("graphUnavailable");
+    const doc = data.analysis;
+    if (doc === null) throw new Error("PR 849 has an analysis");
+    const markup = renderToStaticMarkup(
+      <BriefingView
+        analysis={{
+          ...doc,
+          triage: { ...doc.triage, files: doc.triage.files.filter((f) => f.level === "low") },
+        }}
+        run={{ status: "done" }}
+        headSha={data.pull.headSha}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(tabs(markup).map((c) => text(c))).toEqual(["Not analysed 1 file", "Ignore 2 files"]);
+    expect(tabs(markup)[0]).toContain('aria-selected="true"');
+    expect(markup).toContain('aria-labelledby="risk-tab-unanalysed"');
+  });
+
+  it("says so when the document lists no files", () => {
+    const doc = main.analysis;
+    if (doc === null) throw new Error("pr-847 has an analysis");
+    const markup = renderToStaticMarkup(
+      <BriefingView
+        analysis={{ ...doc, triage: { files: [], noise: [] } }}
+        run={{ status: "done" }}
+        headSha={main.pull.headSha}
+        onOpenFile={() => {}}
+      />,
+    );
+    expect(markup).not.toContain('role="tablist"');
+    expect(text(section(markup, "Files by risk"))).toContain("No files to show.");
   });
 
   it("has the change map slot: hint and legend as page HTML, the renderer's map between", () => {
@@ -179,7 +288,7 @@ describe("briefing the pipeline wrote itself (provenance.briefingUnavailable)", 
     expect(html).toContain('<p class="brief-summary"><bdi>Rocky could not produce');
     expect(html).not.toContain("TL;DR");
     expect(t).toContain("Critical risk");
-    expect(t).toContain("3 files need your attention");
+    expect(t).toContain("Critical 3 files");
     expect(t).toContain("Suggested review path");
   });
 
@@ -206,8 +315,15 @@ describe("change map unavailable (provenance.graphUnavailable)", async () => {
   });
 
   it("lists the files the AI could not analyse and the ones to read by hand", () => {
-    expect(t).toContain("Not analysed 1 file the AI couldn't analyse: read it yourself");
-    expect(html).toContain('aria-label="Open src/api/index.ts"');
+    // Files to read by hand rank above Ignore, as in the sidebar.
+    expect(tabs(html).map((c) => text(c).split(" ")[0])).toEqual([
+      "Critical",
+      "Important",
+      "Normal",
+      "Not",
+      "Ignore",
+    ]);
+    expect(tabs(html)[3]).toContain('aria-selected="false"');
     expect(t).toContain(
       "Read by hand: the AI reviewed these risky files and drafted nothing. sendInviteEmail.ts",
     );
@@ -225,7 +341,7 @@ describe("a document that is not the latest word", () => {
     expect(text(html)).toContain(
       "Re-analysing the latest push… Showing the briefing for an earlier commit, 9b4e1d7; the pull request's head is now 1c2d3e4.",
     );
-    expect(text(html)).toContain("Critical 3 files need your attention");
+    expect(text(html)).toContain("Critical 3 files");
   });
 
   it("out of date: a done document of another commit says so", async () => {
@@ -360,6 +476,6 @@ describe("in the shell", () => {
       />,
     );
     const mainColumn = html.slice(html.indexOf('<main id="main"'), html.indexOf("</main>"));
-    expect(text(mainColumn)).toContain("Critical 3 files need your attention");
+    expect(text(mainColumn)).toContain("Critical 3 files");
   });
 });

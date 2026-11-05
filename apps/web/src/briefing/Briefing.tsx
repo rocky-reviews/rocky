@@ -1,13 +1,15 @@
 /**
  * The briefing (P6-2, POC `renderBrief`): the risk verdict and the TL;DR (H4-8; an older
- * document's summary paragraph instead), the risk table with
- * clickable files, the change map slot, the suggested path, project memory applied and what the
- * AI checked. Without a document it shows where the analysis stands instead (`BriefingState`).
+ * document's summary paragraph instead), the files by risk (H4-10: a chip per level, the
+ * selected level's files clickable below), the change map slot, the suggested path, project
+ * memory applied and what the AI checked. Without a document it shows where the analysis stands
+ * instead (`BriefingState`).
  *
  * Everything from the document is untrusted text: model prose goes through `InlineText`, paths
  * and labels sit in `<bdi>`, and the fixed text for pipeline reasons comes from briefing-model.
  */
 import type { AnalysisDocument } from "@rocky-reviews/schema";
+import { type KeyboardEvent, useRef, useState } from "react";
 import type { AnalysisRun } from "./analysis-run.js";
 import {
   type Banner,
@@ -18,8 +20,13 @@ import {
   nameOf,
   readByHand,
   reviewPathRows,
-  riskRows,
+  type RiskChoice,
+  type RiskLevelGroup,
+  type RiskLevelKey,
+  riskLevels,
+  selectedRiskLevel,
   startFile,
+  tabKeyTarget,
   tokensText,
   VERDICT_LABEL,
 } from "./briefing-model.js";
@@ -132,29 +139,11 @@ const Briefing = ({
               <VerdictBox verdict={briefing.verdict} />
             </>
           )}
-          <table className="risk-table">
-            <caption className="sr-only">Files by risk</caption>
-            <tbody>
-              {riskRows(doc).map((row) => (
-                <tr key={row.key} className={`rt-${row.key}`}>
-                  <th scope="row" className="rt-label">
-                    <span className={`risk-label r-${row.key}`}>{row.label}</span>
-                  </th>
-                  <td className="rt-text">
-                    <b>{row.text}</b>
-                  </td>
-                  <td className="rt-files">
-                    {row.files.map((file, i) => (
-                      <span key={file.path} className="file-item">
-                        <FileButton path={file.path} name={file.name} onOpen={onOpenFile} />
-                        {i < row.files.length - 1 && ", "}
-                      </span>
-                    ))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <RiskLevels
+            head={doc.provenance.head.sha}
+            levels={riskLevels(doc)}
+            onOpenFile={onOpenFile}
+          />
           {byHand.length > 0 && (
             <p className="read-by-hand">
               <b>Read by hand:</b> the AI reviewed these risky files and drafted nothing.{" "}
@@ -283,6 +272,89 @@ const VerdictBox = ({ verdict }: { verdict: AnalysisDocument["briefing"]["verdic
     </p>
   </div>
 );
+
+/**
+ * H4-10: the files by risk as count chips, a WAI-ARIA tab list (selection follows focus), over
+ * one panel with the selected level's files. The selection is component state, kept with the
+ * head commit it was made on, so a new document starts on its default level.
+ */
+const RiskLevels = ({
+  head,
+  levels,
+  onOpenFile,
+}: {
+  head: string;
+  levels: RiskLevelGroup[];
+  onOpenFile: (p: string) => void;
+}) => {
+  const [choice, setChoice] = useState<RiskChoice>();
+  const tabs = useRef<(HTMLButtonElement | null)[]>([]);
+  tabs.current.length = levels.length;
+  const selected = selectedRiskLevel(levels, head, choice);
+  const choose = (key: RiskLevelKey) => setChoice({ head, key });
+
+  const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const target = tabKeyTarget(levels.length, index, e.key);
+    const level = target === undefined ? undefined : levels[target];
+    if (target === undefined || level === undefined) return;
+    e.preventDefault();
+    choose(level.key);
+    tabs.current[target]?.focus();
+  };
+
+  return (
+    <div className="risk-levels">
+      <h3 className="h-eyebrow" id="risk-title">
+        Files by risk
+      </h3>
+      {selected === undefined ? (
+        <p className="empty-note">No files to show.</p>
+      ) : (
+        <>
+          <div className="risk-chips" role="tablist" aria-labelledby="risk-title">
+            {levels.map((level, index) => {
+              const on = level.key === selected.key;
+              return (
+                <button
+                  type="button"
+                  role="tab"
+                  key={level.key}
+                  id={`risk-tab-${level.key}`}
+                  className={`risk-chip r-${level.key}`}
+                  aria-selected={on}
+                  aria-controls="risk-panel"
+                  tabIndex={on ? 0 : -1}
+                  ref={(el) => {
+                    tabs.current[index] = el;
+                  }}
+                  onClick={() => choose(level.key)}
+                  onKeyDown={(e) => onKeyDown(e, index)}
+                >
+                  <span className="risk-dot" aria-hidden="true" />
+                  {level.label} <b>{level.files.length}</b>
+                  <span className="sr-only">{level.files.length === 1 ? " file" : " files"}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div
+            className="risk-files"
+            role="tabpanel"
+            id="risk-panel"
+            aria-labelledby={`risk-tab-${selected.key}`}
+          >
+            {selected.files.map((file, i) => (
+              <span key={file.path} className="file-item">
+                <FileButton path={file.path} name={file.name} onOpen={onOpenFile} />
+                {i < selected.files.length - 1 && ", "}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 const FileButton = ({
   path,

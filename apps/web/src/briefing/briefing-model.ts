@@ -1,5 +1,5 @@
 /**
- * The briefing's view of an analysis document (P6-2, POC `renderBrief`): the risk table rows,
+ * The briefing's view of an analysis document (P6-2, POC `renderBrief`): the risk levels,
  * short file names, the suggested path, the change map's state and the fixed text for pipeline
  * reasons and failure codes. Pure, so it is tested without a DOM. Every text Rocky shows for a
  * reason or code is fixed here; the document only picks which.
@@ -13,13 +13,11 @@ import type {
 } from "@rocky-reviews/schema";
 import type { AnalysisRun } from "./analysis-run.js";
 
-export type RiskRowKey = "critical" | "important" | "normal" | "ignore" | "unanalysed";
+export type RiskLevelKey = "critical" | "important" | "normal" | "ignore" | "unanalysed";
 
 export type RiskFile = { path: string; name: string };
 
-export type RiskRow = { key: RiskRowKey; label: string; text: string; files: RiskFile[] };
-
-const files = (n: number): string => `${n} ${n === 1 ? "file" : "files"}`;
+export type RiskLevelGroup = { key: RiskLevelKey; label: string; files: RiskFile[] };
 
 /**
  * The shortest trailing part of each path that no other path shares (POC defect 4: two files
@@ -46,48 +44,75 @@ const byScore = (doc: AnalysisDocument, level: TriagedFileLevel): string[] =>
     .toSorted((a, b) => b.score - a.score)
     .map((f) => f.path);
 
-/** Every file the risk table and read-by-hand list can show, for one set of short names. */
+/** Every file the risk levels and read-by-hand list can show, for one set of short names. */
 const shownPaths = (doc: AnalysisDocument): string[] => [
   ...doc.triage.files.map((f) => f.path),
   ...doc.triage.noise.map((f) => f.path),
   ...doc.provenance.unanalysed.map((f) => f.path),
 ];
 
-/** The POC's risk table: critical, important, normal, ignore (low + noise), then unanalysed. */
-export const riskRows = (doc: AnalysisDocument): RiskRow[] => {
+/**
+ * The files by risk (H4-10: count chips; the POC's risk table): critical, important, normal,
+ * unanalysed (files to read by hand rank above ignore, as in the sidebar), then ignore (low +
+ * noise), each level only when it has files.
+ */
+export const riskLevels = (doc: AnalysisDocument): RiskLevelGroup[] => {
   const names = shortNames(shownPaths(doc));
-  const rows: [RiskRowKey, string, string[]][] = [
+  const levels: [RiskLevelKey, string, string[]][] = [
     ["critical", "Critical", byScore(doc, "critical")],
     ["important", "Important", byScore(doc, "important")],
     ["normal", "Normal", byScore(doc, "normal")],
+    ["unanalysed", "Not analysed", doc.provenance.unanalysed.map((f) => f.path)],
     ["ignore", "Ignore", [...byScore(doc, "low"), ...doc.triage.noise.map((f) => f.path)]],
   ];
-  const unanalysed = doc.provenance.unanalysed.map((f) => f.path);
-  if (unanalysed.length > 0) rows.push(["unanalysed", "Not analysed", unanalysed]);
-  return rows.map(([key, label, paths]) => ({
-    key,
-    label,
-    text: rowText(key, paths.length),
-    files: paths.map((path) => ({ path, name: names.get(path) ?? path })),
-  }));
+  return levels
+    .filter(([, , paths]) => paths.length > 0)
+    .map(([key, label, paths]) => ({
+      key,
+      label,
+      files: paths.map((path) => ({ path, name: names.get(path) ?? path })),
+    }));
 };
 
-const rowText = (key: RiskRowKey, n: number): string => {
+/** The level selected first: the first present, as levels come riskiest first. */
+export const defaultRiskLevel = (levels: readonly RiskLevelGroup[]): RiskLevelKey | undefined =>
+  levels[0]?.key;
+
+/** A level the reviewer picked, for the document (head commit) it was picked on. */
+export type RiskChoice = { head: string; key: RiskLevelKey };
+
+/**
+ * The selected level: the reviewer's choice while it is for this document's head commit and the
+ * level still has files; otherwise the default, so a new document starts on its riskiest level.
+ */
+export const selectedRiskLevel = (
+  levels: readonly RiskLevelGroup[],
+  head: string,
+  choice: RiskChoice | undefined,
+): RiskLevelGroup | undefined =>
+  (choice?.head === head ? levels.find((l) => l.key === choice.key) : undefined) ??
+  levels.find((l) => l.key === defaultRiskLevel(levels));
+
+/**
+ * Where a key moves the focus in a WAI-ARIA tab list of `count` tabs, from tab `index`: Left and
+ * Right wrap, Home and End go to the ends; any other key is not the tab list's.
+ */
+export const tabKeyTarget = (count: number, index: number, key: string): number | undefined => {
   switch (key) {
-    case "critical":
-      return `${files(n)} ${n === 1 ? "needs" : "need"} your attention`;
-    case "important":
-      return `${files(n)} worth a careful look`;
-    case "normal":
-      return `${files(n)} to skim`;
-    case "ignore":
-      return `${files(n)} ${n === 1 ? "doesn't" : "don't"} matter`;
-    case "unanalysed":
-      return `${files(n)} the AI couldn't analyse: read ${n === 1 ? "it" : "them"} yourself`;
+    case "ArrowRight":
+      return (index + 1) % count;
+    case "ArrowLeft":
+      return (index - 1 + count) % count;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return undefined;
   }
 };
 
-/** Short names for the read-by-hand list, consistent with the risk table. */
+/** Short names for the read-by-hand list, consistent with the risk levels. */
 export const nameOf = (doc: AnalysisDocument): ((path: string) => string) => {
   const names = shortNames(shownPaths(doc));
   return (path) => names.get(path) ?? path;
