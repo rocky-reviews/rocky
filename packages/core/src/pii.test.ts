@@ -2,6 +2,8 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
   MAX_KNOWN_PEOPLE,
+  MAX_KNOWN_PEOPLE_ENTRIES,
+  MAX_KNOWN_PEOPLE_PER_KEY,
   MAX_KNOWN_PERSON_LENGTH,
   MAX_SCRUB_INPUT_LENGTH,
   matchesAsBareWord,
@@ -316,14 +318,14 @@ describe("known people", () => {
     );
   });
 
-  it("stays fast at the cap with realistic multi-word display names (fix round 3)", () => {
-    // 50 000 five-word names: 50 000 whole names plus their parts in the index, no pattern
-    // compiled. Bound per call (index + scrub of a 300-character text).
+  it("stays fast at the cap with realistic multi-word display names (fix rounds 3 and 5)", () => {
+    // 50 000 three-word names: 50 000 whole names plus their parts examined (200 000, the
+    // entries cap fits them). Bound per call (index + scrub of a 300-character text).
     const names = Array.from(
       { length: MAX_KNOWN_PEOPLE },
-      (_, i) => `First${i} Middle${i % 977} van der Last${i}`,
+      (_, i) => `First${i} Middle${i % 977} Last${i}`,
     );
-    const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 van der Last7 agreed`;
+    const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 Last7 agreed`;
     const runs: number[] = [];
     let out = "";
     for (let run = 0; run < 3; run++) {
@@ -333,13 +335,56 @@ describe("known people", () => {
     }
     expect(out.endsWith("[person] agreed")).toBe(true);
     expect(Math.min(...runs)).toBeLessThan(1000);
-    // Twelve-word names at the cap must not blow up either (the index holds eight parts each).
-    const long = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
-      Array.from({ length: 12 }, (_, w) => `W${w}n${i}`).join(" "),
+  });
+
+  it("refuses, quickly, lists whose names and parts exceed the entries cap (fix round 5)", () => {
+    const bound = (people: string[]) => {
+      const started = performance.now();
+      expect(() => scrub("plain text", people)).toThrow(RangeError);
+      expect(performance.now() - started).toBeLessThan(1000);
+    };
+    // Twelve hyphenated parts: 1 + 12 + 24 entries per name.
+    bound(
+      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+        Array.from({ length: 12 }, (_, w) => `A${w}-b${i % 7}`).join(" "),
+      ),
     );
-    const started = performance.now();
-    expect(scrub("plain text with W3n5 inside", long)).toBe("plain text with [person] inside");
-    expect(performance.now() - started).toBeLessThan(2000);
+    // Twelve plain words (short enough to stay under the 100-character name cap).
+    bound(
+      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+        Array.from({ length: 12 }, (_, w) => `W${w}n${i % 997}`).join(" "),
+      ),
+    );
+    // Fifty one-letter words, mostly duplicates: examined parts count, not only indexed ones.
+    bound(
+      Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+        Array.from({ length: 50 }, (_, w) => String.fromCharCode(97 + ((i + w) % 26))).join(" "),
+      ),
+    );
+    expect(MAX_KNOWN_PEOPLE_ENTRIES).toBeGreaterThanOrEqual(4 * MAX_KNOWN_PEOPLE);
+  });
+
+  it("stays fast when 50 000 names share their first two words over 2 000 characters (fix round 5)", () => {
+    const shared = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `John Smith Last${i}`);
+    const weak = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Go Go Last${i}`);
+    for (const [people, text, expected] of [
+      [shared, "john smith ".repeat(181), "[person] [person] ".repeat(181)],
+      // `Go` is weak (dictionary, two letters): bare occurrences stay.
+      [weak, "go go ".repeat(333), "go go ".repeat(333)],
+    ] as const) {
+      const started = performance.now();
+      expect(scrub(text, people)).toBe(expected);
+      expect(performance.now() - started).toBeLessThan(1000);
+    }
+    // More than MAX_KNOWN_PEOPLE_PER_KEY names sharing three words is refused, not scanned.
+    const prefix = Array.from(
+      { length: MAX_KNOWN_PEOPLE_PER_KEY + 1 },
+      (_, i) => `John Smith Jr ${i}`,
+    );
+    expect(() => scrub("x", prefix)).toThrow(RangeError);
+    expect(scrub("john smith jr 3 said", prefix.slice(0, MAX_KNOWN_PEOPLE_PER_KEY))).toBe(
+      "[person] said",
+    );
   });
 
   describe("short or common-word logins match only in person positions (S2)", () => {

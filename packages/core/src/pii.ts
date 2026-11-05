@@ -63,6 +63,18 @@ export const MAX_SCRUB_INPUT_LENGTH = 16_384;
  * 300-character text in well under a second (the test measures it).
  */
 export const MAX_KNOWN_PEOPLE = 50_000;
+/**
+ * Names, parts and hyphenated sub-parts one call examines (indexed or deduplicated); more is
+ * the same `RangeError`. Bounds the per-call work and memory whatever the names look like
+ * (fifty one-letter words, twelve hyphenated parts): 50 000 three-word names fit (200 000),
+ * see the ADR for the measurements.
+ */
+export const MAX_KNOWN_PEOPLE_ENTRIES = 250_000;
+/**
+ * Names sharing their first three words (`John Smith Jr …`); more candidates for one text
+ * position than this is refused too, so a shared prefix can never make a scrub quadratic.
+ */
+export const MAX_KNOWN_PEOPLE_PER_KEY = 256;
 export const MAX_KNOWN_PERSON_LENGTH = 100;
 
 // --- Canonical form -------------------------------------------------------------------------
@@ -473,13 +485,14 @@ interface KnownPerson {
 }
 
 /**
- * Known people by their first two words (one for a single-word name), longer names first, so
- * the longest match wins. Two words, so a text full of a first word 50 000 names share does
- * not scan 50 000 candidates per occurrence.
+ * Known people by their first three words (two or one for shorter names), longer names first,
+ * so the longest match wins. A text full of a first word (or two) that 50 000 names share
+ * therefore does not scan 50 000 candidates per occurrence, and a key with more than
+ * `MAX_KNOWN_PEOPLE_PER_KEY` names is refused.
  */
 type KnownPeopleIndex = ReadonlyMap<string, readonly KnownPerson[]>;
-const indexKey = (words: readonly string[]): string =>
-  words.length === 1 ? (words[0] ?? "") : `${words[0]} ${words[1]}`;
+const KEY_WORDS = 3;
+const indexKey = (words: readonly string[]): string => words.slice(0, KEY_WORDS).join(" ");
 
 const collapse = (gap: string): string => gap.replace(/[ \t]+/gu, " ");
 
@@ -520,15 +533,28 @@ const indexPeople = (people: readonly string[]): KnownPeopleIndex => {
     const slot = indexKey(person.words);
     const list = index.get(slot);
     if (list === undefined) index.set(slot, [person]);
-    else list.push(person);
+    else if (list.length >= MAX_KNOWN_PEOPLE_PER_KEY) {
+      throw new RangeError(
+        `scrub: more than ${MAX_KNOWN_PEOPLE_PER_KEY} people share a name prefix`,
+      );
+    } else list.push(person);
     return true;
   };
   let distinct = 0;
+  let entries = 0;
+  /** Every name, part or sub-part examined counts, deduplicated or not: the work is bounded. */
+  const examine = (text: string): KnownPerson | null => {
+    entries += 1;
+    if (entries > MAX_KNOWN_PEOPLE_ENTRIES) {
+      throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE_ENTRIES} names and parts`);
+    }
+    return personOf(text);
+  };
   for (const raw of people) {
     if (typeof raw !== "string") continue;
     const name = foldPerson(raw).replace(/\s+/gu, " ");
     if (name.length < 2 || name.length > MAX_KNOWN_PERSON_LENGTH) continue;
-    const whole = personOf(name);
+    const whole = examine(name);
     if (whole === null) continue;
     if (add(whole)) {
       distinct += 1;
@@ -547,7 +573,7 @@ const indexPeople = (people: readonly string[]): KnownPeopleIndex => {
       if (part.length === 0) continue;
       const pieces = part.includes("-") ? [part, ...part.split("-")] : [part];
       for (const piece of pieces) {
-        const person = personOf(piece.replace(PART_EDGE, ""));
+        const person = examine(piece.replace(PART_EDGE, ""));
         if (person !== null) add(person);
       }
     }
@@ -582,11 +608,17 @@ const knownPeopleSpans = (folded: string, index: KnownPeopleIndex, priority: num
   for (let i = 0; i < words.length; i++) {
     const first = words[i];
     if (first === undefined) continue;
-    const second = words[i + 1];
-    const candidates = [
-      ...(second === undefined ? [] : (index.get(`${first.text} ${second.text}`) ?? [])),
-      ...(index.get(first.text) ?? []),
-    ];
+    // Longest keys first: a three-word name before a two-word one before a part.
+    const candidates: KnownPerson[] = [];
+    for (let n = KEY_WORDS; n >= 1; n--) {
+      if (i + n > words.length) continue;
+      const key = words
+        .slice(i, i + n)
+        .map((w) => w.text)
+        .join(" ");
+      const list = index.get(key);
+      if (list !== undefined) candidates.push(...list);
+    }
     for (const person of candidates) {
       // Every word, with the same text between (whitespace collapsed).
       let ok = true;
