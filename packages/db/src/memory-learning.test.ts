@@ -285,23 +285,48 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["convention"]);
   });
 
-  it("a learned entry taught by a higher role is not superseded by a lower one's decision", async () => {
+  /** A second analysis of the same head, so the same finding can be decided again. */
+  const rerunOf = (org: SeededOrg) =>
+    db.withOrg(org.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into analyses (revision_id, status, document, completed_at)
+         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
+        [org.revisionId, JSON.stringify(DOCUMENT)],
+      );
+      return rows[0]!.id;
+    });
+
+  it("a lower role's opposite decision about a higher role's pattern is not learned", async () => {
     await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
     await learn(A, await post(A));
     await superuser.query("update memory_entries set learner_role = 'owner' where org_id = $1", [
       A.orgId,
     ]);
-    const rerun = await db.withOrg(A.orgId, async (tx) => {
-      const { rows } = await tx.query<{ id: string }>(
-        `insert into analyses (revision_id, status, document, completed_at)
-         values ($1, 'done', $2::jsonb, now() + interval '1 hour') returning id`,
-        [A.revisionId, JSON.stringify(DOCUMENT)],
-      );
-      return rows[0]!.id;
-    });
-    await decide(A, "F2", { kind: "accept" }, rerun);
-    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 0 });
-    expect((await entriesOf(A)).map((e) => e.kind).sort()).toEqual(["convention", "dismissal"]);
+    await decide(A, "F2", { kind: "accept" }, await rerunOf(A));
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0, superseded: 0, skipped: 1 });
+    expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["dismissal"]);
+  });
+
+  it("an owner's accept is not switched off by a member's later dismissal", async () => {
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    await superuser.query("update memory_entries set learner_role = 'owner' where org_id = $1", [
+      A.orgId,
+    ]);
+    await superuser.query("update members set role = 'member' where id = $1", [A.memberId]);
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" }, await rerunOf(A));
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0, skipped: 1 });
+    const current = await entriesOf(A);
+    expect(current.map((e) => e.kind)).toEqual(["convention"]);
+    expect(current.some((e) => e.kind === "dismissal")).toBe(false);
+  });
+
+  it("the same or a higher role's opposite decision still supersedes", async () => {
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" }, await rerunOf(A));
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 1 });
+    expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["dismissal"]);
   });
 
   it("two learners of the same review at once store each entry once (the repository lock)", async () => {

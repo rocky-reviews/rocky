@@ -658,3 +658,56 @@ describe("cache churn from memory (fix round, M3/S2)", () => {
     expect(stats).toMatchObject({ reused: 5, triageReused: 5, memoryReviews: 5 });
   });
 });
+
+describe("no suppression on a file triage or the rules call risky (fix round 2, S2)", () => {
+  const AUTH = "src/auth/session.ts";
+  const authDiff = addedFile(AUTH, LINES);
+  const dismissalOn = (path: string) =>
+    entry(1, { path, severity: "high", text: `Dismissed as intentional: ${FINDING.title}` });
+  /** A model that relabels a critical problem `low` and suppresses it under M1. */
+  const relabelling =
+    (level: "important" | "critical"): Script =>
+    (call) => {
+      if (call.role === "triage")
+        return { value: { ...triage("important"), level, score: level === "critical" ? 90 : 60 } };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: { findings: [], suppressed: [{ ...SUPPRESSED, severity: "low", entry: "M1" }] },
+        };
+      return { status: "refused" };
+    };
+
+  it("a critical finding relabelled low is restored on a rule-floored file", async () => {
+    const { outcome, calls } = await analyze(relabelling("important"), {
+      diff: authDiff,
+      memory: [dismissalOn(AUTH)],
+    });
+    const { document, stats } = done(outcome);
+    expect(reviewCall(calls)?.labels).toContain("memory");
+    expect(document.findings.map((f) => [f.path, f.title])).toEqual([[AUTH, FINDING.title]]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryRestored: 1, memoryStripped: 0 });
+  });
+
+  it("no suppression stands on a file triaged critical", async () => {
+    const { outcome } = await analyze(relabelling("critical"), {
+      memory: [dismissalOn("src/jobs/retry.ts")],
+    });
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryRestored: 1 });
+  });
+
+  it("a restored item that repeats a raised finding is stored once", async () => {
+    const { outcome } = await analyze(
+      script(() => ({
+        findings: [{ ...FINDING, memory: [] }],
+        suppressed: [{ ...SUPPRESSED, severity: "high", entry: "M1" }],
+      })),
+      { memory: [entry(1, { text: `Dismissed as intentional: ${FINDING.title}` })] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings).toHaveLength(1);
+    expect(stats.memoryRestored).toBe(1);
+  });
+});

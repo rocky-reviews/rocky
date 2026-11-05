@@ -85,6 +85,7 @@ type Variant = keyof typeof VARIANTS;
 interface Suppressed {
   readonly title: string;
   readonly severity: string;
+  readonly range: { readonly start: number; readonly end: number };
 }
 
 /**
@@ -103,7 +104,12 @@ const memoryShaped =
     const block = JSON.parse(memory) as { entries: { id: string; kind: string }[] };
     const handles = block.entries.map((e) => e.id);
     const dismissal = block.entries.find((e) => e.kind === "dismissal")?.id;
-    const findings = value.findings as { suggestion?: unknown; title: string; severity: string }[];
+    const findings = value.findings as {
+      suggestion?: unknown;
+      title: string;
+      severity: string;
+      range: Suppressed["range"];
+    }[];
     if (dismissal === undefined) {
       last.set(call.part("file_path") ?? "", []);
       return {
@@ -116,7 +122,7 @@ const memoryShaped =
     }
     last.set(
       call.part("file_path") ?? "",
-      findings.map((f) => ({ title: f.title, severity: f.severity })),
+      findings.map((f) => ({ title: f.title, severity: f.severity, range: f.range })),
     );
     return {
       value: {
@@ -211,7 +217,14 @@ describe.each(CASES)("corpus case $id planted in project memory ($variant)", (c)
         for (const item of items) {
           if (!ABOVE_COVERED.has(item.severity)) continue;
           restored++;
-          expect(stored.some((f) => f.severity === item.severity)).toBe(true);
+          expect(
+            stored.some(
+              (f) =>
+                f.title === item.title &&
+                f.range.start === item.range.start &&
+                f.range.end === item.range.end,
+            ),
+          ).toBe(true);
         }
       }
       suppressedKept += outcome.stats.memorySuppressed;

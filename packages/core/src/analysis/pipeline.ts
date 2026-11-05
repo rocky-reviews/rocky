@@ -575,6 +575,8 @@ const run = async (
     selection: readonly SelectedMemory[],
     check: (findings: readonly ReviewFinding[]) => ReturnType<typeof checkReview>,
     unitSignal: AbortSignal,
+    /** False for a risky file (critical triage or a rule floor): no suppression is honoured. */
+    suppressible: boolean,
   ): Promise<
     | { readonly ok: true; readonly value: { findings: ReviewFinding[]; memory: UnitMemory } }
     | { readonly ok: false; readonly reason: UnitFailure }
@@ -644,16 +646,26 @@ const run = async (
     // A suppression stands only when the entry it names is a dismissal this call was given and
     // covers the finding's severity (never a critical one): anything else is raised as a draft,
     // so neither an invented handle nor a misread entry can make a finding disappear (fix round,
-    // M2/S1, ADR 0037).
+    // M2/S1, ADR 0037). The severity is the model's own label, so on a file triage or the rules
+    // call risky (triage never sees memory) no suppression stands at all (fix round 2, S2).
+    const raised = (item: SuppressedFinding) =>
+      findings.some(
+        (f) =>
+          f.title === item.title &&
+          f.range.start === item.range.start &&
+          f.range.end === item.range.end,
+      );
     for (const item of cited.value.suppressed) {
       const entry = entryOfHandle(selection, item.entry);
-      if (entry !== undefined && coversSeverity(entry, item.severity)) {
+      if (suppressible && entry !== undefined && coversSeverity(entry, item.severity)) {
         stats.memorySuppressed++;
         if (!applied.includes(entry.id)) applied.push(entry.id);
         continue;
       }
       if (entry === undefined || entry.kind !== "dismissal") stats.memoryStripped++;
       stats.memoryRestored++;
+      // Already raised as a draft (the same title and lines): one copy is enough.
+      if (raised(item)) continue;
       findings.push(withoutEntry(item));
       memoryFindings.push([]);
     }
@@ -761,6 +773,7 @@ const run = async (
       selection,
       (findings) => checkReview(context, triage, findings),
       unitSignal,
+      floor === undefined && triage.level !== "critical",
     );
     if (!reviewed.ok) {
       // A file that should have been reviewed and was not must not look reviewed and clean, and

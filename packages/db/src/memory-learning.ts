@@ -153,6 +153,8 @@ interface Decided {
  * 4. current learned entries on the same path with the same subject, of any kind, are
  *    superseded by it, unless a reviewer with a higher role taught them (owner > admin >
  *    member; fix round, L2): the newest decision about a pattern wins, and history is kept.
+ *    When a higher role taught the opposite kind, the candidate is not stored at all (step 2b,
+ *    fix round 2): it would otherwise stay current beside it and, as a dismissal, hide it.
  *
  * Member-written entries (P8-3) are never superseded by learning.
  */
@@ -340,6 +342,19 @@ export const learnFromReviewSubmission = async (
         row.source_pr_number !== evidence.pullRequestNumber &&
         memorySubject(row.content) === subject,
     );
+    // A higher role's opposite decision about the pattern stands: a member's dismissal must not
+    // switch off what an owner asked for (nor the reverse), so nothing is learned (fix round 2,
+    // S1). The same decision from a lower role adds nothing either way.
+    const overruled = near.rows.some(
+      (row) =>
+        row.kind !== candidate.kind &&
+        roleRank(row.learner_role) > ROLE_RANK[role] &&
+        memorySubject(row.content) === subject,
+    );
+    if (overruled) {
+      skipped++;
+      continue;
+    }
     const result = await createMemoryEntry(tx, {
       authorMemberId: reviewer,
       repoId: submission.repo_id,
