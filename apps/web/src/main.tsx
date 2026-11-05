@@ -47,6 +47,7 @@ const renderPull = (
   pull: PullRef,
   source: ShellDataSource,
   diffSource: DiffDataSource,
+  preloadDiff = false,
 ) => {
   // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
   const review = createHttpReviewSource();
@@ -54,7 +55,12 @@ const renderPull = (
   const posting = createHttpPostingSource();
   createRoot(element).render(
     <StrictMode>
-      <DiffProvider source={diffSource} pull={pull} returnTo={window.location.pathname}>
+      <DiffProvider
+        source={diffSource}
+        pull={pull}
+        returnTo={window.location.pathname}
+        preload={preloadDiff}
+      >
         <App
           source={source}
           pull={pull}
@@ -94,8 +100,9 @@ if (page.kind === "home") {
     ),
   );
 } else if (page.kind === "pull" && page.source === "server") {
-  // H4-3: the diff comes from the server too, read from GitHub when the first file is opened.
-  renderPull(root, page.ref, createHttpShellSource(), createHttpDiffSource());
+  // H4-3: the diff comes from the server too, read from GitHub. H4-16: as soon as the briefing
+  // is shown, not when the first file is opened (a cold read takes seconds).
+  renderPull(root, page.ref, createHttpShellSource(), createHttpDiffSource(), true);
 } else {
   createRoot(root).render(
     <StrictMode>

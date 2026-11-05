@@ -62,8 +62,8 @@ export type Answer = { readonly status: number; readonly body?: unknown };
 export interface PullApi {
   /** Every request for the PR's data, in order. */
   readonly requests: Request[];
-  /** Holds every answer until the returned function is called. */
-  hold(): () => void;
+  /** Holds every answer (or only the diff's) until the returned function is called. */
+  hold(only?: "diff"): () => void;
 }
 
 /**
@@ -77,10 +77,11 @@ export const mockPullApi = async (
 ): Promise<PullApi> => {
   const requests: Request[] = [];
   let held: Promise<void> | null = null;
+  let heldDiffOnly = false;
   await page.route("**/api/repos/**", async (route) => {
     requests.push(route.request());
-    if (held !== null) await held;
     const { pathname } = new URL(route.request().url());
+    if (held !== null && (!heldDiffOnly || pathname.endsWith("/diff"))) await held;
     const chosen = pathname.endsWith("/diff") ? diff : answer;
     const { status, body } = typeof chosen === "function" ? chosen(pathname) : chosen;
     await route.fulfill({
@@ -92,7 +93,8 @@ export const mockPullApi = async (
   });
   return {
     requests,
-    hold: () => {
+    hold: (only) => {
+      heldDiffOnly = only === "diff";
       let release = () => {};
       held = new Promise<void>((resolve) => {
         release = resolve;
