@@ -82,6 +82,25 @@ describe("pnpm evals run", () => {
     expect(t.text()).toContain("pr-1205");
   });
 
+  it("--memory --memory-trials N runs the memory eval N times and prints each trial's diagnosis", async () => {
+    const t = io();
+    const args = ["run", "--fake", "--only", "pr-912", "--memory", "--memory-trials", "2"];
+    expect(await evalsCli([...args, "--out", "r.json"], t.io, deps())).toBe(0);
+    expect(written(t.written, "r.json").memory?.trials).toHaveLength(2);
+    expect(t.text()).toContain("trial 2: pass");
+    expect(t.text()).toContain("level important");
+  });
+
+  it.each([
+    [["--memory", "--memory-trials", "0"]],
+    [["--memory", "--memory-trials", "6"]],
+    [["--memory-trials", "2"]],
+  ])("refuses %j", async (extra) => {
+    const t = io();
+    expect(await evalsCli(["run", "--fake", ...extra], t.io, deps())).not.toBe(0);
+    expect(t.written).toEqual({});
+  });
+
   it("a live run with its key missing stops before any call and names the variable", async () => {
     const t = io();
     expect(await evalsCli(["run"], t.io, deps(["ANTHROPIC_API_KEY"]))).toBe(2);

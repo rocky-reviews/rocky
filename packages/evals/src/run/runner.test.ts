@@ -281,7 +281,7 @@ describe("the project-memory eval in the run (P8-2)", () => {
   it("--memory adds the eval's result; the scripted roles pass it", async () => {
     const report = await fakeRun({ memory: true, only: ["pr-912"] });
     expect(report.options.memory).toBe(true);
-    expect(report.memory).toEqual({
+    expect(report.memory).toMatchObject({
       status: "done",
       run1Raised: true,
       learned: true,
@@ -290,10 +290,24 @@ describe("the project-memory eval in the run (P8-2)", () => {
       run2Cited: true,
       run2BugFound: true,
       pass: true,
+      passes: 1,
+    });
+    // Each analysis says what it did with the case file: codes, levels, counts, seeded ids.
+    expect(report.memory?.trials?.[0]?.runs.apply).toMatchObject({
+      level: "important",
+      reviewed: true,
+      matched: ["B2"],
+      suppressed: 1,
     });
     expect(parseReport(JSON.parse(JSON.stringify(report))).ok).toBe(true);
     // Three analyses on the review role's memory path count toward usage like any other.
     expect(report.usage.byRole["review"]?.calls).toBeGreaterThan(0);
+  });
+
+  it("--memory with trials runs the three analyses that many times", async () => {
+    const report = await fakeRun({ memory: true, memoryTrials: 2, only: ["pr-912"] });
+    expect(report.memory).toMatchObject({ pass: true, passes: 2 });
+    expect(report.memory?.trials).toHaveLength(2);
   });
 
   it("without --memory the report carries none", async () => {

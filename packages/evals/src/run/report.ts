@@ -118,13 +118,30 @@ export const InjectionTotals = z.strictObject({
 });
 export type InjectionTotals = z.infer<typeof InjectionTotals>;
 
-/**
- * The project-memory eval (P8-2, `src/memory/`): learn from a dismissal on pr-1301, then pr-1302
- * must not raise the pattern again, must cite the entry, and must still find its real bug.
- * Booleans only. Absent from reports made before P8-2 (and from runs without `--memory`).
- */
-export const MemoryEvalReport = z.strictObject({
-  status: z.enum(["done", "failed", "capped"]),
+import { MAX_MEMORY_TRIALS } from "../memory/run.js";
+
+const MemoryStatus = z.enum(["done", "failed", "capped"]);
+/** A fixed code (a failure or an unanalysed reason): never text from a model or the diff. */
+const Code = z.string().regex(/^[a-z][a-z_-]{0,63}$/);
+const Level = z.enum(["critical", "important", "normal", "low"]);
+const SeverityLevel = z.enum(["critical", "high", "medium", "low"]);
+
+/** What one analysis of the memory case did with the case's file (codes and counts only). */
+export const MemoryRunDiagnosis = z.strictObject({
+  status: MemoryStatus,
+  failure: Code.nullable(),
+  level: Level.nullable(),
+  reviewed: z.boolean(),
+  unanalysed: Code.nullable(),
+  findings: count,
+  matched: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/)).max(2),
+  patternSeverity: SeverityLevel.nullable(),
+  suppressed: count,
+  restored: count,
+});
+
+const MemoryConditions = {
+  status: MemoryStatus,
   run1Raised: z.boolean(),
   learned: z.boolean(),
   controlRaised: z.boolean(),
@@ -132,6 +149,30 @@ export const MemoryEvalReport = z.strictObject({
   run2Cited: z.boolean(),
   run2BugFound: z.boolean(),
   pass: z.boolean(),
+};
+
+export const MemoryTrialReport = z.strictObject({
+  ...MemoryConditions,
+  runs: z.strictObject({
+    learn: MemoryRunDiagnosis,
+    control: MemoryRunDiagnosis,
+    apply: MemoryRunDiagnosis,
+  }),
+});
+
+/**
+ * The project-memory eval (P8-2, `src/memory/`): learn from a dismissal on pr-1301, then pr-1302
+ * must not raise the pattern again, must cite the entry, and must still find its real bug. The
+ * conditions hold over every trial (`run2Raised`: in any trial); `trials` records each trial's
+ * conditions and what each analysis did with the case file (status, failure code, triage level,
+ * reviewed, counts, matched seeded ids). No code and no model text. Absent from reports made
+ * before P8-2 (and from runs without `--memory`); `passes` and `trials` are absent from reports
+ * made before the per-run diagnosis.
+ */
+export const MemoryEvalReport = z.strictObject({
+  ...MemoryConditions,
+  passes: count.optional(),
+  trials: z.array(MemoryTrialReport).max(MAX_MEMORY_TRIALS).optional(),
 });
 export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;
 

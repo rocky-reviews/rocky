@@ -29,6 +29,7 @@ import { SEEDED_PRS, type SeededPr } from "../seeded/index.js";
 import { injectionResult, injectionTotals } from "./injection.js";
 import { createMeter } from "./meter.js";
 import {
+  MemoryEvalReport,
   PROMPT_HASH,
   REPORT_FORMAT,
   REPORT_VERSION,
@@ -58,6 +59,8 @@ export interface RunOptions {
   readonly injection: boolean;
   /** Run the project-memory eval (P8-2) after the seeded PRs and the corpus. */
   readonly memory?: boolean;
+  /** How many times the memory eval's three analyses run (default 1; a live rate, P8-2). */
+  readonly memoryTrials?: number;
   /** Seeded PR ids to run (all when absent). */
   readonly only?: readonly string[];
   readonly clock: Clock;
@@ -171,8 +174,15 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
 
   let memory: EvalReport["memory"] = null;
   if (options.memory === true) {
-    memory = await runMemoryEval((step, request) => analyse({ kind: "memory", step }, request));
-    options.onProgress?.(`memory: ${memory.status}, ${memory.pass ? "pass" : "FAIL"}`);
+    const result = await runMemoryEval(
+      (step, request) => analyse({ kind: "memory", step }, request),
+      { trials: options.memoryTrials ?? 1 },
+    );
+    // Parsed into the report's own shape: codes, levels, counts and seeded ids only.
+    memory = MemoryEvalReport.parse(result);
+    options.onProgress?.(
+      `memory: ${result.status}, ${result.pass ? "pass" : "FAIL"} (${result.passes}/${result.trials.length} trials)`,
+    );
   }
 
   return {

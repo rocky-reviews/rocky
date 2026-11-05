@@ -2,7 +2,7 @@
  * `pnpm evals` (P4-7). The entry point (`scripts/evals.ts`) wires the real LLM roles in; this
  * module owns arguments, output and exit codes, and is tested with injected I/O.
  *
- *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory] [--max-tokens N] [--only id,…] [--out path]
+ *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--max-tokens N] [--only id,…] [--out path]
  *   pnpm evals compare <baseline.json> <report.json>
  *
  * Exit codes: 0 ok; 1 gate failed (compare) or the token cap stopped the run (run); 2 usage,
@@ -15,6 +15,7 @@ import { parseArgs } from "node:util";
 import type { Clock, LlmRoles } from "@rocky-reviews/core";
 import { INJECTION_CORPUS } from "../injection/corpus.js";
 import { INJECTION_FIXTURES } from "../injection/inject.js";
+import { MAX_MEMORY_TRIALS } from "../memory/run.js";
 import { SEEDED_PRS } from "../seeded/index.js";
 import { compareReports, PlaceholderBaselineError } from "./compare.js";
 import { parseReport, type EvalReport, type ReportModels } from "./report.js";
@@ -55,7 +56,7 @@ export interface CliDeps {
 
 const USAGE = [
   "usage:",
-  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory] [--max-tokens N] [--only pr-847,…] [--out report.json]",
+  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--max-tokens N] [--only pr-847,…] [--out report.json]",
   "  pnpm evals compare <baseline.json> <report.json>",
   "",
 ].join("\n");
@@ -102,6 +103,15 @@ const summary = (report: EvalReport): string => {
       "",
       `memory: ${m.status}, ${m.pass ? "pass" : "FAIL"}; run 1 raised ${m.run1Raised}, learned ${m.learned}, control raised ${m.controlRaised}, run 2 raised ${m.run2Raised}, cited ${m.run2Cited}, bug found ${m.run2BugFound}`,
     );
+    for (const [index, trial] of (m.trials ?? []).entries())
+      lines.push(
+        `  trial ${index + 1}: ${trial.pass ? "pass" : "FAIL"}; ${Object.entries(trial.runs)
+          .map(
+            ([step, r]) =>
+              `${step} ${r.status}${r.failure === null ? "" : ` (${r.failure})`} level ${r.level ?? "-"}${r.reviewed ? "" : " not reviewed"}${r.unanalysed === null ? "" : ` unanalysed ${r.unanalysed}`}, ${r.findings} findings, matched [${r.matched.join(",")}]`,
+          )
+          .join("; ")}`,
+      );
   }
   return `${lines.join("\n")}\n`;
 };
@@ -116,6 +126,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
       "dry-run": { type: "boolean", default: false },
       injection: { type: "boolean", default: false },
       memory: { type: "boolean", default: false },
+      "memory-trials": { type: "string" },
       "max-tokens": { type: "string" },
       only: { type: "string" },
       out: { type: "string" },
@@ -125,6 +136,11 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
     values["max-tokens"] === undefined ? DEFAULT_MAX_TOKENS : Number(values["max-tokens"]);
   if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0)
     throw new UsageError("--max-tokens must be a positive whole number");
+  const memoryTrials = values["memory-trials"] === undefined ? 1 : Number(values["memory-trials"]);
+  if (!Number.isSafeInteger(memoryTrials) || memoryTrials < 1 || memoryTrials > MAX_MEMORY_TRIALS)
+    throw new UsageError(`--memory-trials must be a whole number from 1 to ${MAX_MEMORY_TRIALS}`);
+  if (values["memory-trials"] !== undefined && !values.memory)
+    throw new UsageError("--memory-trials needs --memory");
   const only = values.only
     ?.split(",")
     .map((id) => id.trim())
@@ -170,7 +186,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         ),
         `seeded PRs: ${prs.map((pr) => `${pr.id} (${pr.expected.length} seeded)`).join(", ")}`,
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
-        `memory: ${values.memory ? "3 analyses (learn, control, apply)" : "off"}`,
+        `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply)` : "off"}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),
@@ -185,6 +201,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
     maxTokens,
     injection: values.injection,
     memory: values.memory,
+    memoryTrials,
     ...(only === undefined ? {} : { only }),
     clock: io.clock,
     onProgress: (line) => io.stderr(`${line}\n`),

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   analyzePullRequest,
   MEMORY_CANARY_MARKER,
+  preTriage,
   type AnalysisRequest,
 } from "@rocky-reviews/core";
 import { scriptedRoles, type Script, type ScriptedCall } from "@rocky-reviews/core/testing";
@@ -42,7 +43,7 @@ describe("the project-memory eval (P8-2)", () => {
   it("a pattern dismissed as intentional is not raised again on the next run, and the entry is cited", async () => {
     const calls = new Map<MemoryStep, ScriptedCall[]>();
     const result = await runMemoryEval(analyseWith(fake, calls));
-    expect(result).toEqual({
+    const conditions = {
       status: "done",
       run1Raised: true,
       learned: true,
@@ -51,6 +52,41 @@ describe("the project-memory eval (P8-2)", () => {
       run2Cited: true,
       run2BugFound: true,
       pass: true,
+    };
+    expect(result).toMatchObject({ ...conditions, passes: 1 });
+    expect(result.trials).toHaveLength(1);
+    const reviewed = { status: "done", failure: null, level: "important", reviewed: true };
+    expect(result.trials[0]).toEqual({
+      ...conditions,
+      runs: {
+        learn: {
+          ...reviewed,
+          unanalysed: null,
+          findings: 2,
+          matched: ["B1", "P1"],
+          patternSeverity: "medium",
+          suppressed: 0,
+          restored: 0,
+        },
+        control: {
+          ...reviewed,
+          unanalysed: null,
+          findings: 2,
+          matched: ["B2", "P2"],
+          patternSeverity: "medium",
+          suppressed: 0,
+          restored: 0,
+        },
+        apply: {
+          ...reviewed,
+          unanalysed: null,
+          findings: 1,
+          matched: ["B2"],
+          patternSeverity: null,
+          suppressed: 1,
+          restored: 0,
+        },
+      },
     });
     // Run 2's review got the learned entry as the memory part, behind its canary, as data.
     const review = calls.get("apply")!.find((c) => c.labels.includes("memory"))!;
@@ -87,7 +123,11 @@ describe("the project-memory eval (P8-2)", () => {
         triage: { [pr.path]: { score: 60, level: "important", reason: "A job." } },
         findings: {
           [pr.path]: [
-            { severity: pr.pattern.severity, lines: 4, title: pr.pattern.title },
+            {
+              severity: pr.pattern.severity,
+              lines: pr.pattern.range.start,
+              title: pr.pattern.title,
+            },
             { severity: pr.bug.severity, lines: pr.bug.range.start, title: pr.bug.title },
           ],
         },
@@ -131,5 +171,41 @@ describe("the project-memory eval (P8-2)", () => {
       return outcome;
     });
     expect(stored).toBeDefined();
+  });
+
+  it("records why a run raised nothing: a file triaged normal is never reviewed (the first live run)", async () => {
+    // A triage that calls the case file `normal`: no review, so no findings and nothing learned,
+    // while every analysis is `done`. The diagnosis says so.
+    const normal = (step: MemoryStep): Script => {
+      const pr = step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2;
+      return fakeModel({
+        triage: { [pr.path]: { score: 30, level: "normal", reason: "A small job." } },
+        findings: {},
+        tldr: ["Adds a job."],
+        verdict: { level: "low", reason: "A job." },
+      });
+    };
+    const result = await runMemoryEval(analyseWith(normal));
+    expect(result).toMatchObject({ status: "done", run1Raised: false, pass: false, passes: 0 });
+    for (const run of Object.values(result.trials[0]!.runs))
+      expect(run).toMatchObject({
+        status: "done",
+        level: "normal",
+        reviewed: false,
+        findings: 0,
+        matched: [],
+      });
+  });
+
+  it("runs several trials and reports how many passed", async () => {
+    const result = await runMemoryEval(analyseWith(fake), { trials: 2 });
+    expect(result).toMatchObject({ pass: true, passes: 2 });
+    expect(result.trials).toHaveLength(2);
+    await expect(runMemoryEval(analyseWith(fake), { trials: 0 })).rejects.toThrow(RangeError);
+  });
+
+  it("the case files take no rule floor, so a dismissal can stand on run 2", () => {
+    for (const pr of [MEMORY_RUN_1, MEMORY_RUN_2])
+      expect(preTriage(pr.path)).toEqual({ kind: "analyse" });
   });
 });

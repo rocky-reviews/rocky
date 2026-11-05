@@ -107,27 +107,53 @@ ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, le
 ## Project memory (`--memory`, P8-2)
 
 Does a pattern a reviewer dismissed as intentional stay out of the next review? Two synthetic
-pull requests of one repository share a pattern the team keeps on purpose (a retry limit written
-as a constant in the job file, `src/jobs/`), each with one real bug (`src/memory/case.ts`):
+pull requests of one repository's billing jobs (`src/billing/jobs/`) share a pattern the team
+keeps on purpose, a per-item `catch` that swallows the error and moves on with no log, and each
+has one real, unmistakable bug: SQL built by interpolating the org id (pr-1301), and receipts sent
+only to customers who opted out (pr-1302) (`src/memory/case.ts`). Both are payment code, which
+the triage instructions place at least at `important`, so they are reviewed; neither path takes a
+rule floor.
 
 1. **learn:** pr-1301 is analysed without memory. The produced finding that matches the pattern
    is "dismissed as intentional", and core's learning rule turns it into a dismissal entry
    (`learnedEntry`, then the store's own `prepareMemoryEntry`; the Postgres side is tested in
-   `packages/db`);
+   `packages/db`). The entry covers up to the severity of the finding it came from;
 2. **control:** pr-1302 is analysed without memory: the pattern should be raised, so its
    absence in the next step is the memory's doing;
 3. **apply:** pr-1302 is analysed with the entry.
 
-The result (`memory` in the report) holds booleans only: `run1Raised`, `learned`,
-`controlRaised`, `run2Raised` (must be false), `run2Cited` (the model put the pattern in
-`suppressed` under the entry, the pipeline accepted it, and the briefing's `memoryApplied` cites
-it), `run2BugFound` (memory hid nothing else) and `pass` (all of them, every analysis
-stored). With `--fake` the model is scripted to obey the memory block, so the result checks the
-plumbing (learning, selection, the untrusted part, citations); `memory.test.ts` also shows that a
-model which ignores memory fails it. Live, it measures whether the model follows the memory
-instructions; a control that does not raise the pattern makes the run inconclusive (`pass`
-false, `controlRaised` false), which says the case needs a stronger pattern, not that memory
-failed.
+`--memory-trials N` (1 to 5, default 1) runs the three analyses N times, for a rate on a live
+model. The result (`memory` in the report) holds the conditions over all trials: `run1Raised`,
+`learned`, `controlRaised`, `run2Raised` (must be false; true if any trial raised it),
+`run2Cited` (the model put the pattern in `suppressed` under the entry, the pipeline accepted
+it, and the briefing's `memoryApplied` cites it), `run2BugFound` (memory hid nothing else),
+`pass` (every condition in every trial) and `passes` (trials that passed). `trials` records each
+trial's conditions and, **per analysis**, what it did with the case file: the analysis status and
+failure code, the file's triage level, whether it was reviewed, its unanalysed reason, the count
+of findings on it, the seeded ids they matched, the severity of the pattern finding, and the
+pipeline's suppressed and restored counts. Codes, levels, counts and seeded ids only: never code
+or model text. `pnpm evals run` prints one line per trial.
+
+With `--fake` the model is scripted to obey the memory block, so the result checks the plumbing
+(learning, selection, the untrusted part, enforcement, citations); `memory.test.ts` also shows
+that a model which ignores memory fails it, and that a file triaged `normal` shows up as "not
+reviewed". Live, it measures whether the model follows the memory instructions. A control that
+does not raise the pattern makes the run inconclusive (`pass` false, `controlRaised` false): the
+case needs a stronger pattern, not a fix to memory. Run 2 can also be inconclusive by design when
+triage calls pr-1302 `critical` (no suppression stands on a critical file, ADR 0037 §4), or when
+the model rates the pattern above the severity it gave it in run 1 (the entry does not cover it);
+the per-run diagnosis shows both (`level`, `patternSeverity`, `restored`).
+
+**Live results so far.** The first live run (2026-11-05; triage haiku-5-5, review opus-5-5,
+graph sonnet-5-5) used the earlier case, a 16-line retry job with a hard-coded `MAX_ATTEMPTS`.
+Every condition came back false with every analysis `done`, and the report recorded booleans
+only. Offline diagnosis: of the 26 review-role calls, 8 were briefings, so at most 18 file
+reviews ran for the 25 triaged files; the case files were most likely triaged `normal` (a small
+job touching nothing the triage instructions call risky), and a `normal` file is never reviewed,
+so no finding could be raised. Nothing was swallowed as an error, but a `done` analysis whose
+case file was not reviewed looked the same as a miss. The case was redesigned (payment code,
+which triage places at least at `important`) and the per-run diagnosis added so that the next run
+can tell these apart. The next live run is a needs-human step.
 
 **Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
 A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.

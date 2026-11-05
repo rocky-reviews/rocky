@@ -5,8 +5,12 @@
  * learning rules (core `learnedEntry` and the store's `prepareMemoryEntry`); only the database is
  * left out (the store side is `packages/db` `learnFromReviewSubmission`, tested on Postgres).
  *
- * Three analyses: run 1 (pr-1301, no memory), a control (pr-1302, no memory) and run 2 (pr-1302
- * with the learned entry). The result holds booleans, counts and ids only: no model text.
+ * Three analyses per trial: run 1 (pr-1301, no memory), a control (pr-1302, no memory) and run 2
+ * (pr-1302 with the learned entry). A live run may repeat the trial (`trials`) to report a rate.
+ * The result holds booleans, fixed codes, levels, counts and seeded ids only: no code and no model
+ * text. Each analysis records enough to tell why a condition failed (was the file reviewed at
+ * all, did the analysis fail, what matched): the first live run recorded booleans only and could
+ * not tell a miss from a file that was never reviewed (ADR 0037 §6).
  */
 import {
   learnedEntry,
@@ -30,8 +34,52 @@ export type MemoryAnalyse = (
 /** A stand-in for the stored entry's id: what the pipeline cites and the worker would touch. */
 export const MEMORY_EVAL_ENTRY_ID = "00000000-0000-4000-8000-000000001301";
 
+/** What one analysis of the case did with the case's one file. Codes and counts only. */
+export interface MemoryRunDiagnosis {
+  readonly status: "done" | "failed" | "capped";
+  /** The pipeline's failure code when `failed` (a fixed code), else null. */
+  readonly failure: string | null;
+  /** The file's triage level (after the rule floor), or null when it was not triaged. */
+  readonly level: "critical" | "important" | "normal" | "low" | null;
+  /** The file went through review (critical or important, not unanalysed). */
+  readonly reviewed: boolean;
+  /** The file's unanalysed reason (a fixed code), or null. */
+  readonly unanalysed: string | null;
+  /** Findings stored on the file. */
+  readonly findings: number;
+  /** Seeded ids (`P1`, `B1`, …) a stored finding matched. */
+  readonly matched: readonly string[];
+  /** The severity of the finding that matched the pattern, or null. */
+  readonly patternSeverity: "critical" | "high" | "medium" | "low" | null;
+  /** Findings a dismissal kept out, and suppressions restored as drafts (the pipeline's counts). */
+  readonly suppressed: number;
+  readonly restored: number;
+}
+
+/** One trial: the conditions, and what each of its three analyses did. */
+export interface MemoryTrialResult {
+  readonly status: "done" | "failed" | "capped";
+  readonly run1Raised: boolean;
+  readonly learned: boolean;
+  readonly controlRaised: boolean;
+  readonly run2Raised: boolean;
+  readonly run2Cited: boolean;
+  readonly run2BugFound: boolean;
+  readonly pass: boolean;
+  readonly runs: {
+    readonly learn: MemoryRunDiagnosis;
+    readonly control: MemoryRunDiagnosis;
+    readonly apply: MemoryRunDiagnosis;
+  };
+}
+
+/**
+ * The eval over all trials. The conditions are aggregated so that `pass` means "every trial
+ * passed": each condition that must hold holds in every trial, and `run2Raised` is true when any
+ * trial raised the pattern with memory.
+ */
 export interface MemoryEvalResult {
-  /** `done` when all three analyses were stored; otherwise the first other status. */
+  /** `done` when every analysis was stored; otherwise the first other status. */
   readonly status: "done" | "failed" | "capped";
   /** Run 1 raised the pattern (there was something to dismiss). */
   readonly run1Raised: boolean;
@@ -45,8 +93,11 @@ export interface MemoryEvalResult {
   readonly run2Cited: boolean;
   /** Run 2 still finds pr-1302's real bug: memory hid nothing else. */
   readonly run2BugFound: boolean;
-  /** Every condition above holds. */
+  /** Every condition above holds, in every trial. */
   readonly pass: boolean;
+  /** Trials that passed, of `trials.length`. */
+  readonly passes: number;
+  readonly trials: readonly MemoryTrialResult[];
 }
 
 const request = (pr: MemoryCasePr, memory?: readonly AnalysisMemoryEntry[]): AnalysisRequest => ({
@@ -109,7 +160,52 @@ const statusOf = (
   return "done";
 };
 
-export const runMemoryEval = async (analyse: MemoryAnalyse): Promise<MemoryEvalResult> => {
+const REVIEWED: ReadonlySet<string> = new Set(["critical", "important"]);
+
+/** What one analysis did with the case file: codes, levels, counts and seeded ids only. */
+export const diagnose = (
+  outcome: AnalysisOutcome | "capped",
+  pr: MemoryCasePr,
+): MemoryRunDiagnosis => {
+  const empty = {
+    level: null,
+    reviewed: false,
+    unanalysed: null,
+    findings: 0,
+    matched: [],
+    patternSeverity: null,
+    suppressed: 0,
+    restored: 0,
+  } as const;
+  if (outcome === "capped") return { status: "capped", failure: null, ...empty };
+  const counts = {
+    suppressed: outcome.stats.memorySuppressed,
+    restored: outcome.stats.memoryRestored,
+  };
+  if (outcome.status !== "done")
+    return { status: "failed", failure: outcome.code, ...empty, ...counts };
+  const { document } = outcome;
+  const level = document.triage.files.find((file) => file.path === pr.path)?.level ?? null;
+  const unanalysed =
+    document.provenance.unanalysed.find((file) => file.path === pr.path)?.reason ?? null;
+  const own = document.findings.filter((finding) => finding.path === pr.path);
+  const score = scoreFindings([pr.pattern, pr.bug], own);
+  const patternPair = score.pairs.find((pair) => pair.seeded === pr.pattern.id);
+  return {
+    status: "done",
+    failure: null,
+    level,
+    reviewed: level !== null && REVIEWED.has(level) && unanalysed === null,
+    unanalysed,
+    findings: own.length,
+    matched: score.pairs.map((pair) => pair.seeded).sort(),
+    patternSeverity:
+      patternPair === undefined ? null : (own[patternPair.produced]?.severity ?? null),
+    ...counts,
+  };
+};
+
+const trial = async (analyse: MemoryAnalyse): Promise<MemoryTrialResult> => {
   const run1 = await analyse("learn", request(MEMORY_RUN_1));
   const dismissed = matchOf(MEMORY_RUN_1.pattern, findingsOf(run1));
   const entry = dismissed === undefined ? undefined : learnedFrom(dismissed, MEMORY_RUN_1);
@@ -139,5 +235,43 @@ export const runMemoryEval = async (analyse: MemoryAnalyse): Promise<MemoryEvalR
       !result.run2Raised &&
       result.run2Cited &&
       result.run2BugFound,
+    runs: {
+      learn: diagnose(run1, MEMORY_RUN_1),
+      control: diagnose(control, MEMORY_RUN_2),
+      apply: diagnose(run2, MEMORY_RUN_2),
+    },
+  };
+};
+
+/** At most this many trials in one run (each is three analyses). */
+export const MAX_MEMORY_TRIALS = 5;
+
+export const runMemoryEval = async (
+  analyse: MemoryAnalyse,
+  options: { readonly trials?: number } = {},
+): Promise<MemoryEvalResult> => {
+  const count = options.trials ?? 1;
+  if (!Number.isSafeInteger(count) || count < 1 || count > MAX_MEMORY_TRIALS)
+    throw new RangeError(`memory trials must be 1..${MAX_MEMORY_TRIALS}`);
+  const trials: MemoryTrialResult[] = [];
+  for (let i = 0; i < count; i++) {
+    const result = await trial(analyse);
+    trials.push(result);
+    // A capped analysis means the token budget is spent: later trials could not finish either.
+    if (result.status === "capped") break;
+  }
+  const every = (key: "run1Raised" | "learned" | "controlRaised" | "run2Cited" | "run2BugFound") =>
+    trials.every((t) => t[key]);
+  return {
+    status: trials.find((t) => t.status !== "done")?.status ?? "done",
+    run1Raised: every("run1Raised"),
+    learned: every("learned"),
+    controlRaised: every("controlRaised"),
+    run2Raised: trials.some((t) => t.run2Raised),
+    run2Cited: every("run2Cited"),
+    run2BugFound: every("run2BugFound"),
+    pass: trials.length === count && trials.every((t) => t.pass),
+    passes: trials.filter((t) => t.pass).length,
+    trials,
   };
 };

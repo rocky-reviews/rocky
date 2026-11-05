@@ -3,7 +3,7 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-05T17:27:05.244Z",
+  "createdAt": "2026-11-05T18:51:48.838Z",
   "pipelineVersion": "p4-4.2",
   "promptHash": "ad209ea4b12178ac034d52bcef8d7442b577d666cc792a5964e4c965732e1337",
   "models": {
@@ -33,30 +33,30 @@
     "byRole": {
       "triage": {
         "calls": 479,
-        "inputTokens": 205583,
-        "outputTokens": 36728,
+        "inputTokens": 205702,
+        "outputTokens": 36725,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-triage"]
       },
       "review": {
         "calls": 396,
-        "inputTokens": 214228,
-        "outputTokens": 59286,
+        "inputTokens": 214382,
+        "outputTokens": 59358,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-review"]
       },
       "graph": {
         "calls": 288,
-        "inputTokens": 463387,
+        "inputTokens": 463748,
         "outputTokens": 21885,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-graph"]
       }
     },
-    "totalTokens": 1001097,
+    "totalTokens": 1001800,
     "capped": false
   },
   "prs": [
@@ -1459,6 +1459,57 @@
     "run2Raised": false,
     "run2Cited": true,
     "run2BugFound": true,
-    "pass": true
+    "pass": true,
+    "passes": 1,
+    "trials": [
+      {
+        "status": "done",
+        "run1Raised": true,
+        "learned": true,
+        "controlRaised": true,
+        "run2Raised": false,
+        "run2Cited": true,
+        "run2BugFound": true,
+        "pass": true,
+        "runs": {
+          "learn": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 2,
+            "matched": ["B1", "P1"],
+            "patternSeverity": "medium",
+            "suppressed": 0,
+            "restored": 0
+          },
+          "control": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 2,
+            "matched": ["B2", "P2"],
+            "patternSeverity": "medium",
+            "suppressed": 0,
+            "restored": 0
+          },
+          "apply": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 1,
+            "matched": ["B2"],
+            "patternSeverity": null,
+            "suppressed": 1,
+            "restored": 0
+          }
+        }
+      }
+    ]
   }
 }
