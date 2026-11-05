@@ -87,25 +87,34 @@ to Latin for matching only):
    listed login after `@` is always a person, allow-list or not;
 5. **known people**: the logins and display names the caller passes. The repository puts the
    author login of the source PR and every member login of the org (active or removed) first
-   and the caller's list after; more than `MAX_KNOWN_PEOPLE` (5 000) distinct names is refused
-   (`too_many_people`), never scrubbed with a shortened list. Logins and full names match
-   case-insensitively; a name's individual tokens (≥ 3 letters) match as written (capitalised).
-   A single-token name is matched **wherever it appears as a word only when it is clearly a
-   person** (`matchesAsBareWord`: it has a digit or a hyphen, is not ASCII, or has at least five
-   letters and is not in a small dictionary of common words and word-names: `go`, `api`,
-   `main`, `test`, `Mark`, `Brown`); otherwise it is matched only in person positions: after `@`,
-   after a cue, before a speech verb, in a trailer. So member logins `go` and `main` do not turn
-   "run on main, call the api from go code" into placeholders, while `thanks go` and `@main` are
-   scrubbed. Possessives (`Alice's`) are included; identifiers that contain a name
-   (`aliceValidator`, `alice_id`, `malice`) are not touched;
-6. names after honorifics (`Dr. Ada Lovelace`) and after attribution cues (`thanks`, `cc`,
-   `according to`, `reviewed by`, …) or before speech verbs (`Alice suggested`); a capitalised
-   word followed by lowercase letters only (never CamelCase: `HttpClient said` is code, as is
-   `McDonald`), never an acronym (`per RFC`), never a stop word (`The Team decided` stays; the
-   list holds sentence starters, roles, products and tools: `Prettier wants`, `according to
-Drizzle docs`); verb forms that double as plural nouns (`requests`, `notes`, `comments`,
-   `reviews`, `mentions`, `replies`) are not speech verbs (`Logger notes the id`); nothing inside
-   inline code (backticks) is a name or a handle by context (a listed login in backticks still is);
+   and the caller's list after; more than `MAX_KNOWN_PEOPLE` (50 000) distinct folded names is
+   refused (`too_many_people`), never scrubbed with a shortened list. People are matched by
+   **word lookup**, not by a compiled pattern: the text is split into words once, each word is
+   looked up in an index of the names and of each display name's space-separated parts (up to
+   eight per name), and a multi-word name must match word by word with the same text in
+   between. Everything is case-insensitive: logins, whole display names and their parts
+   (`smith`, `SMITH` and `Smith` of `Alice Smith`). A name or part is matched **wherever it
+   appears as a word** unless it is "weak" (`matchesAsBareWord`): an ASCII word in a small
+   dictionary of common words and word-names (`go`, `api`, `main`, `test`, `Mark`, `Brown`),
+   in the stop list, or at most two letters (`Li`). A weak name is matched only in person
+   positions: after `@`, after a cue, before a speech verb, in a trailer. So member logins `go`
+   and `main` do not turn "run on main, call the api from go code" into placeholders, `thanks
+go` and `@main` are scrubbed (inside backticks too), and `john`, `bob`, `anna`, `Eric Li`
+   and `Pérez` are scrubbed wherever they appear. Possessives (`Alice's`) are included;
+   identifiers that contain a name (`aliceValidator`, `alice_id`, `malice`) are not touched;
+   inline code does not protect a listed person;
+6. names after honorifics (`Dr. DeAndre Jones`, `Mr. O'Neil`) and after attribution cues
+   (`thanks`, `cc`, `according to`, `reviewed by`, …): a capitalised word of any letters
+   (`DeShawn`, `McKenzie`, `Jean-Luc`, `O'Brien`), the stop list keeping sentence starters,
+   roles, products and tools out (`Prettier wants`, `according to Drizzle docs`); names before
+   speech verbs (`Alice suggested`): a capitalised word with lower-case letters after the
+   capital, allowing the usual prefixes (`McDonald`, `DeShawn`), apostrophe parts (`O'Brien`,
+   `De'Andre`) and hyphenated parts (`Jean-Luc`), never CamelCase (`HttpClient said` is code).
+   Never an acronym (`per RFC`); a match never ends inside a word; verb forms that double as
+   plural nouns (`requests`, `notes`, `comments`, `reviews`, `mentions`, `replies`) are not
+   speech verbs (`Logger notes the id` stays, and so does `Alice notes the id` unless Alice is
+   listed); these context heuristics do not look inside inline code (backticks); listed people
+   and `@handles` are scrubbed there too;
 7. phone numbers: 9–15 digits with separators or a leading `+`, never a date, a line range, a
    version, a sha or a bare number;
 8. IPv4 addresses.
@@ -114,10 +123,11 @@ Each class is replaced by a fixed placeholder (`[person]`, `[email]`, `[user]`, 
 `[address]`); the result reports counts per class, which is all a log may carry.
 
 **What the scrubber guarantees:** the known people (member logins, display names passed by the
-caller, the PR author) are never stored wherever they appear as a word, in any case, possessive,
-NFKC or look-alike spelling, with invisible characters inside or inside inline code, **except** a
-name or display-name token that is a dictionary word or at most two letters, which is removed
-only in person positions (after `@`, a cue, in a trailer, before a speech verb); email addresses,
+caller, the PR author, and each space-separated part of a display name) are never stored
+wherever they appear as a word, in any case, possessive, NFKC or look-alike spelling, with
+invisible characters inside or inside inline code, **except** a name or part that is a
+dictionary or stop-list word or at most two letters, which is removed only in person positions
+(after `@`, a cue, in a trailer, before a speech verb; inside inline code too); email addresses,
 URL credentials, `@handles`, trailer values, phone numbers and IPv4 addresses of the listed
 shapes are never stored; no entry carries the prompt canary or any eight-character run of it.
 The output is NFKC without invisible characters, which also removes the hidden-text channel into
@@ -129,13 +139,15 @@ is a word like any other (`Pat merged it` is replaced because of the speech verb
 is not); a listed login or token that is a dictionary word or at most two letters survives
 outside person positions (`go`, `pat`, `Li` in "Li alone" survive; `cc Li` does not); a verb
 form that is also a plural noun is not a cue (`Pat notes the id` stays unless Pat is listed);
-a product or CamelCase word after a cue is a false positive (`according to HttpClient docs`
-stores `according to [person] docs`), never a partial word; names in scripts without letter case (CJK, Arabic, Hebrew) are only caught when listed;
+a product, brand or CamelCase word after a cue is a false positive (`according to HttpClient
+docs` stores `according to [person] docs`, `thanks OpenAPI spec` and `according to GraphQL`
+likewise: the safe side), never a partial word; a CamelCase `@handle` alone on its line is kept
+as decorator syntax; names in scripts without letter case (CJK, Arabic, Hebrew) are only caught when listed;
 a person can be identified without a name ("the CTO", "whoever wrote the auth module", a
 unique role or date); IPv6, postal addresses, national ids, usernames inside URLs
-(`github.com/alice`) and names inside code identifiers are not recognised; a surname token that
-is a capitalised ordinary word at sentence start is a false positive (`Mark the field` with a
-member "Mark Brown" stores `[person] the field`); `@param`-like allow-listing is a list, so an
+(`github.com/alice`) and names inside code identifiers are not recognised; a display-name part
+that is a dictionary word is removed only in person positions (`Mark the field` with a member
+"Mark Brown" stays as written; `cc Mark` does not); `@param`-like allow-listing is a list, so an
 unusual tag is scrubbed (`@fixme` → `[user]`), which is the safe failure. The scrubber is a
 safety net; the controls are that entries are built from fixed codes and prose a reviewer sees
 and can edit (P8-3), that people are referenced by member id only, and that evidence is a path,
@@ -225,7 +237,11 @@ reviewers' prompts; a leaver whose name must not remain; anyone reading an expor
   ADR 0024's decision, not this one's.
 - The per-repository cap is a ceiling, not a budget: P8-4 decides what to keep.
 - `MAX_KNOWN_PEOPLE` (50 000 distinct folded names, a constant with a timing test) bounds the
-  scrub's people list. The repository always passes every member login of the org, so an org
+  scrub's people list. Each name adds up to eight parts to the word index, so the index holds
+  at most 450 000 entries; it is rebuilt per call, in time linear in the list (measured: 50 000
+  five-word names index and scrub a 300-character text in about 230 ms on a laptop, 50 000
+  twelve-word names in about 160 ms, 50 000 logins in about 40 ms; the regex alternation this
+  replaced took seconds and ran out of memory at that size). The repository always passes every member login of the org, so an org
   with more members than that gets `too_many_people` on every create (audited nowhere, answered
   to the caller) until the constant is raised; nothing is scrubbed with a shortened list. No
   GitHub organization Rocky targets is near that size; the way out is a code change with the

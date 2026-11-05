@@ -87,6 +87,13 @@ Task log for the project plan. Agents append a row when a task is merged.
   are scrubbed inside backticks (only the context heuristics skip code); `MAX_KNOWN_PEOPLE` is
   50 000 distinct folded names with a timing test; any eight-character run of the canary is
   refused (`containsPromptCanaryFragment`).
+- Fix round 3 applied: known people are matched by word lookup (an index of names and display
+  name parts, no compiled alternation: linear in the list, measured at the cap with five- and
+  twelve-word names); display-name parts are case-insensitive; weak names in person positions
+  are scrubbed inside backticks; cue/honorific and speech-verb shapes accept `O'Brien`,
+  `De'Andre`, `McDonald`, `DeShawn`; the ADR's guarantee, the `Mark the field` example and the
+  50 000 note were corrected, and the own-line CamelCase handle and brand-after-cue false
+  positives listed.
 - Security L2: chat-template tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, …) are not refused at
   storage; P8-2 must pass entries only as untrusted text (`LlmUntrustedText`), never
   concatenated into instructions.
