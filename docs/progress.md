@@ -114,6 +114,18 @@ Task log for the project plan. Agents append a row when a task is merged.
 - "Dismissals before accepts within the cap" has no test with more than 25 decisions (the
   pr-847 fixture has ten findings).
 - The estimate counts a file whose triage would be reused as a whole analysis (upper bound).
+- Fix round 2 applied: a lower role's opposite decision about a higher role's learned pattern is
+  not stored; no suppression stands on a file triaged critical or with a rule floor (triage never
+  sees memory); a restored item that repeats a raised finding is stored once. `readByHand` was
+  not extended: with no suppression standing on risky files, a risky file can only look clean
+  by having no findings at all, which `readByHand` already lists.
+- N2 (round 2): restored and raised drafts together can exceed 25 per file; only the document's
+  200-finding cap bounds them.
+- N3 (round 2): the final-check allowance is every offered entry's text, wider than needed
+  (each finding could be allowed only its own file's selection).
+- N5 (round 2): the estimate ignores reused triage (counts the triage call anyway).
+- N6 (round 2): suppressed items cost output tokens under the unchanged review output budget
+  (`MAX_OUTPUT_TOKENS.review`); a file with many suppressions may hit the cap and be truncated.
 - `supersedeMemoryEntry` gained `origin: "learned"` in P8-1's file (ADR 0037 §3); P8-1's own
   tests do not cover it (P8-2's `memory-learning.test.ts` does).
 - `containsPromptCanary` and `containsPromptCanaryFragment` now also cover the memory canary
