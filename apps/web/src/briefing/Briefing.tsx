@@ -88,7 +88,6 @@ const Briefing = ({
   const start = startFile(doc);
   // P6-5: k opens the first file in review order; the hint shows only when that is this file.
   const startKey = useKeyShortcut(start !== undefined && reviewOrder(doc)[0] === start ? "k" : "");
-  const minutes = `est. ~${briefing.estimatedReviewMinutes} min review`;
   const lead = briefingLead(doc);
 
   return (
@@ -101,7 +100,6 @@ const Briefing = ({
             ) : (
               <span>Briefing by Rocky</span>
             )}
-            <span>· {minutes}</span>
           </div>
           <Title />
           {banner !== undefined && <BannerBox banner={banner} />}

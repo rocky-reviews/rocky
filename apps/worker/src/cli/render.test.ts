@@ -90,6 +90,13 @@ describe("renderBriefing", () => {
     expect(text).toContain("Change map: unavailable (timeout)");
   });
 
+  it("prints no review-time estimate, in the briefing or the risk table (H4-9)", () => {
+    const text = renderBriefing(structuredClone(PR847), PR);
+    expect(text).not.toContain("Estimated review");
+    expect(text).not.toMatch(/\d+ min\b/);
+    expect(text).toMatch(/^ {4}src\/auth\/invitations\.ts +score {2}97 {2}\S/m);
+  });
+
   it("says so when there is nothing to list", () => {
     const doc = structuredClone(PR847);
     doc.findings = [];

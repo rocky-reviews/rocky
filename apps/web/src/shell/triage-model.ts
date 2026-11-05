@@ -20,7 +20,6 @@ export type SidebarFile = {
   path: string;
   level: TriagedFileLevel;
   score: number;
-  reviewMinutes: number;
   /** One entry per finding on the file, worst first. */
   findings: readonly { id: string; severity: Severity }[];
 };
@@ -49,7 +48,6 @@ export const sidebarGroups = (doc: AnalysisDocument): SidebarGroup[] => {
         path: file.path,
         level,
         score: file.score,
-        reviewMinutes: file.reviewMinutes,
         findings: (findings.get(file.path) ?? []).toSorted(
           (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
         ),
@@ -68,8 +66,6 @@ export const noiseGroup = (doc: AnalysisDocument): NoiseGroup => {
 export type Coverage = {
   reviewed: number;
   total: number;
-  /** Minutes of high-risk review left, from the analysis's per-file estimate. */
-  minutesLeft: number;
   done: boolean;
 };
 
@@ -85,13 +81,13 @@ export const coverage = (
   return {
     reviewed: must.length - left.length,
     total: must.length,
-    minutesLeft:
-      left.length === 0
-        ? 0
-        : Math.max(
-            1,
-            left.reduce((s, f) => s + f.reviewMinutes, 0),
-          ),
     done: left.length === 0,
   };
+};
+
+/** The coverage card's note: a count, not a time (H4-9 hid the model's review-time estimate). */
+export const coverageNote = (c: Coverage): string => {
+  if (c.done) return "All high-risk files reviewed ✓";
+  const left = c.total - c.reviewed;
+  return `${left} high-risk ${left === 1 ? "file" : "files"} left`;
 };

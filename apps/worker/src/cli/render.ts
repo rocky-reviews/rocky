@@ -70,7 +70,6 @@ export const renderBriefing = (doc: AnalysisDocument, pr: PullRequestHeader): st
     out.push("Summary");
     out.push(...indent(briefing.summary ?? "", "  "));
   }
-  out.push(`  Estimated review: ${briefing.estimatedReviewMinutes} min`);
   out.push("");
 
   out.push("Risk");
@@ -84,7 +83,7 @@ export const renderBriefing = (doc: AnalysisDocument, pr: PullRequestHeader): st
     out.push(`  ${level} (${files.length})`);
     for (const file of files) {
       out.push(
-        `    ${oneLine(file.path).padEnd(width)}  score ${String(file.score).padStart(3)}  ${file.reviewMinutes} min  ${oneLine(file.reason)}`,
+        `    ${oneLine(file.path).padEnd(width)}  score ${String(file.score).padStart(3)}  ${oneLine(file.reason)}`,
       );
     }
   }

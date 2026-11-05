@@ -1,7 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "./test.js";
 import { openFile } from "./diff-support.js";
-import { MODES, openShell, WIDTHS } from "./support.js";
+import { MODES, openShell, showLowerRisk, WIDTHS } from "./support.js";
 import { ME } from "./review-api.js";
 import pr847 from "../../../packages/schema/fixtures/pr-847.json" with { type: "json" };
 
@@ -367,6 +367,7 @@ test.describe("review panel", () => {
 
   test("trusting the noise says so in a toast", async ({ page }) => {
     await openShell(page);
+    await showLowerRisk(page);
     await page.locator("#sidebar").getByRole("button", { name: "Trust & mark viewed" }).click();
     await expect(toast(page)).toHaveText("2 noise files marked viewed from the AI summary");
   });

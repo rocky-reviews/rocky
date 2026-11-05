@@ -1,7 +1,7 @@
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { parseAnalysisDocument } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
-import { coverage, noiseGroup, sidebarGroups } from "./triage-model.js";
+import { coverage, coverageNote, noiseGroup, sidebarGroups } from "./triage-model.js";
 
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error(parsed.error.message);
@@ -49,13 +49,8 @@ describe("noiseGroup", () => {
 describe("coverage", () => {
   const groups = sidebarGroups(doc);
 
-  it("counts critical and important files, with minutes from the analysis (POC defect 6)", () => {
-    expect(coverage(groups, new Set())).toEqual({
-      reviewed: 0,
-      total: 4,
-      minutesLeft: 3 + 2 + 1 + 1,
-      done: false,
-    });
+  it("counts critical and important files", () => {
+    expect(coverage(groups, new Set())).toEqual({ reviewed: 0, total: 4, done: false });
   });
 
   it("ignores normal and low files", () => {
@@ -63,15 +58,30 @@ describe("coverage", () => {
     expect(c.reviewed).toBe(0);
   });
 
-  it("shows at least a minute while a high-risk file is left", () => {
+  it("is not done while a high-risk file is left", () => {
     const viewed = new Set(["src/auth/invitations.ts", "src/api/routes/invitations.ts"]);
     viewed.add("db/migrations/20261020_add_invitations.sql");
-    const c = coverage(groups, viewed);
-    expect(c).toMatchObject({ reviewed: 3, minutesLeft: 1, done: false });
+    expect(coverage(groups, viewed)).toEqual({ reviewed: 3, total: 4, done: false });
   });
 
   it("is done when every high-risk file is viewed", () => {
     const all = new Set(groups.slice(0, 2).flatMap((g) => g.files.map((f) => f.path)));
-    expect(coverage(groups, all)).toEqual({ reviewed: 4, total: 4, minutesLeft: 0, done: true });
+    expect(coverage(groups, all)).toEqual({ reviewed: 4, total: 4, done: true });
+  });
+});
+
+describe("coverageNote (H4-9)", () => {
+  it("counts the high-risk files left, singular for one, and has no time estimate", () => {
+    expect(coverageNote({ reviewed: 0, total: 4, done: false })).toBe("4 high-risk files left");
+    expect(coverageNote({ reviewed: 3, total: 4, done: false })).toBe("1 high-risk file left");
+  });
+
+  it("keeps the done state", () => {
+    expect(coverageNote({ reviewed: 4, total: 4, done: true })).toBe(
+      "All high-risk files reviewed ✓",
+    );
+    expect(coverageNote({ reviewed: 0, total: 0, done: true })).toBe(
+      "All high-risk files reviewed ✓",
+    );
   });
 });

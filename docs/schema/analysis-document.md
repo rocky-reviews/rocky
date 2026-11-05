@@ -105,7 +105,7 @@ count or a hunk range. Every other section is then checked against those facts.
         "path": "src/auth/invitations.ts",
         "score": 97, // must sit in the band for its level: critical is 80–100
         "level": "critical",
-        "reviewMinutes": 3, // the sidebar's "minutes of high-risk code left" adds these up
+        "reviewMinutes": 3, // not shown since H4-9 (the sidebar counts files left)
         "reason": "New path that grants org membership and sets the member's role.",
         "whatChanged": "New createInvitation() and acceptInvitation(). …",
         "whyThisLevel": "New path that grants org membership …",
@@ -415,6 +415,8 @@ are refused, and model paths must match exactly.
    additions ÷ 14, and it must agree with the briefing. The PR estimate may exceed the sum
    because the briefing and the noise summaries take time too; an exact equality would send
    every arithmetic slip through a repair round.
+   H4-9: the app and the CLI no longer show either number (the model's estimate was not
+   reliable enough to show). The fields and the check stay, so the display can come back.
 10. **The POC's PR header says +214** while its per-file numbers add up to 215. Decision: the
     fixture keeps the per-file numbers; totals are derived, never stored. Reason: one source
     for every number.
