@@ -191,6 +191,7 @@ export {
   PROMPT_TEXTS,
   FALLBACK_REASON,
   FALLBACK_SUMMARY,
+  containsPromptCanary,
   foldForLeaks,
   PROMPT_SHARE_THRESHOLD,
   promptShare,

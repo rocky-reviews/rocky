@@ -1,4 +1,5 @@
 import {
+  can,
   isDismissReason,
   isMemoryKind,
   isMemoryOrigin,
@@ -6,6 +7,7 @@ import {
   readPullRequestNumber,
   type MemoryEntry,
   type MemoryEntryProblem,
+  type MemoryOrigin,
 } from "@rocky-reviews/core";
 import { audit } from "./audit.js";
 import type { TenantTx } from "./client.js";
@@ -17,10 +19,16 @@ import type { TenantTx } from "./client.js";
  * request.
  *
  * `createMemoryEntry` is the only writer of entry text. It scrubs personal identifiers with the
- * people Rocky knows about here (every member login of the org, active or removed, and the
- * author of the source pull request) on top of the caller's list, then applies core's rules.
+ * people Rocky knows about here (the author of the source pull request and every member login
+ * of the org, active or removed, first; the caller's list after) and applies core's rules.
  * Nothing about a person is stored but the author's member id; the reader derives "former
  * member" from the member row (gone, or removed) at read time.
+ *
+ * Who may write is re-checked in the writing transaction with the actor's row locked `FOR
+ * SHARE` (the T37 precedent): a member-written entry and a supersede need `memory.edit`
+ * (admins and owners, ADR 0024); a learned entry needs its author to be an active member (any
+ * role can dismiss a draft). A removal or demotion racing the write is seen, not raced. The
+ * origin is the caller's parameter, never read from the untrusted entry.
  *
  * Results are fixed codes; errors carry no values (entry text is derived from PR content and
  * reviewer text: neither belongs in an error or a log).
@@ -110,13 +118,16 @@ const viewOf = (row: EntryRow): MemoryEntry => {
   };
 };
 
-/** `true` while `memberId` is an active member of this org. */
-const isActiveMember = async (tx: TenantTx, memberId: string): Promise<boolean> => {
-  const { rowCount } = await tx.query(
-    "select 1 from members where org_id = $1 and id = $2 and removed_at is null",
+/**
+ * The actor's role while they are an active member here, read `FOR SHARE` so it cannot change
+ * under this transaction; `null` when they are not one.
+ */
+const activeRole = async (tx: TenantTx, memberId: string): Promise<string | null> => {
+  const { rows } = await tx.query<{ role: string }>(
+    "select role from members where org_id = $1 and id = $2 and removed_at is null for share",
     [tx.orgId, memberId],
   );
-  return rowCount === 1;
+  return rows[0]?.role ?? null;
 };
 
 /** Serialises creates per repository (the cap below is a count then an insert). */
@@ -136,38 +147,43 @@ export type CreateMemoryEntryResult =
   | { readonly outcome: "unknown_repo" }
   /** The author is not an active member of this org. */
   | { readonly outcome: "not_a_member" }
+  /** A member-written entry needs `memory.edit` (re-checked here, with the row locked). */
+  | { readonly outcome: "not_permitted" }
   | { readonly outcome: "repo_full" };
 
 /**
  * Stores one entry for `repoId`, written by `authorMemberId` (an active member of this org, as
- * the session says), from the untrusted `entry` (core `prepareMemoryEntry`). `people` are
- * logins or names the caller saw around the evidence (commenters, reviewers); the org's member
- * logins and the source PR's author are always added. Audited `memory.created` with ids and
- * counts.
+ * the session says), from the untrusted `entry` (core `prepareMemoryEntry`). `origin` is the
+ * caller's: `member` (a person writes it; needs `memory.edit`) or `learned` (P8-2 derives it
+ * from the author's own decision). `people` are logins or names the caller saw around the
+ * evidence (commenters, reviewers); the source PR's author and the org's member logins always
+ * come first. Audited `memory.created` with ids and counts.
  */
 export const createMemoryEntry = async (
   tx: TenantTx,
   input: {
     readonly authorMemberId: string;
     readonly repoId: string;
+    readonly origin: MemoryOrigin;
     readonly entry: unknown;
     readonly people?: readonly string[];
   },
 ): Promise<CreateMemoryEntryResult> => {
   const author = uuid(input.authorMemberId, "author id");
   const repoId = uuid(input.repoId, "repository id");
-  if (!(await isActiveMember(tx, author))) return { outcome: "not_a_member" };
+  if (!isMemoryOrigin(input.origin)) throw new MemoryStoreError("memory: unknown origin");
+  const role = await activeRole(tx, author);
+  if (role === null) return { outcome: "not_a_member" };
+  if (input.origin === "member" && !can(role, "memory.edit")) return { outcome: "not_permitted" };
   const repo = await tx.query("select 1 from repos where org_id = $1 and id = $2", [
     tx.orgId,
     repoId,
   ]);
   if (repo.rowCount !== 1) return { outcome: "unknown_repo" };
 
-  const people: string[] = [...(input.people ?? [])];
-  const members = await tx.query<{ login: string }>("select login from members where org_id = $1", [
-    tx.orgId,
-  ]);
-  for (const m of members.rows) people.push(m.login);
+  // The people Rocky knows first, so a long caller list can never push them out (the scrubber
+  // refuses a list past its cap rather than shortening it; core answers `too_many_people`).
+  const people: string[] = [];
   const pullRequestNumber = readPullRequestNumber(input.entry);
   if (pullRequestNumber !== null) {
     const pr = await tx.query<{ author_login: string | null }>(
@@ -177,8 +193,13 @@ export const createMemoryEntry = async (
     const login = pr.rows[0]?.author_login;
     if (typeof login === "string") people.push(login);
   }
+  const members = await tx.query<{ login: string }>("select login from members where org_id = $1", [
+    tx.orgId,
+  ]);
+  for (const m of members.rows) people.push(m.login);
+  people.push(...(input.people ?? []));
 
-  const prepared = prepareMemoryEntry(input.entry, { people });
+  const prepared = prepareMemoryEntry(input.entry, { origin: input.origin, people });
   if (!prepared.ok) return { outcome: "invalid", problem: prepared.problem };
   const { draft } = prepared;
 
@@ -274,11 +295,13 @@ export type SupersedeMemoryEntryResult =
   | "already_superseded"
   | "different_repo"
   /** The actor is not an active member of this org. */
-  | "not_a_member";
+  | "not_a_member"
+  /** The actor lacks `memory.edit` (re-checked here, with their row locked). */
+  | "not_permitted";
 
 /**
  * Marks `entryId` as replaced by `byEntryId` (both current entries of the same repository of
- * this org), with both rows locked. The old entry stays as history and leaves the default
+ * this org), with both rows locked, for an actor who holds `memory.edit` here. The old entry stays as history and leaves the default
  * listing. Audited `memory.superseded` with ids only.
  */
 export const supersedeMemoryEntry = async (
@@ -293,7 +316,9 @@ export const supersedeMemoryEntry = async (
   const entryId = uuid(input.entryId, "entry id");
   const byEntryId = uuid(input.byEntryId, "entry id");
   if (entryId === byEntryId) return "self";
-  if (!(await isActiveMember(tx, actor))) return "not_a_member";
+  const role = await activeRole(tx, actor);
+  if (role === null) return "not_a_member";
+  if (!can(role, "memory.edit")) return "not_permitted";
   // Both rows locked in id order (no deadlock between two concurrent supersedes).
   const { rows } = await tx.query<{ id: string; repo_id: string; superseded_by: string | null }>(
     `select id, repo_id, superseded_by from memory_entries

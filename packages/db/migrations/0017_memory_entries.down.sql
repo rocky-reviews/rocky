@@ -1,5 +1,6 @@
 -- Back to the 0002 shape. Rows written under 0017 do not fit the old shape (no source, typed
 -- evidence); the table is emptied the same way the up script did.
+DROP INDEX IF EXISTS memory_entries_org_superseded_by_idx;
 DROP INDEX IF EXISTS memory_entries_org_repo_created_idx;
 
 ALTER TABLE memory_entries NO FORCE ROW LEVEL SECURITY;

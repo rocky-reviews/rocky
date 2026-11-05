@@ -71,3 +71,6 @@ ALTER TABLE memory_entries
 
 -- The per-repository listing, newest first.
 CREATE INDEX memory_entries_org_repo_created_idx ON memory_entries (org_id, repo_id, created_at);
+-- The self-referencing FK's lookup (ON DELETE SET NULL finds the rows that point at a deleted entry).
+CREATE INDEX memory_entries_org_superseded_by_idx ON memory_entries (org_id, superseded_by)
+  WHERE superseded_by IS NOT NULL;

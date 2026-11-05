@@ -1,6 +1,9 @@
 import { limits, pathProblem, textProblem } from "@rocky-reviews/schema";
+import { containsPromptCanary } from "./analysis/leak.js";
 import { isDismissReason, type DismissReason } from "./drafts.js";
-import { scrubPersonalIdentifiers, type ScrubResult } from "./pii.js";
+import { MAX_KNOWN_PEOPLE, scrubPersonalIdentifiers, type ScrubResult } from "./pii.js";
+
+export { MAX_KNOWN_PEOPLE };
 
 /**
  * Project memory entries (P8-1, ADR 0036): what a repository's reviewers decided, kept so later
@@ -84,7 +87,6 @@ export interface MemoryEntryDraft {
 export type MemoryEntryProblem =
   | "invalid_entry"
   | "invalid_kind"
-  | "invalid_origin"
   | "invalid_text"
   | "text_too_long"
   | "invalid_evidence"
@@ -93,7 +95,9 @@ export type MemoryEntryProblem =
   | "invalid_range"
   | "invalid_pull_request"
   | "invalid_confidence"
-  | "invalid_reason";
+  | "invalid_reason"
+  /** More distinct people to scrub than `MAX_KNOWN_PEOPLE`: refused, never truncated. */
+  | "too_many_people";
 
 export type PrepareMemoryEntryResult =
   | { readonly ok: true; readonly draft: MemoryEntryDraft; readonly scrubbed: ScrubResult }
@@ -101,11 +105,15 @@ export type PrepareMemoryEntryResult =
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 /**
- * Text no entry may carry (threat P3): the prompt canary (ADR 0015; a stored entry quoted into a
- * finding would trip the leak guard) and the PR-content markers (ADR 0013; an entry could
- * pretend to open or close a block).
+ * Text no entry may carry (threat P3): the prompt canary in any spelling the leak guard folds
+ * (`containsPromptCanary`; a stored entry quoted into a finding would otherwise fail every later
+ * review), its marker prefix, and the PR-content markers (ADR 0013; an entry could pretend to
+ * open or close a block). The evidence path is held to the canary rule too: it is quoted with
+ * the entry.
  */
 const FORBIDDEN_TEXT = /rk-canary-|<\s*\/?\s*pr_content\b/iu;
+const forbidden = (text: string): boolean =>
+  FORBIDDEN_TEXT.test(text) || containsPromptCanary(text);
 
 const field = (input: object, name: string): unknown =>
   Object.hasOwn(input, name) ? (input as Record<string, unknown>)[name] : undefined;
@@ -124,7 +132,8 @@ const evidenceOf = (input: unknown): MemoryEvidence | MemoryEntryProblem => {
   if (
     typeof path !== "string" ||
     path.length > limits.MAX_PATH_LENGTH ||
-    pathProblem(path) !== undefined
+    pathProblem(path) !== undefined ||
+    containsPromptCanary(path)
   )
     return "invalid_path";
   const sha = field(input, "sha");
@@ -145,32 +154,39 @@ const evidenceOf = (input: unknown): MemoryEvidence | MemoryEntryProblem => {
 };
 
 /**
- * Builds a storable entry from untrusted input: `{ kind, origin, text, evidence, confidence,
- * reason? }`. Unknown fields are ignored; the author and the repository are never read from the
- * input. The text is scrubbed (`scrubPersonalIdentifiers` with `options.people`), whitespace is
+ * Builds a storable entry from untrusted input: `{ kind, text, evidence, confidence, reason? }`.
+ * Unknown fields are ignored; the author, the repository and the origin never come from the
+ * input: `options.origin` says who is producing the entry (the caller knows, the input does
+ * not). The text is scrubbed (`scrubPersonalIdentifiers` with `options.people`; more distinct
+ * people than `MAX_KNOWN_PEOPLE` is `too_many_people`, never a truncated list), whitespace is
  * collapsed to single spaces, and the result must be one line of 1..300 characters without
  * control or invisible characters, markdown links or images (schema `line` rules), the prompt
- * canary or PR-content markers. The problem codes carry no values.
+ * canary in any spelling or PR-content markers. The problem codes carry no values.
  */
 export const prepareMemoryEntry = (
   input: unknown,
-  options: { readonly people?: readonly string[] } = {},
+  options: { readonly origin: MemoryOrigin; readonly people?: readonly string[] },
 ): PrepareMemoryEntryResult => {
+  if (!isMemoryOrigin(options.origin)) throw new TypeError("prepareMemoryEntry: origin");
+  const origin = options.origin;
   if (!isRecord(input)) return fail("invalid_entry");
   const kind = field(input, "kind");
   if (!isMemoryKind(kind)) return fail("invalid_kind");
-  const origin = field(input, "origin");
-  if (!isMemoryOrigin(origin)) return fail("invalid_origin");
 
   const rawText = field(input, "text");
   if (typeof rawText !== "string") return fail("invalid_text");
   if (rawText.length > MAX_MEMORY_TEXT_INPUT_LENGTH) return fail("text_too_long");
-  const scrubbed = scrubPersonalIdentifiers(rawText, { people: options.people ?? [] });
+  let scrubbed: ScrubResult;
+  try {
+    scrubbed = scrubPersonalIdentifiers(rawText, { people: options.people ?? [] });
+  } catch (error) {
+    if (error instanceof RangeError) return fail("too_many_people");
+    throw error;
+  }
   const text = scrubbed.text.replace(/\s+/gu, " ").trim();
   if (text.length === 0) return fail("invalid_text");
   if (text.length > MAX_MEMORY_ENTRY_TEXT_LENGTH) return fail("text_too_long");
-  if (textProblem(text, "line") !== undefined || FORBIDDEN_TEXT.test(text))
-    return fail("invalid_text");
+  if (textProblem(text, "line") !== undefined || forbidden(text)) return fail("invalid_text");
 
   const evidence = evidenceOf(field(input, "evidence"));
   if (typeof evidence === "string") return fail(evidence);

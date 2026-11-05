@@ -4,6 +4,7 @@ import {
   MAX_KNOWN_PEOPLE,
   MAX_KNOWN_PERSON_LENGTH,
   MAX_SCRUB_INPUT_LENGTH,
+  matchesAsBareWord,
   PII_PLACEHOLDER,
   scrubPersonalIdentifiers,
   type ScrubReport,
@@ -29,10 +30,10 @@ interface Case {
   readonly expected: string;
 }
 
-const table = (cases: readonly Case[]) => {
+const table = (cases: readonly Case[], people: readonly string[] = PEOPLE) => {
   for (const c of cases) {
     it(c.name, () => {
-      expect(scrub(c.input)).toBe(c.expected);
+      expect(scrub(c.input, people)).toBe(c.expected);
     });
   }
 };
@@ -135,6 +136,28 @@ describe("@handles", () => {
       expected: "no @ts-ignore in src",
     },
     {
+      name: "not a dotted decorator (S5)",
+      input: "use @app.route here",
+      expected: "use @app.route here",
+    },
+    {
+      name: "not a module decorator (S5)",
+      input: "wrap it in @functools.cache",
+      expected: "wrap it in @functools.cache",
+    },
+    {
+      name: "not a CamelCase decorator (S5)",
+      input: "add @HostBinding to it",
+      expected: "add @HostBinding to it",
+    },
+    { name: "a single-capital handle is a person", input: "ask @Alice", expected: "ask [user]" },
+    {
+      name: "a handle before a dot and a space",
+      input: "ask @octocat. Then",
+      expected: "ask [user]. Then",
+    },
+    { name: "not inside inline code", input: "run `@octocat`", expected: "run `@octocat`" },
+    {
       name: "not inside a word",
       input: "foo@bar is not a handle",
       expected: "foo@bar is not a handle",
@@ -198,15 +221,89 @@ describe("known people", () => {
       input: "alice.validate()",
       expected: "[person].validate()",
     },
+    {
+      name: "inside inline code, a listed login is still a person",
+      input: "see `alice`",
+      expected: "see `[person]`",
+    },
   ]);
 
-  it("ignores people shorter than two characters, longer than the cap, or beyond the list cap", () => {
-    const people = ["a", "x".repeat(MAX_KNOWN_PERSON_LENGTH + 1), "bob"];
-    expect(scrub("a bob x", people)).toBe("a [person] x");
-    const many = Array.from({ length: MAX_KNOWN_PEOPLE + 1 }, (_, i) => `person${i}`);
-    const out = scrub(`person0 person${MAX_KNOWN_PEOPLE}`, many);
-    expect(out.startsWith("[person] ")).toBe(true);
-    expect(out).toBe(`[person] person${MAX_KNOWN_PEOPLE}`);
+  it("ignores people shorter than two characters or longer than the cap", () => {
+    const people = ["a", "x".repeat(MAX_KNOWN_PERSON_LENGTH + 1), "bobby"];
+    expect(scrub("a bobby x", people)).toBe("a [person] x");
+  });
+
+  it("refuses more distinct people than the cap instead of shortening the list (security M2)", () => {
+    const many = Array.from({ length: MAX_KNOWN_PEOPLE + 1 }, (_, i) => `person-${i}`);
+    expect(() => scrub("x", many)).toThrow(RangeError);
+    // Duplicates after folding and case-folding count once.
+    const dupes = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `person-${i}`);
+    const started = performance.now();
+    expect(scrub("PERSON-4999 wrote it", [...dupes, "Person-0", "\uFF50erson-1", "person-2"])).toBe(
+      "[person] wrote it",
+    );
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  describe("short or common-word logins match only in person positions (S2)", () => {
+    const logins = ["go", "api", "dev", "test", "main", "pat", "Mark Brown"];
+    it("decides by digits, hyphens, script and length against a dictionary", () => {
+      for (const strong of ["alice", "octocat2", "bob-the-builder", "李雷", "Alice Smith", "zoë"]) {
+        expect(matchesAsBareWord(strong), strong).toBe(true);
+      }
+      for (const w of [
+        "go",
+        "api",
+        "dev",
+        "test",
+        "main",
+        "pat",
+        "dana",
+        "Mark",
+        "Brown",
+        "admin",
+      ]) {
+        expect(matchesAsBareWord(w), w).toBe(false);
+      }
+    });
+    table(
+      [
+        {
+          name: "ordinary words stay",
+          input: "Run on main branch, call the api from go code; test and dev too",
+          expected: "Run on main branch, call the api from go code; test and dev too",
+        },
+        {
+          name: "after a cue",
+          input: "thanks go and cc api",
+          expected: "thanks [person] and cc [person]",
+        },
+        {
+          name: "before a speech verb",
+          input: "dev said no; main agreed",
+          expected: "[person] said no; [person] agreed",
+        },
+        { name: "as a handle", input: "ping @test", expected: "ping [user]" },
+        { name: "in a trailer", input: "Reviewed-by: pat", expected: "Reviewed-by: [person]" },
+        { name: "possessive after a cue", input: "thanks pat's", expected: "thanks [person]" },
+        {
+          name: "a full display name is always matched",
+          input: "Mark Brown merged it",
+          expected: "[person] merged it",
+        },
+        {
+          name: "its common-word tokens are not",
+          input: "Mark the field brown",
+          expected: "Mark the field brown",
+        },
+        {
+          name: "its tokens in person positions are",
+          input: "cc Mark; Brown said so",
+          expected: "cc [person]; [person] said so",
+        },
+      ],
+      logins,
+    );
   });
 
   it("escapes regex metacharacters in names", () => {
@@ -282,6 +379,41 @@ describe("names by context", () => {
       input: "thanks Everyone",
       expected: "thanks Everyone",
     },
+    {
+      name: "not a CamelCase class before a plural-noun verb (S3)",
+      input: "HttpClient requests are retried",
+      expected: "HttpClient requests are retried",
+    },
+    {
+      name: "not a CamelCase class before a speech verb (S3)",
+      input: "HttpClient said no",
+      expected: "HttpClient said no",
+    },
+    {
+      name: "not a class before 'notes' (S3)",
+      input: "Logger notes the request id",
+      expected: "Logger notes the request id",
+    },
+    {
+      name: "not a tool before 'wants' (S3)",
+      input: "Prettier wants a trailing comma",
+      expected: "Prettier wants a trailing comma",
+    },
+    {
+      name: "not a library after 'according to' (S3)",
+      input: "according to Drizzle docs",
+      expected: "according to Drizzle docs",
+    },
+    {
+      name: "not inside inline code (S3)",
+      input: "run `thanks Carol` verbatim",
+      expected: "run `thanks Carol` verbatim",
+    },
+    {
+      name: "not a plural noun after a name",
+      input: "Grace comments on every PR",
+      expected: "Grace comments on every PR",
+    },
   ]);
 });
 
@@ -340,6 +472,16 @@ describe("code identifiers and ordinary prose stay", () => {
       name: "paths",
       input: "src/invite.ts and docs/people/alice.md",
       expected: "src/invite.ts and docs/people/[person].md",
+    },
+    {
+      name: "CamelCase identifiers before verbs (S3)",
+      input: "RetryPolicy decided; UserService replied",
+      expected: "RetryPolicy decided; UserService replied",
+    },
+    {
+      name: "a class in backticks after a cue (S3)",
+      input: "according to `Config` it is fine",
+      expected: "according to `Config` it is fine",
     },
     {
       name: "sentence start",
@@ -401,9 +543,10 @@ describe("the result", () => {
 });
 
 describe("property: a listed person never survives", () => {
+  // Logins that match as bare words: a digit or a hyphen makes any login one.
   const login = fc
     .stringMatching(/^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$/)
-    .filter((s) => !s.includes("--"));
+    .filter((s) => !s.includes("--") && matchesAsBareWord(s));
   const filler = fc.stringMatching(/^[ \p{L}\p{N}.,;:!?()'"-]{0,30}$/u);
 
   const placeholders = Object.values(PII_PLACEHOLDER).join("");
@@ -413,7 +556,7 @@ describe("property: a listed person never survives", () => {
       fc.property(login, filler, filler, fc.boolean(), (name, before, after, upper) => {
         // The name must not already be part of the filler or of a placeholder, or `includes`
         // would see it for reasons unrelated to the scrub.
-        fc.pre(!`${before}${after}${placeholders}`.toLowerCase().includes(name));
+        fc.pre(!`${before}${after}${placeholders}`.normalize("NFKC").toLowerCase().includes(name));
         const spelled = upper ? name.toUpperCase() : name;
         const hidden = Array.from(spelled).join("​");
         for (const text of [`${before} ${spelled} ${after}`, `${before} ${hidden}. ${after}`]) {

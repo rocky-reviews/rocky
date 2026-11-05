@@ -133,6 +133,16 @@ export const foldForLeaks = (text: string): string =>
 const words = (text: string): string[] => foldForLeaks(text).split(NON_WORD).filter(Boolean);
 const squash = (text: string): string => foldForLeaks(text).replace(NON_ALNUM, "");
 
+const SQUASHED_CANARY = squash(PROMPT_CANARY);
+/**
+ * Whether `text` carries the prompt canary in any spelling the leak guard would flag (spaced,
+ * cased, punctuated, other scripts' digits, look-alikes). Stored text that a later answer may
+ * quote (project memory, P8-1) is refused when this is true, or every review citing it would
+ * fail the guard.
+ */
+export const containsPromptCanary = (text: string): boolean =>
+  squash(text).includes(SQUASHED_CANARY);
+
 const ngrams = (list: readonly string[], n: number): string[] => {
   const out: string[] = [];
   for (let i = 0; i + n <= list.length; i++) out.push(list.slice(i, i + n).join(" "));

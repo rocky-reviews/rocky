@@ -46,16 +46,22 @@ export interface ScrubResult {
 
 export interface ScrubOptions {
   /**
-   * Logins and display names to remove wherever they appear as a word. Entries shorter than two
-   * characters or longer than `MAX_KNOWN_PERSON_LENGTH`, and entries past `MAX_KNOWN_PEOPLE`,
-   * are ignored.
+   * Logins and display names to remove: wherever they appear as a word when
+   * `matchesAsBareWord`, else only in person positions. Entries shorter than two characters or
+   * longer than `MAX_KNOWN_PERSON_LENGTH` are ignored; more than `MAX_KNOWN_PEOPLE` distinct
+   * names is a `RangeError`.
    */
   readonly people?: readonly string[];
 }
 
 /** Longest text scrubbed in one call; a memory entry is far shorter (core `memory.ts`). */
 export const MAX_SCRUB_INPUT_LENGTH = 16_384;
-export const MAX_KNOWN_PEOPLE = 2000;
+/**
+ * Distinct people (after folding and case-folding) one call accepts; more is a `RangeError`,
+ * never a silently shortened list. 5 000 names scrub a 300-character text in a few
+ * milliseconds (the alternation is literal, so matching is linear).
+ */
+export const MAX_KNOWN_PEOPLE = 5000;
 export const MAX_KNOWN_PERSON_LENGTH = 100;
 /** A display-name token shorter than this ("Li", "Al") is too common a word to remove alone. */
 const MIN_NAME_TOKEN_LENGTH = 3;
@@ -161,8 +167,14 @@ const anyCase = (alternation: string): string =>
     return lower === upper ? ch : `[${lower}${upper}]`;
   }).join("");
 
+const CAMEL_CASE = /^\p{Lu}\p{Ll}+\p{Lu}/u;
+/** Inline code: heuristics (names by context, handles) do not look inside it. */
+const INLINE_CODE = /`[^`\n]{1,300}`/gu;
+
 interface Pattern {
   readonly kind: PiiClass;
+  /** Heuristic: spans inside inline code (backticks) are dropped. */
+  readonly skipCode?: true;
   /** Sticky-free global regex with the `d` flag, so group offsets are available. */
   readonly regex: RegExp;
   /** The capture group whose span is replaced (0: the whole match). */
@@ -175,8 +187,12 @@ const LETTER_OR_DIGIT = "\\p{L}\\p{N}";
 /** Not inside a word or identifier: letters, digits and `_` on either side. */
 const NOT_BEFORE_WORD = `(?<![${LETTER_OR_DIGIT}_])`;
 const NOT_AFTER_WORD = `(?![${LETTER_OR_DIGIT}_])`;
-/** A capitalised word: an upper-case letter, a lower-case letter, then letters, apostrophes, hyphens. */
-const CAPITALISED = "\\p{Lu}\\p{Ll}[\\p{L}'’-]{0,40}";
+/**
+ * A capitalised word: an upper-case letter, then lower-case letters, apostrophes and hyphens
+ * only, so a CamelCase identifier (`HttpClient`) is never a name. (`McDonald` is not either;
+ * listed people are matched as written.)
+ */
+const CAPITALISED = "\\p{Lu}\\p{Ll}[\\p{Ll}'’-]{0,40}";
 /** One to three capitalised words. */
 const NAME = `${CAPITALISED}(?:[ \\t]+${CAPITALISED}){0,2}`;
 const EMAIL_LOCAL = `[${LETTER_OR_DIGIT}._%+'-]{1,64}`;
@@ -188,8 +204,12 @@ const TRAILERS =
 const HONORIFICS = "mr|mrs|ms|mx|dr|prof|sir|madam|herr|frau|mme|mlle|sr|sra|señor|señora";
 const CUES =
   "thanks|thank you|thx|cc|/cc|ping|paging|kudos to|according to|h/t|credit to|courtesy of|reviewed by|written by|authored by|reported by|suggested by|requested by|approved by|discussed with|talked to|spoke with|paired with|assigned to|owned by|maintained by";
+/**
+ * Verbs a person is the subject of. Forms that double as plural nouns (`requests`, `notes`,
+ * `comments`, `reviews`, `mentions`, `replies`) are left out: `HttpClient requests` is code.
+ */
 const SPEECH_VERBS =
-  "said|says|wrote|writes|asked|asks|suggested|suggests|mentioned|mentions|pointed out|requested|requests|approved|approves|reviewed|reviews|noted|notes|agreed|agrees|confirmed|confirms|prefers|preferred|wants|wanted|thinks|thought|explained|explains|replied|replies|commented|comments|recommended|recommends|decided|decides|insisted|insists|proposed|proposes|merged|argued|argues";
+  "said|says|wrote|writes|asked|asks|suggested|suggests|mentioned|pointed out|requested|approved|approves|reviewed|noted|agreed|agrees|confirmed|confirms|prefers|preferred|wants|wanted|thinks|thought|explained|explains|replied|commented|recommended|recommends|decided|decides|insisted|insists|proposed|proposes|merged|argued|argues";
 
 /**
  * Capitalised words that start sentences or name groups, products and roles, never a person.
@@ -203,6 +223,13 @@ const STOP_WORDS: ReadonlySet<string> = new Set(
   infra data sales rocky github gitlab postgres postgresql redis node react vite typescript
   javascript python java rust docker kubernetes linux windows macos chrome firefox safari
   stripe paddle fly cloudflare dependabot renovate bot ci cd reviewer reviewers author authors
+  prettier eslint vitest jest mocha webpack babel rollup esbuild turbopack playwright cypress
+  storybook tailwind drizzle prisma knex sequelize fastify express koa hapi nest next nuxt
+  remix svelte angular vue solid astro octokit pino winston sentry datadog grafana prometheus
+  terraform ansible pulumi nginx apache caddy traefik bitbucket jira slack discord notion figma
+  linear vercel netlify heroku aws azure gcp lambda kms ec2 iam rds dynamo sqs sns kafka rabbit
+  nats mysql mariadb sqlite mongo mongodb elastic opensearch typesense pgvector logger client
+  server router handler service module package component hook plugin adapter provider
   maintainer maintainers owner owners admin admins user users customer customers client clients
   member members contributor contributors committer developer developers monday tuesday
   wednesday thursday friday saturday sunday january february march april may june july august
@@ -269,17 +296,24 @@ const PATTERNS: readonly Pattern[] = [
   },
   {
     kind: "handle",
+    // Not followed by `/` (npm scope), `(` (decorator call) or `.letter` (`@app.route`: a login
+    // cannot contain a dot); not a listed tag; not CamelCase with two humps (`@HostBinding`).
     regex: new RegExp(
-      `${NOT_BEFORE_WORD}@([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)(?![${LETTER_OR_DIGIT}_/(-])`,
+      `${NOT_BEFORE_WORD}@([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)(?![${LETTER_OR_DIGIT}_/(-]|\\.[\\p{L}_])`,
       "giud",
     ),
-    keep: (m) => !CODE_AT_WORDS.has((m[1] ?? "").toLowerCase()),
+    skipCode: true,
+    keep: (m) => {
+      const handle = m[1] ?? "";
+      return !CODE_AT_WORDS.has(handle.toLowerCase()) && !CAMEL_CASE.test(handle);
+    },
   },
   // Known people are inserted here (index KNOWN_PEOPLE_AT) per call.
   {
     kind: "person",
     regex: new RegExp(`\\b(?:${anyCase(HONORIFICS)})\\.?[ \\t]+(${NAME})`, "gud"),
     group: 1,
+    skipCode: true,
     keep: (m) => noStopWord(m[1] ?? ""),
   },
   {
@@ -289,6 +323,7 @@ const PATTERNS: readonly Pattern[] = [
       "gud",
     ),
     group: 1,
+    skipCode: true,
     keep: (m) => noStopWord(m[1] ?? ""),
   },
   {
@@ -298,6 +333,7 @@ const PATTERNS: readonly Pattern[] = [
       "gud",
     ),
     group: 1,
+    skipCode: true,
     keep: (m) => noStopWord(m[1] ?? ""),
   },
   {
@@ -357,30 +393,86 @@ const CODE_AT_WORDS: ReadonlySet<string> = new Set(
 const foldPerson = (name: string): string => foldLookalikes(canonical(name)).trim();
 
 /**
- * Two patterns for the caller's people: logins and whole display names, case-insensitively;
- * the tokens of a display name as written (so a capitalised surname is caught and the same
- * word in lower case is not). Possessives are part of the match.
+ * Logins and name tokens that are also ordinary words or too short to be anything else. Such a
+ * person is scrubbed only where the text treats them as a person: after `@`, after a cue
+ * (`thanks go`), before a speech verb (`go said`) or in a trailer. A bare `go` or `main` stays.
+ */
+const COMMON_WORDS: ReadonlySet<string> = new Set(
+  `
+  go api dev test main master admin root user build app web data code docs bot ops git node run
+  add fix new old log key map set get put del max min sum tag tab bar foo baz dot net org com io
+  mail home work time date day week year hello world team alpha beta gamma delta omega prod stage
+  local cloud server client mobile backend frontend review merge branch commit push pull issue bug
+  feature release deploy cache queue token auth login logout config env file path line page view
+  model index table query error debug info warn trace status health metric event hook job task
+  note memo draft final true false null none some any all each every first last next prev back up
+  down left right open close start stop play pause send read write list item group kind type name
+  value text demo sample example default public private static const let var class func lambda
+  async await yield return break case switch while for loop apply call bind this self super core
+  lib src dist tmp temp bin etc var opt usr sys proc dump load save edit copy move link sync async
+  check verify scan clean reset retry skip done todo wip help about search filter sort order limit
+  count total score rank level grade rate speed size width height color style theme dark light
+  mark brown white green black grey gray rose may will bill grant hope faith joy summer april june
+  august jack chase pat sunny rob art max rich frank guy jay ray roy ivy dawn eve lane cliff clay
+  reed rusty sandy wade warren dean earl grace honor justice mercy victor carol hunter miles
+  `
+    .split(/\s+/u)
+    .filter((w) => w.length > 0),
+);
+
+const ASCII_WORD = /^[a-z]+$/i;
+
+/**
+ * Whether a single-token person is scrubbed wherever it appears as a word: it has a digit or a
+ * hyphen (`octocat2`, `bob-the-builder`), it is not ASCII (`李雷`), or it has at least five
+ * letters and is not a common word. Multi-word names are always matched as a whole.
+ */
+export const matchesAsBareWord = (name: string): boolean => {
+  if (/[\s]/u.test(name)) return true;
+  if (!ASCII_WORD.test(name)) return true;
+  return name.length >= 5 && !COMMON_WORDS.has(name.toLowerCase());
+};
+
+const alternation = (names: Iterable<string>): string =>
+  [...names]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegex)
+    .join("|");
+
+/**
+ * Patterns for the caller's people. Logins and whole display names match case-insensitively;
+ * the tokens of a display name match as written (a capitalised surname is caught, the same word
+ * in lower case is not). Possessives are part of the match. A name that `matchesAsBareWord`
+ * refuses (`go`, `Mark`) is matched only after a cue or before a speech verb (trailers and
+ * `@handles` are covered by their own patterns). Throws `RangeError` past `MAX_KNOWN_PEOPLE`
+ * distinct names: the caller refuses the entry instead of scrubbing with a shortened list.
  */
 const knownPeoplePatterns = (people: readonly string[]): Pattern[] => {
   const insensitive = new Set<string>();
   const sensitive = new Set<string>();
-  for (const raw of people.slice(0, MAX_KNOWN_PEOPLE)) {
+  const weakInsensitive = new Set<string>();
+  const weakSensitive = new Set<string>();
+  for (const raw of people) {
     if (typeof raw !== "string") continue;
     const name = foldPerson(raw).replace(/\s+/g, " ");
     if (name.length < 2 || name.length > MAX_KNOWN_PERSON_LENGTH) continue;
-    insensitive.add(name.toLowerCase());
+    (matchesAsBareWord(name) ? insensitive : weakInsensitive).add(name.toLowerCase());
     const tokens = name.split(" ");
     if (tokens.length === 1) continue;
     for (const token of tokens) {
-      if (Array.from(token).length >= MIN_NAME_TOKEN_LENGTH) sensitive.add(token);
+      if (Array.from(token).length < MIN_NAME_TOKEN_LENGTH) continue;
+      (matchesAsBareWord(token) ? sensitive : weakSensitive).add(token);
     }
   }
-  const alternation = (names: Set<string>): string =>
-    [...names]
-      .sort((a, b) => b.length - a.length)
-      .map(escapeRegex)
-      .join("|");
-  const pattern = (names: Set<string>, flags: string): Pattern[] =>
+  const distinct = new Set([
+    ...insensitive,
+    ...weakInsensitive,
+    ...[...sensitive, ...weakSensitive].map((t) => t.toLowerCase()),
+  ]);
+  if (distinct.size > MAX_KNOWN_PEOPLE) {
+    throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE} distinct people`);
+  }
+  const bare = (names: Set<string>, flags: string): Pattern[] =>
     names.size === 0
       ? []
       : [
@@ -392,7 +484,43 @@ const knownPeoplePatterns = (people: readonly string[]): Pattern[] => {
             ),
           },
         ];
-  return [...pattern(insensitive, "giud"), ...pattern(sensitive, "gud")];
+  const inContext = (names: Set<string>, flags: string): Pattern[] =>
+    names.size === 0
+      ? []
+      : [
+          // `@go`: a listed login after `@` is a person even when the tag allow-list has the word.
+          {
+            kind: "handle",
+            regex: new RegExp(
+              `${NOT_BEFORE_WORD}@(?:${alternation(names)})${NOT_AFTER_WORD}`,
+              flags,
+            ),
+          },
+          {
+            kind: "person",
+            regex: new RegExp(
+              `${NOT_BEFORE_WORD}(?:${anyCase(CUES)})(?:[ \\t]+[tT][oO])?[ \\t]+((?:${alternation(names)})(?:['’]s)?)${NOT_AFTER_WORD}`,
+              flags,
+            ),
+            group: 1,
+            skipCode: true,
+          },
+          {
+            kind: "person",
+            regex: new RegExp(
+              `${NOT_BEFORE_WORD}((?:${alternation(names)})(?:['’]s)?)[ \\t]+(?:${SPEECH_VERBS})${NOT_AFTER_WORD}`,
+              flags,
+            ),
+            group: 1,
+            skipCode: true,
+          },
+        ];
+  return [
+    ...bare(insensitive, "giud"),
+    ...bare(sensitive, "gud"),
+    ...inContext(weakInsensitive, "giud"),
+    ...inContext(weakSensitive, "gud"),
+  ];
 };
 
 // --- Matching and assembly ------------------------------------------------------------------
@@ -404,7 +532,18 @@ interface Span {
   readonly priority: number;
 }
 
-const spansOf = (folded: string, pattern: Pattern, priority: number): Span[] => {
+const codeSpans = (folded: string): [number, number][] =>
+  [...folded.matchAll(INLINE_CODE)].map((m) => [m.index, m.index + m[0].length]);
+
+const insideCode = (code: readonly [number, number][], start: number, end: number): boolean =>
+  code.some(([from, to]) => start < to && end > from);
+
+const spansOf = (
+  folded: string,
+  code: readonly [number, number][],
+  pattern: Pattern,
+  priority: number,
+): Span[] => {
   const spans: Span[] = [];
   const { regex } = pattern;
   regex.lastIndex = 0;
@@ -422,7 +561,12 @@ const spansOf = (folded: string, pattern: Pattern, priority: number): Span[] => 
     const span = match.indices?.[pattern.group ?? 0];
     if (span === undefined) continue;
     const [start, end] = span;
-    if (end > start) spans.push({ start, end, kind: pattern.kind, priority });
+    if (end <= start) continue;
+    if (pattern.skipCode === true && insideCode(code, start, end)) {
+      regex.lastIndex = match.index + 1;
+      continue;
+    }
+    spans.push({ start, end, kind: pattern.kind, priority });
   }
   return spans;
 };
@@ -450,7 +594,8 @@ const emptyReport = (): Record<PiiClass, number> => ({
 
 /**
  * Replaces personal identifiers in `text` (see the module comment). Throws `RangeError` for a
- * text longer than `MAX_SCRUB_INPUT_LENGTH`: callers bound their input first.
+ * text longer than `MAX_SCRUB_INPUT_LENGTH` or more than `MAX_KNOWN_PEOPLE` distinct people:
+ * callers bound their input first and refuse rather than scrub with less.
  */
 export const scrubPersonalIdentifiers = (text: string, options: ScrubOptions = {}): ScrubResult => {
   if (typeof text !== "string") throw new TypeError("scrub: text must be a string");
@@ -464,7 +609,10 @@ export const scrubPersonalIdentifiers = (text: string, options: ScrubOptions = {
     ...knownPeoplePatterns(options.people ?? []),
     ...PATTERNS.slice(KNOWN_PEOPLE_AT),
   ];
-  const spans = resolve(patterns.flatMap((pattern, index) => spansOf(folded, pattern, index)));
+  const code = codeSpans(folded);
+  const spans = resolve(
+    patterns.flatMap((pattern, index) => spansOf(folded, code, pattern, index)),
+  );
   const replaced = emptyReport();
   let out = "";
   let cursor = 0;

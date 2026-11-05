@@ -65,6 +65,7 @@ export {
   LEAK_NGRAM_WORDS,
   PROMPT_SHARE_THRESHOLD,
   PROMPT_TEXTS,
+  containsPromptCanary,
   foldForLeaks,
   promptShare,
   type LeakDetector,

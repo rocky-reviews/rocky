@@ -1,4 +1,4 @@
-import { PROMPT_CANARY_MARKER } from "./prompt.js";
+import { PROMPT_CANARY, PROMPT_CANARY_MARKER } from "./prompt.js";
 import { describe, expect, it } from "vitest";
 import {
   FORMER_MEMBER_LABEL,
@@ -6,6 +6,7 @@ import {
   isMemoryOrigin,
   MAX_MEMORY_ENTRY_TEXT_LENGTH,
   MAX_MEMORY_TEXT_INPUT_LENGTH,
+  MAX_KNOWN_PEOPLE,
   MEMORY_KINDS,
   MEMORY_ORIGINS,
   memoryAuthorLabel,
@@ -14,6 +15,7 @@ import {
   readPullRequestNumber,
   type MemoryEntryProblem,
 } from "./memory.js";
+import { MAX_KNOWN_PEOPLE as PII_MAX_KNOWN_PEOPLE } from "./pii.js";
 
 /**
  * P8-1 (ADR 0036 §1, §3): the entry's invariants, the scrub before validation, and what a
@@ -24,7 +26,6 @@ const SHA = "a".repeat(40);
 
 const valid = () => ({
   kind: "convention",
-  origin: "member",
   text: "Use the shared validator for emails.",
   evidence: {
     path: "src/invite.ts",
@@ -36,7 +37,7 @@ const valid = () => ({
 });
 
 const problemOf = (input: unknown, people: readonly string[] = []): MemoryEntryProblem | "ok" => {
-  const result = prepareMemoryEntry(input, { people });
+  const result = prepareMemoryEntry(input, { origin: "member", people });
   return result.ok ? "ok" : result.problem;
 };
 
@@ -54,7 +55,7 @@ describe("kinds and origins", () => {
 
 describe("prepareMemoryEntry", () => {
   it("accepts a valid entry and returns it with the scrub report", () => {
-    const result = prepareMemoryEntry(valid(), { people: [] });
+    const result = prepareMemoryEntry(valid(), { origin: "member", people: [] });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.draft).toEqual({
@@ -76,10 +77,11 @@ describe("prepareMemoryEntry", () => {
   it("scrubs the text before validating it, with the caller's people", () => {
     const result = prepareMemoryEntry(
       { ...valid(), text: "  alice said: keep\tthe  legacy\nendpoint, cc @bob (bob@example.com) " },
-      { people: ["alice"] },
+      { origin: "learned", people: ["alice"] },
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.draft.origin).toBe("learned");
     expect(result.draft.text).toBe("[person] said: keep the legacy endpoint, cc [user] ([email])");
     expect(result.scrubbed.replaced).toEqual({
       person: 1,
@@ -97,10 +99,14 @@ describe("prepareMemoryEntry", () => {
     }
   });
 
-  it("refuses an unknown kind or origin", () => {
+  it("refuses an unknown kind; the origin is the caller's, never the input's (S5)", () => {
     expect(problemOf({ ...valid(), kind: "note" })).toBe("invalid_kind");
     expect(problemOf({ ...valid(), kind: undefined })).toBe("invalid_kind");
-    expect(problemOf({ ...valid(), origin: "system" })).toBe("invalid_origin");
+    const learned = prepareMemoryEntry({ ...valid(), origin: "member" }, { origin: "learned" });
+    expect(learned.ok && learned.draft.origin).toBe("learned");
+    expect(() => prepareMemoryEntry(valid(), { origin: "system" as unknown as "member" })).toThrow(
+      TypeError,
+    );
   });
 
   it("pairs the reason with the dismissal kind", () => {
@@ -111,7 +117,7 @@ describe("prepareMemoryEntry", () => {
     expect(problemOf({ ...valid(), reason: null })).toBe("ok");
     const result = prepareMemoryEntry(
       { ...valid(), kind: "dismissal", reason: "not_worth_it" },
-      { people: [] },
+      { origin: "learned", people: [] },
     );
     expect(result.ok && result.draft.reason).toBe("not_worth_it");
   });
@@ -128,8 +134,8 @@ describe("prepareMemoryEntry", () => {
       "text_too_long",
     );
     // A scrub can lengthen the text ("bob" → "[person]"): the cap applies to what is stored.
-    const nearCap = `${"x".repeat(MAX_MEMORY_ENTRY_TEXT_LENGTH - 4)} bob`;
-    expect(problemOf({ ...valid(), text: nearCap }, ["bob"])).toBe("text_too_long");
+    const nearCap = `${"x".repeat(MAX_MEMORY_ENTRY_TEXT_LENGTH - 6)} bobby`;
+    expect(problemOf({ ...valid(), text: nearCap }, ["bobby"])).toBe("text_too_long");
   });
 
   it("refuses invisible characters, control characters, links and images (schema line rules)", () => {
@@ -144,13 +150,41 @@ describe("prepareMemoryEntry", () => {
     expect(problemOf({ ...valid(), text: "see <https://evil.example>" })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "keep\uD800it" })).toBe("invalid_text");
     // Invisible characters are removed by the scrub, so they do not make a text invalid.
-    const result = prepareMemoryEntry({ ...valid(), text: "keep​it ⁠now" }, { people: [] });
+    const result = prepareMemoryEntry(
+      { ...valid(), text: "keep​it ⁠now" },
+      { origin: "member", people: [] },
+    );
     expect(result.ok && result.draft.text).toBe("keepit now");
   });
 
-  it("refuses the prompt canary and PR-content markers (threat P3)", () => {
+  it("refuses the prompt canary in every spelling the leak guard folds, and PR-content markers (threat P3, security M1/L1)", () => {
     expect(problemOf({ ...valid(), text: `note ${PROMPT_CANARY_MARKER}` })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "note RK-CANARY-0 here" })).toBe("invalid_text");
+    const spaced = PROMPT_CANARY.replace(/(.{4})/g, "$1 ").trim();
+    const fullWidth = Array.from(PROMPT_CANARY, (c) =>
+      /[0-9a-z]/.test(c) ? String.fromCodePoint(c.codePointAt(0)! + 0xfee0) : c,
+    ).join("");
+    const lookalike = PROMPT_CANARY.replace(/e/g, "\u0435").replace(/a/g, "\u0430");
+    const arabicDigits = PROMPT_CANARY.replace(/[0-9]/g, (d) =>
+      String.fromCodePoint(0x0660 + Number(d)),
+    );
+    for (const variant of [
+      PROMPT_CANARY,
+      spaced,
+      PROMPT_CANARY.toUpperCase(),
+      fullWidth,
+      lookalike,
+      arabicDigits,
+      PROMPT_CANARY.split("").join("-"),
+      `${PROMPT_CANARY.slice(0, 8)}\u200B${PROMPT_CANARY.slice(8)}`,
+    ]) {
+      expect(problemOf({ ...valid(), text: `see ${variant} here` }), variant).toBe("invalid_text");
+      expect(
+        problemOf({ ...valid(), evidence: { ...valid().evidence, path: `src/${variant}.ts` } }),
+        variant,
+      ).toBe("invalid_path");
+    }
+    expect(problemOf({ ...valid(), text: `see ${PROMPT_CANARY.slice(0, 15)} here` })).toBe("ok");
     expect(problemOf({ ...valid(), text: 'x <pr_content id="1"> y' })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "x </pr_content> y" })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "x < pr_content > y" })).toBe("invalid_text");
@@ -195,6 +229,15 @@ describe("prepareMemoryEntry", () => {
     expect(problemOf(withEvidence({ pullRequestNumber: "847" }))).toBe("invalid_pull_request");
     expect(problemOf({ ...valid(), evidence: null })).toBe("invalid_evidence");
     expect(problemOf({ ...valid(), evidence: "src/a.ts" })).toBe("invalid_evidence");
+  });
+
+  it("refuses more distinct people than the scrubber accepts instead of truncating (security M2)", () => {
+    expect(MAX_KNOWN_PEOPLE).toBe(PII_MAX_KNOWN_PEOPLE);
+    const many = Array.from({ length: MAX_KNOWN_PEOPLE + 1 }, (_, i) => `person-${i}`);
+    expect(problemOf(valid(), many)).toBe("too_many_people");
+    // Duplicates (case, spelling) count once.
+    const duplicates = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `person-${i}`);
+    expect(problemOf(valid(), [...duplicates, "PERSON-0", "person-1", "\uFF50erson-2"])).toBe("ok");
   });
 
   it("validates the confidence", () => {

@@ -1,4 +1,4 @@
-import type { MemoryEntry } from "@rocky-reviews/core";
+import { MAX_KNOWN_PEOPLE, type MemoryEntry } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db, type TenantTx } from "./client.js";
@@ -80,7 +80,6 @@ const pgError = async (promise: Promise<unknown>): Promise<pg.DatabaseError> => 
 
 const entryInput = (patch: Record<string, unknown> = {}) => ({
   kind: "convention",
-  origin: "member",
   text: "Use the shared validator for emails.",
   evidence: {
     path: "src/invite.ts",
@@ -92,11 +91,17 @@ const entryInput = (patch: Record<string, unknown> = {}) => ({
   ...patch,
 });
 
-const create = (org: SeededOrg, patch: Record<string, unknown> = {}, people: string[] = []) =>
+const create = (
+  org: SeededOrg,
+  patch: Record<string, unknown> = {},
+  people: string[] = [],
+  origin: "member" | "learned" = "member",
+) =>
   db.withOrg(org.orgId, (tx) =>
     createMemoryEntry(tx, {
       authorMemberId: org.memberId,
       repoId: org.repoId,
+      origin,
       entry: entryInput(patch),
       people,
     }),
@@ -106,17 +111,18 @@ const created = async (
   org: SeededOrg,
   patch: Record<string, unknown> = {},
   people: string[] = [],
+  origin: "member" | "learned" = "member",
 ): Promise<MemoryEntry> => {
-  const result = await create(org, patch, people);
+  const result = await create(org, patch, people, origin);
   if (result.outcome !== "created") throw new Error(`expected created, got ${result.outcome}`);
   return result.entry;
 };
 
-const addMember = (org: SeededOrg, login: string) =>
+const addMember = (org: SeededOrg, login: string, role: "member" | "admin" = "member") =>
   db.withOrg(org.orgId, async (tx) => {
     const { rows } = await tx.query<{ id: string }>(
-      "insert into members (forge_user_id, login, role) values ($1, $2, 'member') returning id",
-      [nextForgeId++, login],
+      "insert into members (forge_user_id, login, role) values ($1, $2, $3) returning id",
+      [nextForgeId++, login, role],
     );
     return rows[0]!.id;
   });
@@ -195,10 +201,10 @@ describe("createMemoryEntry", () => {
     );
     const entry = await created(
       A,
-      { text: "alice and Gone-Person agreed with @octocat, see dana" },
+      { text: "alice and Gone-Person agreed with @octocat, cc dana" },
       ["dana"],
     );
-    expect(entry.text).toBe("[person] and [person] agreed with [user], see [person]");
+    expect(entry.text).toBe("[person] and [person] agreed with [user], cc [person]");
     expect(await storedText(entry.id)).not.toMatch(/alice|gone-person|octocat|dana/i);
   });
 
@@ -222,13 +228,19 @@ describe("createMemoryEntry", () => {
   });
 
   it("stores a dismissal with its reason and a learned origin", async () => {
-    const entry = await created(A, {
-      kind: "dismissal",
-      origin: "learned",
-      reason: "intentional",
-      text: "Explicit any in the test helpers is intentional.",
-      confidence: 60,
-    });
+    const entry = await created(
+      A,
+      {
+        kind: "dismissal",
+        reason: "intentional",
+        text: "Explicit any in the test helpers is intentional.",
+        confidence: 60,
+        // The entry's own `origin` is ignored: the caller's parameter decides (S5).
+        origin: "member",
+      },
+      [],
+      "learned",
+    );
     expect(entry).toMatchObject({ kind: "dismissal", origin: "learned", reason: "intentional" });
     expect(await loadMemoryEntryAs(A, entry.id)).toEqual(entry);
   });
@@ -254,21 +266,107 @@ describe("createMemoryEntry", () => {
       removeMember(tx, { actorMemberId: A.memberId, targetMemberId: removedId }),
     );
     const removed = await db.withOrg(A.orgId, (tx) =>
-      createMemoryEntry(tx, { authorMemberId: removedId, repoId: A.repoId, entry: entryInput() }),
+      createMemoryEntry(tx, {
+        authorMemberId: removedId,
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
     );
     expect(removed).toEqual({ outcome: "not_a_member" });
     const foreignMember = await db.withOrg(A.orgId, (tx) =>
-      createMemoryEntry(tx, { authorMemberId: B.memberId, repoId: A.repoId, entry: entryInput() }),
+      createMemoryEntry(tx, {
+        authorMemberId: B.memberId,
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
     );
     expect(foreignMember).toEqual({ outcome: "not_a_member" });
     const foreignRepo = await db.withOrg(A.orgId, (tx) =>
-      createMemoryEntry(tx, { authorMemberId: A.memberId, repoId: B.repoId, entry: entryInput() }),
+      createMemoryEntry(tx, {
+        authorMemberId: A.memberId,
+        repoId: B.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
     );
     expect(foreignRepo).toEqual({ outcome: "unknown_repo" });
     const notUuid = db.withOrg(A.orgId, (tx) =>
-      createMemoryEntry(tx, { authorMemberId: "alice", repoId: A.repoId, entry: entryInput() }),
+      createMemoryEntry(tx, {
+        authorMemberId: "alice",
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
     );
     await expect(notUuid).rejects.toThrow(MemoryStoreError);
+  });
+
+  it("re-checks memory.edit for a member-written entry, with the actor row locked (S5)", async () => {
+    const plain = await addMember(A, "plain-member");
+    const written = await db.withOrg(A.orgId, (tx) =>
+      createMemoryEntry(tx, {
+        authorMemberId: plain,
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
+    );
+    expect(written).toEqual({ outcome: "not_permitted" });
+    // Any active member's own decision can be learned from.
+    const learned = await db.withOrg(A.orgId, (tx) =>
+      createMemoryEntry(tx, {
+        authorMemberId: plain,
+        repoId: A.repoId,
+        origin: "learned",
+        entry: entryInput({
+          kind: "dismissal",
+          reason: "intentional",
+          text: "learned by a member",
+        }),
+      }),
+    );
+    expect(learned.outcome).toBe("created");
+    // The check is read with the row locked FOR SHARE: a removal running at the same time waits
+    // for this transaction, or this transaction sees the removal.
+    const locks = await db.withOrg(A.orgId, async (tx) => {
+      const result = await createMemoryEntry(tx, {
+        authorMemberId: A.memberId,
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput({ text: "while locked" }),
+      });
+      const { rows } = await tx.query<{ mode: string }>(
+        `select mode from pg_locks l join pg_class c on c.oid = l.relation
+          where c.relname = 'members' and l.pid = pg_backend_pid() and l.locktype = 'relation'`,
+      );
+      return { outcome: result.outcome, modes: rows.map((r) => r.mode) };
+    });
+    expect(locks.outcome).toBe("created");
+    expect(locks.modes).toContain("RowShareLock");
+    await expect(
+      db.withOrg(A.orgId, (tx) =>
+        createMemoryEntry(tx, {
+          authorMemberId: A.memberId,
+          repoId: A.repoId,
+          origin: "system" as unknown as "member",
+          entry: entryInput(),
+        }),
+      ),
+    ).rejects.toThrow(MemoryStoreError);
+  });
+
+  it("refuses more distinct people than the scrubber accepts, and puts the known ones first (security M2)", async () => {
+    const many = Array.from({ length: MAX_KNOWN_PEOPLE + 1 }, (_, i) => `caller-person-${i}`);
+    expect(await create(A, {}, many)).toEqual({ outcome: "invalid", problem: "too_many_people" });
+    // The member logins and the PR author are scrubbed even with a long caller list (deduped).
+    const long = Array.from({ length: MAX_KNOWN_PEOPLE - 50 }, (_, i) => `caller-person-${i}`);
+    const entry = await created(A, { text: "alice and caller-person-7 agreed" }, [
+      ...long,
+      ...long,
+    ]);
+    expect(entry.text).toBe("[person] and [person] agreed");
   });
 
   it("refuses the entry past the per-repository cap, under concurrency (P5)", async () => {
@@ -284,7 +382,12 @@ describe("createMemoryEntry", () => {
     );
     const attempt = () =>
       db.withOrg(A.orgId, (tx) =>
-        createMemoryEntry(tx, { authorMemberId: A.memberId, repoId, entry: entryInput() }),
+        createMemoryEntry(tx, {
+          authorMemberId: A.memberId,
+          repoId,
+          origin: "member",
+          entry: entryInput(),
+        }),
       );
     const outcomes = (await Promise.all([attempt(), attempt()])).map((r) => r.outcome).sort();
     expect(outcomes).toEqual(["created", "repo_full"]);
@@ -306,6 +409,7 @@ describe("listMemoryEntries and loadMemoryEntry", () => {
       createMemoryEntry(tx, {
         authorMemberId: A.memberId,
         repoId,
+        origin: "member",
         entry: entryInput({ text: "first" }),
       }),
     );
@@ -313,6 +417,7 @@ describe("listMemoryEntries and loadMemoryEntry", () => {
       createMemoryEntry(tx, {
         authorMemberId: A.memberId,
         repoId,
+        origin: "member",
         entry: entryInput({ text: "second" }),
       }),
     );
@@ -347,12 +452,13 @@ describe("listMemoryEntries and loadMemoryEntry", () => {
   }, 60_000);
 
   it("shows a deleted member as a former member, with nothing to erase (acceptance criterion)", async () => {
-    const authorId = await addMember(A, "temp-author");
+    const authorId = await addMember(A, "temp-author", "admin");
     const repoId = await addRepo(A);
     const result = await db.withOrg(A.orgId, (tx) =>
       createMemoryEntry(tx, {
         authorMemberId: authorId,
         repoId,
+        origin: "member",
         entry: entryInput({ text: "temp-author decided: keep the feature flag" }),
       }),
     );
@@ -379,9 +485,14 @@ describe("listMemoryEntries and loadMemoryEntry", () => {
   });
 
   it("shows a member removed in Rocky as a former member, and by login again once restored", async () => {
-    const authorId = await addMember(A, "removed-author");
+    const authorId = await addMember(A, "removed-author", "admin");
     const entry = await db.withOrg(A.orgId, (tx) =>
-      createMemoryEntry(tx, { authorMemberId: authorId, repoId: A.repoId, entry: entryInput() }),
+      createMemoryEntry(tx, {
+        authorMemberId: authorId,
+        repoId: A.repoId,
+        origin: "member",
+        entry: entryInput(),
+      }),
     );
     if (entry.outcome !== "created") throw new Error("setup");
     await db.withOrg(A.orgId, (tx) =>
@@ -411,6 +522,7 @@ describe("supersedeMemoryEntry", () => {
       createMemoryEntry(tx, {
         authorMemberId: A.memberId,
         repoId,
+        origin: "member",
         entry: entryInput({ text: "old" }),
       }),
     );
@@ -418,6 +530,7 @@ describe("supersedeMemoryEntry", () => {
       createMemoryEntry(tx, {
         authorMemberId: A.memberId,
         repoId,
+        origin: "member",
         entry: entryInput({ text: "new" }),
       }),
     );
@@ -445,6 +558,7 @@ describe("supersedeMemoryEntry", () => {
         const r = await createMemoryEntry(tx, {
           authorMemberId: A.memberId,
           repoId: repo,
+          origin: "member",
           entry: entryInput({ text }),
         });
         if (r.outcome !== "created") throw new Error("setup");
@@ -465,8 +579,11 @@ describe("supersedeMemoryEntry", () => {
     // b → a would close the loop: a is superseded, so it is refused above; b → c then c → b?
     expect(await supersede(A, b, c)).toBe("superseded");
     expect(await supersede(A, c, b)).toBe("already_superseded");
-    // The actor must be an active member of this org.
+    // The actor must be an active member of this org who holds memory.edit (S5).
     expect(await supersede(A, c, a, B.memberId)).toBe("not_a_member");
+    const plain = await addMember(A, "plain-superseder");
+    const d = await make(repoId, "d");
+    expect(await supersede(A, c, d, plain)).toBe("not_permitted");
     const self = await pgError(
       db.withOrg(A.orgId, (tx) =>
         tx.query("update memory_entries set superseded_by = id where id = $1", [c]),
