@@ -58,13 +58,11 @@ export interface ScrubOptions {
 export const MAX_SCRUB_INPUT_LENGTH = 16_384;
 /**
  * Distinct people (after folding and case-folding) one call accepts; more is a `RangeError`,
- * never a silently shortened list. 5 000 names scrub a 300-character text in a few
- * milliseconds (the alternation is literal, so matching is linear).
+ * never a silently shortened list. The alternation is literal, so matching is linear: 50 000
+ * names scrub a 300-character text in well under a second (the test measures it).
  */
-export const MAX_KNOWN_PEOPLE = 5000;
+export const MAX_KNOWN_PEOPLE = 50_000;
 export const MAX_KNOWN_PERSON_LENGTH = 100;
-/** A display-name token shorter than this ("Li", "Al") is too common a word to remove alone. */
-const MIN_NAME_TOKEN_LENGTH = 3;
 
 // --- Canonical form -------------------------------------------------------------------------
 
@@ -168,6 +166,9 @@ const anyCase = (alternation: string): string =>
   }).join("");
 
 const CAMEL_CASE = /^\p{Lu}\p{Ll}+\p{Lu}/u;
+/** `@Decorator` alone on its line (the usual decorator syntax without a call). */
+const OWN_LINE_BEFORE = /(?:^|\n)[ \t]*$/u;
+const OWN_LINE_AFTER = /^[ \t]*(?:\n|$)/u;
 /** Inline code: heuristics (names by context, handles) do not look inside it. */
 const INLINE_CODE = /`[^`\n]{1,300}`/gu;
 
@@ -180,21 +181,28 @@ interface Pattern {
   /** The capture group whose span is replaced (0: the whole match). */
   readonly group?: number;
   /** Extra check on the match; false keeps the text. */
-  readonly keep?: (match: RegExpExecArray) => boolean;
+  readonly keep?: (match: RegExpExecArray, text: string) => boolean;
 }
 
 const LETTER_OR_DIGIT = "\\p{L}\\p{N}";
 /** Not inside a word or identifier: letters, digits and `_` on either side. */
 const NOT_BEFORE_WORD = `(?<![${LETTER_OR_DIGIT}_])`;
 const NOT_AFTER_WORD = `(?![${LETTER_OR_DIGIT}_])`;
+/** A match never ends inside a word: `thanks DeShawn` is all of `DeShawn` or nothing. */
+const WORD_END = `(?![${LETTER_OR_DIGIT}_'’-])`;
 /**
- * A capitalised word: an upper-case letter, then lower-case letters, apostrophes and hyphens
- * only, so a CamelCase identifier (`HttpClient`) is never a name. (`McDonald` is not either;
- * listed people are matched as written.)
+ * A capitalised word after a cue or an honorific: an upper-case letter, a lower-case letter,
+ * then any letters (`DeShawn`, `McKenzie`, `Jean-Luc`); the stop list keeps products out.
  */
-const CAPITALISED = "\\p{Lu}\\p{Ll}[\\p{Ll}'’-]{0,40}";
-/** One to three capitalised words. */
-const NAME = `${CAPITALISED}(?:[ \\t]+${CAPITALISED}){0,2}`;
+const CAPITALISED = "\\p{Lu}\\p{Ll}[\\p{L}'’-]{0,40}";
+/**
+ * A capitalised word before a speech verb: lower-case letters after the capital, with
+ * hyphenated parts (`Jean-Luc`), so a CamelCase identifier (`HttpClient said`) is never a name.
+ */
+const CAPITALISED_PLAIN = "\\p{Lu}\\p{Ll}[\\p{Ll}'’]{0,40}(?:-\\p{Lu}?\\p{Ll}{1,40}){0,3}";
+/** One to three capitalised words, ending at a word boundary. */
+const NAME = `${CAPITALISED}(?:[ \\t]+${CAPITALISED}){0,2}${WORD_END}`;
+const NAME_PLAIN = `${CAPITALISED_PLAIN}(?:[ \\t]+${CAPITALISED_PLAIN}){0,2}${WORD_END}`;
 const EMAIL_LOCAL = `[${LETTER_OR_DIGIT}._%+'-]{1,64}`;
 const EMAIL_DOMAIN = `[${LETTER_OR_DIGIT}-]{1,63}`;
 const EMAIL_TLD = "\\p{L}{2,63}";
@@ -297,15 +305,19 @@ const PATTERNS: readonly Pattern[] = [
   {
     kind: "handle",
     // Not followed by `/` (npm scope), `(` (decorator call) or `.letter` (`@app.route`: a login
-    // cannot contain a dot); not a listed tag; not CamelCase with two humps (`@HostBinding`).
+    // cannot contain a dot); not a listed tag or decorator; not a CamelCase word alone on its
+    // line (decorator syntax). `@JohnSmith about it` is a person. Applies inside code spans too.
     regex: new RegExp(
       `${NOT_BEFORE_WORD}@([a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?)(?![${LETTER_OR_DIGIT}_/(-]|\\.[\\p{L}_])`,
       "giud",
     ),
-    skipCode: true,
-    keep: (m) => {
+    keep: (m, text) => {
       const handle = m[1] ?? "";
-      return !CODE_AT_WORDS.has(handle.toLowerCase()) && !CAMEL_CASE.test(handle);
+      if (CODE_AT_WORDS.has(handle.toLowerCase())) return false;
+      if (!CAMEL_CASE.test(handle)) return true;
+      const before = text.slice(0, m.index);
+      const after = text.slice(m.index + m[0].length);
+      return !(OWN_LINE_BEFORE.test(before) && OWN_LINE_AFTER.test(after));
     },
   },
   // Known people are inserted here (index KNOWN_PEOPLE_AT) per call.
@@ -329,7 +341,7 @@ const PATTERNS: readonly Pattern[] = [
   {
     kind: "person",
     regex: new RegExp(
-      `${NOT_BEFORE_WORD}(${NAME})[ \\t]+(?:${SPEECH_VERBS})${NOT_AFTER_WORD}`,
+      `${NOT_BEFORE_WORD}(${NAME_PLAIN})[ \\t]+(?:${SPEECH_VERBS})${NOT_AFTER_WORD}`,
       "gud",
     ),
     group: 1,
@@ -383,7 +395,10 @@ const CODE_AT_WORDS: ReadonlySet<string> = new Set(
   staticmethod classmethod pytest mock fixture parametrize decorator jvmstatic composable
   preview serializable obsolete attribute html layout rendermode code foreach switch using
   section await
-  `
+    hostbinding contentchild contentchildren viewchildren ngmodule optional skipself injectiontoken
+  requestbody pathvariable requestparam responsebody exceptionhandler valid validated sneakythrows
+  getter setter builder allargsconstructor noargsconstructor slf4j jsonproperty jsonignore
+`
     .split(/\s+/u)
     .filter((w) => w.length > 0),
 );
@@ -423,14 +438,16 @@ const COMMON_WORDS: ReadonlySet<string> = new Set(
 const ASCII_WORD = /^[a-z]+$/i;
 
 /**
- * Whether a single-token person is scrubbed wherever it appears as a word: it has a digit or a
- * hyphen (`octocat2`, `bob-the-builder`), it is not ASCII (`李雷`), or it has at least five
- * letters and is not a common word. Multi-word names are always matched as a whole.
+ * Whether a person's name (or a token of a display name) is scrubbed wherever it appears as a
+ * word. Only two things make it "weak" (scrubbed in person positions only): it is an ASCII word
+ * in the common-words dictionary (`go`, `main`, `Mark`), or it is at most two letters (`Li`,
+ * `Al`). Everything else is a person wherever it appears: `john`, `eric`, `bob`, `octocat2`,
+ * `bob-the-builder`, `李雷`, and every multi-word name as a whole.
  */
 export const matchesAsBareWord = (name: string): boolean => {
   if (/[\s]/u.test(name)) return true;
   if (!ASCII_WORD.test(name)) return true;
-  return name.length >= 5 && !COMMON_WORDS.has(name.toLowerCase());
+  return name.length > 2 && !COMMON_WORDS.has(name.toLowerCase());
 };
 
 const alternation = (names: Iterable<string>): string =>
@@ -460,16 +477,11 @@ const knownPeoplePatterns = (people: readonly string[]): Pattern[] => {
     const tokens = name.split(" ");
     if (tokens.length === 1) continue;
     for (const token of tokens) {
-      if (Array.from(token).length < MIN_NAME_TOKEN_LENGTH) continue;
       (matchesAsBareWord(token) ? sensitive : weakSensitive).add(token);
     }
   }
-  const distinct = new Set([
-    ...insensitive,
-    ...weakInsensitive,
-    ...[...sensitive, ...weakSensitive].map((t) => t.toLowerCase()),
-  ]);
-  if (distinct.size > MAX_KNOWN_PEOPLE) {
+  // Distinct folded people (tokens come from them and are not counted twice).
+  if (insensitive.size + weakInsensitive.size > MAX_KNOWN_PEOPLE) {
     throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE} distinct people`);
   }
   const bare = (names: Set<string>, flags: string): Pattern[] =>
@@ -552,7 +564,7 @@ const spansOf = (
       regex.lastIndex += 1;
       continue;
     }
-    if (pattern.keep !== undefined && !pattern.keep(match)) {
+    if (pattern.keep !== undefined && !pattern.keep(match, folded)) {
       // Retry from the next position: a rejected span may hide a shorter match inside it
       // ("The Alice Smith said" → "Alice Smith said").
       regex.lastIndex = match.index + 1;

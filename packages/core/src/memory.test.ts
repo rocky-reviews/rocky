@@ -184,7 +184,20 @@ describe("prepareMemoryEntry", () => {
         variant,
       ).toBe("invalid_path");
     }
-    expect(problemOf({ ...valid(), text: `see ${PROMPT_CANARY.slice(0, 15)} here` })).toBe("ok");
+    // Any run of eight canary characters is refused (two entries could hold halves); seven pass.
+    expect(problemOf({ ...valid(), text: `see ${PROMPT_CANARY.slice(0, 15)} here` })).toBe(
+      "invalid_text",
+    );
+    expect(problemOf({ ...valid(), text: `see ${PROMPT_CANARY.slice(4, 12)} here` })).toBe(
+      "invalid_text",
+    );
+    expect(problemOf({ ...valid(), text: `see ${PROMPT_CANARY.slice(0, 7)} here` })).toBe("ok");
+    expect(
+      problemOf({
+        ...valid(),
+        evidence: { ...valid().evidence, path: `src/${PROMPT_CANARY.slice(8)}.ts` },
+      }),
+    ).toBe("invalid_path");
     expect(problemOf({ ...valid(), text: 'x <pr_content id="1"> y' })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "x </pr_content> y" })).toBe("invalid_text");
     expect(problemOf({ ...valid(), text: "x < pr_content > y" })).toBe("invalid_text");

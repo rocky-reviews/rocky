@@ -1,5 +1,5 @@
 import { limits, pathProblem, textProblem } from "@rocky-reviews/schema";
-import { containsPromptCanary } from "./analysis/leak.js";
+import { containsPromptCanaryFragment } from "./analysis/leak.js";
 import { isDismissReason, type DismissReason } from "./drafts.js";
 import { MAX_KNOWN_PEOPLE, scrubPersonalIdentifiers, type ScrubResult } from "./pii.js";
 
@@ -106,14 +106,15 @@ export type PrepareMemoryEntryResult =
 const FULL_SHA = /^[0-9a-f]{40}$/;
 /**
  * Text no entry may carry (threat P3): the prompt canary in any spelling the leak guard folds
- * (`containsPromptCanary`; a stored entry quoted into a finding would otherwise fail every later
- * review), its marker prefix, and the PR-content markers (ADR 0013; an entry could pretend to
+ * or any run of eight of its characters (`containsPromptCanaryFragment`: a stored entry quoted
+ * into a finding would otherwise fail every later review, and two entries could hold halves),
+ * its marker prefix, and the PR-content markers (ADR 0013; an entry could pretend to
  * open or close a block). The evidence path is held to the canary rule too: it is quoted with
  * the entry.
  */
 const FORBIDDEN_TEXT = /rk-canary-|<\s*\/?\s*pr_content\b/iu;
 const forbidden = (text: string): boolean =>
-  FORBIDDEN_TEXT.test(text) || containsPromptCanary(text);
+  FORBIDDEN_TEXT.test(text) || containsPromptCanaryFragment(text);
 
 const field = (input: object, name: string): unknown =>
   Object.hasOwn(input, name) ? (input as Record<string, unknown>)[name] : undefined;
@@ -133,7 +134,7 @@ const evidenceOf = (input: unknown): MemoryEvidence | MemoryEntryProblem => {
     typeof path !== "string" ||
     path.length > limits.MAX_PATH_LENGTH ||
     pathProblem(path) !== undefined ||
-    containsPromptCanary(path)
+    containsPromptCanaryFragment(path)
   )
     return "invalid_path";
   const sha = field(input, "sha");

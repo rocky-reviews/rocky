@@ -156,7 +156,31 @@ describe("@handles", () => {
       input: "ask @octocat. Then",
       expected: "ask [user]. Then",
     },
-    { name: "not inside inline code", input: "run `@octocat`", expected: "run `@octocat`" },
+    {
+      name: "inside inline code too (fix round 2)",
+      input: "run `@octocat`",
+      expected: "run `[user]`",
+    },
+    {
+      name: "an unlisted CamelCase handle is a person (fix round 2)",
+      input: "ask @JohnSmith",
+      expected: "ask [user]",
+    },
+    {
+      name: "an unlisted CamelCase handle mid-sentence",
+      input: "ask @DavidSmith about it",
+      expected: "ask [user] about it",
+    },
+    {
+      name: "a CamelCase decorator alone on its line",
+      input: "  @MyDecorator\nclass X {}",
+      expected: "  @MyDecorator\nclass X {}",
+    },
+    {
+      name: "a handle in backticks before a verb",
+      input: "`@octocat` approved",
+      expected: "`[user]` approved",
+    },
     {
       name: "not inside a word",
       input: "foo@bar is not a handle",
@@ -233,6 +257,40 @@ describe("known people", () => {
     expect(scrub("a bobby x", people)).toBe("a [person] x");
   });
 
+  describe("listed people with short names never survive bare (fix round 2 blocker)", () => {
+    table(
+      [
+        {
+          name: "four letters",
+          input: "john fixed the cache",
+          expected: "[person] fixed the cache",
+        },
+        { name: "capitalised four letters", input: "Eric fixed it", expected: "[person] fixed it" },
+        {
+          name: "after per, with a comma",
+          input: "per anna, keep it",
+          expected: "per [person], keep it",
+        },
+        { name: "three letters, possessive", input: "bob's branch", expected: "[person] branch" },
+        {
+          name: "first name of a display name",
+          input: "Juan rewrote it",
+          expected: "[person] rewrote it",
+        },
+        { name: "accented surname", input: "Pérez rewrote it", expected: "[person] rewrote it" },
+        { name: "whole display name", input: "Eric Li merged it", expected: "[person] merged it" },
+        { name: "a two-letter token is weak", input: "Li alone stays", expected: "Li alone stays" },
+        {
+          name: "a two-letter token in a person position",
+          input: "cc Li",
+          expected: "cc [person]",
+        },
+        { name: "four-letter surname", input: "Moss said so", expected: "[person] said so" },
+      ],
+      ["john", "eric", "anna", "bob", "Eric Li", "Juan Pérez", "Kate Moss"],
+    );
+  });
+
   it("refuses more distinct people than the cap instead of shortening the list (security M2)", () => {
     const many = Array.from({ length: MAX_KNOWN_PEOPLE + 1 }, (_, i) => `person-${i}`);
     expect(() => scrub("x", many)).toThrow(RangeError);
@@ -247,8 +305,23 @@ describe("known people", () => {
 
   describe("short or common-word logins match only in person positions (S2)", () => {
     const logins = ["go", "api", "dev", "test", "main", "pat", "Mark Brown"];
-    it("decides by digits, hyphens, script and length against a dictionary", () => {
-      for (const strong of ["alice", "octocat2", "bob-the-builder", "李雷", "Alice Smith", "zoë"]) {
+    it("decides by the dictionary and a two-letter floor only (fix round 2)", () => {
+      for (const strong of [
+        "alice",
+        "octocat2",
+        "bob-the-builder",
+        "李雷",
+        "Alice Smith",
+        "zoë",
+        "john",
+        "eric",
+        "anna",
+        "bob",
+        "dana",
+        "Juan Pérez",
+        "Kate Moss",
+        "Moss",
+      ]) {
         expect(matchesAsBareWord(strong), strong).toBe(true);
       }
       for (const w of [
@@ -258,7 +331,8 @@ describe("known people", () => {
         "test",
         "main",
         "pat",
-        "dana",
+        "Li",
+        "al",
         "Mark",
         "Brown",
         "admin",
@@ -410,6 +484,38 @@ describe("names by context", () => {
       expected: "run `thanks Carol` verbatim",
     },
     {
+      name: "a listed person inside inline code is still scrubbed (fix round 2)",
+      input: "run `thanks Alice Smith` verbatim",
+      expected: "run `thanks [person]` verbatim",
+    },
+    {
+      name: "no cut after a cue: CamelCase (fix round 2)",
+      input: "according to HttpClient docs",
+      expected: "according to [person] docs",
+    },
+    { name: "no cut after thanks", input: "thanks DeShawn", expected: "thanks [person]" },
+    { name: "no cut after cc", input: "cc McKenzie", expected: "cc [person]" },
+    {
+      name: "no cut after an honorific",
+      input: "Dr. DeAndre Jones agreed",
+      expected: "Dr. [person] agreed",
+    },
+    {
+      name: "a hyphenated name before a speech verb",
+      input: "Jean-Luc said no",
+      expected: "[person] said no",
+    },
+    {
+      name: "a hyphenated name after thanks",
+      input: "thanks Jean-Luc",
+      expected: "thanks [person]",
+    },
+    {
+      name: "a plural noun after a name is not a speech verb (documented)",
+      input: "Alice Smith notes the id",
+      expected: "[person] notes the id",
+    },
+    {
       name: "not a plural noun after a name",
       input: "Grace comments on every PR",
       expected: "Grace comments on every PR",
@@ -543,9 +649,13 @@ describe("the result", () => {
 });
 
 describe("property: a listed person never survives", () => {
-  // Logins that match as bare words: a digit or a hyphen makes any login one.
+  // Any login that is not a dictionary word and longer than two characters, short ones
+  // included (fix round 2: `john`, `bob` must not survive bare).
   const login = fc
-    .stringMatching(/^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$/)
+    .oneof(
+      fc.stringMatching(/^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$/),
+      fc.stringMatching(/^[a-z]{3,4}$/),
+    )
     .filter((s) => !s.includes("--") && matchesAsBareWord(s));
   const filler = fc.stringMatching(/^[ \p{L}\p{N}.,;:!?()'"-]{0,30}$/u);
 
