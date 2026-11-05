@@ -206,17 +206,37 @@ handled by the re-check at load.
 
 ### 6. The eval (`packages/evals`, `--memory`)
 
-Two synthetic pull requests of one repository share a pattern the team keeps on purpose (a
-retry limit as a constant in `src/jobs/`), each with one real bug. The suite analyses pr-1301
-without memory, dismisses the produced pattern finding as intentional and learns the entry with
-the real rules, analyses pr-1302 without memory (the control), then with the entry. The run
-passes when run 1 raised the pattern, an entry was learned, the control raised it, run 2 did not,
-run 2 cites the entry, and run 2 still finds the real bug. On `--fake` the model is scripted to
-obey the memory block; `memory.test.ts` shows that a model ignoring memory fails it. Live, the
-same three analyses measure the real model. The gate: once a baseline passed it, a report must
-run it and pass. The fake baseline is regenerated with `--memory` (scores unchanged), and the
-protected paths and CODEOWNERS include `src/memory/`, `src/memory.test.ts` and
-`src/injection/check.ts`, so the PR needs the `evals-baseline-change` label.
+Two synthetic pull requests of one repository's billing jobs share a pattern the team keeps on
+purpose (a per-item `catch` that swallows the error and moves on with no log: what a careful
+reviewer usually flags, and what a team may keep when the next nightly run retries every unpaid
+item), and each has one unmistakable bug (SQL built by interpolating the org id; receipts sent
+only to customers who opted out). The suite analyses pr-1301 without memory, dismisses the
+produced pattern finding as intentional and learns the entry with the real rules, analyses
+pr-1302 without memory (the control), then with the entry. The run passes when run 1 raised the
+pattern, an entry was learned, the control raised it, run 2 did not, run 2 cites the entry, and
+run 2 still finds the real bug. `--memory-trials N` repeats the three analyses for a rate; the
+report keeps the conditions over all trials and, per trial and per analysis, the status and
+failure code, the case file's triage level, whether it was reviewed, its unanalysed reason, the
+count of findings, the matched seeded ids, the pattern's severity and the suppressed and
+restored counts (codes, levels, counts and ids only). On `--fake` the model is scripted to obey
+the memory block; `memory.test.ts` shows that a model ignoring memory fails it. The gate: once a
+baseline passed it, a report must run it and pass. The fake baseline is regenerated with
+`--memory` (scores unchanged), and the protected paths and CODEOWNERS include `src/memory/`,
+`src/memory.test.ts` and `src/injection/check.ts`, so the PR needs the `evals-baseline-change`
+label.
+
+**Live result so far: inconclusive.** The first live run (2026-11-05; triage haiku-5-5, review
+opus-5-5, graph sonnet-5-5) used an earlier case: a 16-line retry job with a hard-coded
+`MAX_ATTEMPTS` (rated low) and a logged email address. Every condition came back false, every
+analysis `done`, and the report held booleans only. Diagnosed offline: the review role's 26 calls
+include the 8 analyses' briefings, so at most 18 file reviews ran for 25 triaged files; the case
+files were most likely triaged `normal`, which is never reviewed, so nothing could be raised.
+Nothing errored, but the report could not tell "not reviewed" from "missed". Hence the redesigned
+case (payment code, which the triage instructions place at least at `important`, and no rule
+floor) and the per-run diagnosis. The eval stays inconclusive by design when the control does not
+raise the pattern, when triage calls pr-1302 critical (no suppression stands there, §4), or when
+run 2 rates the pattern above run 1's severity (the entry does not cover it); the diagnosis
+records all three.
 
 **What the gate proves.** CI runs the eval on the `--fake` model only: it proves the plumbing
 (learning, selection, the untrusted part, enforcement, citations), not that a real model follows

@@ -78,6 +78,9 @@ Task log for the project plan. Agents append a row when a task is merged.
 - **Label:** the PR changes protected eval files (`baselines/fake.json`, `src/run/**`, the new
   `src/memory/**`, `src/memory.test.ts`, `evals.yml`, `CODEOWNERS`): a maintainer adds
   `evals-baseline-change`.
+- First live memory run (2026-11-05) was inconclusive (every condition false, case files most
+  likely triaged `normal` and never reviewed); case redesigned and per-run diagnosis added
+  (ADR 0037 §6). Next: `pnpm evals run --only pr-1205 --memory --memory-trials 2`.
 - **Needs a human before merge:** run `pnpm evals run --memory` with a provider key. CI's gate
   runs the memory eval on the `--fake` model only, which proves the plumbing; the live `memory`
   result is the evidence for the P8-2 criterion (ADR 0037 §6). Include `--memory` in the first
