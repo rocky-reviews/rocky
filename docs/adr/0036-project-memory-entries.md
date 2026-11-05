@@ -90,7 +90,7 @@ to Latin for matching only):
    and the caller's list after; more than `MAX_KNOWN_PEOPLE` (50 000) distinct folded names is
    refused (`too_many_people`), never scrubbed with a shortened list. People are matched by
    **word lookup**, not by a compiled pattern: the text is split into words once, each word is
-   looked up in an index (keyed by the first two words) of the names and of every
+   looked up in an index (keyed by the first three words) of the names and of every
    space-separated part of a display name, trimmed of punctuation, with hyphenated sub-parts
    (`Smith` of `Smith, Alice`, `Ally` of `Alice "Ally" Smith`, `Smith` and `Jones` of `Alice
 Smith-Jones`; a login's hyphenated words such as `the` in `bob-the-builder` are not parts),
@@ -239,15 +239,19 @@ reviewers' prompts; a leaver whose name must not remain; anyone reading an expor
   is derived at read time, so the login is still in `members` until the org is erased. That is
   ADR 0024's decision, not this one's.
 - The per-repository cap is a ceiling, not a budget: P8-4 decides what to keep.
-- `MAX_KNOWN_PEOPLE` (50 000 distinct folded names, a constant with a timing test) bounds the
-  scrub's people list. Every part of a display name is indexed (names are at most 100
-  characters, so parts are bounded); the index is rebuilt per call, in time linear in the list.
-  Measured with 50 000 random names per run on a 300-character text: one-word names about
-  75 ms, two-word about 200 ms, three-word about 280 ms, five-word about 410 ms, twelve-word
-  about 745 ms, with 150–400 MB of transient heap. The index is keyed by the first two words,
-  so 50 000 names sharing a first word over a text that repeats it (the worst case, bounded by
-  the 2 000-character input cap) stays well under a second. The regex alternation this replaced
-  took seconds and ran out of memory at that size.
+- `MAX_KNOWN_PEOPLE` (50 000 distinct folded names) bounds the scrub's people list, and
+  `MAX_KNOWN_PEOPLE_ENTRIES` (250 000 names, parts and hyphenated sub-parts examined per call,
+  deduplicated or not) bounds the work and memory whatever the names look like; both are
+  constants with timing tests and both answer `too_many_people`, never a shortened list. 50 000
+  three-word names fit (200 000 entries); 50 000 five-word names, fifty one-letter words or
+  twelve hyphenated parts do not and are refused in about 100–350 ms. The index is keyed by the
+  first three words and a key with more than `MAX_KNOWN_PEOPLE_PER_KEY` (256) names is refused,
+  so names sharing a prefix cannot make a scrub quadratic. Measured per call (index + scrub, a
+  laptop, transient heap): 50 000 one-word names 56 ms / 31 MB; two-word 187 ms / 98 MB;
+  three-word 254 ms / 108 MB; 50 000 `John Smith …` names over 2 000 characters of `john smith`
+  180 ms / 85 MB; 50 000 weak `Go Go …` names over 2 000 characters 137 ms / 66 MB; 50 000
+  `John Smith Jr …` names refused in 1 ms. The regex alternation this replaced took seconds and
+  ran out of memory at that size.
   with more members than that gets `too_many_people` on every create (audited nowhere, answered
   to the caller) until the constant is raised; nothing is scrubbed with a shortened list. No
   GitHub organization Rocky targets is near that size; the way out is a code change with the

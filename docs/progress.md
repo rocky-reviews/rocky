@@ -97,6 +97,11 @@ Task log for the project plan. Agents append a row when a task is merged.
 - Fix round 4 applied: every display-name part is indexed, trimmed of punctuation, with
   hyphenated sub-parts; the index is keyed by the first two words (the shared-first-word worst
   case); the ADR's guarantee and timings follow the verifier's measurements.
+- Fix round 5 applied: the names, parts and sub-parts examined per call are capped at
+  250 000 (`MAX_KNOWN_PEOPLE_ENTRIES`, `too_many_people` beyond: 50 000 three-word names fit,
+  five-word or fifty-letter names do not), the index is keyed by the first three words and a key
+  with more than 256 names is refused, so shared prefixes cannot go quadratic; the ADR carries
+  the measured times and heap.
 - Scrubber nits (not fixed): `alice'S` leaves `'S` (only a lower-case possessive is absorbed);
   the Cyrillic look-alike folding differs by case (`ИВАН` and `Иван` fold differently, so a
   listed `Ivan` matches one but not the other); `ilker`/`İlker` and `STRAUSS`/`Strauß` do not
