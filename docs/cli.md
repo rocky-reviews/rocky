@@ -136,7 +136,10 @@ stop a run whose real usage would fit.
 
 Errors are fixed codes and fixed text, for example `reading GitHub failed: forge_http_502`,
 `analysis failed: diff_truncated` or `analysis stopped: llm_rate_limited (…)`. They never
-include a provider body, a token or PR content.
+include a provider body, a token or PR content. A failure the pipeline could not classify, or
+one an adapter raised itself, adds a fixed origin tag and the error's class name in brackets:
+`analysis failed: internal_error (pipeline, TypeError)`, `analysis failed: llm_invalid_request
+(sdk_schema_transform)` (ADR 0013, amendment H4-4). Never the error's text.
 
 ## First live run (needs a human with a key)
 
@@ -155,7 +158,7 @@ own prompt text (`packages/core/src/prompt.ts`, `analysis/instructions.ts`, ADR 
 injection corpus; #19 and #20, for example) quote it in the diff, so expect the leak guard to
 mark some of their files unanalysed (ADR 0015 R6).
 
-Things to watch on that run (ADR 0014 R6): every stage schema is accepted by structured
-outputs on the provider (a rejected one, such as the graph's recursive view, shows up as
-`analysis failed: llm_invalid_request`), and whether `MAX_OUTPUT_TOKENS` and the default cap fit
-real answers.
+Things to watch on that run (ADR 0014 R6): every enforced stage schema is accepted by structured
+outputs on the provider (a rejected one shows up as `analysis failed: llm_invalid_request`; the
+graph is sent as a prompt schema because the API cannot compile it, ADR 0013 amendment H4-4), and
+whether `MAX_OUTPUT_TOKENS` and the default cap fit real answers.

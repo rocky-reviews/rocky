@@ -14,6 +14,16 @@ import {
 
 export type StopKind = "complete" | "refused" | "truncated" | "unexpected";
 
+/** One Markdown code fence around the whole answer, and nothing else outside it. */
+const FENCED = /^\s*```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```\s*$/;
+
+/**
+ * The answer without a fence a model put around it (a prompt-mode output is not constrained by
+ * the provider, H4-4). Only a fence that encloses the whole text is removed; anything else is
+ * parsed as it came, and the validator judges what is inside.
+ */
+export const unfenced = (text: string): string => FENCED.exec(text)?.[1] ?? text;
+
 export interface Answer {
   readonly stop: StopKind;
   readonly text: string;
@@ -40,7 +50,8 @@ export const toResult = <T>(
     case "complete": {
       let value: unknown;
       try {
-        value = JSON.parse(answer.text);
+        // Only a prompt-mode answer may be fenced; an enforced one is JSON or it is invalid.
+        value = JSON.parse(output.mode === "prompt" ? unfenced(answer.text) : answer.text);
       } catch {
         return { status: "invalid_output", ...base, issues: ["(root): invalid_json"] };
       }

@@ -162,9 +162,12 @@ export {
 } from "./metering.js";
 export {
   FINAL_INSTRUCTION,
+  FINAL_INSTRUCTION_PROMPT_SCHEMA,
   PROMPT_CANARY,
   PROMPT_CANARY_MARKER,
+  SCHEMA_PREAMBLE,
   systemPrompt,
+  systemPromptWithSchema,
   UNTRUSTED_PREAMBLE,
 } from "./prompt.js";
 export {
@@ -206,7 +209,9 @@ export {
   parseUnifiedDiff,
   PIPELINE_VERSION,
   preTriage,
+  providerJsonSchema,
   type AnalysisDeps,
+  type AnalysisDiagnostic,
   type AnalysisFailureCode,
   type AnalysisOutcome,
   type AnalysisRequest,

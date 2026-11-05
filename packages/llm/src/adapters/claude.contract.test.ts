@@ -249,6 +249,34 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
     else expect(body["fallbacks"]).toBeUndefined();
   });
 
+  it("a prompt-mode output sends its schema after the instructions, in the cached block, and no enforced format (H4-4)", async () => {
+    const { provider, requests } = providerFor(platform, [sse("end-turn.sse")]);
+    const result = await complete(provider, {
+      output: { ...verdictSchema, mode: "prompt" },
+      effort: undefined,
+    });
+    expect(result).toMatchObject({ status: "ok", value: ANSWER });
+    const body = requests[0]!.body;
+    expect(body["output_config"]).toBeUndefined();
+    const system = body["system"] as { text: string; cache_control?: unknown }[];
+    expect(system).toHaveLength(1);
+    expect(system[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(system[0]!.text).toContain("You review pull requests. Report the verdict.");
+    expect(system[0]!.text).toContain(JSON.stringify(verdictSchema.jsonSchema));
+    expect(system[0]!.text.indexOf("Report the verdict.")).toBeLessThan(
+      system[0]!.text.indexOf('"verdict"'),
+    );
+    const messages = body["messages"] as { content: { text: string; cache_control?: unknown }[] }[];
+    const texts = messages[0]!.content.map((block) => block.text);
+    for (const block of messages[0]!.content) expect(block.cache_control).toBeUndefined();
+    expect(texts.at(-1)).toMatch(/only one JSON document .* no code fences/);
+    expect(JSON.stringify(messages)).not.toContain('"$schema"');
+    // With an effort, output_config carries the effort and still no format.
+    const second = providerFor(platform, [sse("end-turn.sse")]);
+    await complete(second.provider, { output: { ...verdictSchema, mode: "prompt" } });
+    expect(second.requests[0]!.body["output_config"]).toEqual({ effort: "high" });
+  });
+
   it("caches only Rocky's instructions and keeps PR content out of the system slot (T5, T6)", async () => {
     const { provider, requests } = providerFor(platform, [sse("end-turn.sse")]);
     await complete(provider);

@@ -5,6 +5,8 @@
 - **Task:** P4-2
 - **Builds on:** [ADR 0004](0004-schema-first-llm.md) (schema-first output),
   [ADR 0012](0012-llm-roles-and-provider-port.md) (roles, config and the `LlmProvider` port)
+- **Amended by:** H4-4 (the sent schema versus the validating schema, a prompt-mode delivery for
+  the graph, and a content-free failure diagnostic; "Amendment (H4-4)" below)
 
 ## Context
 
@@ -70,7 +72,10 @@ Every request has the same shape:
   catalogued model and platform (the structured-outputs page lists them all). The schema first
   goes through the SDK's public `jsonSchemaOutputFormat` helper, which strips constraints the API
   rejects (`minLength`, `minimum`, ...). The port's validator then checks the full schema, so a
-  stripped constraint is still enforced.
+  stripped constraint is still enforced. The role schemas are shaped for that helper by core
+  (`providerJsonSchema`, amendment H4-4 below); a schema it still refuses fails the call as
+  `invalid_request` before anything is sent. The graph's schema exceeds the API's grammar limits
+  and is sent as text instead (`mode: "prompt"`, amendment H4-4).
 - **Effort:** `output_config.effort` when the role sets one. Config validation already refused
   levels the model lacks.
 - **Thinking:** `thinking: { type: "adaptive" }` on every model that takes it. Haiku 4.5 and
@@ -293,6 +298,120 @@ fixtures.
   rules is P4-5.
 - The OpenAI-compatible request is non-streaming, so a server slower than undici's 300-second
   header timeout fails as `network`.
+
+## Amendment (H4-4): the sent schema and the validating schema
+
+**Context.** Dogfooding on a real PR: triage succeeded and the graph call failed in 17 ms, before
+any request, and the analysis ended as `internal_error`. Three provider-side limits stand between
+the graph schema and Anthropic structured outputs, found one behind the other with an offline
+probe (`max_tokens: 1`; a 400 is unbilled):
+
+1. **The SDK's transform** (`jsonSchemaOutputFormat` → `transformJSONSchema`) refuses any
+   subschema with neither a `type` nor a combinator. The graph schema carries three hand-written
+   "at least one of" constraints, added with `.meta()` for the published analysis-document
+   schema: `Payload` (`anyOf: [{ required: ["request"] }, { required: ["response"] }]`) and the
+   `selection` variant of `ViewScope` and `StepFocus`
+   (`anyOf: [{ properties: { lanes: { minItems: 1 } }, required: ["lanes"] }, …]`). Each is a
+   combinator **beside a `type`** whose variants have no `type`. The thrown value was a plain
+   `Error`, not an `LlmCallError`, so it escaped the port and the pipeline's catch-all mapped it
+   to `internal_error` with no detail (by design: an unknown error's text could quote content).
+2. **The API refuses recursive definitions** ("Circular reference detected in schema
+   definitions: JsonValue -> JsonValue"): the drill-down `View` tree and the JSON `sample`
+   value. Unrolling them a bounded number of levels gets past this and into the next limit.
+3. **The API's grammar limits.** An enforced schema is compiled into a grammar: at most 24
+   optional parameters in a request (the graph has 47 even with every defaulted field made
+   required and the recursion unrolled once), and an internal grammar-size limit that lanes +
+   nodes + edges pass but flows, views or a walkthrough on top of them do not (the probe:
+   lanes/nodes/edges with one level of views and no walkthrough compiles; adding either the
+   flows or the walkthrough fails with "The compiled grammar is too large"). The limits are
+   documented on the structured-outputs page (schema complexity limits; 24 optional, 16
+   union-typed parameters).
+
+Triage, review and briefing compile (the probe returns 200 for each). The real-model evals did
+not catch any of this: the job skips itself when `ROCKY_EVALS_ANTHROPIC_API_KEY` is unset in the
+environment (every run so far), and even with the key a failed subject is scored, not fatal, and
+the placeholder live baseline turns the gate into a warning.
+
+**Decision.**
+
+1. **Two schemas, one validator.** A role's `LlmOutputSchema.jsonSchema` is the schema **sent**
+   to a provider; `parse` is the Zod schema itself and is the only validation. The sent schema
+   is the Zod emission (`z.toJSONSchema`, input side) passed through core's
+   `providerJsonSchema` (`packages/core/src/analysis/provider-schema.ts`): a combinator beside a
+   `type` is folded into the description, in the SDK's own `{key: json}` style for constraints
+   it strips, and removed from the schema. Zod never emits that shape itself (a union is a bare
+   combinator; an enum is `type` + `enum`), so the rule touches only `.meta()` constraints. A
+   bare combinator is a union and stays. Giving the variants `type: "object"` was rejected: the
+   SDK closes every object (`additionalProperties: false`, `properties: {}`), so such a variant
+   would forbid every property and the schema would be unsatisfiable. The published
+   analysis-document JSON Schema (`packages/schema/json-schema/`) is a different emission and is
+   unchanged. The OpenAI-compatible adapter sends the same `jsonSchema`.
+2. **Two delivery modes.** `LlmOutputSchema.mode` is `structured` (default: the provider
+   enforces the schema, as §1 says) or `prompt`: the serialised schema follows Rocky's
+   instructions in the system slot (`systemPromptWithSchema`: it is Rocky-authored and static, so
+   it sits inside the one cached block, T5) behind the fixed line `SCHEMA_PREAMBLE`, the final
+   line is `FINAL_INSTRUCTION_PROMPT_SCHEMA` ("only one JSON document … no code fences"), and no
+   `output_config.format` is sent. The mode is a request to the adapter, which decides how to
+   honour it: today only the Claude adapter does; the OpenAI-compatible adapter still sends
+   every output as a strict `response_format` (follow-up in `docs/progress.md`). Both lines are in `PROMPT_TEXTS` for the leak guard (ADR
+   0015); the schema JSON is not, since an answer legitimately repeats its field names. The graph
+   is the one prompt-mode output (`GRAPH_OUTPUT`), because no projection of it compiles (limits 2
+   and 3) short of dropping flows, views or the walkthrough, which is a product decision, not a
+   provider fix. A prompt-mode answer may arrive inside a Markdown fence: for a prompt-mode output only,
+   `toResult` removes one fence that encloses the whole answer and nothing else (`unfenced`); the validator judges the
+   content, and an answer that misses the schema is `invalid_output` with a repair round (ADR
+   0014), exactly as for an enforced output. `PIPELINE_VERSION` is bumped (the graph prompt
+   changed).
+3. **Fail closed, typed.** `wireSchema` in the Claude adapter wraps the SDK transform: a schema
+   it refuses is `LlmCallError("invalid_request", { origin: "sdk_schema_transform" })`, raised
+   before anything is sent, with none of the SDK's text. The port's promise (only `LlmCallError`
+   leaves an adapter) holds for this path too.
+4. **A content-free diagnostic.** `LlmCallError` gains an optional `origin`, a fixed tag an
+   adapter writes in source, checked against `^[a-z][a-z0-9_]{0,31}$` (a `RangeError`
+   otherwise). A failed `AnalysisOutcome` may carry `diagnostic: { origin, errorClass? }`: the
+   adapter's origin for a fatal `LlmCallError`, or `pipeline` plus the thrown value's class name
+   for the catch-all: read only from a real `Error`, from its prototype's constructor function,
+   matching `^[A-Za-z_$][A-Za-z0-9_$]{0,63}$`, else `unknown` (primitives, plain objects, proxies
+   and planted own properties never name a class). The worker logs them as `errorOrigin` and
+   `errorClass` on "analysis failed", next to `errorCode` (the line used `code`, which the log
+   scrubber redacts: the failure code never reached the log; "analysis requeued" had the same
+   defect); the CLI prints `analysis failed: <code> (<origin>[, <class>])`. A message is never
+   read.
+5. **Regression test on the SDK's own transform.** `packages/llm/src/adapters/wire-schema.test.ts`
+   runs `jsonSchemaOutputFormat` over every stage's output schema (`STAGE_CALLS`), prompt-mode
+   ones included, so switching a role between modes stays safe, and asserts the result has no
+   open object, no type beside a combinator and (for enforced roles) no `$defs` cycle; it fails
+   on the previous `main`. `packages/core/src/analysis/provider-schema.test.ts` covers the fold
+   and that the moved constraints are still enforced by `parse`. The adapter contract tests
+   exercise prompt mode with the fixtures' toy verdict schema, not the graph schema; the
+   graph's own shape is covered by the transform test and the real run. The grammar limits (3) have no
+   offline oracle: the evidence is the probe and a completed real run on a private dogfooding
+   pull request, recorded in `docs/progress.md`.
+
+**Threat model (adds to the table above).**
+
+| #   | Threat                                                                                                                                                                                                                                                                                | Prevention                                                                                                                                                                                                                                                                                              | Test                                                                                                                                                                                                                                                                                                                                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| S1  | **A sent schema the provider transform refuses**, so every analysis fails (this bug), or a future `.meta()` constraint brings it back.                                                                                                                                                | `providerJsonSchema` on every stage schema; the Claude adapter maps a refused schema to a typed `invalid_request` with an origin tag before any request.                                                                                                                                                | `wire-schema.test.ts` (the real SDK transform on every role; a refused schema sends nothing and carries no SDK text).                                                                                                                                                                                                                                                                            |
+| S2  | **A looser sent schema** (a folded constraint; a prompt-mode schema nothing enforces) lets the model produce a shape Rocky then rejects.                                                                                                                                              | The constraint stays visible to the model; the Zod validator is unchanged, so such an answer is `invalid_output` and gets a repair round (ADR 0014), never a stored document. Prompt mode changes nothing after the answer arrives: parse, validate, integrity, leak guard, repair.                     | `provider-schema.test.ts` "still validates what the moved constraints say"; `output.test.ts` (a fenced invalid answer is `invalid_output`); the contract test for prompt mode.                                                                                                                                                                                                                   |
+| S3  | **Validation weakened by accident**: the rewrite reaches the validator, or edits the emitted schema in place; `unfenced` repairs more than a fence, or repairs an enforced output's answer (which the provider guaranteed to be JSON: a fence there is a broken answer, not a style). | `parse` runs the Zod schema, never any JSON Schema; the rewrite copies and only folds; `unfenced` runs only for a prompt-mode output and matches one fence around the whole text or returns the text unchanged; the published schema file is compared byte for byte with its emission.                  | `provider-schema.test.ts` (copy, no-op on triage, `outputSchema` round trip); `output.test.ts` (a fenced answer from an enforced output is `invalid_json`; prose around a fence stays invalid JSON); `packages/schema/src/json-schema.test.ts`.                                                                                                                                                  |
+| S4  | **The rewrite drops a union Zod emitted** (nullable, discriminated union), losing the model's guidance.                                                                                                                                                                               | Only a combinator with a sibling `type` is folded; unions have none.                                                                                                                                                                                                                                    | `provider-schema.test.ts` "leaves a combinator without a sibling type alone"; the SDK transform output is checked for closed, typed objects.                                                                                                                                                                                                                                                     |
+| S5  | **The diagnostic leaks content** (an error message quoting a body, an identifier-shaped value planted on a thrown object's `constructor.name` or served by a proxy, a thrown string).                                                                                                 | `origin` is a regex-checked fixed tag; `errorClass` is read only from a real `Error` (`instanceof`), from its prototype's constructor (a function, never an own property), and must match an identifier shape, else `unknown`; nothing reads `message`; the worker and CLI print only those two fields. | `llm.test.ts` (origin shapes), `pipeline.test.ts` (a plain object or a proxy with an identifier-shaped planted name, an Error with a planted own `constructor`, a proxy whose prototype trap plants one, a trapping proxy, primitives: `unknown` or the real class; the message and the planted names never appear), `analysis.e2e.test.ts` and `cli/analyze.test.ts` (the log line and stderr). |
+| S6  | **Prompt mode moves PR content or the schema into the wrong slot**: the schema in the user turn (uncached, after PR content), or PR content in the system block beside it.                                                                                                            | `buildPrompt` places the schema in the system slot only, through `systemPromptWithSchema`, which takes `RockyInstructions` (ADR 0012 §1); PR content stays in the delimited user blocks; the cache breakpoint stays on the system block alone.                                                          | The contract test for prompt mode on every platform (schema after the instructions in the cached block, absent from the user turn, no `cache_control` on PR content, no `output_config.format`).                                                                                                                                                                                                 |
+
+**Residual risks.**
+
+- A prompt-mode answer is not grammar-constrained: more `invalid_output` answers than for an
+  enforced role are possible, each costing a repair round of the graph call (up to
+  `MAX_REPAIR_ROUNDS`). Metering and the token caps bound it; the unit of evidence is the live
+  eval once it runs.
+- The grammar limits (3) are the provider's and change without notice; a role that compiles today
+  may stop compiling. The failure would be `llm_invalid_request` with no origin tag (the
+  provider's 400), which the CLI and worker now log as such.
+- The real-model evals still cannot catch a provider-side schema rejection until a human sets
+  `ROCKY_EVALS_ANTHROPIC_API_KEY` in the `evals-live` and `evals-nightly` environments and the
+  runner treats a failed subject as a failed run (`packages/evals/src/run/**` is protected by the
+  `evals-baseline-change` label; recorded in `docs/progress.md`).
 
 ## Consequences
 

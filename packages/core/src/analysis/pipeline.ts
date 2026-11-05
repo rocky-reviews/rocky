@@ -153,6 +153,17 @@ export interface AnalysisStats {
   graph: "drawn" | "unavailable" | "none";
 }
 
+/**
+ * Where a failure was raised, for the log (H4-4). Content-free by construction: `origin` is a
+ * fixed tag written in Rocky's source (an adapter's `LlmCallError.origin`, or `pipeline` for a
+ * failure nothing classified) and `errorClass` is the thrown value's class name, checked
+ * against an identifier shape; a message, a body or a value never gets in.
+ */
+export interface AnalysisDiagnostic {
+  readonly origin: string;
+  readonly errorClass?: string;
+}
+
 export type AnalysisOutcome =
   | {
       readonly status: "done";
@@ -165,6 +176,7 @@ export type AnalysisOutcome =
       readonly status: "failed";
       readonly code: AnalysisFailureCode;
       readonly stats: AnalysisStats;
+      readonly diagnostic?: AnalysisDiagnostic;
     };
 
 // ---------------------------------------------------------------------------------------------
@@ -792,6 +804,26 @@ const newStats = (): AnalysisStats => ({
   graph: "none",
 });
 
+const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
+
+/**
+ * The class name of a thrown `Error`, or `unknown`. The name is read from the prototype's
+ * constructor (a function: code, not content), never from an own property, and only on a real
+ * `Error`: a plain object or a proxy with a planted, identifier-shaped `constructor.name` is
+ * `unknown`, as are primitives and anything whose lookup throws (H4-4, review round 1 S1).
+ */
+export const errorClassOf = (error: unknown): string => {
+  if (!(error instanceof Error)) return "unknown";
+  try {
+    const constructor: unknown = (Object.getPrototypeOf(error) as object | null)?.constructor;
+    if (typeof constructor !== "function") return "unknown";
+    const name: unknown = constructor.name;
+    return typeof name === "string" && CLASS_NAME.test(name) ? name : "unknown";
+  } catch {
+    return "unknown";
+  }
+};
+
 export const analyzePullRequest = async (
   request: AnalysisRequest,
   deps: AnalysisDeps,
@@ -803,9 +835,20 @@ export const analyzePullRequest = async (
     if (error instanceof Failed) return { status: "failed", code: error.code, stats };
     if (isLlmCallError(error)) {
       if (error.retryable || error.kind === "cancelled") throw error;
-      return { status: "failed", code: `llm_${error.kind as LlmFatalErrorKind}`, stats };
+      return {
+        status: "failed",
+        code: `llm_${error.kind as LlmFatalErrorKind}`,
+        stats,
+        ...(error.origin === undefined ? {} : { diagnostic: { origin: error.origin } }),
+      };
     }
-    // Anything else is a bug or a broken port; it carries no detail out (it could quote content).
-    return { status: "failed", code: "internal_error", stats };
+    // Anything else is a bug or a broken port; only its class name goes out (its message could
+    // quote content).
+    return {
+      status: "failed",
+      code: "internal_error",
+      stats,
+      diagnostic: { origin: "pipeline", errorClass: errorClassOf(error) },
+    };
   }
 };

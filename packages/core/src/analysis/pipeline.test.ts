@@ -402,12 +402,87 @@ describe("A4 failures are fixed codes, and LLM errors are routed", () => {
     expect(llm.calls.filter((c) => c.part("file_path") === "src/util/format.ts")).toHaveLength(0);
   });
 
-  it("a port that throws something else is internal_error, with nothing from the error", async () => {
+  it("a port that throws something else is internal_error, with only the error's class name", async () => {
     const { outcome } = await analyze(() => {
       throw new Error("provider body with secret diff text");
     });
-    expect(outcome).toEqual({ status: "failed", code: "internal_error", stats: expect.anything() });
+    expect(outcome).toEqual({
+      status: "failed",
+      code: "internal_error",
+      stats: expect.anything(),
+      diagnostic: { origin: "pipeline", errorClass: "Error" },
+    });
     expect(JSON.stringify(outcome)).not.toContain("secret");
+  });
+
+  it("the diagnostic names a class, never a value: hostile names, primitives and traps are 'unknown' (H4-4)", async () => {
+    class SchemaTransformFailure extends Error {}
+    const cases: [unknown, string][] = [
+      [new SchemaTransformFailure("x"), "SchemaTransformFailure"],
+      [new RangeError("x"), "RangeError"],
+      ["+secret diff line", "unknown"],
+      [42, "unknown"],
+      [null, "unknown"],
+      [{ constructor: { name: "+ if (user.isAdmin) skipAuth()" } }, "unknown"],
+      [{ constructor: { name: "A".repeat(65) } }, "unknown"],
+      // An identifier-shaped value planted on a plain object, an Error's own property, or a
+      // proxy's trap is not a class name (review round 1, S1).
+      [{ constructor: { name: "ghp_PlantedTokenLookingLikeAnIdentifier" } }, "unknown"],
+      [Object.assign(new Error("x"), { constructor: { name: "ghp_OwnProperty" } }), "Error"],
+      [
+        new Proxy(
+          {},
+          {
+            get: (_target, key) => (key === "constructor" ? { name: "ghp_ProxyName" } : undefined),
+          },
+        ),
+        "unknown",
+      ],
+      // A proxy over a real Error whose get trap throws: the name comes from the real prototype,
+      // never through the trap, so it is the true class and nothing from the trap.
+      [
+        new Proxy(new Error("x"), {
+          get: () => {
+            throw new Error("trap with secret");
+          },
+        }),
+        "Error",
+      ],
+      [
+        new Proxy(new Error("x"), {
+          getPrototypeOf: () => ({ constructor: { name: "ghp_ProtoName" } }),
+        }),
+        "unknown",
+      ],
+    ];
+    for (const [thrown, errorClass] of cases) {
+      const { outcome } = await analyze(() => {
+        throw thrown;
+      });
+      expect(outcome, String(errorClass)).toMatchObject({
+        code: "internal_error",
+        diagnostic: { origin: "pipeline", errorClass },
+      });
+      expect(JSON.stringify(outcome)).not.toMatch(/secret|skipAuth|AAAA|ghp_/);
+    }
+  });
+
+  it("a fatal LLM error keeps the adapter's origin tag as the diagnostic (H4-4)", async () => {
+    const { outcome } = await analyze(() => ({
+      error: new LlmCallError("invalid_request", { origin: "sdk_schema_transform" }),
+    }));
+    expect(outcome).toEqual({
+      status: "failed",
+      code: "llm_invalid_request",
+      stats: expect.anything(),
+      diagnostic: { origin: "sdk_schema_transform" },
+    });
+    const untagged = await analyze(() => ({ error: new LlmCallError("auth") }));
+    expect(untagged.outcome).toEqual({
+      status: "failed",
+      code: "llm_auth",
+      stats: expect.anything(),
+    });
   });
 });
 

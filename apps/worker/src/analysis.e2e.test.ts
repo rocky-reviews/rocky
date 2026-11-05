@@ -434,6 +434,47 @@ describe("runAnalysis (P4-3)", () => {
     });
   });
 
+  it("a failure's diagnostic reaches the log as a fixed tag and a class name, never a message (H4-4)", async () => {
+    const tagged = await newRevision(B, "f".repeat(40));
+    const forge = recordingForge({ ["f".repeat(40)]: diffOf(pr847Diff()) });
+    const run = deps(forge.forge, () => ({
+      error: new LlmCallError("invalid_request", { origin: "sdk_schema_transform" }),
+    }));
+    expect(await runAnalysis(run.runner, await claimed(B, tagged))).toEqual({
+      outcome: "failed",
+      code: "llm_invalid_request",
+    });
+    const failed = run.lines.find((line) => line.includes('"analysis failed"'));
+    expect(failed).toBeDefined();
+    expect(JSON.parse(failed!)).toMatchObject({
+      errorCode: "llm_invalid_request",
+      errorOrigin: "sdk_schema_transform",
+    });
+    expect(failed).not.toContain("errorClass");
+    expect(await stored(tagged)).toMatchObject({
+      status: "failed",
+      error_code: "llm_invalid_request",
+    });
+
+    const untyped = await newRevision(B, "a1".repeat(20));
+    const secret = "provider body quoting +secret diff line";
+    const crash = deps(recordingForge({ ["a1".repeat(20)]: diffOf(pr847Diff()) }).forge, () => {
+      throw new RangeError(secret);
+    });
+    expect(await runAnalysis(crash.runner, await claimed(B, untyped))).toEqual({
+      outcome: "failed",
+      code: "internal_error",
+    });
+    const crashed = crash.lines.find((line) => line.includes('"analysis failed"'));
+    expect(JSON.parse(crashed!)).toMatchObject({
+      errorCode: "internal_error",
+      errorOrigin: "pipeline",
+      errorClass: "RangeError",
+    });
+    expect(crashed).not.toContain("[redacted]");
+    expect(crash.lines.join("\n")).not.toContain("secret diff");
+  });
+
   it.each([
     [
       "a truncated diff",

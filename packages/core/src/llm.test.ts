@@ -84,6 +84,7 @@ describe("LlmCallError (review round 1, S4)", () => {
     expect(Object.keys(error).sort()).toEqual([
       "kind",
       "name",
+      "origin",
       "partialUsage",
       "retryAfterMs",
       "retryable",
@@ -91,6 +92,24 @@ describe("LlmCallError (review round 1, S4)", () => {
     expect(new LlmCallError("auth").retryAfterMs).toBeUndefined();
     expect(new LlmCallError("auth").partialUsage).toBeUndefined();
     expect(() => new LlmCallError("timeout", { retryAfterMs: -1 })).toThrow(RangeError);
+  });
+
+  it("carries an origin tag only in a fixed, content-free shape (H4-4)", () => {
+    const tagged = new LlmCallError("invalid_request", { origin: "sdk_schema_transform" });
+    expect(tagged.origin).toBe("sdk_schema_transform");
+    expect(tagged.message).toBe(new LlmCallError("invalid_request").message);
+    expect(new LlmCallError("invalid_request").origin).toBeUndefined();
+    for (const bad of [
+      "",
+      "Schema",
+      "sdk schema",
+      "sdk-schema",
+      "a".repeat(33),
+      "prompt is too long: +secret",
+      "0rigin",
+    ]) {
+      expect(() => new LlmCallError("invalid_request", { origin: bad }), bad).toThrow(RangeError);
+    }
   });
 
   it("carries partial usage as a frozen copy of the five counts only (P4-5)", () => {

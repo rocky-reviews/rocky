@@ -31,7 +31,7 @@ import {
   type AdapterTransport,
   type ByteBudget,
 } from "./transport.js";
-import { buildPrompt, checkOutputCap, type Prompt } from "./untrusted.js";
+import { buildPrompt, checkOutputCap, promptSchema, type Prompt } from "./untrusted.js";
 
 /**
  * The Claude Messages adapter shared by the Anthropic API, Bedrock, Vertex and Foundry (P4-2,
@@ -83,14 +83,41 @@ export const FALLBACK_MODELS: ReadonlySet<string> = new Set([
 
 const wireSchemas = new WeakMap<object, Record<string, unknown>>();
 
-/** The schema the API accepts: the SDK strips constraints it rejects; the validator keeps them. */
+/**
+ * The schema the API accepts: the SDK strips constraints it rejects; the validator keeps them.
+ * A schema the SDK's transform refuses outright (a subschema with neither a type nor a
+ * combinator) is this adapter's bad input, not the provider's: `invalid_request`, tagged so the
+ * log says where, raised before anything is sent and with none of the SDK's text (H4-4; the
+ * role schemas are shaped for the transform by core's `providerJsonSchema`).
+ */
 const wireSchema = (schema: Readonly<Record<string, unknown>>): Record<string, unknown> => {
   const cached = wireSchemas.get(schema);
   if (cached !== undefined) return cached;
   if (schema["type"] !== "object") throw new LlmCallError("invalid_request");
-  const transformed = jsonSchemaOutputFormat(schema as never).schema as Record<string, unknown>;
+  let transformed: Record<string, unknown>;
+  try {
+    transformed = jsonSchemaOutputFormat(schema as never).schema as Record<string, unknown>;
+  } catch {
+    throw new LlmCallError("invalid_request", { origin: "sdk_schema_transform" });
+  }
   wireSchemas.set(schema, transformed);
   return transformed;
+};
+
+/**
+ * `output_config` for the call: the enforced schema unless the output is prompt-mode (its schema
+ * is in the system slot already, H4-4), plus the effort; left out when it would be empty.
+ */
+const outputConfigFor = (
+  call: ProviderCompletionCall<unknown>,
+): Pick<BetaMessageStreamParams, "output_config"> => {
+  const config = {
+    ...(call.output.mode === "prompt"
+      ? {}
+      : { format: { type: "json_schema" as const, schema: wireSchema(call.output.jsonSchema) } }),
+    ...(call.effort === undefined ? {} : { effort: call.effort }),
+  };
+  return Object.keys(config).length === 0 ? {} : { output_config: config };
 };
 
 const requestFor = (
@@ -100,7 +127,7 @@ const requestFor = (
 ): BetaMessageStreamParams => ({
   model: call.platformModel ?? platform.modelId(call.model),
   max_tokens: call.maxOutputTokens,
-  // The only cache breakpoint: Rocky's instructions, never PR content (T5).
+  // The only cache breakpoint: Rocky's instructions (and a prompt-mode schema), never PR content (T5).
   system: [{ type: "text", text: prompt.system, cache_control: { type: "ephemeral" } }],
   messages: [
     {
@@ -108,10 +135,7 @@ const requestFor = (
       content: [...prompt.parts, prompt.final].map((text) => ({ type: "text" as const, text })),
     },
   ],
-  output_config: {
-    format: { type: "json_schema", schema: wireSchema(call.output.jsonSchema) },
-    ...(call.effort === undefined ? {} : { effort: call.effort }),
-  },
+  ...outputConfigFor(call),
   ...(NO_ADAPTIVE_THINKING.has(call.model) ? {} : { thinking: { type: "adaptive" as const } }),
   ...(platform.serverFallbacks(call.model)
     ? { betas: [FALLBACK_BETA], fallbacks: "default" as const }
@@ -355,7 +379,8 @@ export const claudeProvider = (
     ): Promise<ProviderCompletionResult<T>> => {
       assertAmbientAtCall(platform.kind);
       checkOutputCap(call.maxOutputTokens);
-      const prompt = buildPrompt(call, nonce);
+      const schema = promptSchema(call.output);
+      const prompt = buildPrompt(call, nonce, schema === undefined ? {} : { schema });
       const params = requestFor(call, prompt, platform);
       if (cancelledBy(call.signal)) throw new LlmCallError("cancelled");
       // The SDK's `timeout` stops once headers arrive, and covers neither credential lookups nor

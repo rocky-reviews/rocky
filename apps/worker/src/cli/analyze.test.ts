@@ -1,4 +1,10 @@
-import type { Forge, LlmRoles, LlmUsage, RepositorySession } from "@rocky-reviews/core";
+import {
+  LlmCallError,
+  type Forge,
+  type LlmRoles,
+  type LlmUsage,
+  type RepositorySession,
+} from "@rocky-reviews/core";
 import { scriptedRoles, type Script } from "@rocky-reviews/core/testing";
 import { PR847, pr847Diff, pr847Script } from "@rocky-reviews/evals";
 import {
@@ -284,6 +290,31 @@ describe("pnpm rocky analyze (P4-8)", () => {
     expect(code).toBe(EXIT.failed);
     expect(stdout).toBe("");
     expect(stderr).toMatch(/analysis failed: diff_/);
+  });
+
+  it("names a failure's origin tag and error class, never the error's text (H4-4)", async () => {
+    const tagged = await run(
+      {},
+      {
+        script: () => ({
+          error: new LlmCallError("invalid_request", { origin: "sdk_schema_transform" }),
+        }),
+      },
+    );
+    expect(tagged.code).toBe(EXIT.failed);
+    expect(tagged.stderr).toMatch(/analysis failed: llm_invalid_request \(sdk_schema_transform\)/);
+
+    const crashed = await run(
+      {},
+      {
+        script: () => {
+          throw new TypeError("provider body quoting +secret diff line");
+        },
+      },
+    );
+    expect(crashed.code).toBe(EXIT.failed);
+    expect(crashed.stderr).toMatch(/analysis failed: internal_error \(pipeline, TypeError\)/);
+    expect(crashed.stderr).not.toContain("secret");
   });
 
   it("says when the app cannot see the repository or the PR", async () => {

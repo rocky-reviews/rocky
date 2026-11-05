@@ -36,12 +36,14 @@ export {
   RAISED_FOR_TRIAGE,
   RAISED_FOR_UNREVIEWED,
   type AnalysisDeps,
+  type AnalysisDiagnostic,
   type AnalysisFailureCode,
   type AnalysisOutcome,
   type AnalysisRequest,
   type AnalysisStage,
   type AnalysisStats,
 } from "./pipeline.js";
+export { providerJsonSchema } from "./provider-schema.js";
 export { STAGE_CALLS, type StageTemplate } from "./stages.js";
 export { belowVerdictFloor } from "./verdict.js";
 export {
