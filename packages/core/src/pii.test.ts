@@ -429,6 +429,42 @@ describe("known people", () => {
     );
   });
 
+  it("indexes every display-name part, trimmed of punctuation, with hyphen sub-parts (fix round 4)", () => {
+    const people = [
+      "Smith, Alice",
+      "Bea Jones, PhD",
+      'Carl "Cal" Rivers',
+      "Dana 'Dee' Brooks",
+      "Erin Smith-Jones",
+      "A B C D E F G H Zed",
+    ];
+    const cases: [string, string][] = [
+      ["Smith fixed it", "[person] fixed it"],
+      ["smith, alice fixed it", "[person] fixed it"],
+      ["Jones fixed it; PhD stays", "[person] fixed it; PhD stays"],
+      ["Cal fixed it", "[person] fixed it"],
+      ["Dee fixed it", "[person] fixed it"],
+      ["Smith-Jones fixed it", "[person] fixed it"],
+      ["Jones and Smith fixed it", "[person] and [person] fixed it"],
+      ["Zed fixed it", "[person] fixed it"],
+      ["Rivers fixed it", "[person] fixed it"],
+      // Login words stay whole: no `the` from `bob-the-builder`.
+      ["the builder fixed it", "the builder fixed it"],
+    ];
+    for (const [input, expected] of cases) {
+      expect(scrub(input, [...people, "bob-the-builder"]), input).toBe(expected);
+    }
+  });
+
+  it("stays fast when 50 000 names share a first word and the text repeats it (fix round 4)", () => {
+    const names = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `Shared Last${i}`);
+    const text = "Shared ".repeat(280);
+    const started = performance.now();
+    // `Shared` alone is a part of every name, so every occurrence is a person.
+    expect(scrub(text, names).trim()).toBe(Array.from({ length: 280 }, () => "[person]").join(" "));
+    expect(performance.now() - started).toBeLessThan(1500);
+  });
+
   it("matches names with punctuation literally", () => {
     expect(scrub("a.b+c (d) said hi", ["a.b+c (d)"])).toBe("[person] said hi");
     expect(scrub("aXb+c said hi", ["a.b+c (d)"])).toBe("aXb+c said hi");

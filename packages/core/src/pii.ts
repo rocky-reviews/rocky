@@ -432,6 +432,7 @@ const COMMON_WORDS: ReadonlySet<string> = new Set(
   mark brown white green black grey gray rose may will bill grant hope faith joy summer april june
   august jack chase pat sunny rob art max rich frank guy jay ray roy ivy dawn eve lane cliff clay
   reed rusty sandy wade warren dean earl grace honor justice mercy victor carol hunter miles
+  phd msc bsc esq jnr snr
   `
     .split(/\s+/u)
     .filter((w) => w.length > 0),
@@ -453,8 +454,8 @@ export const matchesAsBareWord = (name: string): boolean => {
   return name.length > 2 && !COMMON_WORDS.has(lower) && !STOP_WORDS.has(lower);
 };
 
-/** Parts indexed per display name (further parts are matched within the whole name only). */
-const MAX_INDEXED_TOKENS_PER_NAME = 8;
+/** Punctuation around a display-name part (`Smith,`, `"Ally"`, `(d)`), trimmed before indexing. */
+const PART_EDGE = /^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu;
 const WORD = /[\p{L}\p{N}_]+/gu;
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
 
@@ -471,8 +472,14 @@ interface KnownPerson {
   readonly weak: boolean;
 }
 
-/** Known people by their first word; longer names first, so the longest match wins. */
+/**
+ * Known people by their first two words (one for a single-word name), longer names first, so
+ * the longest match wins. Two words, so a text full of a first word 50 000 names share does
+ * not scan 50 000 candidates per occurrence.
+ */
 type KnownPeopleIndex = ReadonlyMap<string, readonly KnownPerson[]>;
+const indexKey = (words: readonly string[]): string =>
+  words.length === 1 ? (words[0] ?? "") : `${words[0]} ${words[1]}`;
 
 const collapse = (gap: string): string => gap.replace(/[ \t]+/gu, " ");
 
@@ -510,9 +517,9 @@ const indexPeople = (people: readonly string[]): KnownPeopleIndex => {
     const key = keyOf(person);
     if (seen.has(key)) return false;
     seen.add(key);
-    const first = person.words[0] ?? "";
-    const list = index.get(first);
-    if (list === undefined) index.set(first, [person]);
+    const slot = indexKey(person.words);
+    const list = index.get(slot);
+    if (list === undefined) index.set(slot, [person]);
     else list.push(person);
     return true;
   };
@@ -529,13 +536,20 @@ const indexPeople = (people: readonly string[]): KnownPeopleIndex => {
         throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE} distinct people`);
       }
     }
-    // The space-separated parts of a display name on their own (`Smith` of `Alice Smith`); a
-    // login's hyphenated words (`bob-the-builder`) are not parts.
+    // Every space-separated part of a display name on its own, trimmed of punctuation (`Smith`
+    // of `Smith, Alice`, `Ally` of `Alice "Ally" Smith`), and the hyphen-separated sub-parts
+    // (`Smith` and `Jones` of `Alice Smith-Jones`). A login's hyphenated words are not parts:
+    // `bob-the-builder` must not make `the` a person. The weak rules apply to each.
     const parts = name.split(" ");
     if (parts.length === 1) continue;
-    for (const part of parts.slice(0, MAX_INDEXED_TOKENS_PER_NAME)) {
-      const person = personOf(part);
-      if (person !== null) add(person);
+    for (const raw of parts) {
+      const part = raw.replace(PART_EDGE, "");
+      if (part.length === 0) continue;
+      const pieces = part.includes("-") ? [part, ...part.split("-")] : [part];
+      for (const piece of pieces) {
+        const person = personOf(piece.replace(PART_EDGE, ""));
+        if (person !== null) add(person);
+      }
     }
   }
   for (const list of index.values()) list.sort((a, b) => b.words.length - a.words.length);
@@ -568,8 +582,11 @@ const knownPeopleSpans = (folded: string, index: KnownPeopleIndex, priority: num
   for (let i = 0; i < words.length; i++) {
     const first = words[i];
     if (first === undefined) continue;
-    const candidates = index.get(first.text);
-    if (candidates === undefined) continue;
+    const second = words[i + 1];
+    const candidates = [
+      ...(second === undefined ? [] : (index.get(`${first.text} ${second.text}`) ?? [])),
+      ...(index.get(first.text) ?? []),
+    ];
     for (const person of candidates) {
       // Every word, with the same text between (whitespace collapsed).
       let ok = true;
