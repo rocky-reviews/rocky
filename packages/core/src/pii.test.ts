@@ -209,9 +209,14 @@ describe("known people", () => {
       expected: "[person] prefers tabs",
     },
     {
-      name: "a surname token that is also a word is kept in lower case",
-      input: "a smith hammers",
-      expected: "a smith hammers",
+      name: "display-name parts match in any case (fix round 3)",
+      input: "smith hammers; SMITH too",
+      expected: "[person] hammers; [person] too",
+    },
+    {
+      name: "a dictionary-word part stays outside person positions",
+      input: "a brown hammer",
+      expected: "a brown hammer",
     },
     { name: "unicode name", input: "Zoë Müller wrote this", expected: "[person] wrote this" },
     {
@@ -286,6 +291,16 @@ describe("known people", () => {
           expected: "cc [person]",
         },
         { name: "four-letter surname", input: "Moss said so", expected: "[person] said so" },
+        {
+          name: "parts in any case (fix round 3)",
+          input: "eric fixed it; MOSS fixed it",
+          expected: "[person] fixed it; [person] fixed it",
+        },
+        {
+          name: "a weak part inside inline code in a person position",
+          input: "`cc Li`",
+          expected: "`cc [person]`",
+        },
       ],
       ["john", "eric", "anna", "bob", "Eric Li", "Juan Pérez", "Kate Moss"],
     );
@@ -296,10 +311,34 @@ describe("known people", () => {
     expect(() => scrub("x", many)).toThrow(RangeError);
     // Duplicates after folding and case-folding count once.
     const dupes = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) => `person-${i}`);
-    const started = performance.now();
     expect(scrub("PERSON-4999 wrote it", [...dupes, "Person-0", "\uFF50erson-1", "person-2"])).toBe(
       "[person] wrote it",
     );
+  });
+
+  it("stays fast at the cap with realistic multi-word display names (fix round 3)", () => {
+    // 50 000 five-word names: 50 000 whole names plus their parts in the index, no pattern
+    // compiled. Bound per call (index + scrub of a 300-character text).
+    const names = Array.from(
+      { length: MAX_KNOWN_PEOPLE },
+      (_, i) => `First${i} Middle${i % 977} van der Last${i}`,
+    );
+    const text = `${"Review notes: keep the shared validator; ".repeat(6)} First7 Middle7 van der Last7 agreed`;
+    const runs: number[] = [];
+    let out = "";
+    for (let run = 0; run < 3; run++) {
+      const started = performance.now();
+      out = scrub(text, names);
+      runs.push(performance.now() - started);
+    }
+    expect(out.endsWith("[person] agreed")).toBe(true);
+    expect(Math.min(...runs)).toBeLessThan(1000);
+    // Twelve-word names at the cap must not blow up either (the index holds eight parts each).
+    const long = Array.from({ length: MAX_KNOWN_PEOPLE }, (_, i) =>
+      Array.from({ length: 12 }, (_, w) => `W${w}n${i}`).join(" "),
+    );
+    const started = performance.now();
+    expect(scrub("plain text with W3n5 inside", long)).toBe("plain text with [person] inside");
     expect(performance.now() - started).toBeLessThan(2000);
   });
 
@@ -375,14 +414,25 @@ describe("known people", () => {
           input: "cc Mark; Brown said so",
           expected: "cc [person]; [person] said so",
         },
+        {
+          name: "weak names in person positions inside inline code (fix round 3)",
+          input: "run `thanks go` and `cc api`",
+          expected: "run `thanks [person]` and `cc [person]`",
+        },
+        {
+          name: "lower-case parts of a display name",
+          input: "mark brown merged; brown said so",
+          expected: "[person] merged; [person] said so",
+        },
       ],
       logins,
     );
   });
 
-  it("escapes regex metacharacters in names", () => {
+  it("matches names with punctuation literally", () => {
     expect(scrub("a.b+c (d) said hi", ["a.b+c (d)"])).toBe("[person] said hi");
     expect(scrub("aXb+c said hi", ["a.b+c (d)"])).toBe("aXb+c said hi");
+    expect(scrub("J. R. R. Tolkien wrote it", ["J. R. R. Tolkien"])).toBe("[person] wrote it");
   });
 });
 
@@ -509,6 +559,37 @@ describe("names by context", () => {
       name: "a hyphenated name after thanks",
       input: "thanks Jean-Luc",
       expected: "thanks [person]",
+    },
+    {
+      name: "apostrophe name after thanks (fix round 3)",
+      input: "thanks O'Brien",
+      expected: "thanks [person]",
+    },
+    {
+      name: "apostrophe name after an honorific",
+      input: "Mr. O'Neil agreed",
+      expected: "Mr. [person] agreed",
+    },
+    { name: "D'Angelo after thanks", input: "thanks D'Angelo", expected: "thanks [person]" },
+    {
+      name: "apostrophe name before a speech verb",
+      input: "O'Brien said no",
+      expected: "[person] said no",
+    },
+    {
+      name: "De'Andre before a speech verb",
+      input: "De'Andre said yes",
+      expected: "[person] said yes",
+    },
+    {
+      name: "Mc prefix before a speech verb",
+      input: "McDonald said so",
+      expected: "[person] said so",
+    },
+    {
+      name: "De prefix before a speech verb",
+      input: "DeShawn agreed",
+      expected: "[person] agreed",
     },
     {
       name: "a plural noun after a name is not a speech verb (documented)",

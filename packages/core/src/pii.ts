@@ -46,10 +46,10 @@ export interface ScrubResult {
 
 export interface ScrubOptions {
   /**
-   * Logins and display names to remove: wherever they appear as a word when
-   * `matchesAsBareWord`, else only in person positions. Entries shorter than two characters or
-   * longer than `MAX_KNOWN_PERSON_LENGTH` are ignored; more than `MAX_KNOWN_PEOPLE` distinct
-   * names is a `RangeError`.
+   * Logins and display names to remove, case-insensitively: wherever they appear as a word
+   * when `matchesAsBareWord`, else only in person positions. Entries shorter than two
+   * characters or longer than `MAX_KNOWN_PERSON_LENGTH` are ignored; more than
+   * `MAX_KNOWN_PEOPLE` distinct names is a `RangeError`.
    */
   readonly people?: readonly string[];
 }
@@ -58,8 +58,9 @@ export interface ScrubOptions {
 export const MAX_SCRUB_INPUT_LENGTH = 16_384;
 /**
  * Distinct people (after folding and case-folding) one call accepts; more is a `RangeError`,
- * never a silently shortened list. The alternation is literal, so matching is linear: 50 000
- * names scrub a 300-character text in well under a second (the test measures it).
+ * never a silently shortened list. People are matched by word lookup, not by a compiled
+ * pattern, so the cost is linear in the list: 50 000 five-word display names index and scrub a
+ * 300-character text in well under a second (the test measures it).
  */
 export const MAX_KNOWN_PEOPLE = 50_000;
 export const MAX_KNOWN_PERSON_LENGTH = 100;
@@ -151,8 +152,6 @@ const foldLookalikes = (text: string): string => {
 
 // --- Patterns -------------------------------------------------------------------------------
 
-const escapeRegex = (text: string): string => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-
 /**
  * A literal alternation spelled case-insensitively by hand. The `i` flag is not used with the
  * name patterns: under `u` it folds `\p{Lu}` and `\p{Ll}` too, so a capitalised-word rule
@@ -194,12 +193,15 @@ const WORD_END = `(?![${LETTER_OR_DIGIT}_'’-])`;
  * A capitalised word after a cue or an honorific: an upper-case letter, a lower-case letter,
  * then any letters (`DeShawn`, `McKenzie`, `Jean-Luc`); the stop list keeps products out.
  */
-const CAPITALISED = "\\p{Lu}\\p{Ll}[\\p{L}'’-]{0,40}";
+const CAPITALISED = "\\p{Lu}(?:['’]\\p{Lu})?\\p{Ll}[\\p{L}'’-]{0,40}";
 /**
- * A capitalised word before a speech verb: lower-case letters after the capital, with
- * hyphenated parts (`Jean-Luc`), so a CamelCase identifier (`HttpClient said`) is never a name.
+ * A capitalised word before a speech verb: lower-case letters after the capital, with the
+ * usual name prefixes (`McKenzie`, `DeShawn`, `FitzGerald`), apostrophe parts (`O'Brien`,
+ * `De'Andre`) and hyphenated parts (`Jean-Luc`), so a CamelCase identifier (`HttpClient said`)
+ * is never a name.
  */
-const CAPITALISED_PLAIN = "\\p{Lu}\\p{Ll}[\\p{Ll}'’]{0,40}(?:-\\p{Lu}?\\p{Ll}{1,40}){0,3}";
+const NAME_PREFIX = "(?:(?:Mc|Mac|Fitz|De|Di|Da|Du|La|Le|Van|Von)(?=\\p{Lu}))?";
+const CAPITALISED_PLAIN = `${NAME_PREFIX}\\p{Lu}(?:\\p{Ll}{1,40}|['’]\\p{Lu}\\p{Ll}{1,40})(?:['’]\\p{Lu}?\\p{Ll}{1,40}){0,2}(?:-\\p{Lu}?\\p{Ll}{1,40}){0,3}`;
 /** One to three capitalised words, ending at a word boundary. */
 const NAME = `${CAPITALISED}(?:[ \\t]+${CAPITALISED}){0,2}${WORD_END}`;
 const NAME_PLAIN = `${CAPITALISED_PLAIN}(?:[ \\t]+${CAPITALISED_PLAIN}){0,2}${WORD_END}`;
@@ -320,7 +322,7 @@ const PATTERNS: readonly Pattern[] = [
       return !(OWN_LINE_BEFORE.test(before) && OWN_LINE_AFTER.test(after));
     },
   },
-  // Known people are inserted here (index KNOWN_PEOPLE_AT) per call.
+  // Known people take priority slot KNOWN_PEOPLE_AT here (`knownPeopleSpans`, no pattern).
   {
     kind: "person",
     regex: new RegExp(`\\b(?:${anyCase(HONORIFICS)})\\.?[ \\t]+(${NAME})`, "gud"),
@@ -447,92 +449,167 @@ const ASCII_WORD = /^[a-z]+$/i;
 export const matchesAsBareWord = (name: string): boolean => {
   if (/[\s]/u.test(name)) return true;
   if (!ASCII_WORD.test(name)) return true;
-  return name.length > 2 && !COMMON_WORDS.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  return name.length > 2 && !COMMON_WORDS.has(lower) && !STOP_WORDS.has(lower);
 };
 
-const alternation = (names: Iterable<string>): string =>
-  [...names]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegex)
-    .join("|");
+/** Parts indexed per display name (further parts are matched within the whole name only). */
+const MAX_INDEXED_TOKENS_PER_NAME = 8;
+const WORD = /[\p{L}\p{N}_]+/gu;
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
 
 /**
- * Patterns for the caller's people. Logins and whole display names match case-insensitively;
- * the tokens of a display name match as written (a capitalised surname is caught, the same word
- * in lower case is not). Possessives are part of the match. A name that `matchesAsBareWord`
- * refuses (`go`, `Mark`) is matched only after a cue or before a speech verb (trailers and
- * `@handles` are covered by their own patterns). Throws `RangeError` past `MAX_KNOWN_PEOPLE`
- * distinct names: the caller refuses the entry instead of scrubbing with a shortened list.
+ * A known person as the token matcher sees it: the words of the name in lower case, the text
+ * between them (whitespace collapsed; `-` in `bob-the-builder`), and any non-word text around
+ * (`(d)` in `a.b+c (d)`).
  */
-const knownPeoplePatterns = (people: readonly string[]): Pattern[] => {
-  const insensitive = new Set<string>();
-  const sensitive = new Set<string>();
-  const weakInsensitive = new Set<string>();
-  const weakSensitive = new Set<string>();
+interface KnownPerson {
+  readonly words: readonly string[];
+  readonly gaps: readonly string[];
+  readonly lead: string;
+  readonly trail: string;
+  readonly weak: boolean;
+}
+
+/** Known people by their first word; longer names first, so the longest match wins. */
+type KnownPeopleIndex = ReadonlyMap<string, readonly KnownPerson[]>;
+
+const collapse = (gap: string): string => gap.replace(/[ \t]+/gu, " ");
+
+const personOf = (name: string): KnownPerson | null => {
+  const words: string[] = [];
+  const gaps: string[] = [];
+  let lead = "";
+  let last = 0;
+  for (const match of name.matchAll(WORD)) {
+    if (words.length === 0) lead = name.slice(0, match.index);
+    else gaps.push(collapse(name.slice(last, match.index)));
+    words.push(match[0].toLowerCase());
+    last = match.index + match[0].length;
+  }
+  if (words.length === 0) return null;
+  // Weakness is judged on the words (`(d)` is the two-letter-or-less word `d`; `bob-the-builder`
+  // is three words, so a whole name even though it is one login).
+  return { words, gaps, lead, trail: name.slice(last), weak: !matchesAsBareWord(words.join(" ")) };
+};
+
+const keyOf = (person: KnownPerson): string =>
+  `${person.lead}|${person.words.join(" ")}|${person.gaps.join("|")}|${person.trail}`;
+
+/**
+ * Indexes the caller's people: each login and whole display name, case-insensitively, and each
+ * word of a display name on its own (weak when it is a dictionary word or at most two letters).
+ * Linear in the list: no pattern is compiled, so a long list cannot stall or exhaust memory.
+ * Throws `RangeError` past `MAX_KNOWN_PEOPLE` distinct folded names: the caller refuses the
+ * entry instead of scrubbing with a shortened list.
+ */
+const indexPeople = (people: readonly string[]): KnownPeopleIndex => {
+  const index = new Map<string, KnownPerson[]>();
+  const seen = new Set<string>();
+  const add = (person: KnownPerson): boolean => {
+    const key = keyOf(person);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    const first = person.words[0] ?? "";
+    const list = index.get(first);
+    if (list === undefined) index.set(first, [person]);
+    else list.push(person);
+    return true;
+  };
+  let distinct = 0;
   for (const raw of people) {
     if (typeof raw !== "string") continue;
-    const name = foldPerson(raw).replace(/\s+/g, " ");
+    const name = foldPerson(raw).replace(/\s+/gu, " ");
     if (name.length < 2 || name.length > MAX_KNOWN_PERSON_LENGTH) continue;
-    (matchesAsBareWord(name) ? insensitive : weakInsensitive).add(name.toLowerCase());
-    const tokens = name.split(" ");
-    if (tokens.length === 1) continue;
-    for (const token of tokens) {
-      (matchesAsBareWord(token) ? sensitive : weakSensitive).add(token);
+    const whole = personOf(name);
+    if (whole === null) continue;
+    if (add(whole)) {
+      distinct += 1;
+      if (distinct > MAX_KNOWN_PEOPLE) {
+        throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE} distinct people`);
+      }
+    }
+    // The space-separated parts of a display name on their own (`Smith` of `Alice Smith`); a
+    // login's hyphenated words (`bob-the-builder`) are not parts.
+    const parts = name.split(" ");
+    if (parts.length === 1) continue;
+    for (const part of parts.slice(0, MAX_INDEXED_TOKENS_PER_NAME)) {
+      const person = personOf(part);
+      if (person !== null) add(person);
     }
   }
-  // Distinct folded people (tokens come from them and are not counted twice).
-  if (insensitive.size + weakInsensitive.size > MAX_KNOWN_PEOPLE) {
-    throw new RangeError(`scrub: more than ${MAX_KNOWN_PEOPLE} distinct people`);
+  for (const list of index.values()) list.sort((a, b) => b.words.length - a.words.length);
+  return index;
+};
+
+const POSSESSIVE = /^['’]s/u;
+const CUE_BEFORE = new RegExp(
+  `(?:^|[^${LETTER_OR_DIGIT}_])(?:${anyCase(CUES)})(?:[ \\t]+[tT][oO])?[ \\t]+$`,
+  "u",
+);
+const VERB_AFTER = new RegExp(`^[ \\t]+(?:${SPEECH_VERBS})${NOT_AFTER_WORD}`, "u");
+
+/**
+ * Spans of the known people in `folded`: the text is split into words once and each word is
+ * looked up; a multi-word name must match word by word with the same text in between, and a
+ * match must start and end at a word boundary (`aliceValidator` and `malice` are not Alice).
+ * Possessives are part of the match. A weak name is kept only in a person position: after `@`
+ * (the span then covers the handle), after a cue, or before a speech verb (trailers are
+ * replaced whole by their own pattern). Inline code does not protect a listed person.
+ */
+const knownPeopleSpans = (folded: string, index: KnownPeopleIndex, priority: number): Span[] => {
+  if (index.size === 0) return [];
+  const spans: Span[] = [];
+  const words = [...folded.matchAll(WORD)].map((m) => ({
+    text: m[0].toLowerCase(),
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+  for (let i = 0; i < words.length; i++) {
+    const first = words[i];
+    if (first === undefined) continue;
+    const candidates = index.get(first.text);
+    if (candidates === undefined) continue;
+    for (const person of candidates) {
+      // Every word, with the same text between (whitespace collapsed).
+      let ok = true;
+      let lastEnd = first.end;
+      for (let k = 1; k < person.words.length; k++) {
+        const word = words[i + k];
+        if (
+          word === undefined ||
+          word.text !== person.words[k] ||
+          collapse(folded.slice(lastEnd, word.start)) !== person.gaps[k - 1]
+        ) {
+          ok = false;
+          break;
+        }
+        lastEnd = word.end;
+      }
+      if (!ok) continue;
+      const start = first.start - person.lead.length;
+      if (start < 0 || folded.slice(start, first.start) !== person.lead) continue;
+      let end = lastEnd + person.trail.length;
+      if (folded.slice(lastEnd, end) !== person.trail) continue;
+      // Boundaries: not inside a word on either side (after an optional possessive).
+      if (start > 0 && WORD_CHAR.test(folded[start - 1] ?? "")) continue;
+      const possessive = POSSESSIVE.exec(folded.slice(end, end + 2));
+      if (possessive !== null) end += possessive[0].length;
+      if (WORD_CHAR.test(folded[end] ?? "")) continue;
+      if (person.weak) {
+        if (folded[start - 1] === "@" && !WORD_CHAR.test(folded[start - 2] ?? "")) {
+          spans.push({ start: start - 1, end, kind: "handle", priority });
+          break;
+        }
+        const before = folded.slice(Math.max(0, start - 80), start);
+        const after = folded.slice(end, end + 40);
+        if (!CUE_BEFORE.test(before) && !VERB_AFTER.test(after)) continue;
+      }
+      spans.push({ start, end, kind: "person", priority });
+      break;
+    }
   }
-  const bare = (names: Set<string>, flags: string): Pattern[] =>
-    names.size === 0
-      ? []
-      : [
-          {
-            kind: "person",
-            regex: new RegExp(
-              `${NOT_BEFORE_WORD}(?:${alternation(names)})(?:['’]s)?${NOT_AFTER_WORD}`,
-              flags,
-            ),
-          },
-        ];
-  const inContext = (names: Set<string>, flags: string): Pattern[] =>
-    names.size === 0
-      ? []
-      : [
-          // `@go`: a listed login after `@` is a person even when the tag allow-list has the word.
-          {
-            kind: "handle",
-            regex: new RegExp(
-              `${NOT_BEFORE_WORD}@(?:${alternation(names)})${NOT_AFTER_WORD}`,
-              flags,
-            ),
-          },
-          {
-            kind: "person",
-            regex: new RegExp(
-              `${NOT_BEFORE_WORD}(?:${anyCase(CUES)})(?:[ \\t]+[tT][oO])?[ \\t]+((?:${alternation(names)})(?:['’]s)?)${NOT_AFTER_WORD}`,
-              flags,
-            ),
-            group: 1,
-            skipCode: true,
-          },
-          {
-            kind: "person",
-            regex: new RegExp(
-              `${NOT_BEFORE_WORD}((?:${alternation(names)})(?:['’]s)?)[ \\t]+(?:${SPEECH_VERBS})${NOT_AFTER_WORD}`,
-              flags,
-            ),
-            group: 1,
-            skipCode: true,
-          },
-        ];
-  return [
-    ...bare(insensitive, "giud"),
-    ...bare(sensitive, "gud"),
-    ...inContext(weakInsensitive, "giud"),
-    ...inContext(weakSensitive, "gud"),
-  ];
+  return spans;
 };
 
 // --- Matching and assembly ------------------------------------------------------------------
@@ -616,15 +693,17 @@ export const scrubPersonalIdentifiers = (text: string, options: ScrubOptions = {
   }
   const clean = canonical(text);
   const folded = foldLookalikes(clean);
-  const patterns = [
-    ...PATTERNS.slice(0, KNOWN_PEOPLE_AT),
-    ...knownPeoplePatterns(options.people ?? []),
-    ...PATTERNS.slice(KNOWN_PEOPLE_AT),
-  ];
+  const people = indexPeople(options.people ?? []);
   const code = codeSpans(folded);
-  const spans = resolve(
-    patterns.flatMap((pattern, index) => spansOf(folded, code, pattern, index)),
-  );
+  const spans = resolve([
+    ...PATTERNS.slice(0, KNOWN_PEOPLE_AT).flatMap((pattern, index) =>
+      spansOf(folded, code, pattern, index),
+    ),
+    ...knownPeopleSpans(folded, people, KNOWN_PEOPLE_AT),
+    ...PATTERNS.slice(KNOWN_PEOPLE_AT).flatMap((pattern, index) =>
+      spansOf(folded, code, pattern, KNOWN_PEOPLE_AT + 1 + index),
+    ),
+  ]);
   const replaced = emptyReport();
   let out = "";
   let cursor = 0;
