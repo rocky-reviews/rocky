@@ -23,7 +23,6 @@ describe("learnedEntry: what a decision teaches (P8-2)", () => {
   it("a dismissal as intentional becomes a dismissal entry with its reason, evidence and confidence", () => {
     expect(learnedEntry({ kind: "dismissed", reason: "intentional" }, finding(), SOURCE)).toEqual({
       kind: "dismissal",
-      origin: "learned",
       text: "Dismissed as intentional: Retry count is hard-coded",
       evidence: {
         path: "src/jobs/retry.ts",
@@ -99,7 +98,7 @@ describe("learnedEntry: what a decision teaches (P8-2)", () => {
       finding({ title: "x".repeat(200) }),
       SOURCE,
     );
-    const prepared = prepareMemoryEntry(learned);
+    const prepared = prepareMemoryEntry(learned, { origin: "learned" });
     expect(prepared.ok).toBe(true);
   });
 });

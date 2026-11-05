@@ -54,10 +54,12 @@ const REASON_TEXT: Readonly<Record<Exclude<DismissReason, "not_worth_it">, strin
 const ACCEPTED_TEXT = "Accepted in review: ";
 const PREFIXES = [...Object.values(REASON_TEXT), ACCEPTED_TEXT];
 
-/** A learned entry before the store: what `createMemoryEntry` takes as `entry`. */
+/**
+ * A learned entry before the store: what `createMemoryEntry` takes as `entry`, with
+ * `origin: "learned"` passed by the caller (the store never reads the origin from an entry).
+ */
 export interface LearnedEntry {
   readonly kind: Exclude<MemoryKind, "decision">;
-  readonly origin: "learned";
   readonly text: string;
   readonly evidence: MemoryEvidence;
   readonly confidence: number;
@@ -89,7 +91,6 @@ export const learnedEntry = (
   if (decision.kind === "accepted") {
     return {
       kind: "convention",
-      origin: "learned",
       text: `${ACCEPTED_TEXT}${title}`,
       evidence,
       confidence: decision.edited ? LEARNED_CONFIDENCE.edited : LEARNED_CONFIDENCE.accepted,
@@ -100,7 +101,6 @@ export const learnedEntry = (
   if (reason === "not_worth_it" || finding.severity === "critical") return null;
   return {
     kind: "dismissal",
-    origin: "learned",
     text: `${REASON_TEXT[reason]}${title}`,
     evidence,
     confidence: LEARNED_CONFIDENCE[reason],

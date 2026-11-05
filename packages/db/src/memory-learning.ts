@@ -255,6 +255,9 @@ export const learnFromReviewSubmission = async (
     const result = await createMemoryEntry(tx, {
       authorMemberId: reviewer,
       repoId: submission.repo_id,
+      // Learned: written in the reviewer's name, who needs to be an active member, not to hold
+      // `memory.edit` (ADR 0036 fix round).
+      origin: "learned",
       entry: {
         ...candidate,
         confidence: corroboratedConfidence(candidate.confidence, corroborating?.confidence),
@@ -274,6 +277,7 @@ export const learnFromReviewSubmission = async (
         actorMemberId: reviewer,
         entryId: row.id,
         byEntryId: result.entry.id,
+        origin: "learned",
       });
       if (replaced === "superseded") superseded++;
     }

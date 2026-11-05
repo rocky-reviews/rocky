@@ -6,7 +6,7 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import { decideDraft } from "./drafts.js";
-import { listMemoryEntries } from "./memory.js";
+import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./memory.js";
 import { learnFromReviewSubmission, loadAnalysisMemory } from "./memory-learning.js";
 import { beginReviewSubmission, finishReviewSubmission, loadReviewPlan } from "./reviews.js";
 import {
@@ -312,6 +312,57 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     expect(await learn(A, submission)).toEqual({ outcome: "not_found" });
     expect(await entriesOf(A)).toEqual([]);
     expect(await entriesOf(B)).toEqual([]);
+  });
+});
+
+describe("supersedeMemoryEntry with origin learned (P8-2)", () => {
+  it("a reviewer without memory.edit replaces a learned entry by a learned one, never a member-written one", async () => {
+    const plain = await db.withOrg(A.orgId, async (tx) => {
+      const { rows } = await tx.query<{ id: string }>(
+        `insert into members (forge_user_id, login, role) values ($1, 'plain-reviewer', 'member')
+         on conflict (org_id, forge_user_id) do update set role = 'member' returning id`,
+        [93_001],
+      );
+      return rows[0]!.id;
+    });
+    const make = (origin: "learned" | "member", text: string) =>
+      db.withOrg(A.orgId, async (tx) => {
+        const result = await createMemoryEntry(tx, {
+          authorMemberId: origin === "learned" ? plain : A.memberId,
+          repoId: A.repoId,
+          origin,
+          entry: {
+            kind: "dismissal",
+            reason: "intentional",
+            text,
+            evidence: {
+              path: "src/a.ts",
+              sha: DOC_HEAD,
+              range: { start: 1, end: 1 },
+              pullRequestNumber: 847,
+            },
+            confidence: 80,
+          },
+        });
+        if (result.outcome !== "created") throw new Error(result.outcome);
+        return result.entry.id;
+      });
+    const older = await make("learned", "Dismissed as intentional: one");
+    const newer = await make("learned", "Dismissed as intentional: one again");
+    const written = await make("member", "Dismissed as intentional: one, by hand");
+    const supersede = (entryId: string, byEntryId: string, origin?: "learned") =>
+      db.withOrg(A.orgId, (tx) =>
+        supersedeMemoryEntry(tx, {
+          actorMemberId: plain,
+          entryId,
+          byEntryId,
+          ...(origin === undefined ? {} : { origin }),
+        }),
+      );
+    expect(await supersede(older, newer)).toBe("not_permitted");
+    expect(await supersede(written, newer, "learned")).toBe("not_permitted");
+    expect(await supersede(newer, written, "learned")).toBe("not_permitted");
+    expect(await supersede(older, newer, "learned")).toBe("superseded");
   });
 });
 
