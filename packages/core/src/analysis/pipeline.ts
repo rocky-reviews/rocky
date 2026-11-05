@@ -26,7 +26,7 @@ import {
   limits,
   parseAnalysisDocumentJson,
   Provenance,
-  SCHEMA_VERSION,
+  requiredSchemaVersion,
   type AnalysisDocument,
   type Briefing,
   type BriefingUnavailable,
@@ -65,6 +65,7 @@ import {
   type ReviewFinding,
 } from "./outputs.js";
 import { instructionLeaks } from "./leak.js";
+import { changeMapScope } from "./map-scope.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
 import {
@@ -87,11 +88,16 @@ import {
   checkReview,
   checkTriage,
   partitionIssues,
+  stripGraphRefs,
+  type MappedFiles,
   type ProvenanceBase,
   type UnitCheck,
 } from "./validate.js";
 
-/** Characters of diff sent to the change-map call; a larger PR gets `too-large` (P4-6). */
+/**
+ * Characters of diff sent to the change-map call; a larger PR gets `too-large` (P4-6). Counted
+ * over the mapped files only (H4-5): docs and tooling do not use up the map's budget.
+ */
 export const GRAPH_MAX_INPUT_CHARS = 400_000;
 export const DEFAULT_CONCURRENCY = 4;
 
@@ -151,6 +157,10 @@ export interface AnalysisStats {
   calls: Record<AnalysisStage, number>;
   repairs: number;
   graph: "drawn" | "unavailable" | "none";
+  /** Graph file references outside the mapped set, dropped from the stored map (H4-5). */
+  graphFilesStripped: number;
+  /** Graph line ranges outside the file's changed lines, dropped from the stored map (H4-5). */
+  graphRangesStripped: number;
 }
 
 /**
@@ -559,7 +569,8 @@ const run = async (
   ) =>
     parseAnalysisDocumentJson(
       JSON.stringify({
-        schemaVersion: SCHEMA_VERSION,
+        // The lowest minor the document needs, so older readers keep reading (H4-5, S7).
+        schemaVersion: requiredSchemaVersion({ provenance: { graphUnavailable } }),
         provenance: {
           ...base,
           generator: { ...base.generator, roles: generatorRoles(models, request.previous) },
@@ -598,10 +609,48 @@ const run = async (
   if (!together.ok) throw new Failed("document_invalid");
 
   // --- Change map ----------------------------------------------------------------------------
+  // The map shows code with behaviour (H4-5, ADR 0014 amendment): the graph model gets the
+  // triaged files the deterministic scope keeps (logic, or the tests of a test-only PR) and
+  // nothing else, so an excluded file's path or diff never reaches it. The scope is decided over
+  // every file the rules left to the AI (S5): logic that could not be sent (binary, too large,
+  // triage failed or refused) makes the map unavailable, never a map drawn from the tests. A
+  // card may be backed only by a file the call carried, with a range inside that file's changed
+  // lines: a stray reference or range is dropped and counted (`stripGraphRefs`, S6). A PR with
+  // nothing to map gets the fixed reason `no-logic`, no call.
   let graph: GraphAnswer | undefined;
   let graphUnavailable: GraphUnavailable | undefined;
-  if (triageFiles.length > 0) {
-    const mapped = files.filter((file) => triageFiles.some((t) => t.path === file.path));
+  const triagedPaths = new Set(triageFiles.map((file) => file.path));
+  const scope = changeMapScope(
+    files
+      .filter((file) => preTriage(file.path).kind !== "noise")
+      .map((file) => ({ path: file.path, mappable: triagedPaths.has(file.path) })),
+  );
+  if (scope.kind === "none") {
+    if (triageFiles.length > 0) graphUnavailable = { reason: "no-logic" };
+  } else if (scope.kind === "unmappable") {
+    // Every file of the deciding category was binary, too large, or failed its triage.
+    const sizes = new Set(scope.paths);
+    graphUnavailable = {
+      reason: files.some((file) => sizes.has(file.path) && (file.binary || file.tooLarge))
+        ? "too-large"
+        : "analysis-failed",
+    };
+  } else {
+    const inScope = new Set(scope.paths);
+    const mapped = files.filter((file) => inScope.has(file.path));
+    const spans: MappedFiles = new Map(
+      mapped.map((file) => {
+        const hunks = file.hunks.filter((hunk) => hunk.newLines > 0);
+        const first = hunks[0];
+        const last = hunks.at(-1);
+        return [
+          file.path,
+          first === undefined || last === undefined
+            ? undefined
+            : { start: first.newStart, end: last.newStart + last.newLines - 1 },
+        ];
+      }),
+    );
     const parts: LlmUntrustedText[] = [
       { label: "pr_title", text: request.pullRequest.title },
       ...mapped.flatMap((file, index) => [
@@ -621,13 +670,19 @@ const run = async (
           untrusted: parts,
           output: GRAPH_OUTPUT,
           maxOutputTokens: MAX_OUTPUT_TOKENS.graph,
-          check: (answer) => checkPart("graph", STUB_BRIEFING, answer, undefined),
+          // Checked as it will be stored: with stray references and ranges already dropped.
+          check: (answer) =>
+            checkPart("graph", STUB_BRIEFING, stripGraphRefs(answer, spans).answer, undefined),
         },
         observe("graph"),
         signal,
       );
-      if (drawn.ok) graph = drawn.value;
-      else
+      if (drawn.ok) {
+        const kept = stripGraphRefs(drawn.value, spans);
+        graph = kept.answer;
+        stats.graphFilesStripped = kept.files;
+        stats.graphRangesStripped = kept.ranges;
+      } else
         graphUnavailable = {
           reason:
             drawn.reason === "too_large"
@@ -802,6 +857,8 @@ const newStats = (): AnalysisStats => ({
   calls: { triage: 0, review: 0, graph: 0, briefing: 0 },
   repairs: 0,
   graph: "none",
+  graphFilesStripped: 0,
+  graphRangesStripped: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

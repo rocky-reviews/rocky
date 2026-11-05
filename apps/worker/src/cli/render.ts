@@ -147,6 +147,12 @@ export const renderBriefing = (doc: AnalysisDocument, pr: PullRequestHeader): st
  */
 export type UsagePricer = (report: UsageReport) => string | undefined;
 
+/** Fixed text per `Plan.graphSkipped` (H4-5). */
+const GRAPH_SKIPPED: Readonly<Record<string, string>> = {
+  "too-large": " (PR too large for the change map)",
+  "no-logic": " (nothing to map: the path rules found only documentation, tooling or CI files)",
+};
+
 export const renderUsage = (report: UsageReport, price?: UsagePricer): string => {
   const out: string[] = [`Token usage (cap ${fmt(report.cap)})`];
   for (const role of LLM_COMPLETION_ROLES) {
@@ -201,7 +207,7 @@ export const renderPlan = (
     const calls = plan.calls.filter((call) => call.stage === stage);
     if (calls.length === 0) {
       out.push(
-        `  ${stage.padEnd(8)} none${stage === "graph" && plan.graphSkipped ? " (PR too large for the change map)" : ""}`,
+        `  ${stage.padEnd(8)} none${stage === "graph" ? (GRAPH_SKIPPED[String(plan.graphSkipped)] ?? "") : ""}`,
       );
       continue;
     }

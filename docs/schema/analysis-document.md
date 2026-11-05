@@ -42,14 +42,14 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 ## What the document contains
 
-| Section         | Written by          | What it holds                                                                                                                                                                                                                                                      |
-| --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `schemaVersion` | **Rocky**           | `"1.1.0"`. Patch and minor versions add optional fields; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                                                        |
-| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what. |
-| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                               |
-| `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                              |
-| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                                                              |
-| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough. Absent when the graph role failed; `provenance.graphUnavailable` then says why.                                                  |
+| Section         | Written by          | What it holds                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | **Rocky**           | The lowest minor whose contract the document uses (`requiredSchemaVersion`): `"1.1.0"` unless `graphUnavailable.reason` is `no-logic`, then `"1.2.0"`. Patch and minor versions add optional fields or widen an enum; a reader accepts its own and older minors of its major; a major may remove fields.                                                                         |
+| `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what.                                                                                                               |
+| `briefing`      | model               | Summary paragraph, risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                                                                                                                                             |
+| `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                                                                                                                                            |
+| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                                                                                                                                                                            |
+| `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough. Rocky's pipeline asks the model for lanes, nodes and edges only (H4-5); flows and views are then empty and the walkthrough absent. Absent when the graph role failed or there was nothing to map; `provenance.graphUnavailable` then says why. |
 
 The `provenance` section is the **known facts**. `applyKnownFields(modelOutput, facts)` writes
 it over whatever the model returned, so a model can never state a SHA, a file list, a line
@@ -59,7 +59,7 @@ count or a hunk range. Every other section is then checked against those facts.
 
 ```jsonc
 {
-  "schemaVersion": "1.1.0",
+  "schemaVersion": "1.2.0",
   "provenance": {
     // From git, never from the model. The only files the rest of the document may name.
     "repo": { "owner": "acme", "name": "rocky-app" },
@@ -190,8 +190,11 @@ count or a hunk range. Every other section is then checked against those facts.
   `__proto__`, `constructor` or `prototype`.
 - **A change map is present or explained, never both.** `graph` is optional. When the pipeline
   could not produce one it records `provenance.graphUnavailable` (`reason`: `analysis-failed`,
-  `too-large` or `timeout`, plus an optional `detail`), which the UI shows as "Change map
-  unavailable" with the reason and a Retry button. `detail` holds only fixed strings the
+  `too-large`, `timeout` or, since 1.2, `no-logic`: the pull request changes no code with
+  behaviour, so nothing was asked of the model; plus an optional `detail`), which the UI shows
+  as "Change map unavailable" with the reason and a Retry button (not for `no-logic`: a retry
+  would classify the same paths the same way). `briefingUnavailable` keeps the first three
+  reasons only. `detail` holds only fixed strings the
   pipeline writes itself, never a raw error message, a prompt or model output. The field lives
   in the facts, like `unanalysed`: `applyKnownFields` overwrites it and, when it is set, drops
   any `graph` the model returned, so a model can neither write the text the UI shows, claim a
@@ -321,7 +324,8 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 
 The open questions from the first draft, with the decision taken at the H2 gate and why. The
 schema version stayed `1.0.0` at H2: no producer had consumed the contract yet, and H2 was the
-gate that fixed it. P4-4 moved it to `1.1.0` (above).
+gate that fixed it. P4-4 moved it to `1.1.0` (above); H4-5 added `1.2.0` (the `no-logic`
+reason), stamped only on documents that use it so a 1.1 reader keeps reading every other one.
 
 NFD handling (above) was never a question: the facts keep git's spelling, collisions under NFC
 are refused, and model paths must match exactly.
@@ -342,7 +346,9 @@ are refused, and model paths must match exactly.
    still needs at least `medium`). Reason: a PR with a critical finding is a critical PR; a
    softer verdict would hide it from the reviewer.
 6. **Graph file references are not restricted to PR files.** Decision: unchanged context nodes
-   stay and cannot be clicked. Reason: they show blast radius; there is no diff to open.
+   stay and cannot be clicked. Reason: they show blast radius; there is no diff to open. (The
+   schema keeps this; Rocky's own pipeline is stricter since H4-5 and lets a card name only a
+   file the graph call was given, so a context node it produces carries no file.)
 7. **Markdown bodies are not HTML-filtered here.** Decision: same as 1. No blocklist. Reason:
    the UI disables raw HTML, which catches everything a blocklist would and more.
 8. **PR title, author and URL are not in the document.** Decision: they stay out. They come

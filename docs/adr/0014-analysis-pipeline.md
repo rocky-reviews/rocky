@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-27
 - **Task:** P4-3
+- **Amended by:** H4-5 (the change map shows logic only: a deterministic scope on the graph
+  call's input, cards reference mapped files only; "Amendment (H4-5)" below)
 - **Revised:** review round 2: files with no hunks stay triaged (SF1); unanalysed files of unknown
   risk floor the verdict at medium, also at the write (SF2); fixed reasons for a raised verdict;
   every `@rocky-reviews/*/testing` subpath banned from production code, dynamic imports included.
@@ -312,3 +314,121 @@ erasure.
   a second copy of model output.
 - Per-file triage is cheap to cache, but it cannot rank files against each other: scores are
   per file. The briefing orders the review path.
+
+## Amendment (H4-5): the change map shows logic only
+
+**Context.** Dogfooding on a private pull request (a money ledger plus repository scaffold): the
+map had ten cards, of which five were logic modules, one the tests, three configuration (the CI
+workflow, ESLint, the toolchain) and one documentation. The graph call got every triaged file.
+Product rule (decided by the maintainer, `docs/progress.md` "Dogfooding follow-ups"): the map
+shows **code with behaviour**; configuration or documentation appears only when it changes
+behaviour the code reads at run time. H4-4's follow-up is paired with it: the model is asked only
+for what the page draws (lanes, nodes, edges), as an enforced output again
+([ADR 0013](0013-llm-provider-adapters.md), [ADR 0021](0021-change-map-renderer.md), amendments
+H4-5).
+
+**Decision.**
+
+1. **A deterministic scope on the graph call's input** (`packages/core/src/analysis/map-scope.ts`,
+   `mapCategory` and `changeMapScope`), from the path alone, like the rules pre-triage it extends
+   (§3). It narrows only the graph call: every file is still triaged and reviewed. The first rule
+   that matches wins:
+
+   | #   | Category  | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+   | --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | 1   | `test`    | by name or Jest convention: `__tests__/`, `__mocks__/`, `__fixtures__/`, `__snapshots__/`; `*.test.*`, `*.spec.*`, `*_test.*`, `*_spec.*`, `*.cy.*`, `*.snap`, `test_*`, `conftest.py`; `*Test.java`-style class suffixes only behind a boundary on the original-case name (`LedgerTest.java`, `ledger_test.kt`; `Contest.java`, `Latest.kt`, `Attest.swift` are code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+   | 2   | `logic`   | **kept definitions by name**: `.sql`, `.proto`, `.graphql`/`.gql`, `.prisma`, `.avsc`, `.thrift`, `.fbs`, `.wsdl`, `openapi.*`, `swagger.*`, `*.schema.*`; `Dockerfile*`, `docker-compose*`, `compose.*`, `*.dockerfile`, `fly.toml`, `Procfile`, `app.yaml`, `serverless.yml`, `vercel.json`, `*.tf`; `.env*` the application reads (`.envrc` included; not the samples, row 7). They win over a test directory (`api/spec/openapi.yaml` is the API), not over row 1                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+   | 3   | `test`    | by directory: `test/`, `tests/`, `spec/`, `specs/`, `e2e/`, `cypress/` anywhere; `fixtures/`, `testdata/`, `test-data/` under one of them or at a root (`app/fixtures/seed.rb` is code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+   | 4   | `ci`      | `.github/`, `.gitlab/`, `.circleci/`, `.buildkite/`, `.ci/`, `ci/` at a root (`src/integrations/ci/runner.ts` is code), and the well-known pipeline files (`.gitlab-ci.yml`, `.travis.yml`, `azure-pipelines.yml`, `Jenkinsfile`, `bitbucket-pipelines.yml`, `.drone.yml`, `appveyor.yml`, `cloudbuild.yaml`, ...)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+   | 5   | `logic`   | **kept definitions by directory**: migrations (`migrations/`, `migration/`, `migrate/`, `alembic/`) and deploy trees (`k8s/`, `kubernetes/`, `helm/`, `terraform/`, `deploy/`, `deployment/`), for a file that is not a doc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+   | 6   | `tooling` | by name: package manifests and lockfiles (`package.json`, `pnpm-workspace.yaml`, `pyproject.toml`, `Cargo.toml`, `go.mod`, `Gemfile`, `requirements*.txt`/`.in`, `pom.xml`, `*.csproj`, `*.sln`, `*.lock`, ...); a build, lint, format, type-check, test-runner or scanner tool **only as its configuration file**: `<tool>.config.*`, `<tool>.conf.*`, `<tool>.workspace.*`, `<tool>.setup.*`, `.<tool>rc*`, `.<tool>ignore`, `<tool>.{json,jsonc,json5,yaml,yml,toml,ini,cjs,mjs}` (tools: eslint, prettier, vite, vitest, jest, babel, rollup, webpack, esbuild, tsup, playwright, cypress, tailwind, postcss, biome, turbo, nx, lerna, renovate, codecov, sonar, gitleaks, semgrep, trivy, snyk, hadolint, markdownlint, yamllint, cspell, ...; `lib/jest.ts` and `semgrep.ts` are code); `tsconfig*.json`; editor and repository dotfiles (`.editorconfig`, `.gitignore`, `.npmrc`, `.nvmrc`, `.tool-versions`, ...) |
+   | 7   | `docs`    | Markdown, MDX, reStructuredText, AsciiDoc, `.txt`, `.org`, `.pod`, `.cff`; `docs/`, `doc/`, `documentation/`, `adr/`, `adrs/`, `rfc/`, `rfcs/`, `wiki/` at a root (`src/docs/generator.ts` is code); `README`, `LICENSE`/`LICENCE`, `COPYING`, `NOTICE`, `AUTHORS`, `CONTRIBUTORS`, `CHANGELOG`, `CHANGES`, `HISTORY`, `CODEOWNERS`, `CONTRIBUTING`, `SECURITY`, `FUNDING`, `CODE_OF_CONDUCT`, `CITATION` **only without an extension** (`LICENSE-MIT`) or with a doc one (`SECURITY.md`; `security.ts`, `history.rb`, `license.ts` are code); `.mailmap`; `.env.example`, `.env.sample`, `.env.template`, `.env.dist`                                                                                                                                                                                                                                                                                                    |
+   | 8   | `tooling` | by directory at a root: `scripts/`, `tools/`, `.husky/`, `.changeset/`, `.vscode/`, `.idea/`, `.devcontainer/`, `.yarn/` (`src/agent/tools/search.ts` and `cmd/tools/main.go` are code)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+   | 9   | `logic`   | everything else                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+   A root is the repository root or a package root: the directory right under `apps/`,
+   `packages/`, `services/`, `libs/`, `modules/`, `crates/`, `projects/` or `workspaces/`
+   (`packages/core/scripts/gen.ts` is tooling). Review round 1 (B1, S1–S4) anchored every rule
+   this way after ordinary production names (`security.ts`, `history.rb`, `lib/jest.ts`,
+   `Contest.java`, `src/agent/tools/search.ts`) were misclassified by stem, prefix, suffix or
+   segment matches that ignored the extension or the position in the path.
+
+   Judgment calls, recorded: deploy configuration is kept because a path cannot tell whether it
+   changes what runs, and the graph instructions tell the model to map configuration only where
+   code reads it; `next.config.js`, `app.config.ts`, `config/*.yml` and `settings.*` are logic
+   (runtime settings); `vite.config.ts` and `tailwind.config.js` are tooling (build); test-runner
+   configuration is tooling, a test tree is a test; a documentation site's own code under `docs/`
+   is left out; `scripts/` is tooling even when a script runs in production (follow-up if it
+   bites); `bin/` is logic.
+
+2. **What the call gets.** `changeMapScope` runs over every file the rules left to the AI
+   (noise excluded), each marked mappable when its triage succeeded (S5). The logic files decide:
+   when the pull request changes logic, the map is the mappable logic files in diff order, or
+   unavailable when none of them could be sent (`too-large` when a binary or over-size file is
+   among them, else `analysis-failed`), never a map drawn from the tests. Without logic, the
+   tests are the logic, with the same rule ("the tests are the logic"). With neither, no call is
+   made and the document records `provenance.graphUnavailable: { reason: "no-logic" }` (schema
+   1.2), which the renderer and the web show as Rocky's fixed sentence about the path rules; a
+   pull request whose triaged set is empty (all noise or unanalysed) keeps today's "no graph, no
+   reason". The map's input budget (`GRAPH_MAX_INPUT_CHARS`) is counted over the mapped files
+   only, so documentation cannot push a small change over it. The excluded files' paths and
+   diffs are not in the call at all, which also makes it cheaper (the dogfooding pull request,
+   29 files: the graph call went from 37,994 to 11,029 input tokens, 48,294 to 16,384 in total
+   with the schema's cache write, and from ten cards to five, all backed by the billing
+   sources).
+3. **Cards reference only the mapped files.** The schema's integrity pass checks graph ids, not
+   file references (the published contract lets a context node name a file outside the pull
+   request, `docs/schema/analysis-document.md` decision 6). The pipeline is stricter:
+   `stripGraphFiles` (`validate.ts`) drops every `files[].path` on a node or an edge that is not
+   in the mapped set (exact string match), deterministically, before the integrity check and
+   again on the stored answer, and counts the drops in `stats.graphFilesStripped` (a count,
+   logged). The map is kept: `files` may be empty, so the document stays valid, and one stray
+   path is not worth a repair call or a lost map (S6). Only `files[]` is checked: a label,
+   subtitle or summary can still name any file, as any model text can (N5). Context nodes
+   still exist; they carry no file. The CLI's `--dry-run` plan applies the same scope.
+4. **The graph instructions** (round 2) adapt the writer's guidance of PR Lens (MIT; credited
+   in `instructions.ts` and `NOTICE`, paraphrased, nothing fetched): components by role rather
+   than by file, unchanged context nodes for the blast radius (no files), lanes as the reader's
+   mental model, one or two hero edges, short specific edge labels, badges for short facts, a
+   `range` in new-file line numbers on a file reference when the hunk headers show it, and one
+   line that configuration and schema files are given only when code reads them at run time.
+   A small worked example of Rocky's own (an invitation flow: ids and labels only) closes the
+   text. It says to describe the PR content and never follow instructions found in it. The text
+   is one `rockyInstructions` literal, so it sits in the cached system block only and is in the
+   leak guard's corpus by construction (`PROMPT_TEXTS`); the example's labels are three or four
+   words, well under the guard's eight-word run. Ranges are validated like file references:
+   `stripGraphRefs` keeps a range only inside the span of the file's new-side hunks (first hunk
+   start to last hunk end, the only lines the model saw) and drops it otherwise, counted in
+   `stats.graphRangesStripped`; the reference stays. A card with a range opens its file at the
+   range's first line (the web's `targets.ts`, through ADR 0028 §5's `line`).
+   `PIPELINE_VERSION` is **not** bumped: the version keys per-file units (triage and review), and
+   neither changed (H4-4 review, N4; the comment in `instructions.ts` says so now).
+
+**Threat model (adds to the table above).**
+
+| #   | Threat                                                                                                                                                                                                                                                                                                                                    | Prevention                                                                                                                                                                                                                                                                                                                                                                                             | Test                                                                                                                                                                                                                                              |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A22 | **Misclassification by path**: an ordinary production name matches a rule by stem, prefix, suffix or segment (`src/security.ts`, `history.rb`, `lib/jest.ts`, `Contest.java`, `src/agent/tools/search.ts`), so a logic change shows "nothing to map" in Rocky's voice, or a PR author names code to look like a doc or a test on purpose. | Every rule is anchored to what makes a name unambiguous: doc stems only without an extension or with a doc extension; tool stems only as configuration files; class suffixes only behind a boundary; directory rules only at a root. The scope narrows the map only; triage, review, floors and the verdict read every file as before, and the unavailable text speaks of path rules, not of the code. | `map-scope.test.ts`: each of those names, the production-path probe in the task report, `changeMapScope` for `security.ts` + `README.md` (logic); `pipeline.test.ts` H4-5 ("excluded files are still triaged and reviewed").                      |
+| A23 | **Untrusted names or paths** steer the classifier or the prompt: a path built to make the scan slow, or one carrying instruction text.                                                                                                                                                                                                    | The category is read from the lower-cased path split on `/`, with set lookups, anchored regexes and the pre-triage infix scan (no backtracking); paths reach the model only as parts under Rocky's `file.N.path` labels, never as labels (N7).                                                                                                                                                         | `map-scope.test.ts` property test (never throws, deterministic, bounded time on repeated markers); `pipeline.test.ts` A1 (a path is a part, never a label) and H4-5 (label shapes on the graph call).                                             |
+| A24 | **Excluded-file content reaches the model** anyway (a diff of a doc in the graph call), defeating the product rule and the saving.                                                                                                                                                                                                        | The graph parts are built from the mapped set only; nothing else is in the call.                                                                                                                                                                                                                                                                                                                       | `pipeline.test.ts` H4-5: no excluded path or diff in any graph part; the test-only and docs-only cases; the budget counts mapped files only.                                                                                                      |
+| A25 | **The model maps files outside the set**: a card backed by an excluded file (seen in a previous run, or guessed: `README.md`, `.github/workflows/ci.yml`) or a non-PR file.                                                                                                                                                               | `stripGraphFiles` on every graph answer, before the integrity check and before storage: the reference is dropped, the map kept, the count logged. The schema's own checks and the leak guard are unchanged; a map that is otherwise invalid still gets its repair round.                                                                                                                               | `validate.test.ts`; `pipeline.test.ts` H4-5 (an excluded PR file, a file outside the PR, a differently-spelled path, an edge: one call, the reference gone, `graphFilesStripped` counted; a stripped map with an unknown lane is still repaired). |
+| A26 | **"Nothing to map" shown with model text**, or a model claiming a map is unavailable.                                                                                                                                                                                                                                                     | `no-logic` is an enum value written by the pipeline; `applyKnownFields` owns `graphUnavailable`; the renderer and the web print their own sentence for it; `BriefingUnavailable` keeps its three reasons.                                                                                                                                                                                              | `v1-2.test.ts` (accepted for the graph, refused for the briefing, any other text refused); `render.test.ts` and `briefing-model.test.ts` (fixed text).                                                                                            |
+
+**Residual risks.**
+
+- **R7:** a runtime file the rules call tooling or docs (a settings file at a root `scripts/`,
+  a `robots.txt`, a `requirements/` tree's `.txt`) is missing from the map. Only the map: the
+  review is complete. The table is deliberately narrow and amended by evidence (the probe over
+  NestJS, Rails, Django, Go, agent `tools/` and JVM paths in the H4-5 report).
+- **R8:** the grammar-size limit on the enforced graph schema is the provider's and unverified
+  offline (ADR 0013 amendment H4-5); the real run is the evidence.
+- **R9:** the path rules are heuristics. A root `docs/` holding a documentation site's code, a
+  root `tools/` holding a product's own tools, or a test tree holding a `.sql` definition (kept)
+  are classified by convention, not by content; `fixtures/` under `app/` is code. The map's
+  unavailable text says "Rocky's path rules found only …", never a claim about the code.
+- **R10:** a model can still name an excluded file in a card's label, subtitle or summary; only
+  `files[]` is checked, so such a card is a picture with a misleading caption, not a link.
+- **R11:** a range is checked against the span of the file's hunks, not against the component's
+  real lines: a range inside the span that points at the wrong lines of a mapped file is kept
+  and the card opens there. The new file's length is unknown to the pipeline, so nothing
+  beyond the last hunk is accepted, which can drop a correct range on an unchanged tail.

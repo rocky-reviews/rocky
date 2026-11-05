@@ -6,7 +6,8 @@
 - **Builds on:** [ADR 0004](0004-schema-first-llm.md) (schema-first output),
   [ADR 0012](0012-llm-roles-and-provider-port.md) (roles, config and the `LlmProvider` port)
 - **Amended by:** H4-4 (the sent schema versus the validating schema, a prompt-mode delivery for
-  the graph, and a content-free failure diagnostic; "Amendment (H4-4)" below)
+  the graph, and a content-free failure diagnostic; "Amendment (H4-4)" below); H4-5 (the graph
+  asks for lanes, nodes and edges only and is an enforced output again; "Amendment (H4-5)" below)
 
 ## Context
 
@@ -74,8 +75,9 @@ Every request has the same shape:
   rejects (`minLength`, `minimum`, ...). The port's validator then checks the full schema, so a
   stripped constraint is still enforced. The role schemas are shaped for that helper by core
   (`providerJsonSchema`, amendment H4-4 below); a schema it still refuses fails the call as
-  `invalid_request` before anything is sent. The graph's schema exceeds the API's grammar limits
-  and is sent as text instead (`mode: "prompt"`, amendment H4-4).
+  `invalid_request` before anything is sent. The full graph schema exceeded the API's grammar
+  limits and was sent as text for a while (`mode: "prompt"`, amendment H4-4); since H4-5 the
+  graph asks for lanes, nodes and edges only and is enforced like the other roles.
 - **Effort:** `output_config.effort` when the role sets one. Config validation already refused
   levels the model lacks.
 - **Thinking:** `thinking: { type: "adaptive" }` on every model that takes it. Haiku 4.5 and
@@ -421,3 +423,36 @@ the placeholder live baseline turns the gate into a warning.
   shared.
 - Upgrading to the 1.x SDKs is a dependency bump plus a test run. The adapters already avoid what
   `2026-10-21` removes.
+
+## Amendment (H4-5): the graph is an enforced output again
+
+**Context.** H4-4 put the graph in prompt mode because no projection of the full graph compiled
+under the API's grammar limits short of dropping flows, views or the walkthrough, which was a
+product decision. The maintainer took it (`docs/progress.md`, "Dogfooding follow-ups"): the model
+is asked only for what the page draws.
+
+**Decision.**
+
+1. **`GraphAnswer` is lanes, nodes and edges** (`Graph.pick`, `packages/core/src/analysis/outputs.ts`),
+   and `GRAPH_OUTPUT` is `mode: "structured"` like every other role. The projection has no
+   recursive definition and 16 optional fields (the limit is 24), and H4-4's probe compiled it.
+   The analysis-document schema is unchanged: `flows` and `views` default to empty and the
+   `walkthrough` stays absent, so stored documents, the published JSON Schema, the renderer and the
+   web's parser keep working. Flows, views and the walkthrough come back as their own calls with
+   their UI (ADR 0021 amendment H4-5).
+2. **Prompt mode stays.** `LlmOutputSchema.mode: "prompt"`, `systemPromptWithSchema`, `unfenced`
+   and their tests are unchanged and generic; no role uses the mode today. The fold
+   (`providerJsonSchema`) still runs on every role's schema and is exercised on the full graph in
+   `provider-schema.test.ts`, which a later flows or views call would send.
+3. **Regression test extended.** `wire-schema.test.ts` asserts every role is `structured`, runs
+   the `$defs` cycle check on all of them (the graph included), counts the graph's optional
+   fields against the published limit and checks that no flow, view, walkthrough or recursive
+   definition is in what is sent.
+
+**Threat model.** S1–S6 above still hold. The one change is that the graph's answer is grammar
+constrained again (the H4-4 residual on repair rounds for a prompt-mode output no longer applies
+to it); S2's "looser sent schema" case now concerns only a role that opts into prompt mode.
+
+**Residual risk.** The grammar-size limit remains the provider's and has no offline oracle: the
+evidence is a completed real run on the private dogfooding pull request after this change
+(`docs/progress.md`). A rejection would surface as `llm_invalid_request`.

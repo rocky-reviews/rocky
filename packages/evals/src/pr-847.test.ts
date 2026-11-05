@@ -97,7 +97,21 @@ describe("pr-847 through the pipeline (P4-3)", () => {
     ]);
     expect(document.briefing.verdict.level).toBe("critical");
     expect(document.briefing.estimatedReviewMinutes).toBe(7);
-    expect(document.graph).toEqual(PR847.graph);
+    // H4-5: the model is asked for lanes, nodes and edges only, backed by mapped files only
+    // (the `mem` context node loses its reference to a file outside the PR); flows, views and
+    // the walkthrough come back with their UI.
+    expect(document.graph).toEqual({
+      lanes: PR847.graph!.lanes,
+      nodes: PR847.graph!.nodes.map((node) => ({
+        ...node,
+        files: node.files.filter((file) =>
+          PR847.provenance.files.some((f) => f.path === file.path),
+        ),
+      })),
+      edges: PR847.graph!.edges,
+      flows: [],
+      views: [],
+    });
     expect(document.provenance.unanalysed).toEqual([]);
     expect(document.provenance.generator.roles.map((r) => r.role)).toEqual([
       "triage",

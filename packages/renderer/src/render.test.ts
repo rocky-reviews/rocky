@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CHANGE_MAP_UNAVAILABLE, renderChangeMap, type ChangeMapSource } from "./index.js";
+import {
+  CHANGE_MAP_UNAVAILABLE,
+  renderChangeMap,
+  UNAVAILABLE_REASON_TEXT,
+  type ChangeMapSource,
+} from "./index.js";
 import { deepNesting, longLabels, pr847, singleNode, wideFanOut } from "./test-support.js";
 
 const SHAPES: Record<string, () => ChangeMapSource> = {
@@ -339,6 +344,22 @@ describe("unavailable map", () => {
     expect(map.reason).toBe("too-large");
     expect(map.svg).toContain(CHANGE_MAP_UNAVAILABLE);
     expect(map.svg).toContain("The pull request is too large to map.");
+  });
+
+  it("says in Rocky's words that nothing was mapped when the PR changed no logic (H4-5)", () => {
+    const map = renderChangeMap({
+      findings: [],
+      provenance: { graphUnavailable: { reason: "no-logic" } },
+    });
+    expect(map.status).toBe("unavailable");
+    if (map.status !== "unavailable") return;
+    expect(map.reason).toBe("no-logic");
+    expect(map.svg).toContain(CHANGE_MAP_UNAVAILABLE);
+    // The apostrophe in "Rocky's" is escaped in the markup; the sentence is otherwise verbatim.
+    expect(map.svg).toContain("Nothing to map: Rocky");
+    expect(map.svg).toContain("path rules found only documentation, tooling or CI files.");
+    expect(UNAVAILABLE_REASON_TEXT["no-logic"]).toMatch(/nothing to map/i);
+    expect(UNAVAILABLE_REASON_TEXT["no-logic"]).not.toMatch(/behaviour|no code/i);
   });
 
   it("shows only the heading when the document has no graph and no reason", () => {

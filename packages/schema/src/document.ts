@@ -17,8 +17,22 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.1.0" as const;
+export const SCHEMA_VERSION = "1.2.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
+
+/**
+ * The version a document is stamped with: the lowest minor whose contract it uses (H4-5, review
+ * round 1, S7), so a reader that only knows 1.1 still reads every document that needs nothing
+ * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; a document without it is a
+ * 1.1 document.
+ */
+export const BASE_SCHEMA_VERSION = "1.1.0" as const;
+export type StampedSchemaVersion = typeof BASE_SCHEMA_VERSION | SchemaVersion;
+
+export const requiredSchemaVersion = (doc: {
+  readonly provenance?: { readonly graphUnavailable?: { readonly reason?: unknown } | undefined };
+}): StampedSchemaVersion =>
+  doc.provenance?.graphUnavailable?.reason === "no-logic" ? SCHEMA_VERSION : BASE_SCHEMA_VERSION;
 
 const [currentMajor = "1", currentMinor = "0"] = SCHEMA_VERSION.split(".");
 

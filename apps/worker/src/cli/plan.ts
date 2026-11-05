@@ -1,4 +1,5 @@
 import {
+  changeMapScope,
   GRAPH_MAX_INPUT_CHARS,
   MAX_REPAIR_ROUNDS,
   parseUnifiedDiff,
@@ -18,7 +19,9 @@ import { estimateInputTokens } from "./budget.js";
  * - one triage call per file the rules leave to the AI;
  * - a review call per file the triage puts at critical or important (unknown before triage: a
  *   file the rules floor at important is certain, every other file with new-side lines may be);
- * - one change-map call (skipped when the PR is over the graph's input budget) and one briefing.
+ * - one change-map call over the files the map scope keeps (H4-5: logic, or the tests of a
+ *   test-only PR; skipped when there is nothing to map or the PR is over the graph's input
+ *   budget) and one briefing.
  *
  * Token figures use the budget's own input estimate and each stage's output cap, which is what the
  * cap check reserves for a call in flight. "Certain" counts the certain calls once; "worst case"
@@ -50,7 +53,8 @@ export type Plan =
       readonly ok: true;
       readonly files: readonly PlannedFile[];
       readonly calls: readonly PlannedCall[];
-      readonly graphSkipped: boolean;
+      /** Why no change-map call is planned, or `false` when one is. */
+      readonly graphSkipped: false | "no-logic" | "too-large";
       readonly certainTokens: number;
       readonly worstCaseTokens: number;
     }
@@ -121,16 +125,31 @@ export const planAnalysis = (diff: string, title: string, truncated: boolean): P
     }
   }
 
+  // Decided over every non-noise file, as the pipeline does: a binary or too-large logic file
+  // means no map rather than a map drawn from the tests (H4-5, S5).
+  const scope = changeMapScope(
+    files
+      .filter((file) => file.disposition !== "noise")
+      .map((file) => ({ path: file.path, mappable: file.disposition === "triage" })),
+  );
+  const inScope = new Set(scope.kind === "logic" || scope.kind === "tests" ? scope.paths : []);
   const graphParts: LlmUntrustedText[] = [
     { label: "pr_title", text: title },
-    ...triaged.flatMap((file, index) => [
-      { label: `file.${index}.path`, text: file.path },
-      { label: `file.${index}.diff`, text: file.patch },
-    ]),
+    ...triaged
+      .filter((file) => inScope.has(file.path))
+      .flatMap((file, index) => [
+        { label: `file.${index}.path`, text: file.path },
+        { label: `file.${index}.diff`, text: file.patch },
+      ]),
   ];
   const graphChars = graphParts.reduce((sum, part) => sum + part.text.length, 0);
-  const graphSkipped = triaged.length === 0 || graphChars > GRAPH_MAX_INPUT_CHARS;
-  if (!graphSkipped) {
+  const graphSkipped =
+    scope.kind === "none"
+      ? "no-logic"
+      : scope.kind === "unmappable" || graphChars > GRAPH_MAX_INPUT_CHARS
+        ? "too-large"
+        : false;
+  if (graphSkipped === false) {
     calls.push({
       stage: "graph",
       certain: true,

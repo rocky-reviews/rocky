@@ -34,7 +34,16 @@ export const ReviewAnswer = z
   .describe("Draft review comments for the one changed file in the pr_content blocks.");
 export type ReviewAnswer = z.output<typeof ReviewAnswer>;
 
-export const GraphAnswer = Graph;
+/**
+ * The graph call asks only for what the page draws (H4-5, ADR 0021): lanes, nodes and edges.
+ * Flows, views and the walkthrough stay in the document schema (empty or absent) and come back
+ * as their own calls with their UI. This projection is what makes the graph an enforced output
+ * again: it has no recursive definition and stays under the API's optional-field limit (ADR 0013,
+ * amendments H4-4 and H4-5).
+ */
+export const GraphAnswer = Graph.pick({ lanes: true, nodes: true, edges: true }).describe(
+  "The change map of the pull request in the pr_content blocks: lanes, nodes and edges.",
+);
 export type GraphAnswer = z.output<typeof GraphAnswer>;
 
 export const BriefingAnswer = Briefing.pick({
@@ -90,14 +99,12 @@ export const outputSchema = <S extends z.ZodType>(
 export const TRIAGE_OUTPUT = outputSchema("rocky_triage", TriageAnswer);
 export const REVIEW_OUTPUT = outputSchema("rocky_review", ReviewAnswer);
 /**
- * The graph is sent as a prompt schema, not a provider-enforced one (H4-4, ADR 0013 amendment):
- * the Anthropic API compiles an enforced schema into a grammar and refuses this one three ways
- * (recursive `View` and `JsonValue` definitions, more than 24 optional fields, and a grammar
- * too large for lanes + nodes + edges + flows + views + walkthrough together). The validator is
- * the same either way; an answer that misses the schema is `invalid_output` and gets a repair
- * round.
+ * Enforced like the other roles (H4-5). The full graph could not be (H4-4: recursive `View` and
+ * `JsonValue` definitions, more than 24 optional fields, a grammar too large with flows, views and
+ * the walkthrough); lanes, nodes and edges compile. Prompt mode (`mode: "prompt"`) stays
+ * available to any role that needs it.
  */
-export const GRAPH_OUTPUT = outputSchema("rocky_graph", GraphAnswer, { mode: "prompt" });
+export const GRAPH_OUTPUT = outputSchema("rocky_graph", GraphAnswer);
 export const BRIEFING_OUTPUT = outputSchema("rocky_briefing", BriefingAnswer);
 
 /** Output caps per call. Thinking counts against them (ADR 0012 N9). P4-6 owns token budgets. */

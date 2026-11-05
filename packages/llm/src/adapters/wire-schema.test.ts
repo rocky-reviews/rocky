@@ -30,11 +30,10 @@ describe("every role's output schema goes through the SDK's structured-output tr
       const sent = jsonSchemaOutputFormat(template.output.jsonSchema as never).schema;
       // The API refuses a circular `$defs` reference in an enforced schema ("Self-referencing or
       // mutually-referencing definitions are not supported"): checked offline here, as the real
-      // API did once. A prompt-mode schema (the graph) is text to the provider and may recurse.
-      const defs = (template.output.mode === "prompt" ? {} : (sent["$defs"] ?? {})) as Record<
-        string,
-        unknown
-      >;
+      // API did once. Every role is enforced since H4-5 (the graph asks for lanes, nodes and
+      // edges only), so the check runs on all of them.
+      expect(template.output.mode).toBe("structured");
+      const defs = (sent["$defs"] ?? {}) as Record<string, unknown>;
       const refs = (node: unknown, out = new Set<string>()): Set<string> => {
         if (Array.isArray(node)) node.forEach((entry) => refs(entry, out));
         else if (typeof node === "object" && node !== null) {
@@ -76,16 +75,36 @@ describe("every role's output schema goes through the SDK's structured-output tr
   });
 });
 
-describe("which roles the provider enforces (H4-4)", () => {
-  it("the graph is a prompt-mode output; triage, review and briefing are enforced", () => {
+describe("which roles the provider enforces (H4-4, H4-5)", () => {
+  it("every role is enforced, the graph included (lanes, nodes and edges compile)", () => {
     expect(
       Object.fromEntries(STAGES.map(([stage, template]) => [stage, template.output.mode])),
     ).toEqual({
       triage: "structured",
       review: "structured",
-      graph: "prompt",
+      graph: "structured",
       briefing: "structured",
     });
+  });
+
+  it("the graph schema stays inside the API's published complexity limits (H4-5)", () => {
+    // ADR 0013 amendment H4-4: at most 24 optional parameters and no recursive definition. The
+    // grammar-size limit has no offline oracle; the real run is its evidence (docs/progress.md).
+    const sent = jsonSchemaOutputFormat(STAGE_CALLS.graph.output.jsonSchema as never).schema;
+    let optional = 0;
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) return node.forEach(walk);
+      if (typeof node !== "object" || node === null) return;
+      const schema = node as { properties?: Record<string, unknown>; required?: string[] };
+      if (schema.properties !== undefined) {
+        const required = new Set(schema.required ?? []);
+        optional += Object.keys(schema.properties).filter((key) => !required.has(key)).length;
+      }
+      Object.values(node).forEach(walk);
+    };
+    walk(sent);
+    expect(optional).toBeLessThanOrEqual(24);
+    expect(JSON.stringify(sent)).not.toMatch(/"flows"|"views"|"walkthrough"|JsonValue|"View"/);
   });
 });
 

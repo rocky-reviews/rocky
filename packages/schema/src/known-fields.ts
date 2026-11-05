@@ -7,7 +7,7 @@
  * triage or a finding, but the integrity checks then reject the document (UNKNOWN_FILE),
  * because the only file list that counts is the one written here.
  */
-import { SCHEMA_VERSION } from "./document.js";
+import { requiredSchemaVersion } from "./document.js";
 import type { Provenance, ProvenanceInput } from "./provenance.js";
 
 /** What the pipeline knows from git and its own configuration. The whole provenance section. */
@@ -32,8 +32,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unknown => {
   if (!isRecord(modelOutput)) return modelOutput;
   const result: Record<string, unknown> = { ...modelOutput };
-  result.schemaVersion = SCHEMA_VERSION;
   result.provenance = structuredClone(facts);
+  result.schemaVersion = requiredSchemaVersion({ provenance: facts });
   if (facts.graphUnavailable !== undefined) delete result.graph;
   return result;
 };

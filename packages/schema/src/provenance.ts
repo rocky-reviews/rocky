@@ -181,10 +181,21 @@ export type UnanalysedFile = z.infer<typeof UnanalysedFile>;
 /**
  * Why the pipeline could not produce a change map. Written by the pipeline, never by the model:
  * `analysis-failed` is the graph role's output failing validation after the repair round,
- * `too-large` a PR over the graph's budget, `timeout` the role not answering in time.
+ * `too-large` a PR over the graph's budget, `timeout` the role not answering in time, and
+ * `no-logic` (schema 1.2, H4-5) a pull request that changes no code with behaviour (docs,
+ * tooling or CI only), so nothing was asked of the graph role.
  */
-export const GraphUnavailableReason = z.enum(["analysis-failed", "too-large", "timeout"]);
+export const GraphUnavailableReason = z.enum([
+  "analysis-failed",
+  "too-large",
+  "timeout",
+  "no-logic",
+]);
 export type GraphUnavailableReason = z.infer<typeof GraphUnavailableReason>;
+
+/** A briefing is always attempted, so it has no `no-logic`. */
+export const BriefingUnavailableReason = z.enum(["analysis-failed", "too-large", "timeout"]);
+export type BriefingUnavailableReason = z.infer<typeof BriefingUnavailableReason>;
 
 /**
  * The change map is optional (gate H2, #2): when the graph role fails, the rest of the review
@@ -214,7 +225,7 @@ export type GraphUnavailable = z.infer<typeof GraphUnavailable>;
  * path in triage order. Only a fixed reason; the UI shows fixed text for it.
  */
 export const BriefingUnavailable = z
-  .strictObject({ reason: GraphUnavailableReason })
+  .strictObject({ reason: BriefingUnavailableReason })
   .describe("Why Rocky wrote the briefing itself. Written by the pipeline, never by a model.");
 export type BriefingUnavailable = z.infer<typeof BriefingUnavailable>;
 
