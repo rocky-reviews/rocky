@@ -71,6 +71,38 @@ Task log for the project plan. Agents append a row when a task is merged.
 
 ### P8-1 follow-ups
 
+- Fix round (security M1, M2, L1; review S1–S5) applied: the canary refusal uses the leak
+  guard's folding (`containsPromptCanary`) on text and evidence path; known people are ordered
+  PR author → member logins → caller's list, deduped case-folded, refused past 5 000 distinct
+  (`too_many_people`) instead of truncated; short or common-word logins match only in person
+  positions (`matchesAsBareWord`); CamelCase words, plural-noun verbs and inline code are not
+  name contexts; dotted and CamelCase decorators are not handles; `origin` is a caller parameter
+  and `memory.edit` is re-checked `FOR SHARE` for member-written entries and supersedes; a
+  partial index on `(org_id, superseded_by)`.
+- Security L2: chat-template tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, …) are not refused at
+  storage; P8-2 must pass entries only as untrusted text (`LlmUntrustedText`), never
+  concatenated into instructions.
+- Security L3: `content` is updatable by the app role today (table-level UPDATE). Either a
+  column-level UPDATE grant that excludes `content` (then `touch`/`supersede` keep working), or
+  the rule "edit = insert + supersede" enforced by a trigger.
+- Security L4: `@alice-` (trailing hyphen) and `@alice/` (a path-like mention) are not scrubbed
+  as handles; `alice` itself is caught only when listed.
+- Review nit 6: T41's "a cycle is impossible" rests on the repository's checks; a crafted UPDATE
+  as the app role could still close a loop. A cycle-proof trigger (walk `superseded_by` under the
+  row lock) or reword T41 to say so.
+- Review nit 7: loopback and private IPs (`127.0.0.1`, `10.0.0.1`), four-part versions
+  (`1.2.3.4`) and example domains (`alice@example.com` in docs) are scrubbed as if personal.
+- Review nit 8: `cc: Bob` (a colon after the cue), `@carol(…)` (treated as a decorator) and
+  hyphen variants of a login (`alice-dev` for `alice`) are not caught.
+- Review nit 9: a partial index on `(org_id, superseded_by)` was added in 0017 (fix round).
+- Review nit 10: scrubbing only at write time (ADR 0036 residual risks): a later member or a
+  renamed login is not removed from older entries; a re-scrub job is a P8-3/P8-4 item.
+- Review nit 11: never log `err.detail` from a memory store failure (Postgres echoes the row's
+  values in `detail` for CHECK and unique violations); the server's P8-3 routes must reduce
+  store errors to a SQLSTATE like `inboxDatabaseError` does.
+- Review nit 12: a 0017-specific migration test (the CHECKs and the FK's `ON DELETE SET NULL`
+  are covered by `memory.test.ts` on the migrated schema; a test of the down script's exact
+  0002 shape beyond the ACL snapshot in `migrate.test.ts` is not written).
 - P8-2 must pass entries into prompts as `LlmUntrustedText` with their own canary (the leak
   guard's texts, see the P4-4 note on private prompt text), and pass the logins it saw around the
   evidence (commenters, reviewers) as `people` to `createMemoryEntry`.
