@@ -82,7 +82,7 @@ export const ReviewPanelContent = ({ current = null }: Props) => {
       <li key={finding.id}>
         <button
           type="button"
-          className={`f-item st-${posted !== null && decision.state === "draft" ? "accepted" : decision.state}${focused === finding.id ? " focus" : ""}`}
+          className={`f-item st-${posted !== null && decision.state === "draft" ? "accepted" : decision.state}${toDecide ? " has-sev" : ""}${focused === finding.id ? " focus" : ""}`}
           disabled={stale}
           onClick={() => jumpToFinding(finding.id)}
         >

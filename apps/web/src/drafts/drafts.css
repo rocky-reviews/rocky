@@ -337,9 +337,30 @@
   text-decoration-color: var(--faint);
   color: var(--muted);
 }
-/* H4-14: a draft to decide shows its severity as the card does, a little larger. */
+/*
+ * H4-14: a draft to decide shows its severity as the card does, a little larger, beside the
+ * title; the location gets the item's full width below both.
+ */
+.f-item.has-sev {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 0;
+}
+.f-item.has-sev .f-text {
+  display: contents;
+}
+.f-item.has-sev .t {
+  grid-column: 1;
+  grid-row: 1;
+}
+.f-item.has-sev .loc {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
 .f-item .sev {
-  flex: none;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
   padding: 2px 8px;
 }
 .f-item .sev::before {

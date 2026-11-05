@@ -182,7 +182,7 @@ describe("review panel", () => {
 
   it("marks the focused draft", () => {
     const html = render(reviewWith(findings, {}, [], { focused: "F2" }));
-    expect(html).toMatch(/class="f-item st-draft focus"/);
+    expect(html).toMatch(/class="f-item st-draft has-sev focus"/);
   });
 });
 

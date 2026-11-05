@@ -238,6 +238,10 @@ in-memory store behind a port, plus its tests.
   panel mid-walk.
 - The strip grows by a line while a/e/d are listed (the focused draft on screen), so the panel
   above it shifts when the draft scrolls in or out of view at narrow panel widths.
+- Under To decide the titles start flush left (no dot, the pill is on the right), while under
+  Decided they sit after the severity dot; harmless, but the two lists do not line up.
+- Baselines outside this task's views (e.g. `brief-1024-*`, `file-critical-1024-*`) still carry
+  H4-12's ~3 px shift of the sidebar's Tree hint, under the 0.2% tolerance; left alone here.
 - 1–4 work while focus is among the dismiss reasons (where `d` and the Dismiss button put it); a
   click elsewhere while the reasons are open leaves them without keys until focus returns.
 - The on-screen observer reads the sticky header's height once, when the card is focused; a
