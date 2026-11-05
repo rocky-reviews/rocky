@@ -185,6 +185,19 @@ export {
   type RoleChangeResult,
   type TransferResult,
 } from "./members.js";
+export {
+  createMemoryEntry,
+  listMemoryEntries,
+  loadMemoryEntry,
+  MAX_MEMORY_ENTRIES_PER_REPO,
+  MAX_MEMORY_LISTING,
+  MAX_MEMORY_TOUCH,
+  MemoryStoreError,
+  supersedeMemoryEntry,
+  touchMemoryEntries,
+  type CreateMemoryEntryResult,
+  type SupersedeMemoryEntryResult,
+} from "./memory.js";
 export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
 export {
   loadPullRequestDiffTarget,

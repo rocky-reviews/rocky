@@ -2,6 +2,12 @@ import type { OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
+import {
+  listMemoryEntries,
+  loadMemoryEntry,
+  supersedeMemoryEntry,
+  touchMemoryEntries,
+} from "./memory.js";
 import { APP_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE, WORKER_ROLE } from "./roles.js";
 import {
   asWorker,
@@ -631,6 +637,80 @@ describe("roles across tenants (P7-2, migration 0014)", () => {
     expect(deleted.rowCount).toBe(0);
     const links = await asSuperuser("select 1 from app.session_orgs where org_id = $1", [b.orgId]);
     expect(links).toHaveLength(1);
+  });
+});
+
+describe("memory entries (P8-1, migration 0017, ADR 0036 P1)", () => {
+  it("org A cannot point an own entry at org B's entry, or supersede B's entry, even with a crafted query", async () => {
+    const before = await db.withOrg(b.orgId, (tx) =>
+      tx.query<{ superseded_by: string | null }>(
+        "select superseded_by from memory_entries where id = $1",
+        [b.memoryEntryId],
+      ),
+    );
+    expect(before.rows).toEqual([{ superseded_by: null }]);
+    // Composite FK (T4): B's entry is not a row of org A, so the reference fails.
+    const crafted = await pgError(
+      db.withOrg(a.orgId, (tx) =>
+        tx.query("update memory_entries set superseded_by = $1 where id = $2", [
+          b.memoryEntryId,
+          a.memoryEntryId,
+        ]),
+      ),
+    );
+    expect(crafted.code).toBe(FOREIGN_KEY_VIOLATION);
+    // RLS: B's row does not exist for A; `or true` reaches A's own row only (and a self
+    // reference is refused by the CHECK for every role).
+    const loop = await pgError(
+      db.withOrg(a.orgId, (tx) =>
+        tx.query("update memory_entries set superseded_by = id where id = $1 or true", [
+          b.memoryEntryId,
+        ]),
+      ),
+    );
+    expect(loop.code).toBe("23514");
+    const touched = await db.withOrg(a.orgId, (tx) =>
+      tx.query("update memory_entries set last_used_at = now() where id = $1", [b.memoryEntryId]),
+    );
+    expect(touched.rowCount).toBe(0);
+    const after = await db.withOrg(b.orgId, (tx) =>
+      tx.query<{ superseded_by: string | null; last_used_at: Date | null }>(
+        "select superseded_by, last_used_at from memory_entries where id = $1",
+        [b.memoryEntryId],
+      ),
+    );
+    expect(after.rows).toEqual([{ superseded_by: null, last_used_at: null }]);
+  });
+
+  it("org A's embeddings cannot reference org B's entry or repository", async () => {
+    for (const [column, value] of [
+      ["memory_entry_id", b.memoryEntryId],
+      ["repo_id", b.repoId],
+    ] as const) {
+      const error = await pgError(
+        db.withOrg(a.orgId, (tx) =>
+          tx.query(`update embeddings set ${column} = $1 where id = $2`, [value, a.embeddingId]),
+        ),
+      );
+      expect(error.code, column).toBe(FOREIGN_KEY_VIOLATION);
+    }
+  });
+
+  it("the repository functions see nothing of org B from org A", async () => {
+    expect(await db.withOrg(a.orgId, (tx) => listMemoryEntries(tx, { repoId: b.repoId }))).toEqual(
+      [],
+    );
+    expect(await db.withOrg(a.orgId, (tx) => loadMemoryEntry(tx, b.memoryEntryId))).toBeNull();
+    expect(await db.withOrg(a.orgId, (tx) => touchMemoryEntries(tx, [b.memoryEntryId]))).toBe(0);
+    expect(
+      await db.withOrg(a.orgId, (tx) =>
+        supersedeMemoryEntry(tx, {
+          actorMemberId: a.memberId,
+          entryId: a.memoryEntryId,
+          byEntryId: b.memoryEntryId,
+        }),
+      ),
+    ).toBe("not_found");
   });
 });
 

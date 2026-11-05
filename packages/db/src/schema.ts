@@ -229,14 +229,30 @@ export const reviewSubmissionItems = pgTable("review_submission_items", {
   bodySha256: bytea("body_sha256").notNull(),
 });
 
+/**
+ * Project memory (P8-1, migration 0017, ADR 0036): what a repository's reviewers decided, with
+ * its evidence. `content` is scrubbed of personal identifiers before it is stored; the author is
+ * a member id only (`created_by`, set to null when the member row goes).
+ */
 export const memoryEntries = pgTable("memory_entries", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: orgIdColumn(),
-  repoId: uuid("repo_id"),
-  kind: text("kind").notNull(),
+  repoId: uuid("repo_id").notNull(),
+  kind: text("kind", { enum: ["convention", "decision", "dismissal"] }).notNull(),
+  /** `member` (a person wrote it) or `learned` (P8-2 derived it from a decision). */
+  origin: text("origin", { enum: ["member", "learned"] }).notNull(),
   content: text("content").notNull(),
-  source: jsonb("source").$type<Record<string, unknown>>().notNull().default({}),
+  evidencePath: text("evidence_path").notNull(),
+  evidenceSha: text("evidence_sha").notNull(),
+  evidenceStart: integer("evidence_start").notNull(),
+  evidenceEnd: integer("evidence_end").notNull(),
+  sourcePrNumber: integer("source_pr_number").notNull(),
+  confidence: integer("confidence").notNull(),
+  /** The dismissal reason code, exactly for `dismissal` entries. */
+  reason: text("reason"),
   createdBy: uuid("created_by"),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  supersededBy: uuid("superseded_by"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

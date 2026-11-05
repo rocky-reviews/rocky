@@ -187,6 +187,15 @@ packages/schema (analysis document; shared contract)
   gets a fresh org), erases external stores (`OrgErasers`: object storage, embeddings), then
   `retention.delete_org`, which cascades through every tenant table, deletes or scrubs the
   installation's inbox rows and leaves a tombstone in `app.org_deletions`.
+- Project memory (ADR 0036, P8-1): `memory_entries` holds what a repository's reviewers decided
+  (`convention`, `decision`, `dismissal`) with its evidence (path, full sha, line range, source
+  PR number), a confidence, `last_used_at` and `superseded_by` (a same-org composite FK). The
+  text is one scrubbed line: `packages/core/src/pii.ts` removes emails, `@handles`, URL
+  credentials, phone numbers, IPv4 addresses, git trailers and the people Rocky knows about
+  (every member login of the org, the PR author, the caller's list) before
+  `createMemoryEntry` (`packages/db/src/memory.ts`) stores it. People are stored as member ids
+  only; a reader shows "former member" once the member row is gone or removed. Learning and
+  prompt use (P8-2), the UI and export (P8-3) and decay (P8-4) build on this.
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is
