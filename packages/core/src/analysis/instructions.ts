@@ -42,7 +42,7 @@ Return an empty findings list when the file has no real problems.`;
 
 /**
  * Joined after `REVIEW_INSTRUCTIONS` only when the file has project-memory entries to apply
- * (P8-2, ADR 0036 amendment): a review without memory sends exactly the text it sent before.
+ * (P8-2, ADR 0037): a review without memory sends exactly the text it sent before.
  * The entries themselves never enter this slot: they travel as the untrusted part labelled
  * memory, with ids Rocky assigns per call (M1, M2, …) and the memory canary.
  */

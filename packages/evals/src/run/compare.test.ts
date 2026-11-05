@@ -198,3 +198,40 @@ describe("compareReports: the gate (README: Gate)", () => {
     );
   });
 });
+
+describe("the project-memory eval gate (P8-2)", () => {
+  const memory = (pass: boolean) => ({
+    status: "done" as const,
+    run1Raised: true,
+    learned: true,
+    controlRaised: true,
+    run2Raised: !pass,
+    run2Cited: pass,
+    run2BugFound: true,
+    pass,
+  });
+  const prs = [pr("a", 8)];
+
+  it("a baseline without the memory eval (before P8-2) gates nothing about it", () => {
+    expect(compareReports(report(prs), report(prs, { memory: memory(false) })).ok).toBe(true);
+    expect(compareReports(report(prs), report(prs)).ok).toBe(true);
+    // An old baseline file (no `memory` key, no `options.memory`) still parses.
+    expect(parseReport(JSON.parse(JSON.stringify(report(prs)))).ok).toBe(true);
+  });
+
+  it("once the baseline passed it, the report must run it and pass", () => {
+    const baseline = report(prs, { memory: memory(true) });
+    expect(compareReports(baseline, report(prs, { memory: memory(true) })).ok).toBe(true);
+    const failed = compareReports(baseline, report(prs, { memory: memory(false) }));
+    expect(failed.ok).toBe(false);
+    expect(failed.reasons.join(" ")).toMatch(/memory eval failed/);
+    const missing = compareReports(baseline, report(prs));
+    expect(missing.ok).toBe(false);
+    expect(missing.reasons.join(" ")).toMatch(/--memory/);
+  });
+
+  it("a capped memory run marks the report capped", () => {
+    const capped = report(prs, { memory: { ...memory(false), status: "capped" } });
+    expect(parseReport(JSON.parse(JSON.stringify(capped))).ok).toBe(false);
+  });
+});

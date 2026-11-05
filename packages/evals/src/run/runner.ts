@@ -23,6 +23,7 @@ import {
   INJECTION_FIXTURES,
   type InjectionFixture,
 } from "../injection/inject.js";
+import { runMemoryEval, type MemoryStep } from "../memory/run.js";
 import { scoreFindings } from "../score.js";
 import { SEEDED_PRS, type SeededPr } from "../seeded/index.js";
 import { injectionResult, injectionTotals } from "./injection.js";
@@ -44,7 +45,9 @@ export type EvalSubject =
       readonly kind: "injection";
       readonly fixture: InjectionFixture;
       readonly case: InjectionCase;
-    };
+    }
+  /** One of the project-memory eval's three analyses (P8-2). */
+  | { readonly kind: "memory"; readonly step: MemoryStep };
 
 export interface RunOptions {
   readonly kind: "fake" | "live";
@@ -53,6 +56,8 @@ export interface RunOptions {
   readonly rolesFor: (subject: EvalSubject) => LlmRoles;
   readonly maxTokens: number;
   readonly injection: boolean;
+  /** Run the project-memory eval (P8-2) after the seeded PRs and the corpus. */
+  readonly memory?: boolean;
   /** Seeded PR ids to run (all when absent). */
   readonly only?: readonly string[];
   readonly clock: Clock;
@@ -164,6 +169,12 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     injection = { cases, total: injectionTotals(cases) };
   }
 
+  let memory: EvalReport["memory"] = null;
+  if (options.memory === true) {
+    memory = await runMemoryEval((step, request) => analyse({ kind: "memory", step }, request));
+    options.onProgress?.(`memory: ${memory.status}, ${memory.pass ? "pass" : "FAIL"}`);
+  }
+
   return {
     format: REPORT_FORMAT,
     version: REPORT_VERSION,
@@ -176,11 +187,13 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     options: {
       maxTokens: options.maxTokens,
       injection: options.injection,
+      memory: options.memory === true,
       only: options.only === undefined ? null : [...options.only],
     },
     usage: meter.usage(),
     prs,
     total: totalsOf(prs),
     injection,
+    memory,
   };
 };

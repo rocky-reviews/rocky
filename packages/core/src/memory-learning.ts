@@ -1,5 +1,5 @@
 /**
- * Learning project memory from reviewers' decisions (P8-2, ADR 0036 amendment). Pure: the
+ * Learning project memory from reviewers' decisions (P8-2, ADR 0037). Pure: the
  * database side (`packages/db` `learnFromReviewSubmission`) reads the decisions of a posted
  * review and stores what this module derives, through `createMemoryEntry` (which scrubs and
  * validates again).

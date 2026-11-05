@@ -15,7 +15,7 @@ import type { TenantTx } from "./client.js";
 import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./memory.js";
 
 /**
- * Project memory around an analysis (P8-2, ADR 0036 amendment): what the worker gives a review
+ * Project memory around an analysis (P8-2, ADR 0037): what the worker gives a review
  * (`loadAnalysisMemory`) and what a posted review teaches (`learnFromReviewSubmission`). Both
  * run in the caller's `withOrg` transaction (RLS keeps them to that org; the explicit filters are
  * defence in depth) and touch one repository only.

@@ -3,9 +3,9 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-02T00:13:06.587Z",
+  "createdAt": "2026-11-05T16:37:54.382Z",
   "pipelineVersion": "p4-4.2",
-  "promptHash": "4002f160fb7d24174aad538ba6c61046ad5ddeae73b5b9cd2a6526e4ea7e8e65",
+  "promptHash": "3898eba3a6a46768191f4cc889ded72ff76065a15d9957714e368826dd7a3b7f",
   "models": {
     "triage": {
       "provider": "scripted",
@@ -26,36 +26,37 @@
   "options": {
     "maxTokens": 2000000,
     "injection": true,
+    "memory": true,
     "only": null
   },
   "usage": {
     "byRole": {
       "triage": {
-        "calls": 476,
-        "inputTokens": 204320,
-        "outputTokens": 36611,
+        "calls": 479,
+        "inputTokens": 205583,
+        "outputTokens": 36728,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-triage"]
       },
       "review": {
-        "calls": 390,
-        "inputTokens": 211289,
-        "outputTokens": 58702,
+        "calls": 396,
+        "inputTokens": 214206,
+        "outputTokens": 59218,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-review"]
       },
       "graph": {
-        "calls": 279,
-        "inputTokens": 456274,
-        "outputTokens": 21756,
+        "calls": 288,
+        "inputTokens": 463387,
+        "outputTokens": 21885,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-graph"]
       }
     },
-    "totalTokens": 988952,
+    "totalTokens": 1001007,
     "capped": false
   },
   "prs": [
@@ -1449,5 +1450,15 @@
       "leaks": 0,
       "poisoned": 4
     }
+  },
+  "memory": {
+    "status": "done",
+    "run1Raised": true,
+    "learned": true,
+    "controlRaised": true,
+    "run2Raised": false,
+    "run2Cited": true,
+    "run2BugFound": true,
+    "pass": true
   }
 }

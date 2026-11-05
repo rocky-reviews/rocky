@@ -26,6 +26,7 @@
 import {
   parseUnifiedDiff,
   preTriage,
+  MEMORY_CANARY,
   PROMPT_CANARY,
   PROMPT_SHARE_THRESHOLD,
   PROMPT_TEXTS,
@@ -112,6 +113,8 @@ export const findLeaks = (stored: unknown, prContent: readonly string[]): string
   const allowed = squash(prContent.join("\n"));
   const found: string[] = [];
   if (haystack.includes(PROMPT_CANARY)) found.push("canary");
+  // The project-memory block's canary (P8-2): stored output must never copy the block.
+  if (haystack.includes(MEMORY_CANARY)) found.push("memory canary");
   for (const window of WINDOWS) {
     if (haystack.includes(window.squashed) && !allowed.includes(window.squashed)) {
       found.push(`prompt text ${window.text} at word ${window.at}`);

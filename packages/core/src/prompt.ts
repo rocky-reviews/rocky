@@ -18,7 +18,7 @@ export const PROMPT_CANARY = "2469194879e33fdf";
 export const PROMPT_CANARY_MARKER = `rk-canary-${PROMPT_CANARY}`;
 
 /**
- * The project-memory block's own canary (P8-2, ADR 0036 amendment). Memory entries are persisted
+ * The project-memory block's own canary (P8-2, ADR 0037). Memory entries are persisted
  * text derived from earlier reviews and travel back into review prompts as an untrusted part;
  * the part carries this marker, so an answer that copies the block is refused by the leak guard
  * like one that copies the instructions. Not a secret either. Its `rk-canary-` prefix is one an

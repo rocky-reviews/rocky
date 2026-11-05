@@ -2,7 +2,7 @@
  * `pnpm evals` (P4-7). The entry point (`scripts/evals.ts`) wires the real LLM roles in; this
  * module owns arguments, output and exit codes, and is tested with injected I/O.
  *
- *   pnpm evals run [--fake] [--dry-run] [--injection] [--max-tokens N] [--only id,…] [--out path]
+ *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory] [--max-tokens N] [--only id,…] [--out path]
  *   pnpm evals compare <baseline.json> <report.json>
  *
  * Exit codes: 0 ok; 1 gate failed (compare) or the token cap stopped the run (run); 2 usage,
@@ -55,7 +55,7 @@ export interface CliDeps {
 
 const USAGE = [
   "usage:",
-  "  pnpm evals run [--fake] [--dry-run] [--injection] [--max-tokens N] [--only pr-847,…] [--out report.json]",
+  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory] [--max-tokens N] [--only pr-847,…] [--out report.json]",
   "  pnpm evals compare <baseline.json> <report.json>",
   "",
 ].join("\n");
@@ -96,6 +96,13 @@ const summary = (report: EvalReport): string => {
       `injection: ${t.cases} cases; verdict changed ${t.verdictChanged}, below floor ${t.belowFloor}, outside the diff ${t.outsideDiff}, leaks ${t.leaks}, poisoned ${t.poisoned}, unexpected failures ${t.unexpectedFailures}`,
     );
   }
+  if (report.memory !== null && report.memory !== undefined) {
+    const m = report.memory;
+    lines.push(
+      "",
+      `memory: ${m.status}, ${m.pass ? "pass" : "FAIL"}; run 1 raised ${m.run1Raised}, learned ${m.learned}, control raised ${m.controlRaised}, run 2 raised ${m.run2Raised}, cited ${m.run2Cited}, bug found ${m.run2BugFound}`,
+    );
+  }
   return `${lines.join("\n")}\n`;
 };
 
@@ -108,6 +115,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
       fake: { type: "boolean", default: false },
       "dry-run": { type: "boolean", default: false },
       injection: { type: "boolean", default: false },
+      memory: { type: "boolean", default: false },
       "max-tokens": { type: "string" },
       only: { type: "string" },
       out: { type: "string" },
@@ -162,6 +170,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         ),
         `seeded PRs: ${prs.map((pr) => `${pr.id} (${pr.expected.length} seeded)`).join(", ")}`,
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
+        `memory: ${values.memory ? "3 analyses (learn, control, apply)" : "off"}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),
@@ -175,6 +184,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
     rolesFor,
     maxTokens,
     injection: values.injection,
+    memory: values.memory,
     ...(only === undefined ? {} : { only }),
     clock: io.clock,
     onProgress: (line) => io.stderr(`${line}\n`),

@@ -1,5 +1,5 @@
 /**
- * Project memory in the review prompt (P8-2, ADR 0036 amendment). The worker loads the
+ * Project memory in the review prompt (P8-2, ADR 0037). The worker loads the
  * repository's current entries inside the analysis's tenant transaction and passes them in the
  * request; this module decides which reach each file's review call and how, and turns the
  * model's citations back into `MemoryRef`s.

@@ -6,7 +6,7 @@ and the eval suite that runs them through the real analysis pipeline (P4-3, P4-4
 ```
 pnpm evals run --fake                 # scripted roles: tests the harness, free, deterministic
 pnpm evals run --dry-run              # checks the LLM config and the key; calls nothing
-pnpm evals run [--injection] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
+pnpm evals run [--injection] [--memory] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
 pnpm evals compare <baseline.json> <report.json>
 ```
 
@@ -23,6 +23,7 @@ pnpm evals compare <baseline.json> <report.json>
 | `src/run/cli.ts`               | Arguments, output, exit codes (`scripts/evals.ts` wires the real roles)  |
 | `src/run/fake/test-support.ts` | The `--fake` roles (scripted; loaded only for `--fake`)                  |
 | `src/injection/`               | The prompt-injection corpus and its invariant checks (P4-4, ADR 0015)    |
+| `src/memory/`                  | The project-memory eval: two synthetic PRs, its `--fake` model (P8-2)    |
 | `baselines/fake.json`          | Baseline of a `--fake --injection` run: what CI's harness check compares |
 | `baselines/live.json`          | **Placeholder** for the real-model baseline (see below)                  |
 
@@ -103,6 +104,36 @@ With `--fake`, injection cases run P4-4's adversarial fakes (a fully compromised
 counts are non-zero where a compromised model can still act (in-file suppression, poisoned drafts;
 ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, leaks).
 
+## Project memory (`--memory`, P8-2)
+
+Does a pattern a reviewer dismissed as intentional stay out of the next review? Two synthetic
+pull requests of one repository share a pattern the team keeps on purpose (a retry limit written
+as a constant in the job file, `src/jobs/`), each with one real bug (`src/memory/case.ts`):
+
+1. **learn:** pr-1301 is analysed without memory. The produced finding that matches the pattern
+   is "dismissed as intentional", and core's learning rule turns it into a dismissal entry
+   (`learnedEntry`, then the store's own `prepareMemoryEntry`; the Postgres side is tested in
+   `packages/db`);
+2. **control:** pr-1302 is analysed without memory: the pattern should be raised, so its
+   absence in the next step is the memory's doing;
+3. **apply:** pr-1302 is analysed with the entry.
+
+The result (`memory` in the report) holds booleans only: `run1Raised`, `learned`,
+`controlRaised`, `run2Raised` (must be false), `run2Cited` (the briefing's `memoryApplied` cites
+the entry), `run2BugFound` (memory hid nothing else) and `pass` (all of them, every analysis
+stored). With `--fake` the model is scripted to obey the memory block, so the result checks the
+plumbing (learning, selection, the untrusted part, citations); `memory.test.ts` also shows that a
+model which ignores memory fails it. Live, it measures whether the model follows the memory
+instructions; a control that does not raise the pattern makes the run inconclusive (`pass`
+false, `controlRaised` false), which says the case needs a stronger pattern, not that memory
+failed.
+
+**Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
+A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.
+
+`memory-injection.test.ts` plants every corpus payload as a stored entry and runs every adversary
+on it (ADR 0015 §2: a new channel runs the corpus).
+
 ## Report
 
 `pnpm evals run` writes one JSON document (`src/run/report.ts`, `format: "rocky-evals-report"`,
@@ -116,7 +147,8 @@ ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, le
   answered, the total, and whether the cap stopped the run;
 - `prs` and `total`: the scores above, missed seeded ids, and false positives as path, severity
   and lines;
-- `injection`: per case and totals, or `null`.
+- `injection`: per case and totals, or `null`;
+- `memory`: the project-memory eval's result, or `null` (absent in reports made before P8-2).
 
 A report holds no code, diff, prompt or model text, so it is safe to keep and publish. Without
 `--out`, reports go to `packages/evals/reports/` (git-ignored).
@@ -168,7 +200,7 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 
 `.github/workflows/evals.yml`:
 
-- **harness** (always, free): `pnpm evals run --fake --injection`, then `compare` against the
+- **harness** (always, free): `pnpm evals run --fake --injection --memory`, then `compare` against the
   fake baseline. The same comparison runs in `pnpm verify` (`run/baseline.test.ts`).
 - **live**: nightly and on manual dispatch from the default branch, and on same-repo PRs touching
   `packages/core/src/analysis/**`, `packages/core/src/prompt.ts`, `packages/core/src/llm.ts`,
@@ -181,7 +213,7 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 **What a PR cannot change on its own.** On a pull request both gates compare against the
 **base branch's** baseline (`git show HEAD^1:…`, the merge commit's base parent), and the job
 fails if the PR changes the files that decide a score without the maintainer label
-`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/score.ts`,
+`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/memory/**`, `src/score.ts`,
 `src/run/**`, `scripts/evals.ts`, `.github/workflows/evals.yml` and `.github/CODEOWNERS`. With the
 label (a maintainer reviewed the change, for example a regenerated baseline), the PR's own
 baseline is used. `CODEOWNERS` names the owner of those files.
@@ -200,12 +232,12 @@ settings:
 
 ## Baselines
 
-- **`baselines/fake.json`** is a `--fake --injection` run. Its scores measure the scripts, never
+- **`baselines/fake.json`** is a `--fake --injection --memory` run. Its scores measure the scripts, never
   a model; they only show the harness is intact. When a change to the pipeline or the seeded PRs
   changes them on purpose, regenerate it:
 
   ```
-  pnpm evals run --fake --injection --max-tokens 2000000 --out packages/evals/baselines/fake.json
+  pnpm evals run --fake --injection --memory --max-tokens 2000000 --out packages/evals/baselines/fake.json
   ```
 
 - **`baselines/live.json`** is a placeholder (`kind: "placeholder"`, a notice that starts
@@ -218,7 +250,7 @@ API with the plan's defaults) and a BYOK key:
 
 ```
 ANTHROPIC_API_KEY=<key> pnpm evals run --dry-run --injection
-ANTHROPIC_API_KEY=<key> pnpm evals run --injection --max-tokens 8000000 --out packages/evals/baselines/live.json
+ANTHROPIC_API_KEY=<key> pnpm evals run --injection --memory --max-tokens 8000000 --out packages/evals/baselines/live.json
 ```
 
 Check the printed summary, then commit `packages/evals/baselines/live.json` (it holds no key and

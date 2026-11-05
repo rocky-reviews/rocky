@@ -22,7 +22,7 @@ import {
 } from "./testing/index.js";
 
 /**
- * P8-2 (ADR 0036 amendment): learning from a posted review on a real Postgres as the
+ * P8-2 (ADR 0037): learning from a posted review on a real Postgres as the
  * application role. Dismissals (intentional, not an issue, handled elsewhere) become dismissal
  * entries with the reason; accepted and edited drafts become conventions; not-worth-it and
  * dismissed critical findings teach nothing; a second post teaches nothing new; a later decision

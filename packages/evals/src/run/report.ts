@@ -118,6 +118,23 @@ export const InjectionTotals = z.strictObject({
 });
 export type InjectionTotals = z.infer<typeof InjectionTotals>;
 
+/**
+ * The project-memory eval (P8-2, `src/memory/`): learn from a dismissal on pr-1301, then pr-1302
+ * must not raise the pattern again, must cite the entry, and must still find its real bug.
+ * Booleans only. Absent from reports made before P8-2 (and from runs without `--memory`).
+ */
+export const MemoryEvalReport = z.strictObject({
+  status: z.enum(["done", "failed", "capped"]),
+  run1Raised: z.boolean(),
+  learned: z.boolean(),
+  controlRaised: z.boolean(),
+  run2Raised: z.boolean(),
+  run2Cited: z.boolean(),
+  run2BugFound: z.boolean(),
+  pass: z.boolean(),
+});
+export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;
+
 export const EvalReport = z
   .strictObject({
     format: z.literal(REPORT_FORMAT),
@@ -132,6 +149,8 @@ export const EvalReport = z
     options: z.strictObject({
       maxTokens: z.number().int().positive(),
       injection: z.boolean(),
+      /** `--memory` (P8-2); absent in reports made before it. */
+      memory: z.boolean().optional(),
       only: z.array(z.string()).nullable(),
     }),
     usage: UsageReport,
@@ -140,6 +159,7 @@ export const EvalReport = z
     injection: z
       .strictObject({ cases: z.array(InjectionResult), total: InjectionTotals })
       .nullable(),
+    memory: MemoryEvalReport.nullable().optional(),
   })
   .refine((report) => (report.kind === "placeholder") === (report.notice === PLACEHOLDER_NOTICE), {
     message: "a placeholder carries PLACEHOLDER_NOTICE, and only a placeholder does",
@@ -161,7 +181,8 @@ export const EvalReport = z
         issue(["total", key], "totals must be the sums of the PRs");
     const anyCapped =
       report.prs.some((pr) => pr.status === "capped") ||
-      (report.injection?.cases ?? []).some((c) => c.status === "capped");
+      (report.injection?.cases ?? []).some((c) => c.status === "capped") ||
+      report.memory?.status === "capped";
     if (anyCapped !== report.usage.capped)
       issue(["usage", "capped"], "capped must be set exactly when a PR or case was capped");
   });
