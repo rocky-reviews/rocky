@@ -114,15 +114,23 @@ Each class is replaced by a fixed placeholder (`[person]`, `[email]`, `[user]`, 
 `[address]`); the result reports counts per class, which is all a log may carry.
 
 **What the scrubber guarantees:** the known people (member logins, display names passed by the
-caller, the PR author) are never stored, in any case, possessive, NFKC or look-alike spelling or
-with invisible characters inside; email addresses, URL credentials, `@handles`, trailer values,
-phone numbers and IPv4 addresses of the listed shapes are never stored. The output is NFKC
-without invisible characters, which also removes the hidden-text channel into prompts.
+caller, the PR author) are never stored wherever they appear as a word, in any case, possessive,
+NFKC or look-alike spelling, with invisible characters inside or inside inline code, **except** a
+name or display-name token that is a dictionary word or at most two letters, which is removed
+only in person positions (after `@`, a cue, in a trailer, before a speech verb); email addresses,
+URL credentials, `@handles`, trailer values, phone numbers and IPv4 addresses of the listed
+shapes are never stored; no entry carries the prompt canary or any eight-character run of it.
+The output is NFKC without invisible characters, which also removes the hidden-text channel into
+prompts. The property test in `pii.test.ts` states the first guarantee over random logins of
+every length.
 
 **What it cannot guarantee (honestly):** a name that is not in the list and is not next to a cue
 is a word like any other (`Pat merged it` is replaced because of the speech verb, `Pat's branch`
-is not); a listed login that is a common word or shorter than five letters is removed only in
-person positions (`go`, `pat`, `dana` in "see dana" survive; `cc dana` does not); names in scripts without letter case (CJK, Arabic, Hebrew) are only caught when listed;
+is not); a listed login or token that is a dictionary word or at most two letters survives
+outside person positions (`go`, `pat`, `Li` in "Li alone" survive; `cc Li` does not); a verb
+form that is also a plural noun is not a cue (`Pat notes the id` stays unless Pat is listed);
+a product or CamelCase word after a cue is a false positive (`according to HttpClient docs`
+stores `according to [person] docs`), never a partial word; names in scripts without letter case (CJK, Arabic, Hebrew) are only caught when listed;
 a person can be identified without a name ("the CTO", "whoever wrote the auth module", a
 unique role or date); IPv6, postal addresses, national ids, usernames inside URLs
 (`github.com/alice`) and names inside code identifiers are not recognised; a surname token that
@@ -216,6 +224,12 @@ reviewers' prompts; a leaver whose name must not remain; anyone reading an expor
   is derived at read time, so the login is still in `members` until the org is erased. That is
   ADR 0024's decision, not this one's.
 - The per-repository cap is a ceiling, not a budget: P8-4 decides what to keep.
+- `MAX_KNOWN_PEOPLE` (50 000 distinct folded names, a constant with a timing test) bounds the
+  scrub's people list. The repository always passes every member login of the org, so an org
+  with more members than that gets `too_many_people` on every create (audited nowhere, answered
+  to the caller) until the constant is raised; nothing is scrubbed with a shortened list. No
+  GitHub organization Rocky targets is near that size; the way out is a code change with the
+  timing test, or (P8-3) a per-org setting that passes active members only.
 - `superseded_by … ON DELETE SET NULL`: deleting the newer entry (P8-3) makes the older one
   current again. P8-3 should delete a chain, or supersede instead of deleting.
 - **Scrubbing happens at write time only.** A person who joins the org later, or a login that

@@ -79,6 +79,14 @@ Task log for the project plan. Agents append a row when a task is merged.
   name contexts; dotted and CamelCase decorators are not handles; `origin` is a caller parameter
   and `memory.edit` is re-checked `FOR SHARE` for member-written entries and supersedes; a
   partial index on `(org_id, superseded_by)`.
+- Fix round 2 (verification review) applied: weakness is the dictionary or ≤ 2 letters only
+  (`john`, `bob`, `Eric Li`, `Pérez` are scrubbed bare; the property test covers 3–4-letter
+  logins); cue and honorific names keep the permissive shape with a word-end guard (no
+  `[person]Shawn`), the speech-verb shape allows hyphenated parts (`Jean-Luc said`); unlisted
+  `@CamelCase` handles are people unless alone on a line or listed; listed people and `@handles`
+  are scrubbed inside backticks (only the context heuristics skip code); `MAX_KNOWN_PEOPLE` is
+  50 000 distinct folded names with a timing test; any eight-character run of the canary is
+  refused (`containsPromptCanaryFragment`).
 - Security L2: chat-template tokens (`<|im_start|>`, `[INST]`, `<<SYS>>`, …) are not refused at
   storage; P8-2 must pass entries only as untrusted text (`LlmUntrustedText`), never
   concatenated into instructions.
