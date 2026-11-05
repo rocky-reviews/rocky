@@ -32,19 +32,42 @@ export const bySeverity = (findings: readonly Finding[]): Finding[] =>
     )
     .map((x) => x.finding);
 
-/** H4-14: the open file's drafts first, then the rest; each part by severity. */
-export const panelOrder = (findings: readonly Finding[], current: string | null): Finding[] => {
+/**
+ * H4-14: the open file's drafts first, then the other files' in the sidebar's order (`files`)
+ * starting after the open file and wrapping round; each file's drafts by severity. Every open
+ * file sees a rotation of one cycle, so i/u walking it (and opening each draft's file) visit
+ * every draft once, and u undoes i. Files outside `files` follow, in severity order of their
+ * first draft. On the briefing (no file open): by severity alone.
+ */
+export const panelOrder = (
+  findings: readonly Finding[],
+  current: string | null,
+  files: readonly string[] = [],
+): Finding[] => {
   const sorted = bySeverity(findings);
   if (current === null) return sorted;
-  return [...sorted.filter((f) => f.path === current), ...sorted.filter((f) => f.path !== current)];
+  const all = [...files];
+  for (const f of sorted) if (!all.includes(f.path)) all.push(f.path);
+  const at = all.indexOf(current);
+  const key = (path: string) =>
+    path === current ? -1 : (all.indexOf(path) - at - 1 + all.length) % all.length;
+  // A stable sort: each file's drafts keep their severity order.
+  return sorted
+    .map((finding) => ({ finding, k: key(finding.path) }))
+    .sort((a, b) => a.k - b.k)
+    .map((x) => x.finding);
 };
 
 type Props = {
   /** The file on screen, or null on the briefing. */
   current?: string | null;
+  /** The sidebar's file order (k/j's), which the other files' drafts follow. */
+  files?: readonly string[];
 };
 
-export const ReviewPanelContent = ({ current = null }: Props) => {
+const NO_FILES: readonly string[] = [];
+
+export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) => {
   const {
     status,
     stale,
@@ -56,12 +79,13 @@ export const ReviewPanelContent = ({ current = null }: Props) => {
     jumpToFinding,
     jumpToComment,
   } = useReview();
-  const sorted = panelOrder(findings, current);
+  const sorted = panelOrder(findings, current, files);
   // A draft whose content was already posted (from a re-run of this commit) is decided for
   // every purpose here: nothing can be done with it (P6-6).
   const open = (f: Finding) => decisionOf(f.id).state === "draft" && postedOf(f.id) === null;
   const undecided = sorted.filter(open);
-  const decided = bySeverity(findings).filter((f) => !open(f));
+  // The same order as To decide, which is what i/u walk once every draft is decided.
+  const decided = sorted.filter((f) => !open(f));
   const here = undecided.filter((f) => f.path === current);
   const elsewhere = undecided.filter((f) => f.path !== current);
   const accepted = decided.filter((f) => decisionOf(f.id).state === "accepted").length;

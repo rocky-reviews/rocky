@@ -3,7 +3,9 @@ import { parseAnalysisDocument } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { reviewOrder } from "../diff/annotations.js";
 import type { OwnComment } from "../diff/diff-model.js";
+import { stepDraft } from "../keyboard/keymap.js";
 import { bySeverity, panelOrder, ReviewPanelContent, shorten } from "./ReviewPanel.js";
 import { NO_REVIEW, ReviewContext, type ReviewContextValue } from "./ReviewProvider.js";
 import { reviewWith } from "./testing.js";
@@ -13,11 +15,12 @@ import { reviewWith } from "./testing.js";
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("fixture invalid");
 const findings = parsed.value.findings;
+const files = reviewOrder(parsed.value);
 
 const render = (value: ReviewContextValue, current: string | null = null) =>
   renderToStaticMarkup(
     <ReviewContext value={value}>
-      <ReviewPanelContent current={current} />
+      <ReviewPanelContent current={current} files={files} />
     </ReviewContext>,
   );
 const panel = (decisions: Record<string, DraftDecision> = {}, comments: OwnComment[] = []) =>
@@ -80,20 +83,91 @@ describe("review panel", () => {
       ].map((m) => findings.find((f) => f.title === text(m[1] ?? ""))?.id);
     expect(text(section)).toMatch(/^>To decide This file Invitee/);
     expect(group("to-decide-here")).toEqual(["F1", "F3", "F8"]);
-    expect(group("to-decide-elsewhere")).toEqual(["F2", "F4", "F5", "F6", "F7", "F9", "F10"]);
+    // The other files in the sidebar's order after this one, each by severity.
+    expect(group("to-decide-elsewhere")).toEqual(["F2", "F7", "F4", "F5", "F6", "F9", "F10"]);
+    expect(panelOrder(findings, auth, files).map((f) => f.id)).toEqual([
+      "F1",
+      "F3",
+      "F8",
+      "F2",
+      "F7",
+      "F4",
+      "F5",
+      "F6",
+      "F9",
+      "F10",
+    ]);
+    // Rotated: from the routes file, the auth file comes last.
+    expect(panelOrder(findings, "src/api/routes/invitations.ts", files).map((f) => f.id)).toEqual([
+      "F2",
+      "F7",
+      "F4",
+      "F5",
+      "F6",
+      "F9",
+      "F10",
+      "F1",
+      "F3",
+      "F8",
+    ]);
+    // Without the sidebar's order, files follow their most severe draft.
     expect(panelOrder(findings, auth).map((f) => f.id)).toEqual([
       "F1",
       "F3",
       "F8",
       "F2",
+      "F7",
       "F4",
       "F5",
       "F6",
-      "F7",
       "F9",
       "F10",
     ]);
     expect(panelOrder(findings, null)).toEqual(bySeverity(findings));
+  });
+
+  it("H4-14: i visits every undecided draft once, opening each one's file, and u undoes it", () => {
+    const undecided = () => true;
+    const fileOf = (id: string) => findings.find((f) => f.id === id)?.path ?? null;
+    const step = (at: { current: string | null; focused: string | null }, dir: 1 | -1) => {
+      const to = stepDraft(
+        panelOrder(findings, at.current, files).map((f) => f.id),
+        undecided,
+        at.focused,
+        dir,
+      );
+      return { current: to === undefined ? at.current : fileOf(to), focused: to ?? null };
+    };
+    for (const start of [null, ...files]) {
+      let at = { current: start, focused: null as string | null };
+      const seen: string[] = [];
+      for (let n = 0; n < findings.length; n++) {
+        const next = step(at, 1);
+        // u from where i landed goes back to where it was (once a draft is focused).
+        if (at.focused !== null) expect(step(next, -1).focused).toBe(at.focused);
+        at = next;
+        seen.push(at.focused ?? "");
+      }
+      expect(new Set(seen).size).toBe(findings.length);
+      // One more i comes round to the first again.
+      expect(step(at, 1).focused).toBe(seen[0]);
+    }
+  });
+
+  it("H4-14: Decided follows the same order (i/u walk it once all are decided)", () => {
+    const all = Object.fromEntries(
+      findings.map((f) => [f.id, { state: "dismissed", reason: "not_an_issue" } as const]),
+    );
+    const html = render(reviewWith(findings, all), "src/api/routes/invitations.ts");
+    const decided = (html.split('id="decided"')[1] ?? "").split("</ul>")[0] ?? "";
+    const locs = [...decided.matchAll(/<span class="loc"><bdi>([^<]+)<\/bdi>:(\d+)/g)].map(
+      (m) => `${m[1]}:${m[2]}`,
+    );
+    expect(locs.slice(0, 3)).toEqual([
+      "invitations.ts:13",
+      "invitations.ts:19",
+      "20261020_add_invitations.sql:6",
+    ]);
   });
 
   it("H4-14: no group labels when only one group has drafts to decide", () => {

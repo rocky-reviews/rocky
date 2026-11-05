@@ -449,6 +449,7 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                     )}
                     <RightPanelContent
                       current={selection.kind === "file" ? selection.path : null}
+                      files={order}
                     />
                   </aside>
                 </div>

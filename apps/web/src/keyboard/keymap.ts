@@ -7,8 +7,8 @@
  *   the choice is remembered per browser.
  * - ⌘/Ctrl+Enter (finish) has a modifier, so it stays on; it too is ignored while typing, where
  *   text fields give it their own meaning (save the comment).
- * - H4-14: ↑/↓ with nothing focused scroll the main column (they are not single-character keys,
- *   so they stay on).
+ * - H4-14: ↑/↓ scroll the main column from anywhere outside it, except widgets with their own
+ *   arrow keys (`arrowsScrollFile`); they are not single-character keys, so they stay on.
  */
 
 export type ShortcutAction =
@@ -111,14 +111,60 @@ export const reasonIndexFor = (event: KeyInput, singleKeys: boolean): number | n
 /** Pixels ↑/↓ scroll by: the browser's own step for a focused scroller. */
 export const SCROLL_STEP = 40;
 
+/** Roles whose widgets move with ↑/↓ themselves (ARIA authoring practices). */
+const ARROW_ROLES = new Set([
+  "tablist",
+  "tab",
+  "radiogroup",
+  "radio",
+  "menu",
+  "menubar",
+  "menuitem",
+  "menuitemradio",
+  "menuitemcheckbox",
+  "listbox",
+  "option",
+  "slider",
+  "spinbutton",
+  "tree",
+  "treeitem",
+  "grid",
+  "treegrid",
+]);
+
+/** The focused element and its ancestors, as `arrowsScrollFile` reads them. */
+export type FocusChainItem = {
+  readonly tagName: string;
+  readonly role?: string | null;
+  readonly type?: string;
+  readonly id?: string;
+};
+
 /**
- * H4-14: ↑/↓ with focus on the page itself (body) scroll the main column, which is the scroller
- * the browser would not pick (the page does not scroll). Anywhere else the focused control or
- * the browser handles them (a line in the diff moves the active line; the main column, a card
- * and the sidebar scroll their own box). Returns the pixels to scroll by, or null.
+ * H4-14: whether ↑/↓ pressed with this focus (the element, then its ancestors) scroll the open
+ * file: anywhere on the page (body, the sidebar, the Review panel, the top bar), unless the
+ * focus is in a widget with its own arrow keys (a tab list, radio group, menu, listbox, slider,
+ * tree, grid, select, range or radio input), or in the main column, where the browser already
+ * scrolls the file and a diff line or the diff list moves the active line.
  */
-export const scrollStepFor = (event: KeyInput, onPage: boolean): number | null => {
-  if (!onPage || event.defaultPrevented || event.isComposing) return null;
+export const arrowsScrollFile = (chain: readonly FocusChainItem[]): boolean =>
+  !chain.some((el) => {
+    const tag = el.tagName.toUpperCase();
+    const type = (el.type ?? "").toLowerCase();
+    return (
+      el.id === "main" ||
+      ARROW_ROLES.has((el.role ?? "").toLowerCase()) ||
+      tag === "SELECT" ||
+      (tag === "INPUT" && (type === "range" || type === "radio"))
+    );
+  });
+
+/**
+ * H4-14: ↑/↓ scroll the main column by the browser's own step where `arrowsScrollFile` says so.
+ * Returns the pixels to scroll by, or null.
+ */
+export const scrollStepFor = (event: KeyInput, scrollsFile: boolean): number | null => {
+  if (!scrollsFile || event.defaultPrevented || event.isComposing) return null;
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return null;
   if (event.key === "ArrowDown") return SCROLL_STEP;
   if (event.key === "ArrowUp") return -SCROLL_STEP;
@@ -205,7 +251,11 @@ export const HELP_ROWS: readonly { keys: readonly string[]; label: string; singl
   { keys: ["t"], label: "Change tree: what changed where", single: true },
   { keys: ["m"], label: "Toggle light / dark", single: true },
   { keys: ["?"], label: "This list", single: true },
-  { keys: ["↑", "↓"], label: "Scroll the file", single: false },
+  {
+    keys: ["↑", "↓"],
+    label: "Scroll the file (outside tabs, lists and the diff's lines)",
+    single: false,
+  },
   { keys: ["finish"], label: "Finish review", single: false },
   { keys: ["Esc"], label: "Close / cancel", single: false },
 ];

@@ -5,10 +5,19 @@
 import { ReviewPanelContent } from "../drafts/ReviewPanel.js";
 import { ShortcutStrip } from "../keyboard/ShortcutStrip.js";
 
-/** `current`: the file on screen, or null on the briefing (H4-14: its drafts are listed first). */
-export const RightPanelContent = ({ current }: { current: string | null }) => (
+/**
+ * `current`: the file on screen, or null on the briefing; `files`: the sidebar's order (H4-14:
+ * the open file's drafts first, then the next files').
+ */
+export const RightPanelContent = ({
+  current,
+  files,
+}: {
+  current: string | null;
+  files: readonly string[];
+}) => (
   <>
-    <ReviewPanelContent current={current} />
+    <ReviewPanelContent current={current} files={files} />
     <ShortcutStrip />
   </>
 );

@@ -579,8 +579,19 @@ test("H4-14: To decide lists this file's drafts first, and i/u follow it", async
   await expect(here).toHaveText(["invitations.ts:13", "invitations.ts:19"]);
   await press(page, "i");
   await expect(card(page, "F7")).toBeFocused();
-  await press(page, "u");
-  await expect(card(page, "F2")).toBeFocused();
+  // Then the next file in the sidebar's order (the migration), not back to the first file.
+  await press(page, "i");
+  await expect(card(page, "F4")).toBeFocused();
+  await expect(fileTitle(page)).toHaveText(MIGRATION);
+  for (const id of ["F5", "F6", "F9", "F10", "F1"]) {
+    await press(page, "i");
+    await expect(card(page, id)).toBeFocused();
+  }
+  // u retraces i: back over the file boundaries.
+  for (const id of ["F10", "F9", "F6", "F5", "F4", "F7", "F2", "F8"]) {
+    await press(page, "u");
+    await expect(card(page, id)).toBeFocused();
+  }
 });
 
 test("H4-14: a, e and d act only while the focused draft is on screen, and hint only then", async ({
@@ -682,7 +693,7 @@ test.describe("H4-14: ↑/↓ scroll the open file", () => {
     await expect.poll(() => mainScroll(page)).toBe(40);
   });
 
-  test("picked with the keyboard, focus stays in the sidebar; on a line, arrows move the line", async ({
+  test("picked with the keyboard, focus stays in the sidebar, and ↓ there scrolls the file", async ({
     page,
   }) => {
     await open(page);
@@ -692,12 +703,57 @@ test.describe("H4-14: ↑/↓ scroll the open file", () => {
     await expect(fileTitle(page)).toHaveText(AUTH);
     await expect(file).toBeFocused();
     await press(page, "ArrowDown");
+    await press(page, "ArrowDown");
     await expect(file).toBeFocused();
-    // A focused line keeps its own arrows (keyboard a11y, P6-3): the next line takes focus.
+    await expect.poll(() => mainScroll(page)).toBe(80);
+    await press(page, "ArrowUp");
+    await expect.poll(() => mainScroll(page)).toBe(40);
+  });
+
+  test("from the Review panel and the top bar too", async ({ page }) => {
+    await open(page);
+    await press(page, "k");
+    await page.locator("#review-panel .f-item").first().focus();
+    await press(page, "ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBe(40);
+    await page.getByRole("button", { name: "Keyboard shortcuts" }).focus();
+    await press(page, "ArrowDown");
+    await expect.poll(() => mainScroll(page)).toBe(80);
+  });
+
+  test("a focused diff line keeps its own arrows: the next line takes focus", async ({ page }) => {
+    await open(page);
+    await press(page, "k");
     await page.locator("#main .diff button[data-line]").first().focus();
     const first = await page.evaluate(() => document.activeElement?.getAttribute("data-line"));
     await press(page, "ArrowDown");
     const next = await page.evaluate(() => document.activeElement?.getAttribute("data-line"));
     expect(Number(next)).toBeGreaterThan(Number(first));
+  });
+
+  test("the risk chips (a tab list) keep their own arrows", async ({ page }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const main = document.getElementById("main");
+      if (main === null) return;
+      const calls = { n: 0 };
+      (window as unknown as { scrollCalls: typeof calls }).scrollCalls = calls;
+      // Counts the shortcut's own scrolls (the only caller of scrollBy on the main column).
+      main.scrollBy = () => {
+        calls.n++;
+      };
+    });
+    const chips = page.locator(".risk-chips [role=tab]");
+    await chips.first().focus();
+    await press(page, "ArrowRight");
+    await expect(chips.nth(1)).toBeFocused();
+    await expect(chips.nth(1)).toHaveAttribute("aria-selected", "true");
+    await press(page, "ArrowDown");
+    await press(page, "ArrowUp");
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { scrollCalls: { n: number } }).scrollCalls.n,
+      ),
+    ).toBe(0);
   });
 });

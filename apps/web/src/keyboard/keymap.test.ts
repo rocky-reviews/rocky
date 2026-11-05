@@ -3,6 +3,7 @@ import {
   finishKeys,
   HELP_ROWS,
   type KeyInput,
+  arrowsScrollFile,
   isMac,
   isTextEntry,
   readSingleKeys,
@@ -180,6 +181,63 @@ describe("scrollStepFor (H4-14)", () => {
       expect(scrollStepFor(key("ArrowDown", { [mod]: true }), true)).toBeNull();
     for (const k of ["ArrowLeft", "PageDown", "j"]) expect(scrollStepFor(key(k), true)).toBeNull();
     expect(scrollStepFor(key("ArrowDown", { defaultPrevented: true }), true)).toBeNull();
+  });
+});
+
+describe("arrowsScrollFile (H4-14)", () => {
+  const shell = [{ tagName: "BODY" }, { tagName: "HTML" }];
+  it("scrolls the file from the page, the sidebar, the Review panel and the top bar", () => {
+    expect(arrowsScrollFile([])).toBe(true);
+    expect(arrowsScrollFile(shell)).toBe(true);
+    const sidebar = [
+      { tagName: "BUTTON", type: "button" },
+      { tagName: "LI" },
+      { tagName: "NAV", id: "sidebar" },
+      ...shell,
+    ];
+    expect(arrowsScrollFile(sidebar)).toBe(true);
+    expect(arrowsScrollFile([{ tagName: "INPUT", type: "checkbox" }, ...sidebar.slice(1)])).toBe(
+      true,
+    );
+    expect(
+      arrowsScrollFile([{ tagName: "BUTTON" }, { tagName: "ASIDE", id: "review-panel" }, ...shell]),
+    ).toBe(true);
+    expect(arrowsScrollFile([{ tagName: "A" }, { tagName: "HEADER" }, ...shell])).toBe(true);
+  });
+
+  it("leaves widgets with their own arrow keys alone", () => {
+    for (const role of [
+      "tablist",
+      "tab",
+      "radiogroup",
+      "radio",
+      "menu",
+      "menuitem",
+      "listbox",
+      "option",
+      "slider",
+      "spinbutton",
+      "tree",
+      "grid",
+    ])
+      expect(arrowsScrollFile([{ tagName: "DIV", role }, ...shell])).toBe(false);
+    // The risk chips: a tab inside a tab list.
+    expect(
+      arrowsScrollFile([
+        { tagName: "BUTTON", role: "tab" },
+        { tagName: "DIV", role: "tablist" },
+        ...shell,
+      ]),
+    ).toBe(false);
+    expect(arrowsScrollFile([{ tagName: "SELECT" }, ...shell])).toBe(false);
+    expect(arrowsScrollFile([{ tagName: "INPUT", type: "range" }, ...shell])).toBe(false);
+    expect(arrowsScrollFile([{ tagName: "INPUT", type: "radio" }, ...shell])).toBe(false);
+  });
+
+  it("leaves the main column to the browser and the diff's lines", () => {
+    expect(arrowsScrollFile([{ tagName: "MAIN", id: "main" }, ...shell])).toBe(false);
+    const line = [{ tagName: "BUTTON" }, { tagName: "DIV" }, { tagName: "DIV", role: "group" }];
+    expect(arrowsScrollFile([...line, { tagName: "MAIN", id: "main" }, ...shell])).toBe(false);
   });
 });
 

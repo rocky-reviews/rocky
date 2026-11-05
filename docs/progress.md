@@ -231,11 +231,9 @@ in-memory store behind a port, plus its tests.
 
 ### H4-14 follow-ups
 
-- i/u follow the panel's order, which regroups around the open file. Walking with i past
-  drafts without deciding them can come back to a skipped file before reaching later files, and
-  u right after i into another file goes to the end of the list, not back to the draft before.
-  A walk anchored to the file it started in would fix both, at the cost of not matching the
-  panel mid-walk.
+- Fixed in the fix round: i/u looped between the first few files when drafts were skipped
+  (the other files were ordered by severity alone). The other files now follow the sidebar's
+  order, rotated to start after the open file, so the walk is one cycle and u undoes i.
 - The strip grows by a line while a/e/d are listed (the focused draft on screen), so the panel
   above it shifts when the draft scrolls in or out of view at narrow panel widths.
 - Under To decide the titles start flush left (no dot, the pill is on the right), while under
@@ -243,7 +241,12 @@ in-memory store behind a port, plus its tests.
 - Baselines outside this task's views (e.g. `brief-1024-*`, `file-critical-1024-*`) still carry
   H4-12's ~3 px shift of the sidebar's Tree hint, under the 0.2% tolerance; left alone here.
 - 1–4 work while focus is among the dismiss reasons (where `d` and the Dismiss button put it); a
-  click elsewhere while the reasons are open leaves them without keys until focus returns.
+  click elsewhere while the reasons are open leaves them without keys until focus returns. They
+  are a second keyboard path (the reasons group's `onKeyDown`, beside the document listener),
+  named in ADR 0030; folding them into `ShortcutKeys` (acting on the open reasons while the card
+  is on screen) would make them work from anywhere.
+- "Other files" in To decide is one list in the sidebar's file order; per-file sub-labels (or
+  a file name on each group) would make the grouping visible.
 - The on-screen observer reads the sticky header's height once, when the card is focused; a
   resize that rewraps the header can make the hint and the key disagree by a few pixels at the
   top edge until the card is focused again.

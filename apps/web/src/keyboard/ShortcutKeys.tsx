@@ -8,13 +8,16 @@
  * nothing until the review state is loaded or when the drafts are hidden because the diff is
  * from a newer push than the analysis.
  *
- * H4-14: ↑/↓ with focus on the page itself scroll the main column (`scrollStepFor`).
+ * H4-14: ↑/↓ scroll the main column from outside it, unless the focus is in a widget with its
+ * own arrow keys (`arrowsScrollFile`).
  */
 import { useEffect, useRef } from "react";
 import { panelOrder } from "../drafts/ReviewPanel.js";
 import { type ReviewContextValue, useReview } from "../drafts/ReviewProvider.js";
 import { cardOnScreen } from "./draft-on-screen.js";
 import {
+  arrowsScrollFile,
+  type FocusChainItem,
   isTextEntry,
   scrollStepFor,
   type ShortcutAction,
@@ -65,7 +68,7 @@ export const ShortcutKeys = (props: Props) => {
         case "nextDraft":
         case "prevDraft": {
           if (!draftsShown(r)) return true;
-          const ids = panelOrder(r.findings, p.current).map((f) => f.id);
+          const ids = panelOrder(r.findings, p.current, p.order).map((f) => f.id);
           const undecided = (id: string) =>
             r.decisionOf(id).state === "draft" && r.postedOf(id) === null;
           const to = stepDraft(ids, undecided, r.focused, action === "nextDraft" ? 1 : -1);
@@ -112,9 +115,16 @@ export const ShortcutKeys = (props: Props) => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (isTextEntry(target)) return;
-      const onPage =
-        target === null || target === document.body || target === document.documentElement;
-      const step = scrollStepFor(event, onPage);
+      const chain: FocusChainItem[] = [];
+      const arrow = event.key === "ArrowDown" || event.key === "ArrowUp";
+      for (let el = arrow ? target : null; el !== null; el = el.parentElement)
+        chain.push({
+          tagName: el.tagName,
+          role: el.getAttribute("role"),
+          type: el.getAttribute("type") ?? "",
+          id: el.id,
+        });
+      const step = arrow ? scrollStepFor(event, arrowsScrollFile(chain)) : null;
       if (step !== null) {
         event.preventDefault();
         document.getElementById("main")?.scrollBy({ top: step });
