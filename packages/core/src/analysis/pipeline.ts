@@ -360,10 +360,13 @@ const flowsOutline = (flows: FlowsAnswer["flows"]) =>
   }));
 
 /** A cited finding as the document's checks see it: the handles are not part of a finding. */
-const withoutCitations = ({
-  memory: _citations,
-  ...finding
-}: ReviewFinding & { readonly memory: readonly string[] }): ReviewFinding => finding;
+const withoutCitations = (
+  finding: ReviewFinding & { readonly memory: readonly string[] },
+): ReviewFinding => {
+  const copy: Record<string, unknown> = { ...finding };
+  delete copy["memory"];
+  return copy as ReviewFinding;
+};
 
 const DOCUMENT_PARTS: readonly DocumentPart[] = ["graph", "flows", "walkthrough", "briefing"];
 

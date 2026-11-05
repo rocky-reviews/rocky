@@ -104,6 +104,7 @@ describe("analyses store", () => {
         analysisId: id,
         revisionId: A.revisionId,
         pullRequestId: A.pullRequestId,
+        repoId: A.repoId,
         number: 847,
         title: "Invite flow",
         headSha: "a".repeat(40),
