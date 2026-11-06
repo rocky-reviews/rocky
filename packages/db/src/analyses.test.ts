@@ -42,6 +42,13 @@ let B: SeededOrg;
 const DOCUMENT = JSON.parse(
   readFileSync(new URL("../../schema/fixtures/pr-847.json", import.meta.url), "utf8"),
 ) as AnalysisDocument;
+/**
+ * The fixture without its P8-2b hidden finding (schema 1.6): the verdict-floor tests below empty
+ * `memoryApplied`, and a hidden finding must cite the dismissal that hid it.
+ */
+const BASE: AnalysisDocument = Object.fromEntries(
+  Object.entries(DOCUMENT).filter(([key]) => key !== "hidden"),
+) as AnalysisDocument;
 const UNITS = DOCUMENT.triage.files.map((file, i) => ({
   path: file.path,
   key: i.toString(16).padStart(64, "0"),
@@ -172,7 +179,7 @@ describe("analyses store", () => {
     const id = await running(A, "6".repeat(40));
     const auth = DOCUMENT.triage.files.find((f) => f.path === "src/auth/invitations.ts")!;
     const lowered = {
-      ...DOCUMENT,
+      ...BASE,
       provenance: {
         ...DOCUMENT.provenance,
         unanalysed: [{ path: auth.path, reason: "analysis-failed" }],
@@ -204,7 +211,7 @@ describe("analyses store", () => {
   it("refuses a verdict below high next to a file triaged critical (P4-4 review round 1, item 2)", async () => {
     const id = await running(A, "5".repeat(40));
     const doc = {
-      ...DOCUMENT,
+      ...BASE,
       findings: DOCUMENT.findings
         .filter((f) => f.severity === "medium" || f.severity === "low")
         .map((f) => ({ ...f, memory: [] })),
@@ -225,7 +232,7 @@ describe("analyses store", () => {
     const id = await running(A, "9".repeat(40));
     const page = "web/src/pages/InvitePage.tsx";
     const doc = {
-      ...DOCUMENT,
+      ...BASE,
       provenance: { ...DOCUMENT.provenance, unanalysed: [{ path: page, reason: "too-large" }] },
       // No file triaged critical, so only the unanalysed floor applies (the triage floor is P4-4's).
       triage: {

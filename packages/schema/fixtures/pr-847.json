@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.5.0",
+  "schemaVersion": "1.6.0",
   "provenance": {
     "repo": {
       "owner": "acme",
@@ -231,6 +231,11 @@
         "entryId": "mem-655",
         "text": "Never log emails, tokens or source code",
         "source": "policy · PR #655"
+      },
+      {
+        "entryId": "mem-770",
+        "text": "Dismissed as intentional: Invite emails are not retried on a transient send failure",
+        "source": "dismissal · PR #770"
       }
     ]
   },
@@ -586,6 +591,30 @@
       "body": "There are no tests for reusing an invite (F3) or overriding the role (F1). Both should fail today.",
       "memory": [],
       "agentPrompt": "Add tests to src/auth/invitations.test.ts: reusing an accepted invite is rejected, and a member invite cannot be accepted as admin."
+    }
+  ],
+  "hidden": [
+    {
+      "id": "H1",
+      "severity": "medium",
+      "confidence": 74,
+      "path": "src/jobs/sendInviteEmail.ts",
+      "range": {
+        "start": 12,
+        "end": 12
+      },
+      "title": "Invite emails are not retried on a transient send failure",
+      "body": "A 5xx from the mail provider drops the invitation silently; the invitee never gets a link and nothing is logged for the admin to act on.",
+      "agentPrompt": "In sendInviteEmail (src/jobs/sendInviteEmail.ts), retry a transient send failure with backoff and log a fixed error code when the retries are exhausted.",
+      "hiddenBy": {
+        "entry": {
+          "entryId": "mem-770",
+          "text": "Dismissed as intentional: Invite emails are not retried on a transient send failure",
+          "source": "dismissal · PR #770"
+        },
+        "path": "src/jobs/sendInviteEmail.ts",
+        "dismissedAs": "intentional"
+      }
     }
   ],
   "graph": {

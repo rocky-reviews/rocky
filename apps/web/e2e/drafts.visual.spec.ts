@@ -74,6 +74,33 @@ const STATES: State[] = [
     run: (page) => atCard(page, "F3"),
   },
   {
+    // P8-2b: the jobs file's AI strip with the collapsed "1 finding hidden by memory · show"
+    // line under it. No POC state draws it; the file state is the nearest reference.
+    id: "drafts-hidden",
+    poc: "02-file-critical",
+    run: async (page) => {
+      await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+      await openFile(page, "src/jobs/sendInviteEmail.ts");
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // P8-2b: the same line expanded: the hidden finding with the dismissal that hid it and
+    // "Restore as a draft".
+    id: "drafts-hidden-open",
+    poc: "02-file-critical",
+    run: async (page) => {
+      await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+      await openFile(page, "src/jobs/sendInviteEmail.ts");
+      await page
+        .locator(".hidden-memory")
+        .getByRole("button", { name: /hidden by memory/ })
+        .click();
+      await page.locator('[data-hidden="H1"]').waitFor();
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
     id: "drafts-dismiss",
     poc: "03-draft-dismiss",
     run: async (page) => {

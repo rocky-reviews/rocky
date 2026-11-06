@@ -32,7 +32,7 @@
 import type { Briefing } from "./briefing.js";
 import type { AnalysisDocument } from "./document.js";
 import type { SchemaIssue } from "./errors.js";
-import type { Finding, MemoryRef, Severity } from "./findings.js";
+import type { Finding, HiddenByDismissal, MemoryRef, Severity } from "./findings.js";
 import type { Flow, Graph, StepStage, View } from "./graph.js";
 import { MAX_FLAGS_TOTAL, MAX_VIEW_DEPTH, MAX_VIEWS_TOTAL, SCORE_BANDS } from "./limits.js";
 import type { LineRange } from "./primitives.js";
@@ -451,7 +451,7 @@ const triageIssues = (
 // --- Findings ------------------------------------------------------------------------------
 
 const suggestionIssues = (
-  finding: Finding,
+  finding: Pick<Finding, "path" | "range" | "suggestion">,
   at: string,
   lines: readonly string[] | undefined,
 ): Issues => {
@@ -503,8 +503,23 @@ const suggestionIssues = (
 const sameRef = (a: MemoryRef, b: MemoryRef): boolean =>
   a.entryId === b.entryId && a.text === b.text && a.source === b.source;
 
+/**
+ * A finding as the location rules see it: a draft, or a hidden one (schema 1.6), which carries
+ * no suggestion or backing and cites the dismissal that hid it instead.
+ */
+type Located = Omit<Finding, "suggestion" | "memory" | "restored"> &
+  Partial<Pick<Finding, "suggestion" | "memory">> & {
+    readonly hiddenBy?: HiddenByDismissal | undefined;
+  };
+
+/**
+ * The per-finding rules, for `findings` and for `hidden` (schema 1.6): both name triaged PR
+ * files and ranges inside a hunk, and every memory entry they cite (backing, or the dismissal
+ * that hid one) is in `briefing.memoryApplied`, quoted identically.
+ */
 const findingIssues = (
-  findings: readonly Finding[],
+  collection: "findings" | "hidden",
+  findings: readonly Located[],
   triage: Triage,
   applied: readonly MemoryRef[],
   filesByPath: ReadonlyMap<string, ChangedFile>,
@@ -514,7 +529,7 @@ const findingIssues = (
   const issues: Issues = [];
   reportDuplicateIds(
     issues,
-    "findings",
+    collection,
     findings.map((finding) => finding.id),
   );
 
@@ -523,7 +538,7 @@ const findingIssues = (
   const appliedById = new Map(applied.map((ref) => [ref.entryId, ref] as const));
 
   findings.forEach((finding, index) => {
-    const at = `findings[${index}]`;
+    const at = `${collection}[${index}]`;
     const known = filesByPath.get(finding.path);
 
     if (known === undefined)
@@ -559,25 +574,32 @@ const findingIssues = (
         message: `a ${finding.severity} finding cannot sit in '${finding.path}', which triage rates 'low'`,
       });
 
+    const memory = finding.memory ?? [];
     reportDuplicateIds(
       issues,
       `${at}.memory`,
-      finding.memory.map((ref) => ref.entryId),
+      memory.map((ref) => ref.entryId),
       "entryId",
     );
 
-    finding.memory.forEach((ref, refIndex) => {
+    const cited = [
+      ...memory.map((ref, refIndex) => [ref, `${at}.memory[${refIndex}]`] as const),
+      ...(finding.hiddenBy === undefined
+        ? []
+        : [[finding.hiddenBy.entry, `${at}.hiddenBy.entry`] as const]),
+    ];
+    for (const [ref, refPath] of cited) {
       const known = appliedById.get(ref.entryId);
       if (known === undefined || !sameRef(known, ref))
         issues.push({
           code: "MEMORY_REF_MISMATCH",
-          path: `${at}.memory[${refIndex}]`,
+          path: refPath,
           message:
             known === undefined
               ? `memory entry '${ref.entryId}' is not listed in briefing.memoryApplied`
               : `memory entry '${ref.entryId}' is quoted differently from briefing.memoryApplied`,
         });
-    });
+    }
 
     // Own-property lookup: a path like "constructor" must not reach Object.prototype.
     const lines =
@@ -724,7 +746,22 @@ export const integrityIssues = (
   append(
     issues,
     findingIssues(
+      "findings",
       doc.findings,
+      doc.triage,
+      doc.briefing.memoryApplied,
+      filesByPath,
+      unanalysed,
+      options.newFileLines,
+    ),
+  );
+  // Hidden findings (schema 1.6) are held to the same location rules: a dismissal may keep a
+  // finding out of the drafts, never put one outside the diff or on a file that was not reviewed.
+  append(
+    issues,
+    findingIssues(
+      "hidden",
+      doc.hidden ?? [],
       doc.triage,
       doc.briefing.memoryApplied,
       filesByPath,

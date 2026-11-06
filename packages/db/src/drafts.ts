@@ -5,12 +5,13 @@ import {
   isDismissReason,
   MAX_COMMENT_BODY,
   normaliseCommentBody,
+  restoredAsDraft,
   type DismissReason,
   type DraftAction,
   type DraftDecision,
   type DraftState,
 } from "@rocky-reviews/core";
-import { parseAnalysisDocument, type AnalysisDocument } from "@rocky-reviews/schema";
+import { parseAnalysisDocument, type AnalysisDocument, type Finding } from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
 import {
   carriedDraftContent,
@@ -33,6 +34,13 @@ import {
  *
  * Results are fixed codes; errors carry no values (bodies are the reviewer's text and findings
  * are PR-derived: neither belongs in an error or a log).
+ *
+ * P8-2b: a finding project memory hid (`document.hidden`, schema 1.6) becomes one of the
+ * reviewer's drafts only through `restore`, which creates its decision row (state `draft`). The
+ * row's existence is what "restored" means: `listReviewDrafts` reports it even undecided, and
+ * every other action on a hidden finding needs the row first (`unknown_finding` otherwise: the
+ * client cannot decide what it has not restored). Restoring a draft that was never hidden is an
+ * `invalid_transition`, like any action the state machine refuses.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -191,7 +199,13 @@ export const listReviewDrafts = async (
   const byFinding = new Map(rows.map((row) => [row.finding_id, row]));
   const carried = await carriedDraftContent(tx, memberId, target.revisionId);
   const views: DraftView[] = [];
-  for (const finding of target.document.findings) {
+  // Hidden findings (P8-2b) whose row exists were restored: listed whatever their state, so the
+  // page knows which hidden findings are now drafts.
+  const restored = (target.document.hidden ?? [])
+    .filter((hidden) => byFinding.has(hidden.id))
+    .map(restoredAsDraft);
+  const restoredIds = new Set(restored.map((finding) => finding.id));
+  for (const finding of [...target.document.findings, ...restored]) {
     const row = byFinding.get(finding.id);
     const view = row === undefined ? null : viewOf(row);
     if (view?.posted !== null && view !== null) {
@@ -217,7 +231,10 @@ export const listReviewDrafts = async (
             }
           : { ...view, posted: "posted" },
       );
-    } else if (view !== null && (view.state !== "draft" || view.agentPromptCopiedAt !== null)) {
+    } else if (
+      view !== null &&
+      (view.state !== "draft" || view.agentPromptCopiedAt !== null || restoredIds.has(finding.id))
+    ) {
       views.push(view);
     }
   }
@@ -281,13 +298,26 @@ export const decideDraft = async (
   const memberId = uuid(input.memberId, "member id");
   const target = await loadTarget(tx, analysisId);
   if (target === null) return { outcome: "not_found" };
-  // Looked up by exact id among the document's findings: the client cannot invent a draft.
-  const finding = target.document.findings.find((f) => f.id === input.findingId);
+  // Looked up by exact id among the document's findings, then its hidden findings (P8-2b): the
+  // client cannot invent a draft.
+  const hidden = target.document.hidden?.find((h) => h.id === input.findingId);
+  const finding: Finding | undefined =
+    target.document.findings.find((f) => f.id === input.findingId) ??
+    (hidden === undefined ? undefined : restoredAsDraft(hidden));
   if (finding === undefined) return { outcome: "unknown_finding" };
 
   // The posting lock first (ADR 0026 S2): a submission starting now either carries the state
   // this action leaves, or sees it changed and answers `stale`.
   await lockReviewPlan(tx, target.pullRequestId, memberId);
+  if (hidden !== undefined && input.action.kind !== "restore") {
+    // A hidden finding is decided only once restored: its row must already exist.
+    const existing = await tx.query(
+      `select 1 from findings_state
+        where org_id = $1 and analysis_id = $2 and member_id = $3 and finding_id = $4`,
+      [tx.orgId, analysisId, memberId, finding.id],
+    );
+    if (existing.rowCount === 0) return { outcome: "unknown_finding" };
+  }
   await tx.query(
     `insert into findings_state (analysis_id, member_id, finding_id)
      values ($1, $2, $3)
@@ -313,6 +343,12 @@ export const decideDraft = async (
   );
   const row = rows[0];
   if (row === undefined) throw new DraftStoreError("drafts: decision row missing");
+  // Restoring a hidden finding (P8-2b) is the row's creation, done above; it decides nothing, so
+  // a second restore changes nothing and answers the same. Restoring a draft that was never
+  // hidden falls through to the state machine, which refuses it.
+  if (hidden !== undefined && input.action.kind === "restore") {
+    return { outcome: "ok", draft: viewOf(row) };
+  }
   // This very decision was posted (or is being posted): it cannot change (S2). Copying the
   // agent prompt changes nothing that was posted, so it is never refused here (#39 SF2).
   if (input.action.kind !== "send_to_agent" && (await isCarried(tx, "draft", findingStateId))) {

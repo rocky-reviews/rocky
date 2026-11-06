@@ -282,6 +282,76 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     ]);
   });
 
+  it("records the triage level of the dismissed finding's file, from the document (P8-2b)", async () => {
+    // F3 is a high finding on src/auth/invitations.ts, triaged critical; F6 a medium one on the
+    // important jobs file; F2 an accept. The level is the stored document's triage, so a
+    // reviewer (or a client) cannot claim one: there is no input for it.
+    await decide(A, "F3", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F6", { kind: "dismiss", reason: "not_an_issue" });
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    const { rows } = await superuser.query<{
+      kind: string;
+      evidence_path: string;
+      learned_level: string | null;
+    }>(
+      "select kind, evidence_path, learned_level from memory_entries where org_id = $1 order by kind, evidence_path",
+      [A.orgId],
+    );
+    expect(rows).toEqual([
+      { kind: "convention", evidence_path: "src/api/routes/invitations.ts", learned_level: null },
+      { kind: "dismissal", evidence_path: "src/auth/invitations.ts", learned_level: "critical" },
+      {
+        kind: "dismissal",
+        evidence_path: "src/jobs/sendInviteEmail.ts",
+        learned_level: "important",
+      },
+    ]);
+    const memory = await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
+    expect(memory.map((entry) => [entry.kind, entry.path, entry.learnedLevel]).sort()).toEqual([
+      ["convention", "src/api/routes/invitations.ts", null],
+      ["dismissal", "src/auth/invitations.ts", "critical"],
+      ["dismissal", "src/jobs/sendInviteEmail.ts", "important"],
+    ]);
+    // The database holds the level to a learned dismissal (migration 0021): not a convention,
+    // and not a member-written entry (the origin check runs on the same row rule).
+    await expect(
+      superuser.query(
+        `update memory_entries set learned_level = 'critical'
+          where org_id = $1 and kind = 'convention'`,
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_learned_dismissal" });
+    await expect(
+      superuser.query(
+        `update memory_entries set origin = 'member', learner_role = null
+          where org_id = $1 and kind = 'dismissal' and learned_level = 'critical'`,
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_learned_dismissal" });
+    await expect(
+      superuser.query(
+        "update memory_entries set learned_level = 'noise' where org_id = $1 and kind = 'dismissal'",
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_code" });
+  });
+
+  it("a hidden finding the reviewer restored teaches like a draft (P8-2b)", async () => {
+    // H1 (hidden by a dismissal on the jobs file) restored and accepted: a convention on that
+    // path; posting it is what teaches, like any accepted draft.
+    await decide(A, "H1", { kind: "restore" });
+    await decide(A, "H1", { kind: "accept" });
+    await learn(A, await post(A));
+    expect((await entriesOf(A)).map((e) => [e.kind, e.evidence.path, e.text])).toEqual([
+      [
+        "convention",
+        "src/jobs/sendInviteEmail.ts",
+        "Accepted in review: Invite emails are not retried on a transient send failure",
+      ],
+    ]);
+  });
+
   it("a reviewer who wrote the pull request teaches no dismissal from it, only conventions", async () => {
     await db.withOrg(A.orgId, (tx) =>
       tx.query("update pull_requests set author_login = 'ALICE' where id = $1", [A.pullRequestId]),
@@ -557,6 +627,7 @@ describe("loadAnalysisMemory (P8-2)", () => {
         origin: "learned",
         reason: "intentional",
         severity: "high",
+        learnedLevel: "critical",
         text: "Dismissed as intentional: No permission check: any logged-in user can invite to any org",
         path: "src/api/routes/invitations.ts",
         source: "dismissal · PR #847",

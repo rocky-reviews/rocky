@@ -4,7 +4,7 @@ import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json" with { type: "jso
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
-import { lockReviewPlan } from "./reviews.js";
+import { loadReviewPlan, lockReviewPlan } from "./reviews.js";
 import {
   addOwnComment,
   decideDraft,
@@ -40,6 +40,8 @@ let bob: string;
 
 const F1 = pr847.findings.find((f) => f.id === "F1")!;
 const F2 = pr847.findings.find((f) => f.id === "F2")!;
+/** P8-2b: the finding project memory hid on the jobs file (schema 1.6). */
+const H1 = pr847.hidden.find((h) => h.id === "H1")!;
 
 beforeAll(async () => {
   pgs = await startPostgres();
@@ -519,6 +521,92 @@ describe("posted items are flagged (P6-6: read-only once carried by an attempt)"
     expect(after?.comments[0]?.posted).toBe("posting");
     // Another reviewer's view is untouched (their own rows are not carried).
     expect((await reload(bob))?.drafts).toEqual([]);
+  });
+});
+
+describe("hidden findings are drafts only once restored (P8-2b)", () => {
+  it("restore creates the decision row as an undecided draft; a reload lists it; a second restore is the same answer", async () => {
+    expect(await reload()).toMatchObject({ drafts: [] });
+    const result = await decide("H1", { kind: "restore" });
+    expect(result).toMatchObject({
+      outcome: "ok",
+      draft: { findingId: "H1", state: "draft", reason: null, body: null, posted: null },
+    });
+    expect((await reload())?.drafts).toEqual([
+      expect.objectContaining({ findingId: "H1", state: "draft", agentPromptCopiedAt: null }),
+    ]);
+    expect(await decide("H1", { kind: "restore" })).toMatchObject({
+      outcome: "ok",
+      draft: { findingId: "H1", state: "draft" },
+    });
+    expect(await pending()).toEqual([]);
+  });
+
+  it("an unrestored hidden finding cannot be decided, an unknown H id does not exist, and a draft cannot be restored", async () => {
+    for (const action of [
+      { kind: "accept" } as const,
+      { kind: "dismiss", reason: "intentional" } as const,
+      { kind: "send_to_agent" } as const,
+    ]) {
+      expect(await decide("H1", action), action.kind).toEqual({ outcome: "unknown_finding" });
+    }
+    expect(await decide("H9", { kind: "restore" })).toEqual({ outcome: "unknown_finding" });
+    expect(await decide("F1", { kind: "restore" })).toMatchObject({
+      outcome: "invalid_transition",
+      draft: { findingId: "F1", state: "draft" },
+    });
+    expect((await reload())?.drafts).toEqual([]);
+    // Nothing was written for the hidden finding.
+    const { rows } = await superuser.query(
+      "select finding_id from findings_state where org_id = $1 and analysis_id = $2 and finding_id like 'H%'",
+      [A.orgId, A.analysisId],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("restored, it is decided like any draft, with the document's location and body, and the plan posts it", async () => {
+    await decide("H1", { kind: "restore" });
+    const accepted = await decide("H1", { kind: "accept" });
+    expect(accepted).toMatchObject({
+      outcome: "ok",
+      draft: { findingId: "H1", state: "accepted", edited: false, body: H1.body },
+    });
+    expect(await pending()).toEqual([
+      expect.objectContaining({
+        finding_id: "H1",
+        source: "ai",
+        path: H1.path,
+        start_line: null,
+        line: H1.range.end,
+        body: H1.body,
+      }),
+    ]);
+    const plan = await db.withOrg(A.orgId, (tx) =>
+      loadReviewPlan(tx, { pullRequestId: A.pullRequestId, memberId: A.memberId }),
+    );
+    // A hidden finding has no suggestion: the posted comment is its title and body.
+    expect(
+      plan?.items.map((item) =>
+        item.kind === "draft" ? [item.path, item.line, item.body] : item.kind,
+      ),
+    ).toEqual([[H1.path, H1.range.end, composePostedComment(H1, { body: H1.body })]]);
+    // Undo, then dismiss: the pending comment goes, the reason is kept for project memory.
+    expect(await decide("H1", { kind: "undo" })).toMatchObject({ draft: { state: "draft" } });
+    expect(await pending()).toEqual([]);
+    expect(await decide("H1", { kind: "dismiss", reason: "intentional" })).toMatchObject({
+      outcome: "ok",
+      draft: { findingId: "H1", state: "dismissed", reason: "intentional" },
+    });
+  });
+
+  it("another reviewer, another org: a restore is per reviewer and never crosses the org", async () => {
+    await decide("H1", { kind: "restore" });
+    expect((await reload(bob))?.drafts).toEqual([]);
+    expect(
+      await db.withOrg(B.orgId, (tx) =>
+        decideDraft(tx, { ...me(), findingId: "H1", action: { kind: "restore" } }),
+      ),
+    ).toEqual({ outcome: "not_found" });
   });
 });
 

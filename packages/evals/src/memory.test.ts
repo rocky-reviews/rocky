@@ -9,7 +9,7 @@ import {
   type StructuredCompletionResult,
 } from "@rocky-reviews/core";
 import { scriptedRoles, type Script, type ScriptedCall } from "@rocky-reviews/core/testing";
-import type { Finding } from "@rocky-reviews/schema";
+import type { AnalysisDocument, Finding } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
 import { MEMORY_RUN_1, MEMORY_RUN_2, memoryCaseDiff, memoryFakeScript } from "./memory/case.js";
 import { pinTriage, type PinnedLevel } from "./memory/pin.js";
@@ -98,6 +98,8 @@ describe("the project-memory eval (P8-2)", () => {
           suppressed: 0,
           restored: 0,
           doubleCheck: 0,
+          hidden: 0,
+          hiddenOnCritical: 0,
         },
         control: {
           ...reviewed,
@@ -108,6 +110,8 @@ describe("the project-memory eval (P8-2)", () => {
           suppressed: 0,
           restored: 0,
           doubleCheck: 0,
+          hidden: 0,
+          hiddenOnCritical: 0,
         },
         apply: {
           ...reviewed,
@@ -118,6 +122,9 @@ describe("the project-memory eval (P8-2)", () => {
           suppressed: 1,
           restored: 0,
           doubleCheck: 0,
+          // P8-2b: the hidden pattern is listed in the document, never invisible.
+          hidden: 1,
+          hiddenOnCritical: 0,
         },
       },
     });
@@ -381,6 +388,72 @@ describe("the project-memory eval (P8-2)", () => {
         shownBecause: "critical_file",
       });
       expect(stored?.memory).toEqual([]);
+    });
+
+    it("P8-2b: a dismissal taken on a critical file stands on a critical file nearby: hidden, listed, cited", async () => {
+      // Unpinned and the fake calls every analysis `critical`: the learn run's document holds the
+      // case file as critical, so the entry is learned at that level; run 2 is critical too, in
+      // the same directory, so the suppression stands and the pattern is hidden, not drafted.
+      const critical = (step: MemoryStep) => memoryFakeScript(prOf(step), { triage: "critical" });
+      let document: AnalysisDocument | undefined;
+      const result = await runMemoryEval(
+        async (step, request, options) => {
+          const analysed = await analyseWith(critical)(step, request, options);
+          if (
+            step === "apply" &&
+            analysed.outcome !== "capped" &&
+            analysed.outcome.status === "done"
+          )
+            document = analysed.outcome.document;
+          return analysed;
+        },
+        { pinTriage: null },
+      );
+      expect(result).toMatchObject({
+        run1Raised: true,
+        learned: true,
+        controlRaised: true,
+        run2Raised: false,
+        run2Cited: true,
+        run2BugFound: true,
+        pass: true,
+        pinDecided: 0,
+      });
+      expect(result.trials[0]!.runs.apply).toMatchObject({
+        level: "critical",
+        pinned: null,
+        findings: 1,
+        matched: ["B2"],
+        suppressed: 1,
+        restored: 0,
+        doubleCheck: 0,
+        hidden: 1,
+        hiddenOnCritical: 1,
+      });
+      expect(document?.hidden?.map((h) => h.title)).toEqual([MEMORY_RUN_2.pattern.title]);
+      expect(document?.hidden?.[0]?.hiddenBy).toEqual({
+        entry: {
+          entryId: MEMORY_EVAL_ENTRY_ID,
+          text: `Dismissed as intentional: ${MEMORY_RUN_1.pattern.title}`,
+          source: "dismissal · PR #1301",
+        },
+        path: MEMORY_RUN_1.path,
+        dismissedAs: "intentional",
+      });
+    });
+
+    it("P8-2b: the level is the learn run's stored triage: pinned important, the entry does not stand on a critical run 2", async () => {
+      // The pinned eval (the default) learns at `important` even when the model said critical,
+      // so a critical run 2 restores the finding (the previous test's rule), and N3 counts the
+      // pinned-critical pass: here the pin is what made trial pass.
+      const result = await runMemoryEval(analyseWith(criticalApply));
+      expect(result).toMatchObject({ pass: true, passes: 1, pinDecided: 1 });
+      expect(result.trials[0]!.runs.apply).toMatchObject({
+        modelLevel: "critical",
+        suppressed: 1,
+        hidden: 1,
+        hiddenOnCritical: 0,
+      });
     });
   });
 

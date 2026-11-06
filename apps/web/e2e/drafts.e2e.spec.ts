@@ -319,6 +319,121 @@ test.describe("keyboard", () => {
   });
 });
 
+test.describe("hidden by memory (P8-2b)", () => {
+  const JOBS = "src/jobs/sendInviteEmail.ts";
+  const H1 = pr847.hidden.find((h) => h.id === "H1") ?? pr847.hidden[0];
+  if (H1 === undefined) throw new Error("the fixture carries H1");
+  const toggle = (page: Page) =>
+    page.locator(".hidden-memory").getByRole("button", { name: /hidden by memory/ });
+  const hiddenCard = (page: Page) => page.locator('[data-hidden="H1"]');
+
+  test("one collapsed line on the file; show lists the finding with the dismissal; restore makes it a draft at its line, kept on reload", async ({
+    page,
+    reviewApi,
+  }) => {
+    await openShell(page);
+    await reviewReady(page);
+    await openFile(page, JOBS);
+    await expect(toggle(page)).toHaveText("◆ 1 finding hidden by memory on this file · show");
+    await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText(H1.title)).toHaveCount(0);
+    // The panel lists it too, collapsed, and counts it in no tally.
+    const panel = page.locator("#review-panel");
+    if ((page.viewportSize()?.width ?? 1440) <= 1180)
+      await page.getByRole("button", { name: "Review panel" }).click();
+    await expect(panel.locator(".tally")).toHaveText(
+      "AI drafts to decide10Your comments0Dismissed0",
+    );
+    const panelToggle = panel.getByRole("button", { name: /hidden by memory/ });
+    await expect(panelToggle).toHaveText("◆ 1 finding hidden by memory · show");
+
+    await toggle(page).click();
+    await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(hiddenCard(page)).toBeVisible();
+    await expect(hiddenCard(page)).toContainText(H1.title);
+    // The entry's source (`dismissal · PR #<number>`) is asserted through the fixture, so no
+    // literal "#<digits>" (the raw-colour check reads one as a hex colour).
+    await expect(hiddenCard(page).locator(".hidden-by")).toHaveText(
+      new RegExp(
+        `dismissed this as intentional on src/jobs/sendInviteEmail\\.ts · ${H1.hiddenBy.entry.source}`,
+      ),
+    );
+    await expect(hiddenCard(page).getByRole("button", { name: "Accept", exact: true })).toHaveCount(
+      0,
+    );
+
+    await hiddenCard(page).getByRole("button", { name: "Restore as a draft" }).click();
+    await expect(toast(page)).toContainText("Restored as a draft");
+    // Now a draft under its line, focused, with the usual actions and the line that says so.
+    const draft = card(page, "H1");
+    await expect(draft).toBeVisible();
+    await expect(draft).toHaveClass(/focus/);
+    await expect(draft.getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+    await expect(draft.locator(".double-check")).toContainText("you restored it");
+    await expect(page.locator(".hidden-memory")).toHaveCount(0);
+    expect(reviewApi.decision("H1")).toEqual({ state: "draft" });
+    await expect(panel.locator(".tally")).toHaveText(
+      "AI drafts to decide11Your comments0Dismissed0",
+    );
+
+    // Decided like any draft, and a reload shows it as a draft still (the server lists it).
+    await draft.getByRole("button", { name: "Accept", exact: true }).click();
+    await expect.poll(() => reviewApi.decision("H1").state).toBe("accepted");
+    await page.reload();
+    await page.locator("header.topbar").waitFor();
+    await reviewReady(page);
+    await openFile(page, JOBS);
+    await expect(page.locator(".hidden-memory")).toHaveCount(0);
+    await showCard(page, "H1");
+    await expect(card(page, "H1")).toContainText("from AI draft");
+  });
+
+  test("the panel's item opens the file on the hidden list; the keyboard path never drops focus", async ({
+    page,
+  }) => {
+    await openShell(page);
+    await reviewReady(page);
+    const panel = page.locator("#review-panel");
+    if ((page.viewportSize()?.width ?? 1440) <= 1180)
+      await page.getByRole("button", { name: "Review panel" }).click();
+    const panelToggle = panel.getByRole("button", { name: /hidden by memory/ });
+    await panelToggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(panelToggle).toHaveAttribute("aria-expanded", "true");
+    const item = panel.locator("#hidden-by-memory-list").getByRole("button");
+    await expect(item).toContainText(H1.title);
+    await item.focus();
+    await page.keyboard.press("Enter");
+    // The file opens with the list expanded and the card focused.
+    await page.locator(".file-head").waitFor();
+    await expect(page.locator("#file-title")).toHaveText(JOBS);
+    await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(hiddenCard(page)).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(
+      hiddenCard(page).getByRole("button", { name: "Restore as a draft" }),
+    ).toBeFocused();
+    await page.keyboard.press("Enter");
+    // Focus lands on the restored draft (its Accept is the next Tab stop, as after a jump).
+    const draft = card(page, "H1");
+    await expect(draft).toHaveClass(/focus/);
+    await page.keyboard.press("Tab");
+    await expect(draft.getByRole("button", { name: "Accept", exact: true })).toBeFocused();
+  });
+
+  test("a failed restore keeps the finding hidden and says so", async ({ page, reviewApi }) => {
+    await openShell(page);
+    await reviewReady(page);
+    await openFile(page, JOBS);
+    await toggle(page).click();
+    reviewApi.failNext(1);
+    await hiddenCard(page).getByRole("button", { name: "Restore as a draft" }).click();
+    await expect(toast(page)).toContainText("could not be restored");
+    await expect(hiddenCard(page)).toBeVisible();
+    await expect(card(page, "H1")).toHaveCount(0);
+  });
+});
+
 test.describe("review panel", () => {
   test("tallies the drafts and moves decided ones; the sidebar dot fades", async ({ page }) => {
     await open(page);
@@ -397,6 +512,16 @@ test.describe("axe", () => {
         expect(await seriousViolations(page)).toEqual([]);
         await card(page, "F8").getByRole("button", { name: "Cancel" }).click();
         await card(page, "F8").getByRole("button", { name: "Edit" }).click();
+        expect(await seriousViolations(page)).toEqual([]);
+        // P8-2b: the hidden-by-memory line and its expanded list on the jobs file.
+        await openFile(page, "src/jobs/sendInviteEmail.ts");
+        const hiddenToggle = page
+          .locator(".hidden-memory")
+          .getByRole("button", { name: /hidden by memory/ });
+        await expect(hiddenToggle).toBeVisible();
+        expect(await seriousViolations(page)).toEqual([]);
+        await hiddenToggle.click();
+        await expect(page.locator('[data-hidden="H1"]')).toBeVisible();
         expect(await seriousViolations(page)).toEqual([]);
         if (size.width <= 1180) {
           await page.getByRole("button", { name: "Review panel" }).click();

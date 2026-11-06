@@ -431,3 +431,43 @@
     opacity: 0;
   }
 }
+
+/* ---------- hidden by project memory (P8-2b) ---------- */
+/* The collapsed line under the AI strip, and the panel's section: the mark is cyan (AI). */
+.hidden-memory {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.hidden-toggle .mark {
+  color: var(--ai);
+}
+.hidden-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.hidden-section .hidden-list {
+  margin-top: var(--space-1);
+}
+/* A hidden finding reads as an AI card that is not a draft: dashed, on the panel's second tone. */
+.hidden-draft {
+  border-style: dashed;
+  border-left-style: solid;
+  background: var(--panel-2);
+  box-shadow: none;
+}
+.hidden-draft:focus-visible {
+  outline: 2px solid var(--ai);
+  outline-offset: 2px;
+}
+.hidden-draft .draft-actions .private-note {
+  min-width: 0;
+}
+.f-item.st-hidden .t {
+  color: var(--muted);
+}
+.st-badge.is-hidden {
+  color: var(--muted);
+}

@@ -13,7 +13,13 @@
  *
  * Nothing here posts. An accepted draft becomes a pending comment that only Finish review
  * (P6-6, P3-5) submits, after the reviewer's explicit action.
+ *
+ * P8-2b: a finding project memory hid (`document.hidden`, schema 1.6) is not a draft until the
+ * reviewer **restores** it. `restore` is not a transition of a decision (`applyDraftAction`
+ * refuses it): the store brings the hidden finding into the reviewer's drafts, as an undecided
+ * one (`restoredAsDraft`), and from there the transitions above apply.
  */
+import type { Finding, HiddenFinding } from "@rocky-reviews/schema";
 
 /** Why a draft was dismissed: fixed codes (no free text, so nothing personal is stored). */
 export const DISMISS_REASONS = [
@@ -42,7 +48,9 @@ export type DraftAction =
   | { readonly kind: "edit"; readonly body: string }
   | { readonly kind: "dismiss"; readonly reason: DismissReason }
   | { readonly kind: "undo" }
-  | { readonly kind: "send_to_agent" };
+  | { readonly kind: "send_to_agent" }
+  /** P8-2b: bring a finding memory hid into the drafts; only valid for a hidden finding. */
+  | { readonly kind: "restore" };
 
 export type DraftActionKind = DraftAction["kind"];
 
@@ -77,6 +85,8 @@ export const applyDraftAction = (
     agentPromptCopied,
   });
   if (action.kind === "undo") return current.state === "draft" ? refuse : to(DRAFT);
+  // Restoring is the store's step before any decision exists (P8-2b), never a transition.
+  if (action.kind === "restore") return refuse;
   if (current.state !== "draft") return refuse;
   switch (action.kind) {
     case "accept":
@@ -108,6 +118,7 @@ export const parseDraftAction = (input: unknown): DraftAction | null => {
     case "accept":
     case "undo":
     case "send_to_agent":
+    case "restore":
       return { kind };
     case "edit": {
       const body = field(input, "body");
@@ -121,6 +132,39 @@ export const parseDraftAction = (input: unknown): DraftAction | null => {
       return null;
   }
 };
+
+/**
+ * A hidden finding as the draft it becomes once restored (P8-2b): the same finding with the
+ * fields a draft has that a hidden one lacks (no backing, no suggestion), under its own `H` id.
+ * The page, the store and the posting path all read restored findings through this, so what is
+ * decided, listed and posted is the document's text and location, never the client's.
+ */
+export const restoredAsDraft = (hidden: HiddenFinding): Finding => ({
+  id: hidden.id,
+  severity: hidden.severity,
+  confidence: hidden.confidence,
+  path: hidden.path,
+  range: hidden.range,
+  title: hidden.title,
+  body: hidden.body,
+  memory: [],
+  agentPrompt: hidden.agentPrompt,
+});
+
+/**
+ * The findings a reviewer can decide on: the document's drafts, then the hidden findings in
+ * `restored` (by id), as drafts. A hidden finding not restored is not a draft.
+ */
+export const draftableFindings = (
+  document: {
+    readonly findings: readonly Finding[];
+    readonly hidden?: readonly HiddenFinding[] | undefined;
+  },
+  restored: ReadonlySet<string>,
+): Finding[] => [
+  ...document.findings,
+  ...(document.hidden ?? []).filter((h) => restored.has(h.id)).map(restoredAsDraft),
+];
 
 /** What an accepted draft posts, in parts: the accepted card shows exactly these. */
 export interface PostedCommentParts {

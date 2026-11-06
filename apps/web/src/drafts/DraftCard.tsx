@@ -38,7 +38,7 @@ export const REASON_LABEL: Record<DismissReason, string> = {
 };
 
 /** How the double-check line says what the team decided (P8-2, `finding.restored`). */
-const DISMISSED_AS: Record<RestoredDismissal["dismissedAs"], string> = {
+export const DISMISSED_AS: Record<RestoredDismissal["dismissedAs"], string> = {
   not_an_issue: "not a real issue",
   intentional: "intentional",
   not_worth_it: "not worth it",
@@ -80,7 +80,10 @@ export const DraftCard = ({ finding, original, language }: Props) => {
     setMode,
     focused,
     setFocused,
+    hiddenBy,
   } = useReview();
+  /** P8-2b: the dismissal that had hidden this draft before the reviewer restored it. */
+  const restoredFrom = hiddenBy(finding.id);
   const decision = decisionOf(finding.id);
   const copiedAt = state.drafts.get(finding.id)?.agentPromptCopiedAt ?? null;
   const posted = state.drafts.get(finding.id)?.posted ?? null;
@@ -263,6 +266,21 @@ export const DraftCard = ({ finding, original, language }: Props) => {
           </span>
         </p>
       ))}
+      {restoredFrom !== undefined && (
+        <p className="evidence double-check">
+          <span className="mark" aria-hidden="true">
+            ◆
+          </span>
+          <span>
+            Your team dismissed this as {DISMISSED_AS[restoredFrom.dismissedAs]} on{" "}
+            <code>
+              <bdi>{restoredFrom.path}</bdi>
+            </code>{" "}
+            <span className="source">· {restoredFrom.entry.source}</span>. Rocky had hidden it; you
+            restored it.
+          </span>
+        </p>
+      )}
       {finding.restored !== undefined && (
         <p className="evidence double-check">
           <span className="mark" aria-hidden="true">

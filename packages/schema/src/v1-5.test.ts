@@ -3,7 +3,7 @@ import {
   BASE_SCHEMA_VERSION,
   isSupportedVersion,
   requiredSchemaVersion,
-  SCHEMA_VERSION,
+  RESTORED_SCHEMA_VERSION,
   TLDR_SCHEMA_VERSION,
 } from "./document.js";
 import { Finding, RestoredDismissal } from "./findings.js";
@@ -11,8 +11,8 @@ import { applyKnownFields } from "./known-fields.js";
 import {
   expectAccepted,
   expectRejected,
-  pr847,
   pr847v14,
+  pr847v15,
   pr847WithSummary,
 } from "./test-helpers.js";
 
@@ -35,22 +35,20 @@ const RESTORED = {
 } as const;
 
 describe("schema 1.5: version policy", () => {
-  it("is 1.5.0 and still reads 1.0 to 1.4 documents, but no newer minor", () => {
-    expect(SCHEMA_VERSION).toBe("1.5.0");
+  it("1.5 documents are read (the current reader is 1.6, see v1-6.test.ts)", () => {
+    expect(RESTORED_SCHEMA_VERSION).toBe("1.5.0");
     for (const version of ["1.0.0", "1.1.3", "1.2.0", "1.3.0", "1.4.0", "1.5.0", "1.5.9"])
       expect(isSupportedVersion(version), version).toBe(true);
-    for (const version of ["1.6.0", "1.50.0", "2.0.0"])
-      expect(isSupportedVersion(version), version).toBe(false);
   });
 
   it("stamps 1.5.0 only on a document with a restored finding, and the older stamps otherwise", () => {
     const tldr = { tldr: ["a", "b"] };
     expect(requiredSchemaVersion({ briefing: tldr, findings: [{ restored: RESTORED }] })).toBe(
-      SCHEMA_VERSION,
+      RESTORED_SCHEMA_VERSION,
     );
     expect(
       requiredSchemaVersion({ briefing: { summary: "s" }, findings: [{ restored: {} }] }),
-    ).toBe(SCHEMA_VERSION);
+    ).toBe(RESTORED_SCHEMA_VERSION);
     expect(requiredSchemaVersion({ briefing: tldr, findings: [{}, { restored: undefined }] })).toBe(
       TLDR_SCHEMA_VERSION,
     );
@@ -65,10 +63,10 @@ describe("schema 1.5: version policy", () => {
   });
 
   it("the overlay stamps from the findings: 1.5.0 with a restored one, 1.4.0 without", () => {
-    const doc = pr847();
+    const doc = pr847v15();
     const { briefing, triage, findings, graph, provenance } = doc;
     const stamped = applyKnownFields({ briefing, triage, findings, graph }, provenance);
-    expect(expectAccepted(stamped).schemaVersion).toBe(SCHEMA_VERSION);
+    expect(expectAccepted(stamped).schemaVersion).toBe(RESTORED_SCHEMA_VERSION);
     const old = pr847v14();
     const without = applyKnownFields(
       { briefing: old.briefing, triage, findings: old.findings, graph },
@@ -80,7 +78,7 @@ describe("schema 1.5: version policy", () => {
 
 describe("schema 1.5: findings[].restored", () => {
   it("the fixture carries one on F3 (an auth file triaged critical), and it reads back as written", () => {
-    const value = expectAccepted(pr847());
+    const value = expectAccepted(pr847v15());
     expect(value.schemaVersion).toBe("1.5.0");
     const f3 = value.findings.find((finding) => finding.id === "F3");
     expect(f3?.restored).toEqual(RESTORED);
@@ -120,7 +118,7 @@ describe("schema 1.5: findings[].restored", () => {
     expectRejected(at({ ...RESTORED, why: "because" }), "INVALID_SHAPE", path);
     expectRejected(at({ entry: RESTORED.entry }), "INVALID_SHAPE", `${path}.path`);
     expect(RestoredDismissal.safeParse(RESTORED).success).toBe(true);
-    expect(Finding.safeParse({ ...pr847().findings[0], restored: null }).success).toBe(false);
+    expect(Finding.safeParse({ ...pr847v15().findings[0], restored: null }).success).toBe(false);
   });
 
   it("is optional: a 1.4 document without it is accepted unchanged", () => {

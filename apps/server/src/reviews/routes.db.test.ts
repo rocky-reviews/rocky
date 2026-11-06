@@ -238,6 +238,26 @@ describe("drafts API: every transition, then a reload (P6-4 acceptance criterion
     expect(Date.parse(draft!.agentPromptCopiedAt!)).not.toBeNaN();
   });
 
+  it("P8-2b: a hidden finding is restored, then decided like a draft; undecidable before that", async () => {
+    const dana = await sessionFor("dana");
+    // Not restored: nothing to decide (the client cannot act on what it has not restored).
+    expect((await act(dana, "H1", { action: "accept" })).statusCode).toBe(404);
+    expect((await act(dana, "H9", { action: "restore" })).statusCode).toBe(404);
+    // A draft that was never hidden cannot be "restored".
+    expect((await act(dana, "F4", { action: "restore" })).statusCode).toBe(409);
+    const restored = await act(dana, "H1", { action: "restore" });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ draft: { findingId: "H1", state: "draft" } });
+    expect((await reloadAs(dana)).drafts).toEqual([
+      expect.objectContaining({ findingId: "H1", state: "draft" }),
+    ]);
+    expect((await act(dana, "H1", { action: "accept" })).statusCode).toBe(200);
+    expect((await reloadAs(dana)).drafts).toEqual([
+      expect.objectContaining({ findingId: "H1", state: "accepted" }),
+    ]);
+    await act(dana, "H1", { action: "undo" });
+  });
+
   it("own comments: add → reload lists it → delete → reload has none", async () => {
     const dana = await sessionFor("dana");
     const created = await call(dana, "POST", `${base()}/comments`, {

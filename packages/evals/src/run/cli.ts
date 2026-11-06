@@ -101,14 +101,14 @@ const summary = (report: EvalReport): string => {
     const m = report.memory;
     lines.push(
       "",
-      `memory: ${m.status}, ${m.pass ? "pass" : "FAIL"}; run 1 raised ${m.run1Raised}, learned ${m.learned}, control raised ${m.controlRaised}, run 2 raised ${m.run2Raised}, cited ${m.run2Cited}, bug found ${m.run2BugFound}`,
+      `memory: ${m.status}, ${m.pass ? "pass" : "FAIL"}; run 1 raised ${m.run1Raised}, learned ${m.learned}, control raised ${m.controlRaised}, run 2 raised ${m.run2Raised}, cited ${m.run2Cited}, bug found ${m.run2BugFound}${m.pinDecided === undefined ? "" : `; passes where the pin decided (model said critical): ${m.pinDecided}`}`,
     );
     for (const [index, trial] of (m.trials ?? []).entries())
       lines.push(
         `  trial ${index + 1}: ${trial.pass ? "pass" : "FAIL"}; ${Object.entries(trial.runs)
           .map(
             ([step, r]) =>
-              `${step} ${r.status}${r.failure === null ? "" : ` (${r.failure})`} level ${r.level ?? "-"}${r.pinned === null || r.pinned === undefined ? "" : ` (pinned; model said ${r.modelLevel ?? "-"})`}${r.reviewed ? "" : " not reviewed"}${r.unanalysed === null ? "" : ` unanalysed ${r.unanalysed}`}, ${r.findings} findings, matched [${r.matched.join(",")}]${r.restored === 0 ? "" : `, restored ${r.restored} (double-check ${r.doubleCheck ?? 0})`}`,
+              `${step} ${r.status}${r.failure === null ? "" : ` (${r.failure})`} level ${r.level ?? "-"}${r.pinned === null || r.pinned === undefined ? "" : ` (pinned; model said ${r.modelLevel ?? "-"})`}${r.reviewed ? "" : " not reviewed"}${r.unanalysed === null ? "" : ` unanalysed ${r.unanalysed}`}, ${r.findings} findings, matched [${r.matched.join(",")}]${r.restored === 0 ? "" : `, restored ${r.restored} (double-check ${r.doubleCheck ?? 0})`}${r.hidden === undefined || r.hidden === 0 ? "" : `, hidden ${r.hidden} (on a critical file ${r.hiddenOnCritical ?? 0})`}`,
           )
           .join("; ")}`,
       );

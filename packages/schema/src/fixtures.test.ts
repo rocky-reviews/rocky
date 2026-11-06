@@ -31,7 +31,11 @@ describe("golden fixtures", () => {
     expect(doc.graph!.nodes).toHaveLength(7);
     expect(doc.graph!.edges).toHaveLength(7);
     expect(doc.graph!.edges.filter((edge) => edge.emphasis === "hero")).toHaveLength(2);
-    expect(doc.briefing.memoryApplied).toHaveLength(4);
+    expect(doc.briefing.memoryApplied).toHaveLength(5);
+    // P8-2b: one finding a dismissal entry hid (schema 1.6), on the important jobs file.
+    expect(doc.hidden?.map((finding) => [finding.id, finding.path])).toEqual([
+      ["H1", "src/jobs/sendInviteEmail.ts"],
+    ]);
     expect(doc.briefing.checkedOk).toHaveLength(4);
     expect(doc.briefing.reviewPath).toHaveLength(4);
     expect(doc.briefing.estimatedReviewMinutes).toBe(7);

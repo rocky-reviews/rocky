@@ -5,11 +5,17 @@ import {
   MAX_LEARNED_PER_REVIEW,
   memorySourceLabel,
   memorySubject,
+  restoredAsDraft,
   type AnalysisMemoryEntry,
   type LearnedEntry,
   type ReviewDecision,
 } from "@rocky-reviews/core";
-import { parseAnalysisDocument, type AnalysisDocument, type Severity } from "@rocky-reviews/schema";
+import {
+  parseAnalysisDocument,
+  type AnalysisDocument,
+  type Severity,
+  type TriagedFileLevel,
+} from "@rocky-reviews/schema";
 import type { TenantTx } from "./client.js";
 import { createMemoryEntry, lockRepoMemory, supersedeMemoryEntry } from "./memory.js";
 
@@ -66,13 +72,14 @@ export const loadAnalysisMemory = async (
     origin: AnalysisMemoryEntry["origin"];
     reason: AnalysisMemoryEntry["reason"];
     severity: AnalysisMemoryEntry["severity"];
+    learned_level: TriagedFileLevel | null;
     content: string;
     evidence_path: string;
     source_pr_number: number;
     confidence: number;
   }>(
-    `select id, kind, origin, reason, severity, content, evidence_path, source_pr_number,
-            confidence
+    `select id, kind, origin, reason, severity, learned_level, content, evidence_path,
+            source_pr_number, confidence
        from (select e.*, row_number() over (
                       partition by case when origin = 'member' then 'member'
                                         when kind = 'dismissal' then 'dismissal'
@@ -103,6 +110,7 @@ export const loadAnalysisMemory = async (
     origin: row.origin,
     reason: row.reason,
     severity: row.severity,
+    learnedLevel: row.learned_level,
     text: row.content,
     path: row.evidence_path,
     source: memorySourceLabel({
@@ -149,8 +157,12 @@ interface Decided {
  *
  * A reviewer who wrote the pull request teaches no dismissal from it: an author must not be able
  * to switch a finding off for the repository by dismissing it on their own PR (fix round, M2).
- * A dismissal records the dismissed finding's severity, the highest it will cover, and every
- * learned entry records the reviewer's role. For each entry, in order:
+ * A dismissal records the dismissed finding's severity, the highest it will cover, and the triage
+ * level its file had in the stored document (P8-2b, `learned_level`: what lets it stand on a
+ * critical file later; read from the document's triage, never from a request), and every learned
+ * entry records the reviewer's role. A hidden finding the reviewer restored (P8-2b) teaches like
+ * any draft: accepting it teaches a convention that supersedes the dismissal that hid it. For
+ * each entry, in order:
  *
  * 1. an entry already learned from the same evidence (kind, reason, path, sha, lines, PR) is a
  *    repeat: nothing is written (posting twice on a revision teaches once);
@@ -280,11 +292,19 @@ export const learnFromReviewSubmission = async (
     }
   }
 
-  const candidates: { readonly entry: LearnedEntry; readonly severity: Severity | null }[] = [];
+  const candidates: {
+    readonly entry: LearnedEntry;
+    readonly severity: Severity | null;
+    readonly learnedLevel: TriagedFileLevel | null;
+  }[] = [];
   let skipped = 0;
   for (const { analysisId, findingId, decision } of decided) {
     const document = documents.get(analysisId);
-    const finding = document?.findings.find((f) => f.id === findingId);
+    // A decision row exists for a hidden finding only once the reviewer restored it.
+    const hidden = document?.hidden?.find((h) => h.id === findingId);
+    const finding =
+      document?.findings.find((f) => f.id === findingId) ??
+      (hidden === undefined ? undefined : restoredAsDraft(hidden));
     const learned =
       document === undefined ||
       finding === undefined ||
@@ -297,11 +317,16 @@ export const learnFromReviewSubmission = async (
             headSha: document.provenance.head.sha,
           });
     if (learned === null || candidates.length >= MAX_LEARNED_PER_REVIEW) skipped++;
-    else
+    else {
+      const dismissal = learned.kind === "dismissal";
       candidates.push({
         entry: learned,
-        severity: learned.kind === "dismissal" ? (finding?.severity ?? null) : null,
+        severity: dismissal ? (finding?.severity ?? null) : null,
+        learnedLevel: dismissal
+          ? (document?.triage.files.find((file) => file.path === finding?.path)?.level ?? null)
+          : null,
       });
+    }
   }
 
   // The logins Rocky saw around these decisions: the PR's author and the reviewer (the store adds
@@ -313,7 +338,7 @@ export const learnFromReviewSubmission = async (
   let created = 0;
   let superseded = 0;
   let repeated = 0;
-  for (const { entry: candidate, severity } of candidates) {
+  for (const { entry: candidate, severity, learnedLevel } of candidates) {
     const { evidence } = candidate;
     const repeat = await tx.query(
       `select 1 from memory_entries
@@ -426,9 +451,10 @@ export const learnFromReviewSubmission = async (
     // Compared on the stored (scrubbed) texts, so a scrubbed title still matches its older entry.
     const storedSubject = memorySubject(result.entry.text);
     await tx.query(
-      `update memory_entries set severity = $3, learner_role = $4, learned_subject = $5
+      `update memory_entries
+          set severity = $3, learner_role = $4, learned_subject = $5, learned_level = $6
         where org_id = $1 and id = $2`,
-      [tx.orgId, result.entry.id, severity, role, storedSubject],
+      [tx.orgId, result.entry.id, severity, role, storedSubject, learnedLevel],
     );
     // The opposite decision about a switched-off pattern is learned switched off too, so learning
     // never undoes an admin's decision in two steps (P8-3 fix round, S3); only a person switches

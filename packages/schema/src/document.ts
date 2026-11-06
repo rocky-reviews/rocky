@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import { Briefing } from "./briefing.js";
-import { Findings } from "./findings.js";
+import { Findings, HiddenFindings } from "./findings.js";
 import { Graph } from "./graph.js";
 import { Provenance } from "./provenance.js";
 import { Triage } from "./triage.js";
@@ -17,7 +17,7 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.5.0" as const;
+export const SCHEMA_VERSION = "1.6.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 /**
@@ -26,18 +26,21 @@ export type SchemaVersion = typeof SCHEMA_VERSION;
  * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; 1.3 (H4-7) added the
  * pipeline-owned `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`; 1.4
  * (H4-8) added `briefing.tldr`, which may stand in for `briefing.summary`; 1.5 (P8-2, ADR 0037)
- * added the pipeline-owned `findings[].restored`. A document that uses none of them is a 1.1
- * document.
+ * added the pipeline-owned `findings[].restored`; 1.6 (P8-2b) added the pipeline-owned `hidden`
+ * list (findings a dismissal entry kept out of the drafts). A document that uses none of them is
+ * a 1.1 document.
  */
 export const BASE_SCHEMA_VERSION = "1.1.0" as const;
 export const NO_LOGIC_SCHEMA_VERSION = "1.2.0" as const;
 export const MAP_SECTIONS_SCHEMA_VERSION = "1.3.0" as const;
 export const TLDR_SCHEMA_VERSION = "1.4.0" as const;
+export const RESTORED_SCHEMA_VERSION = "1.5.0" as const;
 export type StampedSchemaVersion =
   | typeof BASE_SCHEMA_VERSION
   | typeof NO_LOGIC_SCHEMA_VERSION
   | typeof MAP_SECTIONS_SCHEMA_VERSION
   | typeof TLDR_SCHEMA_VERSION
+  | typeof RESTORED_SCHEMA_VERSION
   | SchemaVersion;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -47,6 +50,8 @@ export const requiredSchemaVersion = (doc: {
   readonly briefing?: unknown;
   /** Unvalidated when the overlay stamps; only `restored` is looked at. */
   readonly findings?: unknown;
+  /** Only the pipeline writes it (1.6); unvalidated here, only its presence counts. */
+  readonly hidden?: unknown;
   readonly provenance?:
     | {
         readonly graphUnavailable?: { readonly reason?: unknown } | undefined;
@@ -55,12 +60,14 @@ export const requiredSchemaVersion = (doc: {
       }
     | undefined;
 }): StampedSchemaVersion => {
+  // Only the pipeline writes `hidden` (1.6); a document that lists one needs the 1.6 reader.
+  if (Array.isArray(doc.hidden) && doc.hidden.length > 0) return SCHEMA_VERSION;
   // Only the pipeline writes `restored` (1.5); a finding that carries one needs the 1.5 reader.
   if (
     Array.isArray(doc.findings) &&
     doc.findings.some((finding) => isRecord(finding) && finding["restored"] !== undefined)
   )
-    return SCHEMA_VERSION;
+    return RESTORED_SCHEMA_VERSION;
   // `briefing` is unvalidated model output when the overlay stamps it, so it is only looked at.
   const briefing = doc.briefing;
   const tldr =
@@ -116,6 +123,11 @@ export type AnalysisModelOutputInput = z.input<typeof AnalysisModelOutput>;
 export const AnalysisDocument = AnalysisModelOutput.safeExtend({
   schemaVersion: SchemaVersionField,
   provenance: Provenance,
+  // Pipeline-owned (schema 1.6, P8-2b): findings a project-memory dismissal kept out of the
+  // drafts. Written only when there are some, so older readers keep reading every other document.
+  hidden: HiddenFindings.optional().describe(
+    "Findings a project-memory dismissal hid (pipeline-written); absent when none.",
+  ),
 })
   // The pipeline records why the change map is missing only when it is missing; a document
   // that carries both a graph and that reason would leave the UI two stories to choose from.

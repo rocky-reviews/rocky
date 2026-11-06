@@ -267,7 +267,7 @@ export const DiffBody = ({
       if (i === -1) return;
       pendingCard.current = { i, selector: `[data-finding="${CSS.escape(finding.id)}"]`, tries: 0 };
       reveal(i);
-    } else if (jump.path === path) {
+    } else if (jump.kind === "comment" && jump.path === path) {
       doneJump(jump.seq);
       focusLine(jump.line);
     }

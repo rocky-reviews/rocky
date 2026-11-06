@@ -3,8 +3,8 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-06T12:25:29.020Z",
-  "pipelineVersion": "p4-4.2",
+  "createdAt": "2026-11-06T15:08:33.437Z",
+  "pipelineVersion": "p8-2b.1",
   "promptHash": "ad209ea4b12178ac034d52bcef8d7442b577d666cc792a5964e4c965732e1337",
   "models": {
     "triage": {
@@ -1461,6 +1461,7 @@
     "run2BugFound": true,
     "pass": true,
     "passes": 1,
+    "pinDecided": 0,
     "trials": [
       {
         "status": "done",
@@ -1485,7 +1486,9 @@
             "patternSeverity": "medium",
             "suppressed": 0,
             "restored": 0,
-            "doubleCheck": 0
+            "doubleCheck": 0,
+            "hidden": 0,
+            "hiddenOnCritical": 0
           },
           "control": {
             "status": "done",
@@ -1500,7 +1503,9 @@
             "patternSeverity": "medium",
             "suppressed": 0,
             "restored": 0,
-            "doubleCheck": 0
+            "doubleCheck": 0,
+            "hidden": 0,
+            "hiddenOnCritical": 0
           },
           "apply": {
             "status": "done",
@@ -1515,7 +1520,9 @@
             "patternSeverity": null,
             "suppressed": 1,
             "restored": 0,
-            "doubleCheck": 0
+            "doubleCheck": 0,
+            "hidden": 1,
+            "hiddenOnCritical": 0
           }
         }
       }

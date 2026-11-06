@@ -8,8 +8,9 @@ import {
   DRAFT,
   type DraftAction,
   type DraftDecision,
+  restoredAsDraft,
 } from "@rocky-reviews/core/drafts";
-import type { Finding } from "@rocky-reviews/schema";
+import type { Finding, HiddenFinding } from "@rocky-reviews/schema";
 import type { DraftRecord, ReviewSource, ReviewState } from "../data/review-data.js";
 import type { OwnComment, PostedState } from "../diff/diff-model.js";
 import { NO_REVIEW, type ReviewContextValue } from "./ReviewProvider.js";
@@ -63,9 +64,11 @@ const wire = (findingId: string, decision: DraftDecision, copiedAt: string | nul
 /** The server's behaviour in memory: what the e2e mock and the provider tests rely on. */
 export const memoryReviewSource = (
   findings: readonly Finding[],
-  options: { fail?: () => boolean } = {},
+  options: { fail?: () => boolean; hidden?: readonly HiddenFinding[] } = {},
 ): ReviewSource & { readonly calls: string[] } => {
   const decisions = new Map<string, { decision: DraftDecision; copiedAt: string | null }>();
+  // P8-2b: a hidden finding is decidable once restored (a record exists), as the server does it.
+  const hidden = new Map((options.hidden ?? []).map((h) => [h.id, h]));
   const comments: OwnComment[] = [];
   const calls: string[] = [];
   let next = 1;
@@ -79,7 +82,9 @@ export const memoryReviewSource = (
       check();
       return {
         drafts: [...decisions]
-          .filter(([, d]) => d.decision.state !== "draft" || d.copiedAt !== null)
+          .filter(
+            ([id, d]) => d.decision.state !== "draft" || d.copiedAt !== null || hidden.has(id),
+          )
           .map(([id, d]) => wire(id, d.decision, d.copiedAt)),
         comments: [...comments],
       };
@@ -87,9 +92,18 @@ export const memoryReviewSource = (
     decide: async (_analysisId: string, findingId: string, action: DraftAction) => {
       calls.push(`decide ${findingId} ${action.kind}`);
       check();
-      const finding = findings.find((f) => f.id === findingId);
+      const hiddenOne = hidden.get(findingId);
+      const finding =
+        findings.find((f) => f.id === findingId) ??
+        (hiddenOne === undefined ? undefined : restoredAsDraft(hiddenOne));
       if (finding === undefined) throw new Error("404");
+      if (hiddenOne !== undefined && action.kind !== "restore" && !decisions.has(findingId))
+        throw new Error("404");
       const current = decisions.get(findingId) ?? { decision: DRAFT, copiedAt: null };
+      if (hiddenOne !== undefined && action.kind === "restore") {
+        decisions.set(findingId, current);
+        return { kind: "ok", draft: wire(findingId, current.decision, current.copiedAt) };
+      }
       const t = applyDraftAction(current.decision, action, finding);
       if (!t.ok)
         return {

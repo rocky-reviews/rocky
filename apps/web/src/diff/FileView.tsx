@@ -6,9 +6,15 @@
  *
  * AI notes (flags, hot lines), drafts and own comments are shown only when the analysis is for
  * the diff's head commit; after a new push they would point at the wrong lines.
+ *
+ * P8-2b: findings project memory hid on the file are never invisible: a collapsed line under the
+ * AI strip ("N findings hidden by memory · show") expands to each one with the dismissal that hid
+ * it and "Restore as a draft". The drafts come from the review context, so a restored one sits
+ * under its line like any draft.
  */
 import type { AnalysisDocument, Finding, TriagedFileLevel } from "@rocky-reviews/schema";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HiddenCard } from "../drafts/HiddenCard.js";
 import type { Selection } from "../shell/Sidebar.js";
 import { LEVEL_LABEL } from "../shell/triage-model.js";
 import { fileAnnotations, fileTriage, NO_ANNOTATIONS, reviewOrder } from "./annotations.js";
@@ -79,7 +85,7 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
   };
 
   const current = load.kind === "ready" && load.data.headSha === analysis.provenance.head.sha;
-  const { state, status } = useReview();
+  const { state, status, findings: drafts, hidden, jump, doneJump } = useReview();
   // Own comments are stored against the analysed lines, so they are taken only on that diff,
   // once the reviewer's review has loaded.
   const commentable = current && status === "ready";
@@ -96,11 +102,41 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
     () => (current ? fileAnnotations(analysis, path, dismissed) : NO_ANNOTATIONS),
     [current, analysis, path, dismissed],
   );
-  // P6-4: the drafts sit under their lines, only on the diff the analysis was made for.
+  // P6-4: the drafts sit under their lines, only on the diff the analysis was made for. P8-2b:
+  // from the review context, which adds the hidden findings the reviewer restored.
   const findings = useMemo<readonly Finding[]>(
-    () => (current ? analysis.findings.filter((f) => f.path === path) : []),
-    [current, analysis, path],
+    () => (current ? drafts.filter((f) => f.path === path) : []),
+    [current, drafts, path],
   );
+  // P8-2b: the file's findings memory hid, collapsed until asked for (or jumped to).
+  const hiddenHere = useMemo(
+    () => (current ? hidden.filter((h) => h.path === path) : []),
+    [current, hidden, path],
+  );
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenList = useRef<HTMLUListElement>(null);
+  /** A jump's target: focused once the list is rendered (the jump may also open it). */
+  const pendingHidden = useRef<string | null>(null);
+  useEffect(() => {
+    setShowHidden(false);
+    pendingHidden.current = null;
+  }, [path]);
+  useEffect(() => {
+    if (jump === null || jump.kind !== "hidden" || jump.path !== path) return;
+    doneJump(jump.seq);
+    pendingHidden.current = jump.findingId;
+    setShowHidden(true);
+  }, [jump, doneJump, path]);
+  useEffect(() => {
+    const id = pendingHidden.current;
+    if (!showHidden || id === null) return;
+    const target = hiddenList.current?.querySelector<HTMLElement>(
+      `[data-hidden="${CSS.escape(id)}"]`,
+    );
+    if (target === null || target === undefined) return;
+    pendingHidden.current = null;
+    target.focus();
+  }, [showHidden, hiddenHere]);
 
   const showDiff = triage?.kind !== "noise" || showRaw;
 
@@ -159,6 +195,36 @@ export const FileView = ({ path, line, analysis, viewed, onToggleViewed, onSelec
             </div>
           )}
         </dl>
+      )}
+
+      {hiddenHere.length > 0 && (
+        <section className="hidden-memory" aria-labelledby="hidden-memory-title">
+          <h3 className="sr-only" id="hidden-memory-title">
+            Findings hidden by project memory
+          </h3>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost hidden-toggle"
+            aria-expanded={showHidden}
+            aria-controls="hidden-memory-list"
+            onClick={() => setShowHidden((v) => !v)}
+          >
+            <span className="mark" aria-hidden="true">
+              ◆
+            </span>{" "}
+            {hiddenHere.length} {hiddenHere.length === 1 ? "finding" : "findings"} hidden by memory
+            <span className="sr-only"> on this file</span> · {showHidden ? "hide" : "show"}
+          </button>
+          {showHidden && (
+            <ul className="hidden-list" id="hidden-memory-list" ref={hiddenList}>
+              {hiddenHere.map((h) => (
+                <li key={h.id}>
+                  <HiddenCard hidden={h} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       {triage?.kind === "noise" && (

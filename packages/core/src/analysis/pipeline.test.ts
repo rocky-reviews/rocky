@@ -592,7 +592,9 @@ describe("A5 incremental reuse is keyed and conservative", () => {
   });
 
   it("keys bind the pipeline version", () => {
-    expect(PIPELINE_VERSION).toMatch(/^p4-4\.\d+$/);
+    // The task that last changed what shapes a unit's answer, and its round (P8-2b, fix round 4
+    // N5: the double-check marker and the hidden list are new unit outputs).
+    expect(PIPELINE_VERSION).toMatch(/^p8-2b\.\d+$/);
   });
 
   it("a file that could not be analysed is tried again", async () => {

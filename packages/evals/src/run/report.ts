@@ -145,6 +145,10 @@ export const MemoryRunDiagnosis = z.strictObject({
   restored: count,
   /** Covered suppressions restored for a double-check (`Finding.restored`); absent in older reports. */
   doubleCheck: count.optional(),
+  /** Findings listed as hidden by memory on the case file (P8-2b); absent in older reports. */
+  hidden: count.optional(),
+  /** Suppressions that stood on a critical file (P8-2b); absent in older reports. */
+  hiddenOnCritical: count.optional(),
 });
 
 const MemoryConditions = {
@@ -179,6 +183,8 @@ export const MemoryTrialReport = z.strictObject({
 export const MemoryEvalReport = z.strictObject({
   ...MemoryConditions,
   passes: count.optional(),
+  /** Passing trials whose apply run the model called critical (the pin decided); absent in older reports. */
+  pinDecided: count.optional(),
   trials: z.array(MemoryTrialReport).max(MAX_MEMORY_TRIALS).optional(),
 });
 export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;

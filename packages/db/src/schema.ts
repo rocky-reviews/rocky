@@ -256,6 +256,11 @@ export const memoryEntries = pgTable("memory_entries", {
   severity: text("severity", { enum: ["critical", "high", "medium", "low"] }),
   /** The reviewer's role when the entry was learned (0018), kept by an edit (0020). */
   learnerRole: text("learner_role", { enum: ["owner", "admin", "member"] }),
+  /**
+   * For a learned dismissal: the triage level the dismissed finding's file had in the stored
+   * document (0021, P8-2b); `critical` lets it stand on a critical file. Null otherwise.
+   */
+  learnedLevel: text("learned_level", { enum: ["critical", "important", "normal", "low"] }),
   createdBy: uuid("created_by"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   /** When the decay job (P8-4, migration 0019) last lowered the confidence; null until it does. */

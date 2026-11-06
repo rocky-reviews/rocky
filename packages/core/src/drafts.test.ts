@@ -29,6 +29,7 @@ const ACTIONS: Record<string, DraftAction> = {
   dismiss: { kind: "dismiss", reason: "not_an_issue" },
   undo: { kind: "undo" },
   send_to_agent: { kind: "send_to_agent" },
+  restore: { kind: "restore" },
 };
 
 type Expected = DraftDecision | "invalid_transition";
@@ -43,6 +44,7 @@ const TABLE: Record<string, [DraftDecision, Record<keyof typeof ACTIONS, Expecte
       dismiss: { state: "dismissed", reason: "not_an_issue" },
       undo: "invalid_transition",
       send_to_agent: DRAFT,
+      restore: "invalid_transition",
     },
   ],
   accepted: [
@@ -53,6 +55,7 @@ const TABLE: Record<string, [DraftDecision, Record<keyof typeof ACTIONS, Expecte
       dismiss: "invalid_transition",
       undo: DRAFT,
       send_to_agent: "invalid_transition",
+      restore: "invalid_transition",
     },
   ],
   "accepted (edited)": [
@@ -63,6 +66,7 @@ const TABLE: Record<string, [DraftDecision, Record<keyof typeof ACTIONS, Expecte
       dismiss: "invalid_transition",
       undo: DRAFT,
       send_to_agent: "invalid_transition",
+      restore: "invalid_transition",
     },
   ],
   dismissed: [
@@ -73,6 +77,7 @@ const TABLE: Record<string, [DraftDecision, Record<keyof typeof ACTIONS, Expecte
       dismiss: "invalid_transition",
       undo: DRAFT,
       send_to_agent: "invalid_transition",
+      restore: "invalid_transition",
     },
   ],
 };
@@ -126,6 +131,7 @@ describe("parseDraftAction (untrusted request bodies)", () => {
     expect(parseDraftAction({ action: "accept" })).toEqual({ kind: "accept" });
     expect(parseDraftAction({ action: "undo" })).toEqual({ kind: "undo" });
     expect(parseDraftAction({ action: "send_to_agent" })).toEqual({ kind: "send_to_agent" });
+    expect(parseDraftAction({ action: "restore" })).toEqual({ kind: "restore" });
     expect(parseDraftAction({ action: "edit", body: "x" })).toEqual({ kind: "edit", body: "x" });
     for (const reason of DISMISS_REASONS) {
       expect(parseDraftAction({ action: "dismiss", reason })).toEqual({ kind: "dismiss", reason });

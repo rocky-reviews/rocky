@@ -36,6 +36,7 @@ export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unkno
   result.schemaVersion = requiredSchemaVersion({
     briefing: result.briefing,
     findings: result.findings,
+    hidden: result.hidden,
     provenance: facts,
   });
   if (facts.graphUnavailable !== undefined) delete result.graph;
