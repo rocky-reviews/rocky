@@ -202,7 +202,8 @@ learned entries (`not_permitted` otherwise). Learning never replaces what a pers
   key without memory (`FileUnit.triageKey`, when it differs): when only the memory changed, the
   previous triage is reused and only the review runs again (`triageReused`). A reused unit keeps its citations: finding refs from
   the previous document, entries applied without a finding from `FileUnit.memoryApplied`
-  (optional; older units read as before), both re-filtered to the file's current selection.
+  (optional; older units read as before), both re-filtered to the file's current selection,
+  the latter while `suppressionStands` still holds (§7).
 - **Estimate:** the memory part is counted for every file sent, as if each were reviewed (an upper
   bound), and in the unit keys the estimate checks for reuse. A file whose triage would be
   reused is still counted whole (an upper bound again).
@@ -346,15 +347,18 @@ The follow-up lets it stand under guards the pipeline enforces (`suppressionStan
     re-run for a **reused unit's hidden findings** (fix round 2): the unit key covers the
     selection, not the entries the rule reads, so a higher role's entry learned since the last
     push restores the finding on reuse as a fresh review would (the unit then no longer lists
-    the entry as applied). The load bound keeps the blocking entries in reach: owner- and
+    the entry as applied; every applied entry is re-checked, including one whose suppression
+    repeated a raised draft and so had no hidden finding; the double-check marker a fresh run
+    would put on that draft cannot be rebuilt on reuse, since the unit does not record which
+    draft the suppression repeated: the draft is visible either way). The load bound keeps the blocking entries in reach: owner- and
     admin-taught conventions and decisions load under their own group of 50
     (`ANALYSIS_MEMORY_BOUNDS.learnedOverruling`), so fifty member-taught accepts cannot push an
     owner's older convention out of the window. Chosen over failing closed while the
     learned-other group is truncated: truncation is routine in a busy repository, and failing
     closed there would switch the critical path off silently. What the bound does **not**
-    cover: an owner with more than 50 current learned conventions and decisions in the
-    repository (the 51st oldest drops out), and entries learned before migration 0018, which
-    carry no role and rank as member (they never block).
+    cover: owners and admins together with more than 50 current learned conventions and
+    decisions in the repository (the group is shared; the 51st oldest drops out), and entries
+    learned before migration 0018, which carry no role and rank as member (they never block).
   - anything else on a critical file: restored with the double-check marker, as fix round 3.
 - **Suppressions are never invisible (schema 1.6, `document.hidden`).** Every suppression that
   stands, on any file, is listed in the document as a `HiddenFinding`: the finding's text and

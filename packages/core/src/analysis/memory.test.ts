@@ -1587,3 +1587,105 @@ describe("P8-2b fix round 2: the block holds on reused units", () => {
     expect(same.stats.memoryRestored).toBe(0);
   });
 });
+
+describe("P8-2b fix round 3: every applied entry is re-checked on reuse", () => {
+  const A = "src/billing/a.ts";
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+  const owner = entry(2, {
+    kind: "convention",
+    reason: null,
+    severity: null,
+    path: "src/billing/c.ts",
+    learnerRole: "owner",
+    text: "Accepted in review: Retries must log the failure",
+  });
+  /** On a critical file the model both raises F and suppresses it under the first dismissal. */
+  const raisesAndSuppresses: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const covering = blockOf(call)?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value: {
+          findings: [{ ...FINDING, memory: [] }],
+          suppressed:
+            covering === undefined ? [] : [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+        },
+      };
+    }
+    return { status: "refused" };
+  };
+
+  it("an entry applied without a hidden finding (its suppression repeated a draft) is dropped on reuse once an owner's accept blocks it", async () => {
+    const diff = addedFile(A, LINES);
+    const D = dismissalOn(A);
+    const fillers = Array.from({ length: 11 }, (_, i) =>
+      dismissalOn(A, { id: uuid(10 + i), text: `Dismissed as intentional: Other ${i}` }),
+    );
+    const first = done(
+      (await analyze(raisesAndSuppresses, { diff, memory: [D, ...fillers] })).outcome,
+    );
+    // Fresh: the draft is shown once, the suppression stood and was applied, nothing hidden.
+    expect(first.document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(first.document.hidden).toBeUndefined();
+    expect(first.document.briefing.memoryApplied.map((ref) => ref.entryId)).toEqual([D.id]);
+    expect(first.units[0]?.memoryApplied).toEqual([D.id]);
+    const previous = { document: first.document, units: first.units };
+    const { outcome, calls } = await analyze(raisesAndSuppresses, {
+      diff,
+      previous,
+      memory: [D, ...fillers, owner],
+    });
+    const { document, stats, units } = done(outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(calls)).toBeUndefined();
+    // Reused: the draft stays, the entry is no longer applied (a fresh run would not apply it
+    // either); the marker a fresh run would put on the draft cannot be rebuilt here.
+    expect(document.findings.map((f) => [f.title, f.restored])).toEqual([
+      [FINDING.title, undefined],
+    ]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(units[0]?.memoryApplied).toBeUndefined();
+  });
+
+  it("a reused restore for another reason: the entry's level is no longer critical on the next push", async () => {
+    // A rule floor cannot change between pushes (it is a path rule), so the other input the
+    // unit key does not cover is used: the stored entry's learned level (edited since).
+    const diff = addedFile(A, LINES);
+    const D = dismissalOn(A);
+    const critical: Script = (call) => {
+      if (call.role === "triage")
+        return { value: { ...triage("important"), level: "critical", score: 90 } };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: { findings: [], suppressed: [{ ...SUPPRESSED, severity: "low", entry: "M1" }] },
+        };
+      return { status: "refused" };
+    };
+    const first = done((await analyze(critical, { diff, memory: [D] })).outcome);
+    expect(first.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    const previous = { document: first.document, units: first.units };
+    const second = await analyze(critical, {
+      diff,
+      previous,
+      memory: [{ ...D, learnedLevel: "important" }],
+    });
+    const { document, stats } = done(second.outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(second.calls)).toBeUndefined();
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings.map((f) => [f.title, f.restored?.shownBecause])).toEqual([
+      [FINDING.title, "critical_file"],
+    ]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(stats).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 1 });
+  });
+});

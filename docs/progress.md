@@ -202,6 +202,11 @@ Task log for the project plan. Agents append a row when a task is merged.
   own bound (`learnedOverruling: 50`, `MAX_ANALYSIS_MEMORY` 300) so a member's accepts cannot
   push an owner's older convention out of the window (chosen over failing closed on a truncated
   learned-other group, which is routine in a busy repository).
+- Fix round 3 applied: on reuse every applied entry is re-checked with `suppressionStands`
+  (not only those with a hidden finding); the ADR says the marker a repeated draft would carry
+  cannot be rebuilt on reuse, and that the owner/admin load group is shared.
+- Nit (stats only, predates P8-2b): on reuse, suppressions that still stand are not counted in
+  `memorySuppressed` or `memoryHiddenOnCritical` (a reused unit counts nothing it reuses).
 - Nit: a hidden finding overflowing to a draft (an uncitable entry, or past the hidden cap) can
   take the draft list past `MAX_FINDINGS` (`raw` is not capped; not a regression: restored
   drafts could already do it).

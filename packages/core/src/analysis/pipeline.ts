@@ -802,15 +802,17 @@ const run = async (
         mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
       );
       const hidden: HiddenUnitItem[] = [];
-      const failed = new Set<string>();
+      const stands = (id: string): boolean => {
+        const entry = entryById.get(id);
+        return entry !== undefined && suppressionStands(entry, file.path, risk, memory.entries);
+      };
       for (const item of reused.hidden) {
         if (!offered.has(item.entryId)) continue;
-        const entry = entryById.get(item.entryId);
-        if (entry !== undefined && suppressionStands(entry, file.path, risk, memory.entries)) {
+        if (stands(item.entryId)) {
           hidden.push(item);
           continue;
         }
-        failed.add(item.entryId);
+        const entry = entryById.get(item.entryId);
         stats.memoryRestored++;
         const marker =
           entry !== undefined &&
@@ -823,9 +825,11 @@ const run = async (
         memoryFindings.push([]);
         restored.push(marker);
       }
-      const applied = keep(reused.memory.applied).filter(
-        (id) => !failed.has(id) || hidden.some((item) => item.entryId === id),
-      );
+      // Every applied entry is re-checked, not only those with a hidden finding: a suppression
+      // that repeated a raised draft was applied without one (fix round 3). The marker that
+      // draft would carry on a fresh run cannot be rebuilt here: the unit holds no record of
+      // which raised draft the suppression repeated.
+      const applied = keep(reused.memory.applied).filter(stands);
       return {
         path: file.path,
         triage,
