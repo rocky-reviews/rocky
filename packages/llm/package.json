@@ -10,7 +10,7 @@
     "./testing": "./src/testing.ts"
   },
   "dependencies": {
-    "@anthropic-ai/bedrock-sdk": "0.35.0",
+    "@anthropic-ai/bedrock-sdk": "1.1.0",
     "@anthropic-ai/foundry-sdk": "0.6.0",
     "@anthropic-ai/sdk": "0.135.0",
     "@anthropic-ai/vertex-sdk": "0.21.0",
