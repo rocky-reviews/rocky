@@ -225,6 +225,15 @@ Task log for the project plan. Agents append a row when a task is merged.
   whose entry is no longer offered instead of raising it as a draft; in practice the unit key
   changes with the selection, so the unit is not reused then.
 - Review nits go here.
+- Post-rebase verification nit: an edited owner/admin convention has `origin = 'member'`, so it
+  loads under the member bound (100), not `learnedOverruling`; an admin writing 100 newer entries
+  pushes it out of the window and it stops blocking. Only admins write such rows. A partition for
+  `origin = 'member' and learner_role in ('owner','admin') and kind <> 'dismissal'` (or folding it
+  into the overruling group) would close it.
+- Post-rebase verification nit: no test for a changed-kind edit (a learned member dismissal edited
+  into a convention by an admin carries `admin` and blocks a member's critical dismissal nearby),
+  and no core test that an edited dismissal carrying a role does not block (guaranteed today by
+  `other.kind !== "dismissal"`).
 
 ### P8-2 follow-ups
 
