@@ -6,7 +6,13 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import { decideDraft } from "./drafts.js";
-import { createMemoryEntry, listMemoryEntries, supersedeMemoryEntry } from "./memory.js";
+import {
+  createMemoryEntry,
+  listMemoryEntries,
+  setMemoryEntryDisabled,
+  setRepoMemoryEnabled,
+  supersedeMemoryEntry,
+} from "./memory.js";
 import {
   ANALYSIS_MEMORY_BOUNDS,
   learnFromReviewSubmission,
@@ -87,6 +93,7 @@ const reset = async (org: SeededOrg, document: AnalysisDocument = DOCUMENT) => {
     await tx.query("update members set removed_at = null, role = 'admin' where id = $1", [
       org.memberId,
     ]);
+    await tx.query("update repos set memory_enabled = true where id = $1", [org.repoId]);
   });
 };
 
@@ -534,5 +541,71 @@ describe("loadAnalysisMemory bounds (fix round, M2/S5)", () => {
     expect(count("dismissal", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedDismissals);
     expect(count("decision", "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
     expect(memory).toHaveLength(MAX_ANALYSIS_MEMORY);
+  });
+});
+
+describe("switching memory off (P8-3, ADR 0038)", () => {
+  const switchEntry = (entryId: string, disabled: boolean) =>
+    db.withOrg(A.orgId, (tx) =>
+      setMemoryEntryDisabled(tx, { actorMemberId: A.memberId, entryId, disabled }),
+    );
+  const switchRepo = (enabled: boolean) =>
+    db.withOrg(A.orgId, (tx) =>
+      setRepoMemoryEnabled(tx, { actorMemberId: A.memberId, repoId: A.repoId, enabled }),
+    );
+  const analysisMemory = () => db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
+
+  it("a switched-off entry is never offered to a review; switched on, it is again", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F3", { kind: "accept" });
+    await learn(A, await post(A));
+    const [first] = await entriesOf(A);
+    expect(await analysisMemory()).toHaveLength(2);
+    expect(await switchEntry(first!.id, true)).toMatchObject({ outcome: "switched" });
+    const offered = await analysisMemory();
+    expect(offered).toHaveLength(1);
+    expect(offered.map((e) => e.id)).not.toContain(first!.id);
+    await switchEntry(first!.id, false);
+    expect(await analysisMemory()).toHaveLength(2);
+  });
+
+  it("memory switched off for the repository offers nothing and learns nothing; the entries stay", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    expect(await switchRepo(false)).toBe("switched");
+    expect(await analysisMemory()).toEqual([]);
+    await decide(A, "F3", { kind: "accept" });
+    expect(await learn(A, await post(A))).toEqual({ outcome: "memory_disabled" });
+    expect(await entriesOf(A)).toHaveLength(1);
+    expect(await switchRepo(true)).toBe("switched");
+    expect(await analysisMemory()).toHaveLength(1);
+  });
+
+  it("a pattern an admin switched off is not learned again beside it; the opposite decision still is", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    const [dismissal] = await entriesOf(A);
+    await switchEntry(dismissal!.id, true);
+
+    // The same dismissal on another pull request: nothing new, the switched-off entry stays.
+    await db.withOrg(A.orgId, async (tx) => {
+      await tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]);
+      await tx.query("update pull_requests set number = 848 where id = $1", [A.pullRequestId]);
+    });
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0, skipped: 1 });
+    expect((await entriesOf(A)).map((e) => [e.id, e.disabledAt !== null])).toEqual([
+      [dismissal!.id, true],
+    ]);
+    expect(await analysisMemory()).toEqual([]);
+
+    // An accept of the same finding is the opposite decision: learned, and it replaces the
+    // switched-off dismissal (the newest decision wins).
+    await db.withOrg(A.orgId, (tx) =>
+      tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]),
+    );
+    await decide(A, "F2", { kind: "accept" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 1 });
+    expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["convention"]);
   });
 });

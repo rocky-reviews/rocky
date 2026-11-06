@@ -185,6 +185,29 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   // H4-3: the PR's diff, same names and checks (the reader is a stub here: no GitHub).
   "GET /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
   "HEAD /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
+  // P8-3 (ADR 0038): a repository's memory and its export, read by every member who reviews it
+  // (the P3-6 check runs inside; from org B the same names find nothing). Changing it needs
+  // memory.edit (admins and owners); an entry id nobody has is not found for them.
+  "GET /api/repos/:owner/:repo/memory": review("GET", true),
+  "HEAD /api/repos/:owner/:repo/memory": review("GET", true),
+  "GET /api/repos/:owner/:repo/memory/export": review("GET", true),
+  "HEAD /api/repos/:owner/:repo/memory/export": review("GET", true),
+  "PUT /api/repos/:owner/:repo/memory/enabled": org("admin", "other", true),
+  "POST /api/repos/:owner/:repo/memory/entries/:entryId/edit": {
+    ...org("admin", "other", true),
+    admin: "not_found",
+    owner: "not_found",
+  },
+  "PUT /api/repos/:owner/:repo/memory/entries/:entryId/disabled": {
+    ...org("admin", "other", true),
+    admin: "not_found",
+    owner: "not_found",
+  },
+  "DELETE /api/repos/:owner/:repo/memory/entries/:entryId": {
+    ...org("admin", "other", true),
+    admin: "not_found",
+    owner: "not_found",
+  },
 };
 
 const NOBODYS_COMMENT = "00000000-0000-4000-8000-000000000000";
@@ -411,6 +434,7 @@ const requestFor = (key: string) => {
     .replace(":analysisId", A.analysisId)
     .replace(":findingId", "F1")
     .replace(":commentId", NOBODYS_COMMENT)
+    .replace(":entryId", NOBODYS_COMMENT)
     .replace(":pullRequestId", A.pullRequestId)
     // seedOrg's repository is `org-<installation id>/api`, its pull request #847.
     .replace(":owner/:repo", `org-91/api`)
@@ -438,7 +462,13 @@ const requestFor = (key: string) => {
                         verdict: "approve",
                         body: "",
                       }
-                    : undefined;
+                    : path === "/api/repos/:owner/:repo/memory/enabled"
+                      ? { enabled: true }
+                      : path === "/api/repos/:owner/:repo/memory/entries/:entryId/edit"
+                        ? { kind: "convention", text: "x" }
+                        : path === "/api/repos/:owner/:repo/memory/entries/:entryId/disabled"
+                          ? { disabled: true }
+                          : undefined;
   return { method, url, body };
 };
 
@@ -518,6 +548,12 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "GET /api/pull-requests/:pullRequestId/review": "pull_requests.review",
       "POST /api/pull-requests/:pullRequestId/review": "pull_requests.review",
       "POST /webhooks/github": "public",
+      "GET /api/repos/:owner/:repo/memory": "pull_requests.review",
+      "GET /api/repos/:owner/:repo/memory/export": "pull_requests.review",
+      "PUT /api/repos/:owner/:repo/memory/enabled": "memory.edit",
+      "POST /api/repos/:owner/:repo/memory/entries/:entryId/edit": "memory.edit",
+      "PUT /api/repos/:owner/:repo/memory/entries/:entryId/disabled": "memory.edit",
+      "DELETE /api/repos/:owner/:repo/memory/entries/:entryId": "memory.edit",
       "GET /api/inbox": "pull_requests.review",
       "POST /api/inbox/approvals": "pull_requests.review",
       "GET /api/analyses/:analysisId/review": "drafts.own",

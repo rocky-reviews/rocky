@@ -8,6 +8,7 @@ import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/poli
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
+import { registerMemoryRoutes } from "./memory/routes.js";
 import type { PullRequestDiffReader } from "./pulls/diff-reader.js";
 import { registerPullRequestDiffRoutes } from "./pulls/diff-routes.js";
 import { registerPullRequestPageRoutes } from "./pulls/routes.js";
@@ -173,6 +174,11 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.pullRequestDiffs === undefined ? {} : { diffs: deps.pullRequestDiffs }),
+    });
+    // P8-3: a repository's project memory (view, edit, delete, switch off, export).
+    registerMemoryRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
     if (deps.reviewPosting !== undefined) {
       const { poster, keys, now, postingTimeoutMs } = deps.reviewPosting;

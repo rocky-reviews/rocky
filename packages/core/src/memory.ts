@@ -1,4 +1,4 @@
-import { limits, pathProblem, textProblem } from "@rocky-reviews/schema";
+import { limits, pathProblem, textProblem, type Severity } from "@rocky-reviews/schema";
 import { containsPromptCanaryFragment } from "./analysis/leak.js";
 import { isDismissReason, type DismissReason } from "./drafts.js";
 import { MAX_KNOWN_PEOPLE, scrubPersonalIdentifiers, type ScrubResult } from "./pii.js";
@@ -65,6 +65,12 @@ export interface MemoryEntry {
   readonly confidence: number;
   /** The dismissal reason; set exactly for `dismissal` entries. */
   readonly reason: DismissReason | null;
+  /**
+   * For a learned dismissal: the severity of the finding it was learned from, the highest it
+   * covers (migration 0018, ADR 0037 §2); `null` otherwise (a dismissal without one covers up to
+   * `medium`).
+   */
+  readonly severity: Severity | null;
   readonly author: MemoryAuthor;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -72,6 +78,8 @@ export interface MemoryEntry {
   readonly lastUsedAt: Date | null;
   /** The entry that replaced this one, or `null` while it is current. */
   readonly supersededBy: string | null;
+  /** When an admin switched the entry off (P8-3, ADR 0038); `null` while it applies. */
+  readonly disabledAt: Date | null;
 }
 
 /** A validated, scrubbed entry ready to be stored (the author and repository come from the caller). */
