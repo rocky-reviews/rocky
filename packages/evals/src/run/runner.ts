@@ -23,6 +23,7 @@ import {
   INJECTION_FIXTURES,
   type InjectionFixture,
 } from "../injection/inject.js";
+import { pinTriage, type TriagePin } from "../memory/pin.js";
 import { runMemoryEval, type MemoryStep } from "../memory/run.js";
 import { scoreFindings } from "../score.js";
 import { SEEDED_PRS, type SeededPr } from "../seeded/index.js";
@@ -115,11 +116,16 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
   });
   const createdAt = options.clock.now().toISOString();
-  const analyse = async (subject: EvalSubject, request: AnalysisRequest) => {
+  const analyse = async (
+    subject: EvalSubject,
+    request: AnalysisRequest,
+    /** An eval-harness wrapper over the roles (the memory eval's triage pin); identity otherwise. */
+    wrap: (roles: LlmRoles) => LlmRoles = (roles) => roles,
+  ) => {
     if (meter.capped()) return "capped" as const;
     try {
       const outcome = await analyzePullRequest(request, {
-        llm: meter.wrap(options.rolesFor(subject)),
+        llm: meter.wrap(wrap(options.rolesFor(subject))),
         clock: options.clock,
         sha256Hex,
         generator: { name: "rocky-evals", version: PIPELINE_VERSION },
@@ -175,7 +181,16 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
   let memory: EvalReport["memory"] = null;
   if (options.memory === true) {
     const result = await runMemoryEval(
-      (step, request) => analyse({ kind: "memory", step }, request),
+      async (step, request, { pinTriage: level }) => {
+        const subject = { kind: "memory", step } as const;
+        if (level === null) return { outcome: await analyse(subject, request) };
+        let pin: TriagePin | undefined;
+        const outcome = await analyse(subject, request, (roles) => {
+          pin = pinTriage(roles, level);
+          return pin.roles;
+        });
+        return { outcome, answered: pin?.answered };
+      },
       { trials: options.memoryTrials ?? 1 },
     );
     // Parsed into the report's own shape: codes, levels, counts and seeded ids only.

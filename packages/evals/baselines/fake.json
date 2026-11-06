@@ -3,7 +3,7 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-05T18:51:48.838Z",
+  "createdAt": "2026-11-06T12:25:29.020Z",
   "pipelineVersion": "p4-4.2",
   "promptHash": "ad209ea4b12178ac034d52bcef8d7442b577d666cc792a5964e4c965732e1337",
   "models": {
@@ -33,7 +33,7 @@
     "byRole": {
       "triage": {
         "calls": 479,
-        "inputTokens": 205702,
+        "inputTokens": 205706,
         "outputTokens": 36725,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
@@ -41,22 +41,22 @@
       },
       "review": {
         "calls": 396,
-        "inputTokens": 214382,
-        "outputTokens": 59358,
+        "inputTokens": 214393,
+        "outputTokens": 59374,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-review"]
       },
       "graph": {
         "calls": 288,
-        "inputTokens": 463748,
+        "inputTokens": 463770,
         "outputTokens": 21885,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-graph"]
       }
     },
-    "totalTokens": 1001800,
+    "totalTokens": 1001853,
     "capped": false
   },
   "prs": [
@@ -1476,37 +1476,46 @@
             "status": "done",
             "failure": null,
             "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
             "reviewed": true,
             "unanalysed": null,
             "findings": 2,
             "matched": ["B1", "P1"],
             "patternSeverity": "medium",
             "suppressed": 0,
-            "restored": 0
+            "restored": 0,
+            "doubleCheck": 0
           },
           "control": {
             "status": "done",
             "failure": null,
             "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
             "reviewed": true,
             "unanalysed": null,
             "findings": 2,
             "matched": ["B2", "P2"],
             "patternSeverity": "medium",
             "suppressed": 0,
-            "restored": 0
+            "restored": 0,
+            "doubleCheck": 0
           },
           "apply": {
             "status": "done",
             "failure": null,
             "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
             "reviewed": true,
             "unanalysed": null,
             "findings": 1,
             "matched": ["B2"],
             "patternSeverity": null,
             "suppressed": 1,
-            "restored": 0
+            "restored": 0,
+            "doubleCheck": 0
           }
         }
       }

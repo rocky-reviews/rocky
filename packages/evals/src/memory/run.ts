@@ -11,6 +11,11 @@
  * text. Each analysis records enough to tell why a condition failed (was the file reviewed at
  * all, did the analysis fail, what matched): the first live run recorded booleans only and could
  * not tell a miss from a file that was never reviewed (ADR 0037 §6).
+ *
+ * Triage is pinned to `important` in every analysis (`pinTriage`, an eval-harness option): the
+ * third live run lost a trial to triage alone (the case file `critical` in one trial, where no
+ * suppression stands by design). Pass/fail then measures memory only: the pattern hidden, the
+ * entry cited, the bug still found. The model's own level is kept as a diagnostic.
  */
 import {
   learnedEntry,
@@ -24,12 +29,29 @@ import type { Finding } from "@rocky-reviews/schema";
 import { scoreFindings, type SeededFinding } from "../score.js";
 import { MEMORY_RUN_1, MEMORY_RUN_2, memoryCaseDiff, type MemoryCasePr } from "./case.js";
 
+import type { PinnedLevel } from "./pin.js";
+
 export type MemoryStep = "learn" | "control" | "apply";
+
+/** The triage level every analysis of the eval is pinned to (`pinTriage`). */
+export const MEMORY_TRIAGE_PIN: PinnedLevel = "important";
+
+/** What the caller runs an analysis with: pin the case file's triage to this level, or not. */
+export interface MemoryAnalyseOptions {
+  readonly pinTriage: PinnedLevel | null;
+}
+
+export interface MemoryAnalysed {
+  readonly outcome: AnalysisOutcome | "capped";
+  /** With a pin: the level the triage model answered per path, before the pin (`pinTriage`). */
+  readonly answered?: ReadonlyMap<string, PinnedLevel> | undefined;
+}
 
 export type MemoryAnalyse = (
   step: MemoryStep,
   request: AnalysisRequest,
-) => Promise<AnalysisOutcome | "capped">;
+  options: MemoryAnalyseOptions,
+) => Promise<MemoryAnalysed>;
 
 /** A stand-in for the stored entry's id: what the pipeline cites and the worker would touch. */
 export const MEMORY_EVAL_ENTRY_ID = "00000000-0000-4000-8000-000000001301";
@@ -39,8 +61,12 @@ export interface MemoryRunDiagnosis {
   readonly status: "done" | "failed" | "capped";
   /** The pipeline's failure code when `failed` (a fixed code), else null. */
   readonly failure: string | null;
-  /** The file's triage level (after the rule floor), or null when it was not triaged. */
+  /** The file's triage level as the pipeline saw it (after the pin and the rule floor), or null when it was not triaged. */
   readonly level: "critical" | "important" | "normal" | "low" | null;
+  /** The level triage was pinned to, or null when it was not pinned. */
+  readonly pinned: "critical" | "important" | "normal" | "low" | null;
+  /** With a pin: the level the triage model itself answered for the file (a diagnostic), or null. */
+  readonly modelLevel: "critical" | "important" | "normal" | "low" | null;
   /** The file went through review (critical or important, not unanalysed). */
   readonly reviewed: boolean;
   /** The file's unanalysed reason (a fixed code), or null. */
@@ -54,6 +80,8 @@ export interface MemoryRunDiagnosis {
   /** Findings a dismissal kept out, and suppressions restored as drafts (the pipeline's counts). */
   readonly suppressed: number;
   readonly restored: number;
+  /** Of the restored, covered suppressions restored because the file is risky (`Finding.restored`). */
+  readonly doubleCheck: number;
 }
 
 /** One trial: the conditions, and what each of its three analyses did. */
@@ -113,6 +141,12 @@ const request = (pr: MemoryCasePr, memory?: readonly AnalysisMemoryEntry[]): Ana
 const findingsOf = (outcome: AnalysisOutcome | "capped"): readonly Finding[] =>
   outcome !== "capped" && outcome.status === "done" ? outcome.document.findings : [];
 
+/** The triage level the pipeline would give the case file, for the diagnosis. */
+interface TriagePinned {
+  readonly pinned: PinnedLevel | null;
+  readonly answered: ReadonlyMap<string, PinnedLevel> | undefined;
+}
+
 /** The produced finding that matches `seeded` under the suite's matching rules, if any. */
 const matchOf = (seeded: SeededFinding, findings: readonly Finding[]): Finding | undefined => {
   const score = scoreFindings([seeded], findings);
@@ -166,9 +200,12 @@ const REVIEWED: ReadonlySet<string> = new Set(["critical", "important"]);
 export const diagnose = (
   outcome: AnalysisOutcome | "capped",
   pr: MemoryCasePr,
+  triage: TriagePinned = { pinned: null, answered: undefined },
 ): MemoryRunDiagnosis => {
   const empty = {
     level: null,
+    pinned: triage.pinned,
+    modelLevel: triage.pinned === null ? null : (triage.answered?.get(pr.path) ?? null),
     reviewed: false,
     unanalysed: null,
     findings: 0,
@@ -176,11 +213,13 @@ export const diagnose = (
     patternSeverity: null,
     suppressed: 0,
     restored: 0,
+    doubleCheck: 0,
   } as const;
   if (outcome === "capped") return { status: "capped", failure: null, ...empty };
   const counts = {
     suppressed: outcome.stats.memorySuppressed,
     restored: outcome.stats.memoryRestored,
+    doubleCheck: outcome.stats.memoryDoubleCheck,
   };
   if (outcome.status !== "done")
     return { status: "failed", failure: outcome.code, ...empty, ...counts };
@@ -192,6 +231,7 @@ export const diagnose = (
   const score = scoreFindings([pr.pattern, pr.bug], own);
   const patternPair = score.pairs.find((pair) => pair.seeded === pr.pattern.id);
   return {
+    ...empty,
     status: "done",
     failure: null,
     level,
@@ -205,13 +245,28 @@ export const diagnose = (
   };
 };
 
-const trial = async (analyse: MemoryAnalyse): Promise<MemoryTrialResult> => {
-  const run1 = await analyse("learn", request(MEMORY_RUN_1));
+const trial = async (
+  analyse: MemoryAnalyse,
+  pinTriage: PinnedLevel | null,
+): Promise<MemoryTrialResult> => {
+  const options = { pinTriage };
+  const learn = await analyse("learn", request(MEMORY_RUN_1), options);
+  const run1 = learn.outcome;
   const dismissed = matchOf(MEMORY_RUN_1.pattern, findingsOf(run1));
   const entry = dismissed === undefined ? undefined : learnedFrom(dismissed, MEMORY_RUN_1);
-  const control = await analyse("control", request(MEMORY_RUN_2));
-  const run2 = await analyse("apply", request(MEMORY_RUN_2, entry === undefined ? [] : [entry]));
+  const controlled = await analyse("control", request(MEMORY_RUN_2), options);
+  const control = controlled.outcome;
+  const applied = await analyse(
+    "apply",
+    request(MEMORY_RUN_2, entry === undefined ? [] : [entry]),
+    options,
+  );
+  const run2 = applied.outcome;
   const run2Findings = findingsOf(run2);
+  const pinnedOf = (analysed: MemoryAnalysed): TriagePinned => ({
+    pinned: pinTriage,
+    answered: analysed.answered,
+  });
   const result = {
     status: statusOf([run1, control, run2]),
     run1Raised: dismissed !== undefined,
@@ -236,9 +291,9 @@ const trial = async (analyse: MemoryAnalyse): Promise<MemoryTrialResult> => {
       result.run2Cited &&
       result.run2BugFound,
     runs: {
-      learn: diagnose(run1, MEMORY_RUN_1),
-      control: diagnose(control, MEMORY_RUN_2),
-      apply: diagnose(run2, MEMORY_RUN_2),
+      learn: diagnose(run1, MEMORY_RUN_1, pinnedOf(learn)),
+      control: diagnose(control, MEMORY_RUN_2, pinnedOf(controlled)),
+      apply: diagnose(run2, MEMORY_RUN_2, pinnedOf(applied)),
     },
   };
 };
@@ -248,14 +303,19 @@ export const MAX_MEMORY_TRIALS = 5;
 
 export const runMemoryEval = async (
   analyse: MemoryAnalyse,
-  options: { readonly trials?: number } = {},
+  options: {
+    readonly trials?: number;
+    /** The level to pin triage to in every analysis (`MEMORY_TRIAGE_PIN`); `null` leaves triage to the model. */
+    readonly pinTriage?: PinnedLevel | null;
+  } = {},
 ): Promise<MemoryEvalResult> => {
   const count = options.trials ?? 1;
   if (!Number.isSafeInteger(count) || count < 1 || count > MAX_MEMORY_TRIALS)
     throw new RangeError(`memory trials must be 1..${MAX_MEMORY_TRIALS}`);
+  const pinTriage = options.pinTriage === undefined ? MEMORY_TRIAGE_PIN : options.pinTriage;
   const trials: MemoryTrialResult[] = [];
   for (let i = 0; i < count; i++) {
-    const result = await trial(analyse);
+    const result = await trial(analyse, pinTriage);
     trials.push(result);
     // A capped analysis means the token budget is spent: later trials could not finish either.
     if (result.status === "capped") break;

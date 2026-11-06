@@ -130,7 +130,12 @@ const SeverityLevel = z.enum(["critical", "high", "medium", "low"]);
 export const MemoryRunDiagnosis = z.strictObject({
   status: MemoryStatus,
   failure: Code.nullable(),
+  /** The level the pipeline saw (after the pin, if any, and the rule floor). */
   level: Level.nullable(),
+  /** The level triage was pinned to (fix round 3), or null; absent in reports made before it. */
+  pinned: Level.nullable().optional(),
+  /** With a pin: the level the triage model answered itself; absent in older reports. */
+  modelLevel: Level.nullable().optional(),
   reviewed: z.boolean(),
   unanalysed: Code.nullable(),
   findings: count,
@@ -138,6 +143,8 @@ export const MemoryRunDiagnosis = z.strictObject({
   patternSeverity: SeverityLevel.nullable(),
   suppressed: count,
   restored: count,
+  /** Covered suppressions restored for a double-check (`Finding.restored`); absent in older reports. */
+  doubleCheck: count.optional(),
 });
 
 const MemoryConditions = {

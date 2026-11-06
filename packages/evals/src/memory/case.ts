@@ -155,9 +155,11 @@ const fakeFinding = (finding: SeededFinding): FakeFinding => ({
   title: finding.title,
 });
 
-const decentModel = (pr: MemoryCasePr): Script =>
+const TRIAGE_SCORE = { critical: 90, important: 65, normal: 35, low: 10 } as const;
+
+const decentModel = (pr: MemoryCasePr, level: keyof typeof TRIAGE_SCORE): Script =>
   fakeModel({
-    triage: { [pr.path]: { score: 65, level: "important", reason: "A new payments job." } },
+    triage: { [pr.path]: { score: TRIAGE_SCORE[level], level, reason: "A new payments job." } },
     findings: { [pr.path]: [fakeFinding(pr.pattern), fakeFinding(pr.bug)] },
     tldr: [`Adds ${pr.title.toLowerCase()}.`, `Start with \`${pr.path}\`.`],
     verdict: { level: "high", reason: "A new payments job with a real bug." },
@@ -183,12 +185,14 @@ const withoutSuggestion = <T extends object>(finding: T): Omit<T, "suggestion"> 
 /**
  * The `--fake` model for the memory case: the decent model above, and when a review carries
  * memory it does what the memory instructions ask, by role, labels and parts only: a finding
- * whose title a dismissal entry names goes in `suppressed` with that entry's id.
+ * whose title a dismissal entry names goes in `suppressed` with that entry's id. `triage` is
+ * the level it gives the case file (`important` by default; tests use `critical` for the
+ * critical-file rule and the pin).
  */
 export const memoryFakeScript =
-  (pr: MemoryCasePr): Script =>
+  (pr: MemoryCasePr, options: { readonly triage?: keyof typeof TRIAGE_SCORE } = {}): Script =>
   async (call) => {
-    const answer: ScriptedAnswer = await decentModel(pr)(call);
+    const answer: ScriptedAnswer = await decentModel(pr, options.triage ?? "important")(call);
     const memory = call.part("memory");
     if (memory === undefined || stageOf(call) !== "review" || !("value" in answer)) return answer;
     const block = JSON.parse(memory) as MemoryBlock;

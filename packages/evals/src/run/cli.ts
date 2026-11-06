@@ -108,7 +108,7 @@ const summary = (report: EvalReport): string => {
         `  trial ${index + 1}: ${trial.pass ? "pass" : "FAIL"}; ${Object.entries(trial.runs)
           .map(
             ([step, r]) =>
-              `${step} ${r.status}${r.failure === null ? "" : ` (${r.failure})`} level ${r.level ?? "-"}${r.reviewed ? "" : " not reviewed"}${r.unanalysed === null ? "" : ` unanalysed ${r.unanalysed}`}, ${r.findings} findings, matched [${r.matched.join(",")}]`,
+              `${step} ${r.status}${r.failure === null ? "" : ` (${r.failure})`} level ${r.level ?? "-"}${r.pinned === null || r.pinned === undefined ? "" : ` (pinned; model said ${r.modelLevel ?? "-"})`}${r.reviewed ? "" : " not reviewed"}${r.unanalysed === null ? "" : ` unanalysed ${r.unanalysed}`}, ${r.findings} findings, matched [${r.matched.join(",")}]${r.restored === 0 ? "" : `, restored ${r.restored} (double-check ${r.doubleCheck ?? 0})`}`,
           )
           .join("; ")}`,
       );
@@ -186,7 +186,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         ),
         `seeded PRs: ${prs.map((pr) => `${pr.id} (${pr.expected.length} seeded)`).join(", ")}`,
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
-        `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply)` : "off"}`,
+        `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply), triage pinned to important` : "off"}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),

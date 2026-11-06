@@ -123,6 +123,14 @@ rule floor.
    absence in the next step is the memory's doing;
 3. **apply:** pr-1302 is analysed with the entry.
 
+**Triage is pinned to `important`** in all three analyses (`src/memory/pin.ts`, an eval-harness
+wrapper over the triage role; the product never pins). The triage model is still called and the
+level it answered is recorded (`modelLevel`); the pipeline sees `important` with the score moved
+into its band. So pass/fail measures memory only: the pattern hidden, the entry cited, the bug
+still found. Without the pin a `normal` file is never reviewed and on a `critical` one no
+suppression stands by design (ADR 0037 §4), which cost two live runs their result (below).
+`runMemoryEval(…, { pinTriage: null })` leaves triage to the model; the tests use it.
+
 `--memory-trials N` (1 to 5, default 1) runs the three analyses N times, for a rate on a live
 model. The result (`memory` in the report) holds the conditions over all trials: `run1Raised`,
 `learned`, `controlRaised`, `run2Raised` (must be false; true if any trial raised it),
@@ -130,31 +138,44 @@ model. The result (`memory` in the report) holds the conditions over all trials:
 it, and the briefing's `memoryApplied` cites it), `run2BugFound` (memory hid nothing else),
 `pass` (every condition in every trial) and `passes` (trials that passed). `trials` records each
 trial's conditions and, **per analysis**, what it did with the case file: the analysis status and
-failure code, the file's triage level, whether it was reviewed, its unanalysed reason, the count
-of findings on it, the seeded ids they matched, the severity of the pattern finding, and the
-pipeline's suppressed and restored counts. Codes, levels, counts and seeded ids only: never code
-or model text. `pnpm evals run` prints one line per trial.
+failure code, the file's triage level as the pipeline saw it, the level it was pinned to and the
+level the triage model answered (`pinned`, `modelLevel`), whether it was reviewed, its unanalysed
+reason, the count of findings on it, the seeded ids they matched, the severity of the pattern
+finding, and the pipeline's suppressed, restored and double-check counts (`doubleCheck`: covered
+suppressions restored because the file is risky, which the document marks as `restored`). Codes,
+levels, counts and seeded ids only: never code or model text. `pnpm evals run` prints one line
+per trial. Reports made before the pin lack `pinned`, `modelLevel` and `doubleCheck`.
 
 With `--fake` the model is scripted to obey the memory block, so the result checks the plumbing
 (learning, selection, the untrusted part, enforcement, citations); `memory.test.ts` also shows
-that a model which ignores memory fails it, and that a file triaged `normal` shows up as "not
-reviewed". Live, it measures whether the model follows the memory instructions. A control that
-does not raise the pattern makes the run inconclusive (`pass` false, `controlRaised` false): the
-case needs a stronger pattern, not a fix to memory. Run 2 can also be inconclusive by design when
-triage calls pr-1302 `critical` (no suppression stands on a critical file, ADR 0037 §4), or when
-the model rates the pattern above the severity it gave it in run 1 (the entry does not cover it);
-the per-run diagnosis shows both (`level`, `patternSeverity`, `restored`).
+that a model which ignores memory fails it, that unpinned a file triaged `normal` shows up as
+"not reviewed", that the pin keeps a trial the model would have called `critical` measurable
+(`modelLevel: "critical"`, `level: "important"`), and, deterministically, the critical-file rule:
+unpinned, with pr-1302 triaged `critical`, the fake's suppression is restored as a draft with the
+double-check marker (`restored 1`, `doubleCheck 1`, `run2Raised`). Live, it measures whether the
+model follows the memory instructions. A control that does not raise the pattern makes the run
+inconclusive (`pass` false, `controlRaised` false): the case needs a stronger pattern, not a fix
+to memory. Run 2 can also be inconclusive by design when the model rates the pattern above the
+severity it gave it in run 1 (the entry does not cover it); the per-run diagnosis shows it
+(`patternSeverity`, `restored`).
 
-**Live results so far.** The first live run (2026-11-05; triage haiku-5-5, review opus-5-5,
-graph sonnet-5-5) used the earlier case, a 16-line retry job with a hard-coded `MAX_ATTEMPTS`.
-Every condition came back false with every analysis `done`, and the report recorded booleans
-only. Offline diagnosis: of the 26 review-role calls, 8 were briefings, so at most 18 file
-reviews ran for the 25 triaged files; the case files were most likely triaged `normal` (a small
-job touching nothing the triage instructions call risky), and a `normal` file is never reviewed,
-so no finding could be raised. Nothing was swallowed as an error, but a `done` analysis whose
-case file was not reviewed looked the same as a miss. The case was redesigned (payment code,
-which triage places at least at `important`) and the per-run diagnosis added so that the next run
-can tell these apart. The next live run is a needs-human step.
+**Live results so far.** Run 1 (2026-11-05; triage haiku-5-5, review opus-5-5, graph
+sonnet-5-5) used the earlier case, a 16-line retry job with a hard-coded `MAX_ATTEMPTS`. Every
+condition came back false with every analysis `done`, and the report recorded booleans only.
+Offline diagnosis: of the 26 review-role calls, 8 were briefings, so at most 18 file reviews ran
+for the 25 triaged files; the case files were most likely triaged `normal` (a small job touching
+nothing the triage instructions call risky), and a `normal` file is never reviewed, so no finding
+could be raised. Nothing was swallowed as an error, but a `done` analysis whose case file was not
+reviewed looked the same as a miss. The case was redesigned (payment code) and the per-run
+diagnosis added. Run 2 (2026-11-05, pr-1302 as a receipts mailer): pr-1302 was triaged `normal`
+in the control and in run 2 of both trials, never reviewed, nothing to measure; pr-1302 now
+releases payment authorizations with an inverted cutoff. Run 3 (2026-11-06, report
+`reports/live-2026-11-06T00-34-01-796Z.json`): 1 of 2 trials passed. Trial 1: control
+`important`, raised the pattern and the bug; run 2 `important`, suppressed the pattern citing the
+entry and found the bug. Trial 2: run 2 triaged `critical`, the model suppressed the pattern and
+the pipeline restored it (no suppression on a critical file, by design), so the trial failed. The
+model followed memory in both trials; triage variance broke the count, hence the pin. The next
+live run, pinned, is a needs-human step.
 
 **Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
 A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.

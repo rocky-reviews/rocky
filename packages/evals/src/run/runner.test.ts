@@ -295,9 +295,14 @@ describe("the project-memory eval in the run (P8-2)", () => {
     // Each analysis says what it did with the case file: codes, levels, counts, seeded ids.
     expect(report.memory?.trials?.[0]?.runs.apply).toMatchObject({
       level: "important",
+      // Triage is pinned (fix round 3); the fake answered `important` itself.
+      pinned: "important",
+      modelLevel: "important",
       reviewed: true,
       matched: ["B2"],
       suppressed: 1,
+      restored: 0,
+      doubleCheck: 0,
     });
     expect(parseReport(JSON.parse(JSON.stringify(report))).ok).toBe(true);
     // Three analyses on the review role's memory path count toward usage like any other.
