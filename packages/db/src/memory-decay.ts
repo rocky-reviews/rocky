@@ -29,11 +29,16 @@ import {
  * wrote them and P8-3 is where people edit and delete them. Deletion is permanent; the entries
  * are derived data (GitHub holds the reviews they came from).
  *
- * Each rule **locks first**: it selects its candidates `FOR UPDATE` with the rule's predicate
- * (under READ COMMITTED the predicate is re-evaluated on the newest row version, so an entry
- * cited or superseded by a transaction that committed meanwhile drops out), then acts on exactly
- * those ids with a fresh snapshot. A concurrent supersede or citation of a locked entry waits
- * for this transaction and then finds the entry gone or already stepped (fix round 1, S2).
+ * Each rule **locks first and never waits**: it selects its candidates `FOR UPDATE SKIP LOCKED`
+ * with the rule's predicate (under READ COMMITTED the predicate is re-evaluated on the newest
+ * row version, so an entry cited or superseded by a transaction that committed meanwhile drops
+ * out; one a transaction still holds is left for the next run), then acts on exactly those ids
+ * with a fresh snapshot. The chain behind a retiring head is locked the same way, and a chain
+ * with a row held elsewhere is skipped whole. So the job never waits on a `memory_entries` row,
+ * and a concurrent supersede or citation that waits on a row the job holds finds it gone or
+ * already stepped once the job commits (fix rounds 1 and 2, S2): a deadlock with the analysis
+ * commit (`touchMemoryEntries`) or the learner, whose victim could have been a finished review,
+ * cannot involve a wait of this job.
  *
  * The windows come from `app.retention_settings` (migrator-owned, read-only for the application,
  * with CHECK floors that `checkWindows` repeats here for every caller) and `as_of` is clamped to
@@ -114,7 +119,7 @@ const LOCK_HISTORY_SQL = `
                       where x.org_id = $1 and x.superseded_by = e.id)
    order by e.updated_at, e.id
    limit $4
-   for update`;
+   for update skip locked`;
 const PURGE_HISTORY_SQL = `
   delete from memory_entries e
    where e.org_id = $1 and e.id = any($2::uuid[]) and e.superseded_by is not null
@@ -130,7 +135,8 @@ const PURGE_HISTORY_SQL = `
  * member-written entry anywhere is kept whole: the job never deletes what a person wrote. The
  * chain is computed after the heads are locked, so a supersede that made a locked head the
  * successor of a member-written entry is either visible here (the chain is then skipped) or
- * waiting on the lock (and then finds the head gone).
+ * waiting on the lock (and then finds the head gone). The chain's rows are then locked `SKIP
+ * LOCKED` too, and a chain with a row held elsewhere waits for the next run.
  */
 const LOCK_HEADS_SQL = `
   select e.id from memory_entries e
@@ -139,28 +145,29 @@ const LOCK_HEADS_SQL = `
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4
-   for update`;
-const RETIRE_SQL = `
+   for update skip locked`;
+const CHAIN_SQL = `
   with recursive chain as (
     select h.id, h.id as head from unnest($2::uuid[]) as h(id)
     union
     select e.id, c.head from memory_entries e
       join chain c on e.org_id = $1 and e.superseded_by = c.id
-  ),
-  mixed as (
-    select distinct c.head from chain c
-      join memory_entries e on e.org_id = $1 and e.id = c.id
-     where e.origin <> 'learned'
   )
-  delete from memory_entries e using chain c
-   where e.org_id = $1 and e.id = c.id
-     and not exists (select 1 from mixed m where m.head = c.head)`;
+  select c.id, c.head, e.origin = 'learned' as learned
+    from chain c join memory_entries e on e.org_id = $1 and e.id = c.id`;
+const LOCK_ROWS_SQL = `
+  select e.id from memory_entries e
+   where e.org_id = $1 and e.id = any($2::uuid[])
+   order by e.id
+   for update skip locked`;
+const DELETE_ROWS_SQL = `delete from memory_entries e where e.org_id = $1 and e.id = any($2::uuid[])`;
 
 /**
  * Current learned entries idle for a decay period since their last citation, creation or decay
  * step, whichever is latest (locked first, so a citation that committed meanwhile keeps the
- * entry out). `decayed_at` is set to the clamped instant, so the same instant never decays twice
- * and a later citation restarts the clock.
+ * entry out, and one still in flight leaves it for the next run). `decayed_at` is set to the
+ * clamped instant, so the same instant never decays twice and a later citation restarts the
+ * clock.
  */
 const LOCK_DECAY_SQL = `
   select e.id from memory_entries e
@@ -171,13 +178,34 @@ const LOCK_DECAY_SQL = `
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4
-   for update`;
+   for update skip locked`;
 const DECAY_SQL = `
   update memory_entries e
      set confidence = greatest(0, e.confidence - $4), decayed_at = $3::timestamptz
    where e.org_id = $1 and e.id = any($2::uuid[])`;
 
 const ids = (rows: { id: string }[]): string[] => rows.map((row) => row.id);
+
+/**
+ * The chains behind the locked heads: every row of a chain that is all learned and whose other
+ * rows could all be locked without waiting. Returns the ids to delete.
+ */
+const retirableChains = async (tx: TenantTx, heads: string[]): Promise<string[]> => {
+  const chain = await tx.query<{ id: string; head: string; learned: boolean }>(CHAIN_SQL, [
+    tx.orgId,
+    heads,
+  ]);
+  const skipped = new Set<string>();
+  for (const row of chain.rows) if (!row.learned) skipped.add(row.head);
+  const behind = chain.rows.filter((row) => row.id !== row.head && !skipped.has(row.head));
+  if (behind.length > 0) {
+    const locked = new Set(
+      ids((await tx.query<{ id: string }>(LOCK_ROWS_SQL, [tx.orgId, ids(behind)])).rows),
+    );
+    for (const row of behind) if (!locked.has(row.id)) skipped.add(row.head);
+  }
+  return ids(chain.rows.filter((row) => !skipped.has(row.head)));
+};
 
 /**
  * Applies the three rules to the current org as of `asOf` (clamped to the database clock) and,
@@ -215,10 +243,11 @@ export const decayOrgMemory = async (
     windows.memoryUnusedDays,
     MAX_MEMORY_DECAY_BATCH,
   ]);
+  const victims = heads.rows.length === 0 ? [] : await retirableChains(tx, ids(heads.rows));
   const retired =
-    heads.rows.length === 0
+    victims.length === 0
       ? 0
-      : ((await tx.query(RETIRE_SQL, [tx.orgId, ids(heads.rows)])).rowCount ?? 0);
+      : ((await tx.query(DELETE_ROWS_SQL, [tx.orgId, victims])).rowCount ?? 0);
 
   const candidates = await tx.query<{ id: string }>(LOCK_DECAY_SQL, [
     tx.orgId,

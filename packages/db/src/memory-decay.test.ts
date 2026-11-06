@@ -439,15 +439,16 @@ describe("the clock, the windows and the audit trail", () => {
   });
 });
 
-describe("races with a concurrent tenant transaction (fix round 1, S2 and N4)", () => {
+describe("concurrent tenant transactions: the job never waits (fix rounds 1 and 2, S2 and N4)", () => {
+  type Tx = Parameters<Parameters<Db["withOrg"]>[1]>[0];
+
   /**
-   * Two connections of the application pool: one holds a tenant transaction open on `held`
-   * after `act` ran (its row locks stay), the job runs on the other and blocks on those locks;
-   * `release` commits the first and the job continues on the newest row versions.
+   * Holds a tenant transaction of org B open after `act` ran on it (its row locks stay) and
+   * hands back `release`, which lets it commit. The application pool has two connections: one
+   * for the held transaction, one for whatever runs meanwhile. No timing is involved: the job
+   * either sees the lock (and skips) or does not, and the assertions tell which.
    */
-  const raceWith = async (
-    act: (tx: Parameters<Parameters<Db["withOrg"]>[1]>[0]) => Promise<void>,
-  ) => {
+  const hold = async (act: (tx: Tx) => Promise<void>) => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -462,18 +463,18 @@ describe("races with a concurrent tenant transaction (fix round 1, S2 and N4)", 
       await gate;
     });
     await hasActed;
-    const job = run(B);
-    // The job is now waiting on the locks held by `held`; let that transaction commit.
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    release();
-    await held;
-    return job;
+    return {
+      release: async () => {
+        release();
+        await held;
+      },
+    };
   };
 
-  it("a supersede that commits while retire waits for the head keeps the chain whole: the member-written entry is not made current again (S2)", async () => {
+  it("a supersede still holding the head: the job skips the head (nothing waits), and the chain is whole once the supersede commits (S2)", async () => {
     const head = await plant(B, { createdAt: ageDays(400) });
     const written = await plant(B, { origin: "member", createdAt: ageDays(5), confidence: 90 });
-    await raceWith(async (tx) => {
+    const supersede = await hold(async (tx) => {
       expect(
         await supersedeMemoryEntry(tx, {
           actorMemberId: B.memberId,
@@ -482,18 +483,67 @@ describe("races with a concurrent tenant transaction (fix round 1, S2 and N4)", 
         }),
       ).toBe("superseded");
     });
+    // Runs to completion while the supersede holds its locks: the head is skipped, not waited for.
+    await run(B);
     expect(await exists("memory_entries", head)).toBe(true);
+    await supersede.release();
     expect(await row(written)).toMatchObject({ superseded_by: head, confidence: 90 });
+    // The chain now holds a member-written entry: a later run keeps it whole.
+    await run(B);
+    expect(await exists("memory_entries", head)).toBe(true);
+    expect(await row(written)).toMatchObject({ superseded_by: head });
   });
 
-  it("a citation that commits while decay waits for the entry keeps its confidence (N4)", async () => {
+  it("the job holding the head: a supersede that arrives meanwhile finds it gone (not_found) and the member-written entry stays current (S2)", async () => {
+    const head = await plant(B, { createdAt: ageDays(400) });
+    const written = await plant(B, { origin: "member", createdAt: ageDays(5), confidence: 90 });
+    const job = await hold(async (tx) => {
+      const report = await decayOrgMemory(tx, { asOf: NOW, windows: WINDOWS });
+      expect(report.retired).toBeGreaterThanOrEqual(1);
+    });
+    // The supersede locks both rows FOR UPDATE and waits for the job's commit (its own choice to
+    // wait, never the job's); released right away, it then sees the head gone.
+    const result = db.withOrg(B.orgId, (tx) =>
+      supersedeMemoryEntry(tx, { actorMemberId: B.memberId, entryId: written, byEntryId: head }),
+    );
+    await job.release();
+    expect(await result).toBe("not_found");
+    expect(await exists("memory_entries", head)).toBe(false);
+    expect(await row(written)).toMatchObject({ superseded_by: null, confidence: 90 });
+  });
+
+  it("a citation still holding the entry: the job skips the decay step; the next run takes it only if the entry is idle again (N4)", async () => {
     const entry = await plant(B, { createdAt: ageDays(91) });
-    await raceWith(async (tx) => {
+    const citation = await hold(async (tx) => {
       expect(await touchMemoryEntries(tx, [entry])).toBe(1);
     });
+    await run(B);
+    expect(await row(entry)).toMatchObject({ confidence: 80, decayed_at: null });
+    await citation.release();
+    await run(B);
     const after = await row(entry);
     expect(after).toMatchObject({ confidence: 80, decayed_at: null });
     expect(after?.last_used_at).not.toBeNull();
+  });
+
+  it("a row of the chain behind a retiring head held elsewhere: the whole chain waits for the next run (no wait, no partial chain)", async () => {
+    const head = await plant(B, { createdAt: ageDays(400) });
+    const behind = await plant(B, {
+      createdAt: ageDays(500),
+      supersededBy: head,
+      updatedAt: ageDays(10),
+    });
+    const citation = await hold(async (tx) => {
+      // A reused unit may still cite a superseded entry's id (ADR 0037 §4).
+      expect(await touchMemoryEntries(tx, [behind])).toBe(1);
+    });
+    await run(B);
+    expect(await exists("memory_entries", head)).toBe(true);
+    expect(await exists("memory_entries", behind)).toBe(true);
+    await citation.release();
+    await run(B);
+    expect(await exists("memory_entries", head)).toBe(false);
+    expect(await exists("memory_entries", behind)).toBe(false);
   });
 });
 

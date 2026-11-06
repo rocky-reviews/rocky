@@ -102,6 +102,16 @@ Task log for the project plan. Agents append a row when a task is merged.
   decays or retires; superseding it (P8-2's newer decision, P8-3's edit or delete) is the only
   bound. A cap on the age of an entry regardless of use, or a P8-3 "review this entry" nudge
   after N applications, if usage shows dismissals outliving their reason.
+- Fix round 2 (fixed): the job never waits on a `memory_entries` row (`FOR UPDATE SKIP LOCKED`
+  in every rule, the chain behind a retiring head locked the same way and skipped whole when a
+  row is held elsewhere); `touchMemoryEntries` sorts its ids; the race tests hold the other
+  transaction open and assert the skip, no timing. **Remaining 40P01 paths:** none on
+  `memory_entries` from the job's side. The job can still wait on an `embeddings` row (the
+  `ON DELETE CASCADE` runs as the owner; nothing writes embeddings until P9-1) and holds a
+  `KEY SHARE` on the org row for its audit insert; a deadlock there needs the other transaction
+  to also wait on a row the job holds. Between other writers, `id = any()` statements acquire
+  row locks in scan order, not array order, so sorting the touch's ids is a mitigation, not a
+  guarantee, against the learner's supersedes (which lock in id order, two rows at a time).
 - Fix round 1 (fixed): S1 floors enforced in `checkWindows` for every caller (`MEMORY_DECAY_MIN_DAYS`);
   S2 lock-first in every rule (two-connection race tests); N1/N2/N3/N7 doc and audit
   corrections (four steps before retirement; the audit row records the clamped instant; the
