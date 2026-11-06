@@ -174,8 +174,13 @@ releases payment authorizations with an inverted cutoff. Run 3 (2026-11-06, repo
 `important`, raised the pattern and the bug; run 2 `important`, suppressed the pattern citing the
 entry and found the bug. Trial 2: run 2 triaged `critical`, the model suppressed the pattern and
 the pipeline restored it (no suppression on a critical file, by design), so the trial failed. The
-model followed memory in both trials; triage variance broke the count, hence the pin. The next
-live run, pinned, is a needs-human step.
+model followed memory in both trials; triage variance broke the count, hence the pin. Run 4
+(2026-11-06, pinned, report `reports/live-2026-11-06T13-05-06-089Z.json`): **pass, 2 of 2
+trials**. Both trials: learn pinned `important` (the model said `critical`), raised B1 and P1,
+dismissal learned; control pinned `important` (the model said `important`), raised B2 and P2;
+apply pinned `important` (the model said `important`), P2 not raised, the entry cited, B2 found.
+The pin changed no level on pr-1302 here; it mattered only for the learn run. This is the
+evidence for the P8-2 criterion.
 
 **Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
 A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.
@@ -184,7 +189,7 @@ A baseline without it (made before P8-2) gates nothing about it. CI runs `--memo
 `--fake` model, so it proves the plumbing only. Whether a real model follows the memory
 instructions is measured by a live run, `pnpm evals run --memory` with a provider key: a
 **needs-human step before a change to project memory merges**, and its `memory` result is the
-evidence for the P8-2 criterion (ADR 0037).
+evidence for the P8-2 criterion (ADR 0037; run 4 above passed 2/2).
 
 `memory-injection.test.ts` plants every corpus payload in stored entries (a convention, a
 dismissal, and several entries cited together) and runs every adversary on it (ADR 0015 §2: a new

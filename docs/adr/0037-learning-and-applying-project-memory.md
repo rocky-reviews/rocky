@@ -276,16 +276,21 @@ passed. Trial 1: the control, `important`, raised the pattern and the bug; run 2
 suppressed the pattern citing the entry and found the bug. Trial 2: run 2 was triaged
 `critical`; the model suppressed the pattern, the pipeline restored it (no suppression on a
 critical file, by design), and the trial failed. The model followed memory in both trials;
-triage variance broke the count, which is what the pin removes. The eval stays inconclusive by
+triage variance broke the count, which is what the pin removes. Run 4 (2026-11-06, pinned,
+report `packages/evals/reports/live-2026-11-06T13-05-06-089Z.json`): **pass, 2 of 2 trials**,
+the evidence for the P8-2 criterion. In both trials the learn run (pinned `important`; the model
+said `critical`) raised the pattern and the bug and taught the dismissal; the control (pinned
+`important`; the model said `important`) raised both; run 2 (pinned `important`; the model said
+`important`) did not raise the pattern, cited the entry and found the bug. The pin changed no
+level on pr-1302 in this run; it mattered only for the learn run. The eval stays inconclusive by
 design when the control does not raise the pattern, or when run 2 rates the pattern above run 1's
-severity (the entry does not cover it); the diagnosis records both. The next live run, pinned, is
-a needs-human step.
+severity (the entry does not cover it); the diagnosis records both.
 
 **What the gate proves.** CI runs the eval on the `--fake` model only: it proves the plumbing
 (learning, selection, the untrusted part, enforcement, citations), not that a real model follows
 the memory instructions. A live run, `pnpm evals run --memory` with a provider key, is a
-**needs-human step before merge**, and its `memory` result is the evidence for the P8-2
-criterion.
+**needs-human step before a change to project memory merges**, and its `memory` result is the
+evidence for the P8-2 criterion: run 4 above, passed 2/2.
 
 ## Threat model
 

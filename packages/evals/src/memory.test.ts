@@ -4,6 +4,9 @@ import {
   MEMORY_CANARY_MARKER,
   preTriage,
   type AnalysisRequest,
+  type LlmRoles,
+  type StructuredCompletionRequest,
+  type StructuredCompletionResult,
 } from "@rocky-reviews/core";
 import { scriptedRoles, type Script, type ScriptedCall } from "@rocky-reviews/core/testing";
 import type { Finding } from "@rocky-reviews/schema";
@@ -285,10 +288,46 @@ describe("the project-memory eval (P8-2)", () => {
       expect(pin.answered.get(MEMORY_RUN_2.path)).toBe("critical");
     });
 
-    it("the pin passes a result that is not ok through, and takes every level", () => {
+    it("the pin passes through, unchanged and unrecorded, whatever it cannot pin", async () => {
+      // A triage client that answers whatever the case says: the wrapper's early returns.
+      const base = { model: "m", usage: undefined, provider: "scripted" };
+      const cases: [string, StructuredCompletionResult<unknown>][] = [
+        ["a refused result", { ...base, status: "refused" }],
+        ["an invalid result", { ...base, status: "invalid_output", issues: ["level: x"] }],
+        ["a non-record value", { ...base, status: "ok", value: "important" }],
+        ["an unknown level", { ...base, status: "ok", value: { level: "bogus", score: 90 } }],
+        ["a missing level", { ...base, status: "ok", value: { score: 90 } }],
+      ];
+      const request = {
+        untrusted: [{ label: "file_path", text: MEMORY_RUN_2.path }],
+      } as unknown as StructuredCompletionRequest<unknown>;
+      for (const [name, result] of cases) {
+        const roles: LlmRoles = {
+          completion: (role) => ({ role, complete: async () => result as never }),
+          embedding: () => undefined,
+        };
+        const pin = pinTriage(roles, "important");
+        expect(await pin.roles.completion("triage").complete(request), name).toBe(result);
+        expect(pin.answered.size, name).toBe(0);
+      }
+      // A valid level without a score is pinned (the level only) and recorded.
+      const scoreless: StructuredCompletionResult<unknown> = {
+        ...base,
+        status: "ok",
+        value: { level: "critical", reason: "r" },
+      };
+      const roles: LlmRoles = {
+        completion: (role) => ({ role, complete: async () => scoreless as never }),
+        embedding: () => undefined,
+      };
       const levels: PinnedLevel[] = ["critical", "important", "normal", "low"];
-      for (const level of levels)
-        expect(pinTriage(scriptedRoles(fake("apply")).roles, level).answered.size).toBe(0);
+      for (const level of levels) {
+        const pin = pinTriage(roles, level);
+        const pinned = await pin.roles.completion("triage").complete(request);
+        expect(pinned, level).toMatchObject({ status: "ok", value: { level, reason: "r" } });
+        expect((pinned as { value: Record<string, unknown> }).value["score"]).toBeUndefined();
+        expect(pin.answered.get(MEMORY_RUN_2.path), level).toBe("critical");
+      }
     });
   });
 

@@ -82,8 +82,19 @@ Task log for the project plan. Agents append a row when a task is merged.
   triage, not to memory. Fix round 3: triage pinned to `important` in the eval (harness only,
   `src/memory/pin.ts`; the model's level kept as `modelLevel`), pr-1302 redesigned (expires stale
   pending charges), the critical-file rule checked deterministically on the fake, and the
-  product's double-check marker (`Finding.restored`, schema 1.5) with its draft-card line. Next:
-  `pnpm evals run --only pr-1205 --memory --memory-trials 2` (pinned).
+  product's double-check marker (`Finding.restored`, schema 1.5) with its draft-card line. Run 4
+  (2026-11-06, pinned, `packages/evals/reports/live-2026-11-06T13-05-06-089Z.json`) passed 2/2:
+  the P8-2 criterion is shown live (ADR 0037 §6).
+- Fix round 4 nits (not fixed): N1 the double-check marker is lost when the model both raises
+  and suppresses the same finding on a risky file (`pipeline.ts`: `if (raised(item)) continue;`
+  drops the restored copy, marker included; the raised copy could carry it). N2
+  `DraftCard.test.tsx`'s not-contains assertion for the entry text is weak: assert the
+  double-check `<p>`'s text does not contain the entry text, and that a `<script>`-shaped path
+  renders escaped. N3 the eval summary could count the passing trials whose apply `modelLevel`
+  was `critical` (how often the pin, not memory, decided). N4 schema `DISMISSAL_REASONS`
+  duplicates core's `DISMISS_REASONS`; a test that the two are equal would catch drift. N5
+  `PIPELINE_VERSION` (`p4-4.2`) was not bumped: units stored on a dev database before this round
+  are reused without a marker until the file or its memory changes.
 - **Follow-up (its own 🔴 round): suppression on critical files when the entry was learned on a
   critical file.** Today no suppression stands on a file triaged critical or rule-floored, so a
   team's dismissal taken on such a file never applies there (the draft comes back with the
@@ -95,10 +106,10 @@ Task log for the project plan. Agents append a row when a task is merged.
   the same issue by the model's judgement; P8-3's view shows the entry); when a file is both
   rule-floored and triaged critical the marker says `critical_file`; the restored entry is not
   touched (`last_used_at`) since it was not applied.
-- **Needs a human before merge:** run `pnpm evals run --memory` with a provider key. CI's gate
-  runs the memory eval on the `--fake` model only, which proves the plumbing; the live `memory`
-  result is the evidence for the P8-2 criterion (ADR 0037 §6). Include `--memory` in the first
-  real live baseline.
+- **Live evidence (done, run 4):** `pnpm evals run --memory` with a provider key passed 2/2
+  pinned (ADR 0037 §6). CI's gate runs the memory eval on the `--fake` model only, which proves
+  the plumbing; a later change to project memory needs a live run again. Include `--memory` in
+  the first real live baseline.
   One case is not a rate: more patterns (another directory, a near-miss that must still be
   raised) would measure over- and under-application.
 - P8-3: show learned entries with their origin and the decision they came from, and let an admin
