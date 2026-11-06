@@ -131,6 +131,12 @@ Task log for the project plan. Agents append a row when a task is merged.
 - Re-scrub of untouched entries with the current member list is still open (ADR 0036 residual).
 - The list shows the newest 500 entries (`truncated`); paging is not built. The export has all.
 - Finding-level `memory` refs on draft cards could link to the entry on the memory page.
+- Review nits (fix round 1): editing a switched-off entry sets the new row's `disabled_at`
+  without touching `updated_at`; the cross-repository route test asserts 404 but not that the
+  entry is unchanged; the store's role re-check (a role lowered between the route check and the
+  transaction) is tested in the store, not through the routes.
+- Switching a learned-switched-off entry on again is per entry: an opposite decision learned
+  switched off (ADR 0039) must be switched on by hand.
 
 ### P8-2 follow-ups
 

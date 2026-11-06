@@ -371,6 +371,32 @@ describe("setRepoMemoryEnabled", () => {
     expect((await as(B, (tx) => findMemoryRepository(tx, "org-82/api")))?.memoryEnabled).toBe(true);
   });
 
+  it("with history, lists the current entries first, so a page never pushes them off (review N1)", async () => {
+    const current = await created(B, { text: "Dismissed as intentional: an old retry loop" });
+    const older = await created(B, { text: "Dismissed as intentional: a newer swallowed error" });
+    // The superseded entry is newer than the current one, yet a page of one holds the current one.
+    expect(
+      await as(B, (tx) =>
+        supersedeMemoryEntry(tx, {
+          actorMemberId: B.memberId,
+          entryId: older.id,
+          byEntryId: current.id,
+          origin: "member",
+        }),
+      ),
+    ).toBe("superseded");
+    const page = await as(B, (tx) =>
+      listMemoryEntries(tx, { repoId: B.repoId, includeSuperseded: true, limit: 1 }),
+    );
+    expect(page.map((e) => e.id)).toEqual([current.id]);
+    const all = await as(B, (tx) =>
+      listMemoryEntries(tx, { repoId: B.repoId, includeSuperseded: true }),
+    );
+    const firstSuperseded = all.findIndex((e) => e.supersededBy !== null);
+    expect(all.slice(firstSuperseded).every((e) => e.supersededBy !== null)).toBe(true);
+    expect(all.map((e) => e.id)).toContain(older.id);
+  });
+
   it("counts a repository's entries, current and superseded, in this org only", async () => {
     const n = await as(A, (tx) => countMemoryEntries(tx, A.repoId));
     expect(n).toBeGreaterThan(0);

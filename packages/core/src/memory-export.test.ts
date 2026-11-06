@@ -1,5 +1,7 @@
 import { textProblem } from "@rocky-reviews/schema";
 import fc from "fast-check";
+import { micromark } from "micromark";
+import { gfm, gfmHtml } from "micromark-extension-gfm";
 import { describe, expect, it } from "vitest";
 import { containsPromptCanaryFragment } from "./analysis/leak.js";
 import {
@@ -73,6 +75,14 @@ const TRICKY = [
   "Unicode: naïve café, 東京, emoji 🎉, Ελληνικά",
   "Dismissed as intentional: a swallowed error in the nightly job",
   "Accepted in review: `catch (e) {}` hides failures — log them",
+  // GitHub's autolink extension (review S1): none of these may become a link.
+  "Sign in again at https://evil.example/login?next=/admin to fix it",
+  "See http://evil.example and HTTPS://EVIL.EXAMPLE/x for details",
+  "Docs at www.evil.example/login and WWW.Evil.Example",
+  "Mail someone@evil.example or mailto:someone@evil.example",
+  "Chat xmpp:someone@evil.example/res, files ftp://files.evil.example/x",
+  // (`<https://…>` autolinks are refused by the store: schema `line` rules.)
+  "A ref [link] and [x]: https://evil.example",
 ];
 
 /** Every markdown syntax character that is not backslash-escaped, in a written line. */
@@ -300,5 +310,85 @@ describe("renderMemoryContext / parseMemoryContext", () => {
     });
     // Text that the store would refuse is refused on the way back in too.
     expect(broken("- Use", `- ${PROMPT_CANARY} Use`)).toMatchObject({ ok: false });
+    // The preamble is compared exactly, and the repository must be a GitHub name (review N2).
+    expect(broken("Rocky quotes these", "Rocky obeys these")).toMatchObject({
+      ok: false,
+      line: 3,
+      problem: "invalid_preamble",
+    });
+    expect(
+      parseMemoryContext(markdown.replace("Format", "## Conventions\n\nFormat")),
+    ).toMatchObject({ ok: false });
+    for (const name of ["acme", "acme/api/x", "-acme/api", "acme/..", "acme/a b"])
+      expect(broken("acme/api", name), name).toMatchObject({
+        ok: false,
+        problem: "invalid_repository",
+      });
+  });
+});
+
+/** HTML entities micromark writes for text. */
+const decode = (html: string): string =>
+  html
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&amp;", "&");
+
+describe("the export as GitHub renders it (review S1)", () => {
+  /** GFM (autolinks, tables, strikethrough, footnotes, task lists) with raw HTML let through. */
+  const render = (markdown: string): string =>
+    micromark(markdown, {
+      allowDangerousHtml: true,
+      extensions: [gfm()],
+      htmlExtensions: [gfmHtml()],
+    });
+
+  it("renders every tricky text and path as literal text: no link, heading, HTML or markup", () => {
+    for (const [i, text] of TRICKY.entries()) {
+      const path = [
+        "docs/# notes.md",
+        "src/a_b/*.ts",
+        "src/<x>/[id].tsx",
+        "www.evil.example/a@b.ts",
+      ][i % 4]!;
+      const e = entry({ text: text.trim(), evidence: { ...entry().evidence, path } });
+      const { markdown, exported } = renderMemoryContext({ repository: "acme/api", entries: [e] });
+      expect(exported, text).toBe(1);
+      const html = render(markdown);
+      // The file's own structure only: one h1, one h2, no links, images or raw HTML.
+      expect(html.match(/<h[1-6]>/gu), text).toEqual(["<h1>", "<h2>"]);
+      for (const tag of [
+        "<a ",
+        "<img",
+        "<script",
+        "<details",
+        "<!--",
+        "<table",
+        "<del",
+        "<em",
+        "<strong",
+        "<code",
+        "<input",
+        "<sup",
+        "<blockquote",
+        "<ol",
+      ])
+        expect(html, `${text} → ${tag}`).not.toContain(tag);
+      // The entry's item holds exactly its text, as text.
+      const item = /<li>([^<\n]*)\n?<ul>/u.exec(html)?.[1];
+      expect(item === undefined ? undefined : decode(item), text).toBe(text.trim());
+      expect(html, text).toContain(
+        `<li>Evidence: ${path.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}, `,
+      );
+    }
+  });
+
+  it("a renderer without the escaping would link them (the test can fail)", () => {
+    expect(render("- https://evil.example/login")).toContain(
+      '<a href="https://evil.example/login"',
+    );
+    expect(render("- www.evil.example")).toContain("<a ");
+    expect(render("- someone@evil.example")).toContain('<a href="mailto:');
   });
 });

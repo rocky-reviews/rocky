@@ -9,6 +9,7 @@ import { decideDraft } from "./drafts.js";
 import {
   createMemoryEntry,
   listMemoryEntries,
+  editMemoryEntry,
   setMemoryEntryDisabled,
   setRepoMemoryEnabled,
   supersedeMemoryEntry,
@@ -600,12 +601,67 @@ describe("switching memory off (P8-3, ADR 0039)", () => {
     expect(await analysisMemory()).toEqual([]);
 
     // An accept of the same finding is the opposite decision: learned, and it replaces the
-    // switched-off dismissal (the newest decision wins).
+    // switched-off dismissal (the newest decision wins), but it keeps the switch-off.
     await db.withOrg(A.orgId, (tx) =>
       tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]),
     );
     await decide(A, "F2", { kind: "accept" });
     expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 1 });
-    expect((await entriesOf(A)).map((e) => e.kind)).toEqual(["convention"]);
+    expect((await entriesOf(A)).map((e) => [e.kind, e.disabledAt !== null])).toEqual([
+      ["convention", true],
+    ]);
+    expect(await analysisMemory()).toEqual([]);
+
+    // Dismissing it again on a third pull request does not undo the admin's switch-off in two
+    // steps (review S3): no dismissal is offered to a review.
+    await db.withOrg(A.orgId, async (tx) => {
+      await tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]);
+      await tx.query("update pull_requests set number = 849 where id = $1", [A.pullRequestId]);
+    });
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    const current = await entriesOf(A);
+    expect(current.length).toBeGreaterThan(0);
+    expect(current.every((e) => e.disabledAt !== null)).toBe(true);
+    expect(await analysisMemory()).toEqual([]);
+  });
+
+  it("an edited switched-off entry still holds the switch-off (review S2)", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    const [dismissal] = await entriesOf(A);
+    await switchEntry(dismissal!.id, true);
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      editMemoryEntry(tx, {
+        actorMemberId: A.memberId,
+        entryId: dismissal!.id,
+        edit: { kind: "dismissal", reason: "not_an_issue", text: dismissal!.text },
+      }),
+    );
+    expect(edited.outcome).toBe("edited");
+
+    // The same dismissal on another pull request: the edited entry (origin member) is switched
+    // off, so nothing is learned beside it.
+    await db.withOrg(A.orgId, async (tx) => {
+      await tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]);
+      await tx.query("update pull_requests set number = 850 where id = $1", [A.pullRequestId]);
+    });
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0 });
+
+    // The opposite decision is learned beside the edited entry (learning never supersedes what a
+    // person wrote), and it is learned switched off.
+    await db.withOrg(A.orgId, (tx) =>
+      tx.query("delete from findings_state where analysis_id = $1", [A.analysisId]),
+    );
+    await decide(A, "F2", { kind: "accept" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 1, superseded: 0 });
+    expect(
+      (await entriesOf(A)).map((e) => [e.kind, e.origin, e.disabledAt !== null]).sort(),
+    ).toEqual([
+      ["convention", "learned", true],
+      ["dismissal", "member", true],
+    ]);
+    expect(await analysisMemory()).toEqual([]);
   });
 });

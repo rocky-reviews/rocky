@@ -344,22 +344,29 @@ export const learnFromReviewSubmission = async (
       confidence: number;
       source_pr_number: number;
       learner_role: string | null;
+      origin: string;
       disabled: boolean;
     }>(
-      `select id, kind, content, confidence, source_pr_number, learner_role,
+      // Current entries of either origin: an edited entry (origin member) still holds its
+      // pattern's switch-off and its decision (P8-3 fix round, S2).
+      `select id, kind, content, confidence, source_pr_number, learner_role, origin,
               (disabled_at is not null) as disabled
          from memory_entries
-        where org_id = $1 and repo_id = $2 and evidence_path = $3 and origin = 'learned'
+        where org_id = $1 and repo_id = $2 and evidence_path = $3
           and superseded_by is null
         order by created_at desc, id desc`,
       [tx.orgId, submission.repo_id, evidence.path],
     );
     const subject = memorySubject(candidate.text);
     // An admin switched this very pattern off (P8-3): learning it again beside the switched-off
-    // entry would undo that, so nothing is learned. The opposite decision is learned as usual.
+    // entry would undo that, so nothing is learned. The opposite decision is learned, and it
+    // stays switched off (below).
     const switchedOff = near.rows.some(
       (row) =>
-        row.disabled && row.kind === candidate.kind && memorySubject(row.content) === subject,
+        row.disabled &&
+        row.kind === candidate.kind &&
+        subject !== null &&
+        memorySubject(row.content) === subject,
     );
     if (switchedOff) {
       skipped++;
@@ -368,6 +375,7 @@ export const learnFromReviewSubmission = async (
     const corroborating = near.rows.find(
       (row) =>
         !row.disabled &&
+        row.origin === "learned" &&
         row.kind === candidate.kind &&
         row.source_pr_number !== evidence.pullRequestNumber &&
         memorySubject(row.content) === subject,
@@ -409,7 +417,14 @@ export const learnFromReviewSubmission = async (
     );
     // Compared on the stored (scrubbed) texts, so a scrubbed title still matches its older entry.
     const storedSubject = memorySubject(result.entry.text);
+    // The opposite decision about a switched-off pattern is learned switched off too, so learning
+    // never undoes an admin's decision in two steps (P8-3 fix round, S3); only a person switches
+    // it on again. Compared on the stored text, like superseding below.
+    const carriesSwitchOff =
+      storedSubject !== null &&
+      near.rows.some((row) => row.disabled && memorySubject(row.content) === storedSubject);
     for (const row of near.rows) {
+      if (row.origin !== "learned") continue;
       if (storedSubject === null || memorySubject(row.content) !== storedSubject) continue;
       // A higher role's decision is not overturned by a lower one's (L2).
       if (roleRank(row.learner_role) > ROLE_RANK[role]) continue;
@@ -421,6 +436,12 @@ export const learnFromReviewSubmission = async (
       });
       if (replaced === "superseded") superseded++;
     }
+    if (carriesSwitchOff)
+      await tx.query(
+        `update memory_entries set disabled_at = now(), updated_at = now()
+          where org_id = $1 and id = $2`,
+        [tx.orgId, result.entry.id],
+      );
   }
   return { outcome: "learned", created, superseded, repeated, skipped };
 };

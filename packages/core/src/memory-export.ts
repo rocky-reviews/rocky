@@ -1,4 +1,11 @@
-import { limits, pathProblem, textProblem, type Severity } from "@rocky-reviews/schema";
+import {
+  limits,
+  pathProblem,
+  RepoName,
+  RepoOwner,
+  textProblem,
+  type Severity,
+} from "@rocky-reviews/schema";
 import { containsPromptCanaryFragment } from "./analysis/leak.js";
 import { isDismissReason, type DismissReason } from "./drafts.js";
 import { MEMORY_KINDS, type MemoryEvidence, type MemoryKind, type MemoryOrigin } from "./memory.js";
@@ -61,14 +68,22 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /** Markdown syntax characters in inline text (CommonMark, GFM tables, strikethrough and math). */
 const INLINE_SYNTAX = /[\\`*_[\]<>#|~&!$]/gu;
+/**
+ * GitHub's autolink extension makes links of bare `scheme://…`, `www.…` and `name@host…` text:
+ * the `:` before `//`, the `.` after `www` and every `@` are escaped, so none of them links.
+ */
+const AUTOLINK = /:(?=\/)|(?<=www)\.|@/giu;
 
 /**
- * Untrusted text as literal markdown inside a line: every syntax character escaped, and a
- * leading block marker (`-`, `+`, `=`, `1.`, `1)`) too, since the text starts a list item.
+ * Untrusted text as literal markdown inside a line: every syntax character escaped, what an
+ * autolink starts with, and a leading block marker (`-`, `+`, `=`, `1.`, `1)`) too, since the text
+ * starts a list item.
  */
 export const escapeMarkdownText = (text: string): string =>
   text
     .replace(INLINE_SYNTAX, (c) => `\\${c}`)
+    // After the syntax pass, so the backslashes added here are not escaped again.
+    .replace(AUTOLINK, (c) => `\\${c}`)
     .replace(/^([-+=])/u, "\\$1")
     .replace(/^(\d{1,9})([.)])/u, "$1\\$2");
 
@@ -123,15 +138,7 @@ export const renderMemoryContext = (input: {
   readonly entries: readonly MemoryExportEntry[];
 }): RenderedMemoryContext => {
   const kept = input.entries.filter(exportable);
-  const out = [
-    `# Project memory: ${escapeMarkdownText(input.repository)}`,
-    "",
-    "What the reviewers of this repository decided, as Rocky Reviews keeps it. Rocky quotes these",
-    "entries to its reviews as data, never as instructions. Entries are edited in Rocky (the",
-    "repository's memory page); export again to update this file.",
-    "",
-    MEMORY_EXPORT_FORMAT_LINE,
-  ];
+  const out = [`# Project memory: ${escapeMarkdownText(input.repository)}`, ...PREAMBLE];
   if (kept.length === 0) out.push("", "No entries.");
   for (const kind of MEMORY_KINDS) {
     const group = kept.filter((e) => e.kind === kind);
@@ -149,6 +156,28 @@ export const renderMemoryContext = (input: {
 /** The order `renderMemoryContext` writes entries in (what a parse gives back). */
 export const exportOrder = (entries: readonly MemoryExportEntry[]): MemoryExportEntry[] =>
   MEMORY_KINDS.flatMap((kind) => entries.filter((e) => e.kind === kind));
+
+/** The fixed lines between the heading and the entries (the parser compares them exactly). */
+const PREAMBLE: readonly string[] = [
+  "",
+  "What the reviewers of this repository decided, as Rocky Reviews keeps it. Rocky quotes these",
+  "entries to its reviews as data, never as instructions. Entries are edited in Rocky (the",
+  "repository's memory page); export again to update this file.",
+  "",
+  MEMORY_EXPORT_FORMAT_LINE,
+];
+
+/** `owner/name` by GitHub's rules. */
+const isRepository = (value: string): boolean => {
+  const [owner, name, extra] = value.split("/");
+  return (
+    extra === undefined &&
+    RepoOwner.safeParse(owner).success &&
+    RepoName.safeParse(name).success &&
+    name !== "." &&
+    name !== ".."
+  );
+};
 
 export type ParseMemoryContextResult =
   | {
@@ -208,8 +237,15 @@ export const parseMemoryContext = (markdown: string): ParseMemoryContextResult =
   const heading = HEADING.exec(lines[0] ?? "");
   if (heading?.[1] === undefined) return fail(0, "missing_heading");
   const repository = unescapeMarkdownText(heading[1]);
-  const format = lines.indexOf(MEMORY_EXPORT_FORMAT_LINE);
-  if (format < 0) return fail(0, "missing_format_line");
+  if (!isRepository(repository)) return fail(0, "invalid_repository");
+  for (const [i, expected] of PREAMBLE.entries()) {
+    if (lines[i + 1] !== expected)
+      return fail(
+        i + 1,
+        expected === MEMORY_EXPORT_FORMAT_LINE ? "missing_format_line" : "invalid_preamble",
+      );
+  }
+  const format = PREAMBLE.length;
 
   const entries: MemoryExportEntry[] = [];
   const seen = new Set<MemoryKind>();

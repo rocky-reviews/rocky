@@ -296,7 +296,7 @@ export const listMemoryEntries = async (
   const { rows } = await tx.query<EntryRow>(
     `select ${ENTRY_COLUMNS} from ${ENTRY_JOIN}
       where e.org_id = $1 and e.repo_id = $2 and ($3 or e.superseded_by is null)
-      order by e.created_at desc, e.id desc
+      order by (e.superseded_by is null) desc, e.created_at desc, e.id desc
       limit $4`,
     [tx.orgId, repoId, input.includeSuperseded === true, limit],
   );
