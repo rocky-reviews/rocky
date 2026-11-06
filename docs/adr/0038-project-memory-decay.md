@@ -132,9 +132,11 @@ the cutoffs into the past, as with every purge (THREATS T13).
   neither the retire nor the decay rule takes an entry with `disabled_at` set, or any entry of a
   repository with `memory_enabled = false`. Such an entry is never offered to a review, so it is
   never cited and its idleness says nothing about the pattern; retiring it would also undo the
-  switch-off (the pattern could be learned again, switched on). Its clocks pause while it is off
-  and run from where they stood once it is switched on, so a long-off entry may decay or retire
-  at the next run after that. History (superseded rows) is purged as before: the switch-off
+  switch-off (the pattern could be learned again, switched on). Switching the entry (or its
+  repository's memory) on again sets `memory_entries.enabled_at`, and both rules measure
+  idleness from the latest of `created_at`, `last_used_at`, `decayed_at` (decay only) and
+  `enabled_at`: the time off never counts, and the entry ages normally from the switch-on.
+  `last_used_at` is not touched (it means a review cited the entry). History (superseded rows) is purged as before: the switch-off
   lives on the current entry. Tests: `memory-decay.test.ts` "switched off (P8-3, ADR 0039)…".
   _Amended by P8-3 after this ADR was accepted._
 - `decayed_at` is not exposed through `MemoryEntry`; P8-3 can read it to show "fading since …".
@@ -189,8 +191,9 @@ deleted (it cannot: the rules read timestamps and origins only).
   keeps the previous version forever. Bounded by the cap, visible in P8-3's history view.
 - **Deletion is permanent and the audit row holds counts.** Which entries went is not
   recorded; a team that wants to know what Rocky forgot can read P8-3's export before and after.
-- **Switching an old entry back on** resumes its clocks (§4): it may decay or retire at the
-  next run. Switching on does not count as a citation.
+- **Switched-off time** is measured by the switch-on (`enabled_at`, §4), not tracked as an
+  interval: an entry switched on, used by no review and switched off again within the windows
+  is aged from that switch-on, as intended.
 - **A citation racing a retirement, the other way round.** Lock-first (D10) keeps a citation
   that committed before the lock from losing the entry or a step, and one still in flight keeps
   the entry out of this run. A citation that starts after the job holds the lock waits, then

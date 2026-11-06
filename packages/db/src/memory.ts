@@ -3,6 +3,7 @@ import {
   isDismissReason,
   isMemoryKind,
   isMemoryOrigin,
+  memorySubject,
   prepareMemoryEntry,
   readPullRequestNumber,
   type MemoryEdit,
@@ -498,6 +499,8 @@ interface LockedEntry {
   disabled_at: Date | null;
   learner_role: string | null;
   learned_subject: string | null;
+  origin: string;
+  content: string;
 }
 
 /**
@@ -515,7 +518,7 @@ const lockEntry = async (tx: TenantTx, entryId: string): Promise<LockedEntry | n
   const { rows } = await tx.query<LockedEntry>(
     `select id, repo_id, kind, confidence, severity, evidence_path, evidence_sha, evidence_start,
             evidence_end, source_pr_number, superseded_by, disabled_at, learner_role,
-            learned_subject
+            learned_subject, origin, content
        from memory_entries where org_id = $1 and id = $2 for update`,
     [tx.orgId, entryId],
   );
@@ -573,11 +576,16 @@ export const editMemoryEntry = async (
   });
   if (created.outcome !== "created") return created;
   const severity = edit.kind === "dismissal" && old.kind === "dismissal" ? old.severity : null;
+  // The same decision keeps its role; a changed kind is the editor's decision, not the learner's
+  // (fix round 4). A row learned before 0020 gets its subject here (TypeScript is its source).
+  const learnerRole = edit.kind === old.kind ? old.learner_role : await activeRole(tx, actor);
+  const subject =
+    old.learned_subject ?? (old.origin === "learned" ? memorySubject(old.content) : null);
   await tx.query(
     `update memory_entries
         set severity = $3, disabled_at = $4, learner_role = $5, learned_subject = $6
       where org_id = $1 and id = $2`,
-    [tx.orgId, created.entry.id, severity, old.disabled_at, old.learner_role, old.learned_subject],
+    [tx.orgId, created.entry.id, severity, old.disabled_at, learnerRole, subject],
   );
   const superseded = await supersedeMemoryEntry(tx, {
     actorMemberId: actor,
@@ -664,7 +672,8 @@ export const setMemoryEntryDisabled = async (
   if ((entry.disabled_at !== null) !== input.disabled) {
     await tx.query(
       `update memory_entries
-          set disabled_at = case when $3 then now() else null end, updated_at = now()
+          set disabled_at = case when $3 then now() else null end,
+              enabled_at = case when $3 then enabled_at else now() end, updated_at = now()
         where org_id = $1 and id = $2`,
       [tx.orgId, entryId, input.disabled],
     );
@@ -710,6 +719,14 @@ export const setRepoMemoryEnabled = async (
       "update repos set memory_enabled = $3, updated_at = now() where org_id = $1 and id = $2",
       [tx.orgId, repoId, input.enabled],
     );
+    // Switched on again: the time off does not count as idle for P8-4's decay (fix round 4).
+    // `updated_at` is left alone: it is the history window's clock for superseded rows.
+    if (input.enabled)
+      await tx.query(
+        `update memory_entries set enabled_at = now()
+          where org_id = $1 and repo_id = $2 and superseded_by is null`,
+        [tx.orgId, repoId],
+      );
     await audit(
       tx,
       { type: "user", id: actor },

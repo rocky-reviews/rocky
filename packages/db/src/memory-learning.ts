@@ -340,6 +340,7 @@ export const learnFromReviewSubmission = async (
     const near = await tx.query<{
       id: string;
       kind: string;
+      content: string;
       confidence: number;
       source_pr_number: number;
       learner_role: string | null;
@@ -350,7 +351,7 @@ export const learnFromReviewSubmission = async (
       // Current entries of either origin: an edited entry (origin member) still holds its
       // pattern's switch-off and its decision (P8-3 fix round, S2), matched on the subject it was
       // learned with, whatever its text says now (fix round 2).
-      `select id, kind, confidence, source_pr_number, learner_role, origin,
+      `select id, kind, content, confidence, source_pr_number, learner_role, origin,
               learned_subject, (disabled_at is not null) as disabled
          from memory_entries
         where org_id = $1 and repo_id = $2 and evidence_path = $3
@@ -358,6 +359,17 @@ export const learnFromReviewSubmission = async (
         order by created_at desc, id desc`,
       [tx.orgId, submission.repo_id, evidence.path],
     );
+    // A row learned before 0020 has no stored subject: fill it from its text, with the same
+    // `memorySubject` that writes new ones (fix round 4), under the lock taken above.
+    for (const row of near.rows) {
+      if (row.origin !== "learned" || row.learned_subject !== null) continue;
+      row.learned_subject = memorySubject(row.content);
+      if (row.learned_subject === null) continue;
+      await tx.query(
+        "update memory_entries set learned_subject = $3 where org_id = $1 and id = $2",
+        [tx.orgId, row.id, row.learned_subject],
+      );
+    }
     const subject = memorySubject(candidate.text);
     // An admin switched this very pattern off (P8-3): learning it again beside the switched-off
     // entry would undo that, so nothing is learned. The opposite decision is learned, and it

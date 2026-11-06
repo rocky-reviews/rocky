@@ -351,6 +351,34 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     expect((await entriesOf(A)).map((e) => [e.kind, e.origin])).toEqual([["dismissal", "member"]]);
   });
 
+  it("an edit that changes the kind is the editor's decision; a row from before 0020 gets its subject (fix round 4)", async () => {
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    await learn(A, await post(A));
+    // An owner's dismissal, learned before 0020 (no stored subject).
+    await superuser.query(
+      "update memory_entries set learner_role = 'owner', learned_subject = null where org_id = $1",
+      [A.orgId],
+    );
+    const [dismissal] = await entriesOf(A);
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      editMemoryEntry(tx, {
+        actorMemberId: A.memberId,
+        entryId: dismissal!.id,
+        edit: { kind: "convention", reason: null, text: "Invitations check the org in middleware" },
+      }),
+    );
+    expect(edited.outcome).toBe("edited");
+    if (edited.outcome !== "edited") return;
+    const { rows } = await superuser.query<{ learner_role: string; learned_subject: string }>(
+      "select learner_role, learned_subject from memory_entries where id = $1",
+      [edited.entry.id],
+    );
+    expect(rows[0]).toEqual({
+      learner_role: "admin",
+      learned_subject: memorySubject(dismissal!.text),
+    });
+  });
+
   it("the same or a higher role's opposite decision still supersedes", async () => {
     await decide(A, "F2", { kind: "accept" });
     await learn(A, await post(A));
@@ -685,38 +713,53 @@ describe("switching memory off (P8-3, ADR 0039)", () => {
     expect(await analysisMemory()).toEqual([]);
   });
 
-  it("migration 0020 fills a learned entry's subject from its text as memorySubject does", async () => {
-    const texts = [
-      "Dismissed as intentional:   A  Swallowed   error ",
-      "Dismissed as not an issue: Retry LOOP",
-      "Dismissed as handled elsewhere: x",
-      "Accepted in review: No permission check",
-      "We accept swallowed errors in nightly jobs",
-    ];
-    const ids: string[] = [];
-    for (const [i, text] of texts.entries()) {
+  it("a row learned before 0020 gets its subject from memorySubject when learning reads it, non-ASCII too (fix round 4)", async () => {
+    const PATH = "src/api/routes/invitations.ts";
+    const plantOld = async (content: string, kind: string, disabled: boolean) => {
       const { rows } = await superuser.query<{ id: string }>(
         `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
-           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, created_by)
-         values ($1, $2, 'convention', 'learned', $3, 'src/backfill.ts', $4, $5, $5, 847, 50, $6)
+           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, created_by,
+           reason, disabled_at)
+         values ($1, $2, $3, 'learned', $4, $5, $6, 13, 13, 700, 50, $7, $8, $9)
          returning id`,
-        [A.orgId, A.repoId, text, DOC_HEAD, i + 1, A.memberId],
+        [
+          A.orgId,
+          A.repoId,
+          kind,
+          content,
+          PATH,
+          DOC_HEAD,
+          A.memberId,
+          kind === "dismissal" ? "intentional" : null,
+          disabled ? new Date() : null,
+        ],
       );
-      ids.push(rows[0]!.id);
-    }
-    const up = readFileSync(
-      new URL("../migrations/0020_memory_controls.up.sql", import.meta.url),
-      "utf8",
+      return rows[0]!.id;
+    };
+    const texts = [
+      "Accepted in review: İstanbul",
+      "Accepted in review: ΣΑΣ",
+      "Accepted in review:   Spaced    OUT  ",
+    ];
+    const others = [];
+    for (const text of texts) others.push(await plantOld(text, "convention", false));
+    // The pattern an admin switched off before 0020 (no stored subject yet).
+    const switchedOff = await plantOld(
+      "Dismissed as intentional: No permission check: any logged-in user can invite to any org",
+      "dismissal",
+      true,
     );
-    const backfill = /^UPDATE memory_entries AS e[\s\S]*?;$/mu.exec(up)?.[0];
-    expect(backfill).toBeDefined();
-    await superuser.query(backfill!);
-    const { rows } = await superuser.query<{ id: string; learned_subject: string | null }>(
-      "select id, learned_subject from memory_entries where id = any($1::uuid[])",
-      [ids],
+
+    await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0 });
+    const { rows } = await superuser.query<{ id: string; content: string; s: string | null }>(
+      "select id, content, learned_subject as s from memory_entries where id = any($1::uuid[])",
+      [[...others, switchedOff]],
     );
-    const stored = new Map(rows.map((row) => [row.id, row.learned_subject]));
-    expect(ids.map((id) => stored.get(id))).toEqual(texts.map((text) => memorySubject(text)));
+    expect(rows).toHaveLength(4);
+    for (const r of rows) expect(r.s, r.content).toBe(memorySubject(r.content));
+    expect(rows.find((r) => r.content.includes("İstanbul"))?.s).toBe("i̇stanbul");
+    expect(rows.find((r) => r.content.includes("ΣΑΣ"))?.s).toBe("σας");
   });
 
   it("an edited switched-off entry still holds the switch-off (review S2)", async () => {

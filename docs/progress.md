@@ -138,9 +138,8 @@ Task log for the project plan. Agents append a row when a task is merged.
   opposite decision or a near-duplicate, because learning never supersedes member-written rows.
 - [x] Decay versus switched-off entries (done after the rebase onto P8-4): the decay and retire
       scans in `packages/db/src/memory-decay.ts` skip `disabled_at is not null` and repositories
-      with memory off; their clocks pause (ADR 0038 §4, ADR 0039). Open: switching an old entry on
-      resumes its clocks, so it may decay or retire at the next run; a grace period on switch-on
-      is possible if that surprises people.
+      with memory off, and both measure idleness from the last switch-on (`enabled_at`, fix
+      round 4), so the time off never counts (ADR 0038 §4, ADR 0039).
 - Switching a learned-switched-off entry on again is per entry: an opposite decision learned
   switched off (ADR 0039) must be switched on by hand.
 

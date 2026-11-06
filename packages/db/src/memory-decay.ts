@@ -131,7 +131,9 @@ const PURGE_HISTORY_SQL = `
  * one of a repository whose memory is switched off (`repos.memory_enabled`, both P8-3): such an
  * entry is never offered to a review, so it is never cited, and its idleness says nothing about
  * the pattern. Retiring it would also undo the switch-off: the pattern could be learned again,
- * switched on (ADR 0039). Its clocks pause while it is off.
+ * switched on (ADR 0039). Switching it (or its repository's memory) on again sets `enabled_at`,
+ * and both rules measure idleness from the latest of creation, citation, decay step and
+ * `enabled_at`: the time it spent off never counts.
  */
 
 /**
@@ -152,7 +154,8 @@ const LOCK_HEADS_SQL = `
      and e.disabled_at is null
      and exists (select 1 from repos r
                   where r.org_id = $1 and r.id = e.repo_id and r.memory_enabled)
-     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at))
+     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
+                  coalesce(e.enabled_at, e.created_at))
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4
@@ -188,7 +191,7 @@ const LOCK_DECAY_SQL = `
                   where r.org_id = $1 and r.id = e.repo_id and r.memory_enabled)
      and e.confidence > 0
      and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
-                  coalesce(e.decayed_at, e.created_at))
+                  coalesce(e.decayed_at, e.created_at), coalesce(e.enabled_at, e.created_at))
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4

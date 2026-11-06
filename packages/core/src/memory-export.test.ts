@@ -179,9 +179,10 @@ describe("renderMemoryContext / parseMemoryContext", () => {
   });
 
   it("round-trips any valid one-line text and never renders a link (property)", () => {
-    // `w`, `.`, `:`, `/` and `@` so that GFM autolink shapes (www., http://, a@b.c) come up.
+    // `h`, `t`, `p`, `w`, `.`, `:`, `/` and `@`, so GFM autolink shapes (www., http://, a@b.c)
+    // can come up; the tricky cases above hold them verbatim.
     const alphabet = fc.constantFrom(
-      ..."abcwWXYZ019 .,;:'\"()-+=/\\`*_[]<>#|~&!$%^{}@?éß東🎉".split(/(?:)/u),
+      ..."abchptwWXYZ019 .,;:'\"()-+=/\\`*_[]<>#|~&!$%^{}@?éß東🎉".split(/(?:)/u),
     );
     fc.assert(
       fc.property(fc.array(alphabet, { minLength: 1, maxLength: 120 }), (chars) => {

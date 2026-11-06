@@ -11,9 +11,17 @@
 -- memory_entries.learned_subject: what a learned entry is about (`memorySubject` of its stored
 -- text: the text after the fixed prefix, whitespace collapsed, lower-cased), kept when P8-3
 -- edits the entry, so an edit with new text still holds the pattern's switch-off and decision.
--- Learning matches on it; NULL for entries a person wrote. Existing learned rows are filled from
--- their text below. An edit also keeps the entry's learner_role (the role whose decision it
--- is), so 0018's rule that only learned entries carry one is dropped.
+-- Learning matches on it; NULL for entries a person wrote. TypeScript is its only source: rows
+-- learned before 0020 are filled lazily, by learning (under the repository's memory lock) when
+-- it reads them and by an edit, with `memorySubject` (a SQL `lower()` folds non-ASCII text
+-- differently, so no SQL backfill). An edit of the same kind also keeps the entry's
+-- learner_role (the role whose decision it is), so 0018's rule that only learned entries carry
+-- one is dropped.
+--
+-- memory_entries.enabled_at: when the entry was last switched on again, by itself or with its
+-- repository's memory. P8-4's decay measures idleness from the latest of created_at,
+-- last_used_at, decayed_at and this, so the time an entry spent off does not count. NULL until
+-- the first switch-on.
 --
 -- Who may change either is `memory.edit` (admins and owners, ADR 0024), re-checked in the
 -- writing transaction (packages/db `memory.ts`). No grants or policies change: rocky_app keeps
@@ -25,12 +33,8 @@ ALTER TABLE memory_entries
 ALTER TABLE memory_entries
   ADD COLUMN learned_subject text;
 
-UPDATE memory_entries AS e
-   SET learned_subject = nullif(lower(btrim(regexp_replace(
-         substring(e.content FROM length(p.prefix) + 1), '\s+', ' ', 'g'))), '')
-  FROM (VALUES ('Dismissed as intentional: '), ('Dismissed as not an issue: '),
-               ('Dismissed as handled elsewhere: '), ('Accepted in review: ')) AS p (prefix)
- WHERE e.origin = 'learned' AND starts_with(e.content, p.prefix);
+ALTER TABLE memory_entries
+  ADD COLUMN enabled_at timestamptz;
 
 ALTER TABLE memory_entries
   DROP CONSTRAINT memory_entries_learner_role_learned;

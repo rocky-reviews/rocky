@@ -9,6 +9,9 @@ ALTER TABLE memory_entries
     CHECK (learner_role IS NULL OR origin = 'learned');
 
 ALTER TABLE memory_entries
+  DROP COLUMN enabled_at;
+
+ALTER TABLE memory_entries
   DROP COLUMN learned_subject;
 
 ALTER TABLE memory_entries

@@ -265,6 +265,8 @@ export const memoryEntries = pgTable("memory_entries", {
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
   /** What a learned entry is about, kept across edits (P8-3, migration 0020); null otherwise. */
   learnedSubject: text("learned_subject"),
+  /** When the entry was last switched on again (P8-3, migration 0020); decay counts from it. */
+  enabledAt: timestamp("enabled_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
