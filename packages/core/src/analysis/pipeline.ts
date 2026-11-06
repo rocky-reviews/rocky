@@ -509,6 +509,16 @@ interface HiddenUnitItem {
   readonly entryId: string;
 }
 
+/**
+ * What memory must not override on a file (`FileRisk`): why a suppression would be restored
+ * (`critical_file` when the floored triage is critical, `rule_floor` for a floored file that is
+ * not) and whether the path takes a rule floor at all.
+ */
+const fileRisk = (level: TriagedFile["level"], floor: FloorLevel | undefined): FileRisk => ({
+  because: level === "critical" ? "critical_file" : floor === undefined ? undefined : "rule_floor",
+  ruleFloored: floor !== undefined,
+});
+
 /** Keeps the PR estimate within the document's cap: per-file minutes are scaled down to fit. */
 const fitMinutes = (files: readonly TriagedFile[]): TriagedFile[] => {
   const sum = files.reduce((total, file) => total + file.reviewMinutes, 0);
@@ -531,6 +541,7 @@ const run = async (
   const memory = usableMemory(request.memory);
   stats.memoryEntries = memory.entries.length;
   stats.memoryDropped = memory.dropped;
+  const entryById = new Map(memory.entries.map((entry) => [entry.id, entry] as const));
   if (request.diffTruncated) throw new Failed("diff_truncated");
   const parsed = parseUnifiedDiff(request.diff);
   if (!parsed.ok) throw new Failed(parsed.code);
@@ -776,11 +787,49 @@ const run = async (
     if (reused !== undefined && instructionLeaks(reused, fileParts).length === 0) {
       stats.reused++;
       const triage = applyFloor(reused.triage, floor);
-      const applied = keep(reused.memory.applied);
+      const risk = fileRisk(triage.level, floor);
+      // A reused unit's hidden findings are re-checked against the current memory (P8-2b fix
+      // round 2): the unit key covers the file's selection, not the entries `overruledNearby`
+      // reads, so a higher role's entry learned since the last push (and never selected for
+      // this file) would otherwise keep the finding hidden where a fresh review would restore
+      // it. Coverage cannot have changed (the entry's severity is in the key), so only
+      // `suppressionStands` is re-run; a suppression that no longer stands is restored as a
+      // draft with the double-check marker, as on the fresh path, and its entry is no longer
+      // "applied" by this unit unless another hidden finding still stands under it.
+      const findings: ReviewFinding[] = [...reused.findings];
+      const memoryFindings = reused.memory.findings.map(keep);
+      const restored = reused.restored.map((mark) =>
+        mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
+      );
+      const hidden: HiddenUnitItem[] = [];
+      const failed = new Set<string>();
+      for (const item of reused.hidden) {
+        if (!offered.has(item.entryId)) continue;
+        const entry = entryById.get(item.entryId);
+        if (entry !== undefined && suppressionStands(entry, file.path, risk, memory.entries)) {
+          hidden.push(item);
+          continue;
+        }
+        failed.add(item.entryId);
+        stats.memoryRestored++;
+        const marker =
+          entry !== undefined &&
+          risk.because !== undefined &&
+          restoredDismissalOf(entry, risk.because) !== undefined
+            ? { entryId: entry.id, because: risk.because }
+            : undefined;
+        if (marker !== undefined) stats.memoryDoubleCheck++;
+        findings.push(item.finding);
+        memoryFindings.push([]);
+        restored.push(marker);
+      }
+      const applied = keep(reused.memory.applied).filter(
+        (id) => !failed.has(id) || hidden.some((item) => item.entryId === id),
+      );
       return {
         path: file.path,
         triage,
-        findings: reused.findings,
+        findings,
         reviewed: REVIEWED_LEVELS.has(triage.level) && hasNewSide(file),
         ruleFloor: floor,
         unit: {
@@ -789,11 +838,9 @@ const run = async (
           reviewMinutes: reused.triage.reviewMinutes,
           ...(applied.length === 0 ? {} : { memoryApplied: applied }),
         },
-        memory: { findings: reused.memory.findings.map(keep), applied },
-        restored: reused.restored.map((mark) =>
-          mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
-        ),
-        hidden: reused.hidden.filter((item) => offered.has(item.entryId)),
+        memory: { findings: memoryFindings, applied },
+        restored,
+        hidden,
       };
     }
     const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
@@ -854,15 +901,7 @@ const run = async (
       selection,
       (findings) => checkReview(context, triage, findings),
       unitSignal,
-      {
-        because:
-          triage.level === "critical"
-            ? "critical_file"
-            : floor === undefined
-              ? undefined
-              : "rule_floor",
-        ruleFloored: floor !== undefined,
-      },
+      fileRisk(triage.level, floor),
       file.path,
     );
     if (!reviewed.ok) {
@@ -963,7 +1002,6 @@ const run = async (
   // a finding (in file order). The document requires every finding's ref, and every hidden
   // finding's entry, in `briefing.memoryApplied`, quoted identically: all are built here, from
   // the stored entries, never from model text.
-  const entryById = new Map(memory.entries.map((entry) => [entry.id, entry] as const));
   const appliedIds: string[] = [];
   const cite = (id: string): boolean => {
     if (!entryById.has(id)) return false;

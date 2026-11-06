@@ -48,11 +48,15 @@ export class MemoryLearningError extends Error {
  * How many current entries of each group an analysis loads, newest first in each (fix round,
  * M2/S5): member-written entries, learned dismissals and other learned entries are bounded
  * separately, so neither a burst of learned entries can push out what people wrote nor newer
- * conventions push out the dismissals. Together `MAX_ANALYSIS_MEMORY`.
+ * conventions push out the dismissals. P8-2b fix round 2: conventions and decisions taught by
+ * an owner or admin (`learner_role`) load under their own bound (`learnedOverruling`), so a
+ * member's run of accepts cannot push an owner's older convention out of the window and with it
+ * the block it exerts on the critical path (`overruledNearby`). Together `MAX_ANALYSIS_MEMORY`.
  */
 export const ANALYSIS_MEMORY_BOUNDS = {
   member: 100,
   learnedDismissals: 100,
+  learnedOverruling: 50,
   learnedOther: 50,
 } as const;
 
@@ -84,6 +88,7 @@ export const loadAnalysisMemory = async (
        from (select e.*, row_number() over (
                       partition by case when origin = 'member' then 'member'
                                         when kind = 'dismissal' then 'dismissal'
+                                        when learner_role in ('owner', 'admin') then 'overruling'
                                         else 'other' end
                       order by created_at desc, id desc) as n
                from memory_entries e
@@ -95,13 +100,17 @@ export const loadAnalysisMemory = async (
             ) ranked
       where (origin = 'member' and n <= $3)
          or (origin = 'learned' and kind = 'dismissal' and n <= $4)
-         or (origin = 'learned' and kind <> 'dismissal' and n <= $5)
+         or (origin = 'learned' and kind <> 'dismissal'
+             and learner_role in ('owner', 'admin') and n <= $5)
+         or (origin = 'learned' and kind <> 'dismissal'
+             and (learner_role is null or learner_role = 'member') and n <= $6)
       order by created_at desc, id desc`,
     [
       tx.orgId,
       repoId,
       ANALYSIS_MEMORY_BOUNDS.member,
       ANALYSIS_MEMORY_BOUNDS.learnedDismissals,
+      ANALYSIS_MEMORY_BOUNDS.learnedOverruling,
       ANALYSIS_MEMORY_BOUNDS.learnedOther,
     ],
   );

@@ -99,9 +99,10 @@ const roleRank = (entry: AnalysisMemoryEntry): number =>
 
 /**
  * Most entries one analysis takes from the request. The worker loads member-written entries,
- * learned dismissals and other learned entries under separate bounds that add up to this.
+ * learned dismissals, owner- and admin-taught conventions and decisions, and other learned
+ * entries under separate bounds that add up to this (`ANALYSIS_MEMORY_BOUNDS`).
  */
-export const MAX_ANALYSIS_MEMORY = 250;
+export const MAX_ANALYSIS_MEMORY = 300;
 export const MEMORY_LABEL = "memory";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

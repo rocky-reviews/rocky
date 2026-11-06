@@ -196,6 +196,18 @@ Task log for the project plan. Agents append a row when a task is merged.
   refuses"). Two read `reviewApi.decision("F1")` synchronously after the UI updates (a test
   race; `expect.poll` would fix them); two time out on "Comment on line 10" as detached or not
   stable (the virtualised row re-measures under load).
+- Fix round 2 applied: a reused unit re-checks `suppressionStands` for its hidden findings
+  (the unit key covers the file's selection, not the entries `overruledNearby` reads), restoring
+  with the double-check marker; owner/admin-taught conventions and decisions load under their
+  own bound (`learnedOverruling: 50`, `MAX_ANALYSIS_MEMORY` 300) so a member's accepts cannot
+  push an owner's older convention out of the window (chosen over failing closed on a truncated
+  learned-other group, which is routine in a busy repository).
+- Nit: a hidden finding overflowing to a draft (an uncitable entry, or past the hidden cap) can
+  take the draft list past `MAX_FINDINGS` (`raw` is not capped; not a regression: restored
+  drafts could already do it).
+- Nit: learned entries from before migration 0018 carry no role and rank as member, so an
+  owner's convention learned before 0018 never blocks the critical path; more than 50 current
+  owner/admin conventions and decisions in one repository drop the oldest out of the load group.
 - Nit: ids are not checked across `findings` and `hidden` (`integrity.ts`); the pipeline keeps
   the collections apart (`F…` and `H…`), and a document with an `F1` in both would parse.
 - Nit: the reuse filter (`pipeline.ts`, `reused.hidden.filter(offered)`) drops a hidden finding

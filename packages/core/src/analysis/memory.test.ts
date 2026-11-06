@@ -1511,3 +1511,79 @@ describe("P8-2b fix round 1: hidden list nits", () => {
     expect(stats.memorySuppressed).toBe(225);
   });
 });
+
+describe("P8-2b fix round 2: the block holds on reused units", () => {
+  const A = "src/billing/a.ts";
+  const critical: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const covering = blockOf(call)?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value:
+          covering === undefined
+            ? { findings: [{ ...FINDING, memory: [] }], suppressed: [] }
+            : {
+                findings: [],
+                suppressed: [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+              },
+      };
+    }
+    return { status: "refused" };
+  };
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+
+  it("a reused unit re-checks the block: an owner's accept learned since the last push restores the hidden finding", async () => {
+    const diff = addedFile(A, LINES);
+    // D hides the finding; eleven more dismissals on a.ts fill the selection (relevance 3), so
+    // an owner's convention on c.ts (relevance 2, a convention) is never selected and the unit
+    // key does not change when it is learned.
+    const D = dismissalOn(A);
+    const fillers = Array.from({ length: 11 }, (_, i) =>
+      dismissalOn(A, { id: uuid(10 + i), text: `Dismissed as intentional: Other ${i}` }),
+    );
+    const first = done((await analyze(critical, { diff, memory: [D, ...fillers] })).outcome);
+    expect(first.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(first.units[0]?.memoryApplied).toEqual([D.id]);
+    const previous = { document: first.document, units: first.units };
+    const owner = entry(2, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path: "src/billing/c.ts",
+      learnerRole: "owner",
+      text: "Accepted in review: Retries must log the failure",
+    });
+    const { outcome, calls } = await analyze(critical, {
+      diff,
+      previous,
+      memory: [D, ...fillers, owner],
+    });
+    const { document, stats, units } = done(outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(calls)).toBeUndefined();
+    expect(document.hidden).toBeUndefined();
+    expect(
+      document.findings.map((f) => [f.title, f.restored?.shownBecause, f.restored?.entry.entryId]),
+    ).toEqual([[FINDING.title, "critical_file", D.id]]);
+    // The entry no longer applies on this file: not cited, and the unit no longer lists it.
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(units[0]?.memoryApplied).toBeUndefined();
+    expect(stats).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 1 });
+    // Without the owner's entry the unit is reused as it was.
+    const same = done(
+      (await analyze(critical, { diff, previous, memory: [D, ...fillers] })).outcome,
+    );
+    expect(same.stats.reused).toBe(1);
+    expect(same.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(same.stats.memoryRestored).toBe(0);
+  });
+});

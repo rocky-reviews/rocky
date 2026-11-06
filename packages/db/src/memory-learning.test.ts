@@ -640,30 +640,62 @@ describe("loadAnalysisMemory (P8-2)", () => {
   });
 });
 
-describe("loadAnalysisMemory bounds (fix round, M2/S5)", () => {
-  it("member-written entries, learned dismissals and other learned entries are bounded apart", async () => {
-    const insert = (count: number, kind: string, origin: string, offset: number) =>
+describe("loadAnalysisMemory bounds (fix round, M2/S5; P8-2b fix round 2)", () => {
+  it("member-written entries, learned dismissals, owner/admin-taught entries and other learned entries are bounded apart", async () => {
+    const insert = (
+      count: number,
+      kind: string,
+      origin: string,
+      offset: number,
+      role: string | null = origin === "learned" ? "member" : null,
+    ) =>
       superuser.query(
         `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
            evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason,
-           created_at)
+           learner_role, created_at)
          select $1, $2, $3, $4, $3 || ' ' || g, 'src/a.ts', $5, 1, 1, 847, 70,
-                case when $3 = 'dismissal' then 'intentional' end,
+                case when $3 = 'dismissal' then 'intentional' end, $8,
                 now() - make_interval(secs => g + $7)
            from generate_series(1, $6) g`,
-        [A.orgId, A.repoId, kind, origin, DOC_HEAD, count, offset],
+        [A.orgId, A.repoId, kind, origin, DOC_HEAD, count, offset, role],
       );
-    // Oldest first: the dismissals, then members' entries, then a burst of newer conventions.
+    // Oldest first: an owner's and an admin's conventions, then the dismissals, then members'
+    // entries, then a burst of newer member-taught conventions (and a few without a role, as
+    // learned before 0018).
+    await insert(30, "convention", "learned", 3000, "owner");
+    await insert(30, "decision", "learned", 2900, "admin");
     await insert(130, "dismissal", "learned", 2000);
     await insert(120, "decision", "member", 1000);
-    await insert(300, "convention", "learned", 0);
+    await insert(290, "convention", "learned", 0);
+    await insert(10, "convention", "learned", 0, null);
     const memory = await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
-    const count = (kind: string, origin: string) =>
-      memory.filter((e) => e.kind === kind && e.origin === origin).length;
-    expect(count("convention", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedOther);
-    expect(count("dismissal", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedDismissals);
-    expect(count("decision", "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
+    const count = (pick: (e: (typeof memory)[number]) => boolean) => memory.filter(pick).length;
+    // The owner's and admin's entries are the oldest of all and still loaded, bounded apart:
+    // a member's run of accepts cannot push them out (and with them the block they exert on the
+    // critical path, `overruledNearby`).
+    expect(count((e) => e.learnerRole === "owner" || e.learnerRole === "admin")).toBe(
+      ANALYSIS_MEMORY_BOUNDS.learnedOverruling,
+    );
+    // Newest first within the group: all 30 of the admin's, then the 20 newest of the owner's.
+    expect(count((e) => e.learnerRole === "admin")).toBe(30);
+    expect(count((e) => e.learnerRole === "owner")).toBe(20);
+    expect(
+      count(
+        (e) =>
+          e.kind !== "dismissal" &&
+          e.origin === "learned" &&
+          e.learnerRole !== "owner" &&
+          e.learnerRole !== "admin",
+      ),
+    ).toBe(ANALYSIS_MEMORY_BOUNDS.learnedOther);
+    expect(count((e) => e.kind === "dismissal" && e.origin === "learned")).toBe(
+      ANALYSIS_MEMORY_BOUNDS.learnedDismissals,
+    );
+    expect(count((e) => e.origin === "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
     expect(memory).toHaveLength(MAX_ANALYSIS_MEMORY);
+    expect(Object.values(ANALYSIS_MEMORY_BOUNDS).reduce((total, bound) => total + bound, 0)).toBe(
+      MAX_ANALYSIS_MEMORY,
+    );
   });
 });
 
