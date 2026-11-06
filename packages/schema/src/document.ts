@@ -17,7 +17,7 @@ import { Triage } from "./triage.js";
  * Contract version carried by every document. Patch and minor releases only add optional
  * fields or widen an enum; a major release may remove or retype a field.
  */
-export const SCHEMA_VERSION = "1.4.0" as const;
+export const SCHEMA_VERSION = "1.5.0" as const;
 export type SchemaVersion = typeof SCHEMA_VERSION;
 
 /**
@@ -25,20 +25,28 @@ export type SchemaVersion = typeof SCHEMA_VERSION;
  * round 1, S7), so a reader that only knows 1.1 still reads every document that needs nothing
  * newer. 1.2 added one value, `graphUnavailable.reason: "no-logic"`; 1.3 (H4-7) added the
  * pipeline-owned `provenance.flowsUnavailable` and `provenance.walkthroughUnavailable`; 1.4
- * (H4-8) added `briefing.tldr`, which may stand in for `briefing.summary`. A document that uses
- * none of them is a 1.1 document.
+ * (H4-8) added `briefing.tldr`, which may stand in for `briefing.summary`; 1.5 (P8-2, ADR 0037)
+ * added the pipeline-owned `findings[].restored`. A document that uses none of them is a 1.1
+ * document.
  */
 export const BASE_SCHEMA_VERSION = "1.1.0" as const;
 export const NO_LOGIC_SCHEMA_VERSION = "1.2.0" as const;
 export const MAP_SECTIONS_SCHEMA_VERSION = "1.3.0" as const;
+export const TLDR_SCHEMA_VERSION = "1.4.0" as const;
 export type StampedSchemaVersion =
   | typeof BASE_SCHEMA_VERSION
   | typeof NO_LOGIC_SCHEMA_VERSION
   | typeof MAP_SECTIONS_SCHEMA_VERSION
+  | typeof TLDR_SCHEMA_VERSION
   | SchemaVersion;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 export const requiredSchemaVersion = (doc: {
   readonly briefing?: unknown;
+  /** Unvalidated when the overlay stamps; only `restored` is looked at. */
+  readonly findings?: unknown;
   readonly provenance?:
     | {
         readonly graphUnavailable?: { readonly reason?: unknown } | undefined;
@@ -47,13 +55,19 @@ export const requiredSchemaVersion = (doc: {
       }
     | undefined;
 }): StampedSchemaVersion => {
+  // Only the pipeline writes `restored` (1.5); a finding that carries one needs the 1.5 reader.
+  if (
+    Array.isArray(doc.findings) &&
+    doc.findings.some((finding) => isRecord(finding) && finding["restored"] !== undefined)
+  )
+    return SCHEMA_VERSION;
   // `briefing` is unvalidated model output when the overlay stamps it, so it is only looked at.
   const briefing = doc.briefing;
   const tldr =
     typeof briefing === "object" && briefing !== null
       ? (briefing as { readonly tldr?: unknown }).tldr
       : undefined;
-  if (Array.isArray(tldr)) return SCHEMA_VERSION;
+  if (Array.isArray(tldr)) return TLDR_SCHEMA_VERSION;
   const provenance = doc.provenance;
   if (
     provenance?.flowsUnavailable !== undefined ||

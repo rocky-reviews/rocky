@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "1.4.0",
+  "schemaVersion": "1.5.0",
   "provenance": {
     "repo": {
       "owner": "acme",
@@ -442,6 +442,16 @@
         ]
       },
       "memory": [],
+      "restored": {
+        "entry": {
+          "entryId": "mem-812",
+          "text": "Dismissed as intentional: Invitations can be reused after they're accepted",
+          "source": "dismissal · PR #812"
+        },
+        "path": "src/auth/invitations.ts",
+        "dismissedAs": "intentional",
+        "shownBecause": "critical_file"
+      },
       "agentPrompt": "In acceptInvitation (src/auth/invitations.ts), reject invitations whose acceptedAt is set, and add a test for reusing an invite."
     },
     {

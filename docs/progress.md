@@ -78,9 +78,24 @@ Task log for the project plan. Agents append a row when a task is merged.
 - **Label:** the PR changes protected eval files (`baselines/fake.json`, `src/run/**`, the new
   `src/memory/**`, `src/memory.test.ts`, `evals.yml`, `CODEOWNERS`): a maintainer adds
   `evals-baseline-change`.
-- First live memory run (2026-11-05) was inconclusive (every condition false, case files most
-  likely triaged `normal` and never reviewed); case redesigned and per-run diagnosis added
-  (ADR 0037 §6). Next: `pnpm evals run --only pr-1205 --memory --memory-trials 2`.
+- Live memory runs 1–3 (2026-11-05/06) recorded in ADR 0037 §6: run 1 and run 2 never reviewed
+  the case file (`normal`), run 3 passed 1/2 trials with the failing trial lost to a `critical`
+  triage, not to memory. Fix round 3: triage pinned to `important` in the eval (harness only,
+  `src/memory/pin.ts`; the model's level kept as `modelLevel`), pr-1302 redesigned (expires stale
+  pending charges), the critical-file rule checked deterministically on the fake, and the
+  product's double-check marker (`Finding.restored`, schema 1.5) with its draft-card line. Next:
+  `pnpm evals run --only pr-1205 --memory --memory-trials 2` (pinned).
+- **Follow-up (its own 🔴 round): suppression on critical files when the entry was learned on a
+  critical file.** Today no suppression stands on a file triaged critical or rule-floored, so a
+  team's dismissal taken on such a file never applies there (the draft comes back with the
+  double-check line every time). Guards if it is allowed: store the triage level the entry was
+  learned at; on critical files apply only within the same file or directory; keep the severity
+  cap, never hide a critical finding, never on rule-floored files; and show a collapsed "N hidden
+  by memory · show" line instead of making suppressions invisible (possibly for all files).
+- Fix round 3 nits: the double-check line does not quote the entry's text (the title above is
+  the same issue by the model's judgement; P8-3's view shows the entry); when a file is both
+  rule-floored and triaged critical the marker says `critical_file`; the restored entry is not
+  touched (`last_used_at`) since it was not applied.
 - **Needs a human before merge:** run `pnpm evals run --memory` with a provider key. CI's gate
   runs the memory eval on the `--fake` model only, which proves the plumbing; the live `memory`
   result is the evidence for the P8-2 criterion (ADR 0037 §6). Include `--memory` in the first

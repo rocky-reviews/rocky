@@ -20,6 +20,8 @@ const byId = (id: string) => {
 };
 const F1 = byId("F1");
 const F2 = byId("F2");
+/** A dismissal covered F3, but its file is critical: the double-check line (P8-2). */
+const F3 = byId("F3");
 
 const render = (
   finding: Finding,
@@ -157,6 +159,40 @@ describe("an undecided draft", () => {
     expect(t).toContain(F2.memory[0]?.source ?? "missing");
   });
 
+  it("says when a dismissal covered the draft but the file is critical: double-check", () => {
+    const html = render(F3);
+    expect(text(html)).toContain(
+      "◆ Your team dismissed this as intentional on src/auth/invitations.ts · dismissal · PR",
+    );
+    expect(text(html)).toContain(
+      "This file is critical, so Rocky is showing it anyway: double-check",
+    );
+    expect(html).toContain('class="evidence double-check"');
+    // The entry's path and text are stored data, rendered as text (never markup).
+    expect(html).toContain("<code><bdi>src/auth/invitations.ts</bdi></code>");
+    const fixture = JSON.stringify(F3.restored);
+    expect(fixture).toContain("Invitations can be reused");
+    expect(html).not.toContain("Invitations can be reused after they&#x27;re accepted · dismissal");
+    // The other reasons and the rule-floor wording.
+    const restored = F3.restored;
+    if (restored === undefined) throw new Error("F3 carries a restored marker");
+    const variant = (over: Partial<NonNullable<Finding["restored"]>>) =>
+      text(render({ ...F3, restored: { ...restored, ...over } }));
+    const elsewhere = variant({ dismissedAs: "handled_elsewhere", shownBecause: "rule_floor" });
+    expect(elsewhere).toContain(
+      "dismissed this as already handled elsewhere on src/auth/invitations.ts",
+    );
+    expect(elsewhere).toContain(
+      "This file always gets a full review, so Rocky is showing it anyway",
+    );
+    expect(variant({ dismissedAs: "not_an_issue" })).toContain(
+      "dismissed this as not a real issue",
+    );
+    expect(variant({ dismissedAs: "not_worth_it" })).toContain("dismissed this as not worth it");
+    // Without the marker (every other draft) there is no such line.
+    expect(render(F1)).not.toContain("double-check");
+  });
+
   it("has the focus ring when focused, and notes a copied fix prompt", () => {
     expect(render(F1, { focused: "F1" })).toContain('class="draft sev-critical focus"');
     expect(text(render(F1, { copied: true }))).toContain("✓ Fix prompt copied Send to agent");
@@ -247,6 +283,9 @@ describe("decided drafts", () => {
     expect(added).toEqual(parts.suggestion?.map((line) => line.trim()));
     // Nothing that is not posted: no severity, no confidence, no project-memory evidence.
     expect(text(html)).not.toMatch(/Critical|confident|Seen in/);
+    // Nor the double-check line of a restored draft (F3): it is not posted either.
+    const restored = render(F3, { decision: { state: "accepted", edited: false, body: F3.body } });
+    expect(text(restored)).not.toContain("double-check");
   });
 
   it("accepted and posted to GitHub (P6-6): says Posted, read-only, no Undo", () => {

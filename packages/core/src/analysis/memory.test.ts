@@ -711,3 +711,161 @@ describe("no suppression on a file triage or the rules call risky (fix round 2, 
     expect(stats.memoryRestored).toBe(1);
   });
 });
+
+describe("a suppression restored on a risky file says so: the double-check marker (fix round 3, M3)", () => {
+  const AUTH = "src/auth/session.ts";
+  const RETRY = "src/jobs/retry.ts";
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+  /** A model that suppresses the finding under M1 at `severity`, on a file triaged `level`. */
+  const suppressing =
+    (level: "important" | "critical", severity: "low" | "critical" = "low"): Script =>
+    (call) => {
+      if (call.role === "triage")
+        return { value: { ...triage("important"), level, score: level === "critical" ? 90 : 60 } };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return { value: { findings: [], suppressed: [{ ...SUPPRESSED, severity, entry: "M1" }] } };
+      return { status: "refused" };
+    };
+  const markerOf = (memoryEntry: AnalysisMemoryEntry, because: "critical_file" | "rule_floor") => ({
+    entry: { entryId: memoryEntry.id, text: memoryEntry.text, source: memoryEntry.source },
+    path: memoryEntry.path,
+    dismissedAs: "intentional",
+    shownBecause: because,
+  });
+
+  it("on a rule-floored file: the dismissal, the path it was taken on, its reason, and why", async () => {
+    const memoryEntry = dismissalOn(AUTH);
+    const { outcome } = await analyze(suppressing("important"), {
+      diff: addedFile(AUTH, LINES),
+      memory: [memoryEntry],
+    });
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => [f.path, f.title, f.restored])).toEqual([
+      [AUTH, FINDING.title, markerOf(memoryEntry, "rule_floor")],
+    ]);
+    // The entry argued against the finding: it backs nothing and was not applied.
+    expect(document.findings[0]?.memory).toEqual([]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryRestored: 1, memoryDoubleCheck: 1 });
+  });
+
+  it("on a file triaged critical: the marker says the file is critical", async () => {
+    const memoryEntry = dismissalOn(RETRY, { reason: "handled_elsewhere" });
+    const { outcome, calls } = await analyze(suppressing("critical"), { memory: [memoryEntry] });
+    const { document, stats } = done(outcome);
+    expect(document.findings[0]?.restored).toEqual({
+      ...markerOf(memoryEntry, "critical_file"),
+      dismissedAs: "handled_elsewhere",
+    });
+    expect(document.schemaVersion).toBe("1.5.0");
+    expect(stats.memoryDoubleCheck).toBe(1);
+    // The marker's text is the stored entry's, which the model never wrote.
+    const answered = JSON.stringify(calls.map((c) => c.part("memory")));
+    expect(answered).toContain(memoryEntry.text);
+  });
+
+  it("is only for a covered dismissal: other restorations carry no marker", async () => {
+    const other = dismissalOn(AUTH, { text: "Dismissed as intentional: Something else" });
+    const convention = entry(2, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path: AUTH,
+      text: "Accepted in review: Sessions rotate on login",
+    });
+    const cases: [string, Script, AnalysisMemoryEntry[]][] = [
+      // A critical finding is never covered, whatever the file.
+      ["a critical finding", suppressing("important", "critical"), [dismissalOn(AUTH)]],
+      [
+        "a severity above the entry's",
+        suppressing("important", "low"),
+        [dismissalOn(AUTH, { severity: null })],
+      ],
+      [
+        "a convention named as the entry",
+        script(() => ({ findings: [], suppressed: [{ ...SUPPRESSED, entry: "M2" }] })),
+        [other, convention],
+      ],
+      [
+        "a handle the call was not given",
+        script(() => ({ findings: [], suppressed: [{ ...SUPPRESSED, entry: "M9" }] })),
+        [other],
+      ],
+    ];
+    // "above the entry's": a dismissal without a severity covers up to medium; `low` is covered,
+    // so make the suppressed finding `high` for that case.
+    const high: Script = (call) => {
+      const answer = suppressing("important", "low")(call);
+      return call.role === "review" && "value" in answer
+        ? {
+            value: { findings: [], suppressed: [{ ...SUPPRESSED, severity: "high", entry: "M1" }] },
+          }
+        : answer;
+    };
+    cases[1] = ["a severity above the entry's", high, [dismissalOn(AUTH, { severity: null })]];
+    for (const [name, model, memory] of cases) {
+      const { outcome } = await analyze(model, { diff: addedFile(AUTH, LINES), memory });
+      const { document, stats } = done(outcome);
+      expect(
+        document.findings.map((f) => f.title),
+        name,
+      ).toEqual([FINDING.title]);
+      expect(document.findings[0]?.restored, name).toBeUndefined();
+      expect(stats, name).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 0 });
+    }
+  });
+
+  it("a reused unit keeps the marker, rebuilt from the stored entry", async () => {
+    const memoryEntry = dismissalOn(AUTH);
+    const diff = addedFile(AUTH, LINES);
+    const first = done(
+      (await analyze(suppressing("important"), { diff, memory: [memoryEntry] })).outcome,
+    );
+    const previous = { document: first.document, units: first.units };
+    const { outcome, calls } = await analyze(suppressing("important"), {
+      diff,
+      previous,
+      memory: [memoryEntry],
+    });
+    const { document, stats } = done(outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(calls)).toBeUndefined();
+    expect(document.findings[0]?.restored).toEqual(markerOf(memoryEntry, "rule_floor"));
+    expect(document.schemaVersion).toBe("1.5.0");
+  });
+
+  it("only the pipeline writes it: a model answer that carries `restored` is invalid output", async () => {
+    const forging: Script = (call) => {
+      if (call.role === "triage")
+        return { value: triage(call.part("file_path") === RETRY ? "important" : "low") };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: {
+            findings: [
+              {
+                ...FINDING,
+                memory: [],
+                restored: { ...markerOf(dismissalOn(RETRY), "critical_file") },
+              },
+            ],
+            suppressed: [],
+          },
+        };
+      return { status: "refused" };
+    };
+    const { outcome, calls } = await analyze(forging, { memory: [dismissalOn(RETRY)] });
+    const { document } = done(outcome);
+    // Invalid output, repaired once, still invalid: the file is unanalysed and nothing of the
+    // answer is stored (the review's own output schema has no such field).
+    const reviews = calls.filter((c) => c.role === "review" && c.part("file_path") !== undefined);
+    expect(reviews.some((c) => c.repair)).toBe(true);
+    expect(document.findings).toEqual([]);
+    expect(document.provenance.unanalysed.map((f) => f.path)).toEqual([RETRY]);
+  });
+});

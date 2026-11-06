@@ -16,12 +16,17 @@
  *   the pipeline resolves them against the call's own selection, so an id the call was not given
  *   (another repository's, another file's, an invented one) can never be stored.
  * - A dismissal covers findings up to its severity (`coversSeverity`), never a critical one.
+ * - On a risky file (triaged critical, or a rule floor) no suppression stands; a covered one is
+ *   restored as a draft that says so (`restoredDismissalOf`, `Finding.restored`, schema 1.5), so
+ *   the reviewer double-checks it against what the team dismissed. Only the pipeline writes it.
  */
 import {
   MemoryRef,
   pathProblem,
   Severity,
   type MemoryRef as MemoryRefValue,
+  type RESTORED_BECAUSE,
+  type RestoredDismissal,
 } from "@rocky-reviews/schema";
 import { isDismissReason, type DismissReason } from "../drafts.js";
 import type { LlmUntrustedText } from "../llm.js";
@@ -257,6 +262,37 @@ export const memoryRefOf = (entry: AnalysisMemoryEntry): MemoryRefValue => ({
   text: entry.text,
   source: entry.source,
 });
+
+/** Why no suppression stands on a file: it is triaged critical, or its path takes a rule floor. */
+export type RestoredBecause = (typeof RESTORED_BECAUSE)[number];
+
+/**
+ * A covered suppression the pipeline restored because the file is risky (fix round 3): the
+ * stored entry's id and why, as a unit carries it. `Finding.restored` is built from the stored
+ * entry at the end (`restoredDismissalOf`), never from this or from model text.
+ */
+export interface RestoredByRisk {
+  readonly entryId: string;
+  readonly because: RestoredBecause;
+}
+
+/**
+ * The document's "double-check" marker for a restored suppression: the dismissal as a ref, the
+ * path the team took it on, its reason and why the finding is shown anyway. Only a dismissal
+ * with a reason can be the entry (a convention named as a dismissal is restored without one).
+ */
+export const restoredDismissalOf = (
+  entry: AnalysisMemoryEntry,
+  because: RestoredBecause,
+): RestoredDismissal | undefined =>
+  entry.kind !== "dismissal" || entry.reason === null
+    ? undefined
+    : {
+        entry: memoryRefOf(entry),
+        path: entry.path,
+        dismissedAs: entry.reason,
+        shownBecause: because,
+      };
 
 /**
  * The stored entry ids behind `handles`, in order, without duplicates; handles the call was not

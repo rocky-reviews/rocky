@@ -48,7 +48,8 @@ export const TriageAnswer = TriagedFile.omit({ path: true }).describe(
 );
 export type TriageAnswer = z.output<typeof TriageAnswer>;
 
-export const ReviewFinding = Finding.omit({ id: true, path: true, memory: true });
+// `restored` (schema 1.5) is the pipeline's: a model answer that carries it is invalid output.
+export const ReviewFinding = Finding.omit({ id: true, path: true, memory: true, restored: true });
 export type ReviewFinding = z.output<typeof ReviewFinding>;
 
 export const ReviewAnswer = z

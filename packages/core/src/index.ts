@@ -247,7 +247,10 @@ export {
   REVIEW_MEMORY_OUTPUT,
   selectMemory,
   usableMemory,
+  restoredDismissalOf,
   type AnalysisMemoryEntry,
+  type RestoredBecause,
+  type RestoredByRisk,
   type SelectedMemory,
 } from "./analysis/index.js";
 export {

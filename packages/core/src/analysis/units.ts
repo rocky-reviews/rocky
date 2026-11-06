@@ -20,6 +20,7 @@ import {
   type TriagedFile,
 } from "@rocky-reviews/schema";
 import type { DiffFile } from "./diff.js";
+import type { RestoredByRisk } from "./memory.js";
 import { MAX_MEMORY_PER_FILE, type ReviewFinding } from "./outputs.js";
 
 /**
@@ -102,6 +103,11 @@ export interface ReusedUnit {
     readonly findings: readonly (readonly string[])[];
     readonly applied: readonly string[];
   };
+  /**
+   * Per finding (same order): the dismissal the pipeline restored it against on a risky file, as
+   * the stored id and why (`Finding.restored`, schema 1.5); undefined for the others.
+   */
+  readonly restored: readonly (RestoredByRisk | undefined)[];
 }
 
 const sameFacts = (a: ChangedFile, b: ChangedFile): boolean =>
@@ -142,6 +148,11 @@ export const reusableUnit = (
       findings: own.map((finding) => finding.memory.map((ref) => ref.entryId)),
       applied: unit.memoryApplied ?? [],
     },
+    restored: own.map((finding) =>
+      finding.restored === undefined
+        ? undefined
+        : { entryId: finding.restored.entry.entryId, because: finding.restored.shownBecause },
+    ),
   };
 };
 

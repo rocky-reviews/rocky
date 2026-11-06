@@ -208,7 +208,10 @@ packages/schema (analysis document; shared contract)
   canary. The model cites per-call handles and moves covered findings to `suppressed`; the
   pipeline keeps a finding out only when a dismissal it was given covers its severity, builds
   `MemoryRef`s from the stored entries, and the worker touches `last_used_at` for what the stored
-  document cites. Only the review re-runs when a file's memory changes; triage is reused.
+  document cites. On a file triaged critical or with a rule floor no suppression stands: a
+  covered finding comes back as a draft with `restored` (schema 1.5: the dismissal, its path and
+  reason, and why), which the draft card shows as a double-check line. Only the review re-runs
+  when a file's memory changes; triage is reused.
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is

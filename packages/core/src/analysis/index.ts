@@ -34,7 +34,10 @@ export {
   pathRelevance,
   selectMemory,
   usableMemory,
+  restoredDismissalOf,
   type AnalysisMemoryEntry,
+  type RestoredBecause,
+  type RestoredByRisk,
   type SelectedMemory,
 } from "./memory.js";
 export { REVIEW_MEMORY_OUTPUT } from "./outputs.js";
