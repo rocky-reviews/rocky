@@ -9,6 +9,7 @@ import {
   decayOrgMemory,
   MEMORY_DECAY_ACTOR,
   MEMORY_DECAY_MIN_DAYS,
+  MEMORY_DECAY_STATEMENTS,
   MEMORY_DECAY_STEP,
   memoryDecayCutoff,
   runMemoryDecay,
@@ -443,6 +444,26 @@ describe("concurrent tenant transactions: the job never waits (fix rounds 1 and 
   type Tx = Parameters<Parameters<Db["withOrg"]>[1]>[0];
 
   /**
+   * True once some other backend is blocked on a row lock while running a statement on `table`
+   * that contains `fragment` (bounded poll of pg_stat_activity, 5 s), so a test can prove the
+   * other side was waiting before it releases what it holds.
+   */
+  const waitingOnLock = async (table: string, fragment: string): Promise<boolean> => {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const { rows } = await superuser.query(
+        `select 1 from pg_stat_activity
+          where wait_event_type = 'Lock' and state = 'active'
+            and query ilike $1 and query ilike $2`,
+        [`%${table}%`, `%${fragment}%`],
+      );
+      if ((rows.length ?? 0) > 0) return true;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return false;
+  };
+
+  /**
    * Holds a tenant transaction of org B open after `act` ran on it (its row locks stay) and
    * hands back `release`, which lets it commit. The application pool has two connections: one
    * for the held transaction, one for whatever runs meanwhile. No timing is involved: the job
@@ -502,14 +523,52 @@ describe("concurrent tenant transactions: the job never waits (fix rounds 1 and 
       expect(report.retired).toBeGreaterThanOrEqual(1);
     });
     // The supersede locks both rows FOR UPDATE and waits for the job's commit (its own choice to
-    // wait, never the job's); released right away, it then sees the head gone.
+    // wait, never the job's); once it is seen waiting on a lock, the job commits and the
+    // supersede then sees the head gone.
     const result = db.withOrg(B.orgId, (tx) =>
       supersedeMemoryEntry(tx, { actorMemberId: B.memberId, entryId: written, byEntryId: head }),
     );
+    expect(await waitingOnLock("memory_entries", "for update")).toBe(true);
     await job.release();
     expect(await result).toBe("not_found");
     expect(await exists("memory_entries", head)).toBe(false);
     expect(await row(written)).toMatchObject({ superseded_by: null, confidence: 90 });
+  });
+
+  it("the heads are locked before the chain behind them is walked: a supersede that commits in between is seen and the chain kept whole (S2 ordering)", async () => {
+    const head = await plant(B, { createdAt: ageDays(400) });
+    const written = await plant(B, { origin: "member", createdAt: ageDays(5), confidence: 90 });
+    let intercepted = 0;
+    // A TenantTx that, right before the heads lock is sent, lets a member-written supersede of
+    // the head commit on the other connection. With the lock first, the walk that follows sees
+    // the member-written entry in the chain and keeps it whole; a walk done before the lock
+    // would have missed it and deleting the head would make that entry current again.
+    const report = await db.withOrg(B.orgId, async (tx) => {
+      const wrapped = {
+        orgId: tx.orgId,
+        db: tx.db,
+        query: async (sql: string, params?: unknown[]) => {
+          if (sql === MEMORY_DECAY_STATEMENTS.lockHeads) {
+            intercepted++;
+            expect(
+              await db.withOrg(B.orgId, (other) =>
+                supersedeMemoryEntry(other, {
+                  actorMemberId: B.memberId,
+                  entryId: written,
+                  byEntryId: head,
+                }),
+              ),
+            ).toBe("superseded");
+          }
+          return tx.query(sql, params);
+        },
+      } as unknown as Tx;
+      return decayOrgMemory(wrapped, { asOf: NOW, windows: WINDOWS });
+    });
+    expect(intercepted).toBe(1);
+    expect(report.retired).toBe(0);
+    expect(await exists("memory_entries", head)).toBe(true);
+    expect(await row(written)).toMatchObject({ superseded_by: head, confidence: 90 });
   });
 
   it("a citation still holding the entry: the job skips the decay step; the next run takes it only if the entry is idle again (N4)", async () => {

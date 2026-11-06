@@ -187,6 +187,12 @@ const DECAY_SQL = `
 const ids = (rows: { id: string }[]): string[] => rows.map((row) => row.id);
 
 /**
+ * For tests that pin the statement order S2 relies on (the heads are locked before the chain
+ * behind them is walked): the exact text of the heads lock, so a test can act between the two.
+ */
+export const MEMORY_DECAY_STATEMENTS = { lockHeads: LOCK_HEADS_SQL } as const;
+
+/**
  * The chains behind the locked heads: every row of a chain that is all learned and whose other
  * rows could all be locked without waiting. Returns the ids to delete.
  */

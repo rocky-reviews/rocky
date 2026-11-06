@@ -193,6 +193,15 @@ deleted (it cannot: the rules read timestamps and origins only).
 - **Where the job can still wait.** Not on `memory_entries` rows. The `ON DELETE CASCADE` into
   `embeddings` runs as the owner and would wait on an embeddings row another transaction holds
   (nothing writes embeddings today; P9-1 should keep its writers short), and the audit insert
-  takes a `KEY SHARE` on the org row (`delete_org` locks it `FOR UPDATE`, so erasure waits for
-  the job's commit, never the reverse). A deadlock through those paths would need the other
-  side to then wait on a row the job holds; the job's locks are only released at its commit.
+  takes a `KEY SHARE` on the org row (`delete_org` locks it `FOR UPDATE`, so in practice
+  erasure waits for the job's commit and not the reverse: `worker.live_orgs` leaves out every
+  org with a `delete_after`, so the job and `delete_org` can only meet on an org that was
+  scheduled for deletion, at least seven days before, during one run of the job over it; and
+  either way the victim of such a deadlock would be the job or the erasure, both retried, never
+  a review). A deadlock through those paths would need the other side to then wait on a row
+  the job holds; the job's locks are only released at its commit.
+- **A row held by a transaction that never ends delays its chain indefinitely.** `SKIP LOCKED`
+  leaves a held row, and the whole chain behind a retiring head, for the next run; a
+  transaction that holds a memory row and never commits or rolls back (a hung client) keeps
+  that entry, chain or step alive until the connection is cleaned up. Postgres's
+  `idle_in_transaction_session_timeout` is the operational bound.
