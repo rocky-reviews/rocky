@@ -9,7 +9,7 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 
 ## Top bar
 
-- [x] P6-1 · Brand mark + "Rocky Reviews" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
+- [x] P6-1 · Brand mark + "Rocky Reviews" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the Rocky mountain since H4-18 (see Intentional differences)
 - [x] P6-1 · PR title + `#number` — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
 - [x] P6-1 · Status pill: Open / Approved / Changes requested / Commented (changes after submit) — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png); the submitted states render from `myReview` (`Shell.test.tsx`), set by Finish review in P6-6
 - [x] P6-1 · Repo name, "@author wants to merge `head` → `base`" — [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png), [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png)
@@ -188,6 +188,13 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   and j — [brief-1440-light](../../apps/web/e2e/__screenshots__/brief-1440-light.png),
   [brief-1024-dark](../../apps/web/e2e/__screenshots__/brief-1024-dark.png),
   [brief-375-dark](../../apps/web/e2e/__screenshots__/brief-375-dark.png).
+- **Brand mark and tab icon (H4-18).** The POC's mark is a cyan-to-indigo gradient square. The
+  app uses the Rocky mountain from the website, drawn in `--text` (so it follows light/dark),
+  32 × 22 px; the tab icon is the same mountain (`public/favicon.svg`, its stroke follows the
+  browser's colour scheme; ICO and apple-touch-icon fallbacks are a white mark on a dark tile) —
+  [pr-shell-1440-light](../../apps/web/e2e/__screenshots__/pr-shell-1440-light.png),
+  [pr-shell-1440-dark](../../apps/web/e2e/__screenshots__/pr-shell-1440-dark.png),
+  [inbox-1440-dark](../../apps/web/e2e/__screenshots__/inbox-1440-dark.png).
 - **Noise box text (P6-1).** The POC's "Lockfile + generated types … The AI found nothing
   unusual" was hard-coded; the app states what the analysis says: "n files (lines) the AI
   summarised as noise".

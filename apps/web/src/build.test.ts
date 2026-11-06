@@ -122,3 +122,34 @@ describe("the production index.html (CSP without inline content)", () => {
     for (const link of links) expect(attr(link, "href")).toMatch(SAME_ORIGIN_PATH);
   });
 });
+
+/** H4-18: the Rocky mark from the website is the tab icon, with raster fallbacks. */
+describe("the app icons", () => {
+  const link = (rel: string, href: RegExp): Tree.Element | undefined =>
+    elements.find(
+      (el) =>
+        el.tagName.toLowerCase() === "link" &&
+        attr(el, "rel")?.toLowerCase() === rel &&
+        href.test(attr(el, "href") ?? ""),
+    );
+  const shipped = (el: Tree.Element | undefined): Buffer => {
+    const href = el === undefined ? undefined : attr(el, "href");
+    expect(href).toMatch(SAME_ORIGIN_PATH);
+    return readFileSync(join(outDir, href ?? ""));
+  };
+
+  it("declares an SVG favicon, an ICO fallback and an apple-touch-icon, all shipped", () => {
+    const svg = link("icon", /^\/favicon\.svg$/);
+    expect(svg && attr(svg, "type")).toBe("image/svg+xml");
+    expect(shipped(svg).toString("utf8")).toContain("<svg");
+
+    const ico = link("icon", /^\/favicon\.ico$/);
+    expect(ico && attr(ico, "sizes")).toBe("32x32");
+    // ICONDIR: reserved 0, type 1 (icon).
+    expect([...shipped(ico).subarray(0, 4)]).toEqual([0, 0, 1, 0]);
+
+    const png = shipped(link("apple-touch-icon", /^\/apple-touch-icon\.png$/));
+    expect(png.subarray(1, 4).toString("ascii")).toBe("PNG");
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([180, 180]);
+  });
+});

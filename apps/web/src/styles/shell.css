@@ -122,11 +122,11 @@ code,
   font-weight: 650;
   white-space: nowrap;
 }
+/* H4-18: the Rocky mark (128×88), in the text colour; it replaced the POC's gradient square. */
 .brand-mark {
-  width: 22px;
+  width: 32px;
   height: 22px;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(135deg, var(--ai), var(--you));
+  color: var(--text);
   flex: none;
 }
 .pr-meta {
