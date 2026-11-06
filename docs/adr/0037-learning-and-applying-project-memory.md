@@ -209,8 +209,9 @@ handled by the re-check at load.
 Two synthetic pull requests of one repository's billing jobs share a pattern the team keeps on
 purpose (a per-item `catch` that swallows the error and moves on with no log: what a careful
 reviewer usually flags, and what a team may keep when the next nightly run retries every unpaid
-item), and each has one unmistakable bug (SQL built by interpolating the org id; receipts sent
-only to customers who opted out). The suite analyses pr-1301 without memory, dismisses the
+item), and each has one unmistakable bug (SQL built by interpolating the org id; an inverted
+cutoff comparison that expires fresh payment authorizations and keeps stale ones). The suite
+analyses pr-1301 without memory, dismisses the
 produced pattern finding as intentional and learns the entry with the real rules, analyses
 pr-1302 without memory (the control), then with the entry. The run passes when run 1 raised the
 pattern, an entry was learned, the control raised it, run 2 did not, run 2 cites the entry, and

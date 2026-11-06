@@ -109,8 +109,9 @@ ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, le
 Does a pattern a reviewer dismissed as intentional stay out of the next review? Two synthetic
 pull requests of one repository's billing jobs (`src/billing/jobs/`) share a pattern the team
 keeps on purpose, a per-item `catch` that swallows the error and moves on with no log, and each
-has one real, unmistakable bug: SQL built by interpolating the org id (pr-1301), and receipts sent
-only to customers who opted out (pr-1302) (`src/memory/case.ts`). Both are payment code, which
+has one real, unmistakable bug: SQL built by interpolating the org id (pr-1301), and an inverted
+cutoff comparison that expires fresh payment authorizations and keeps stale ones (pr-1302)
+(`src/memory/case.ts`). Both are payment code, which
 the triage instructions place at least at `important`, so they are reviewed; neither path takes a
 rule floor.
 

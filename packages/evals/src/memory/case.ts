@@ -9,13 +9,14 @@
  *   purpose (a nightly job retries every unpaid item the next night).
  * - **pr-1301** "Retry failed charges nightly": the pattern on lines 12-14; the org id
  *   interpolated into SQL on line 6 (SQL injection).
- * - **pr-1302** "Send payment receipts": the pattern on lines 13-15; receipts sent only to
- *   customers who opted out, on line 11 (an inverted condition).
+ * - **pr-1302** "Expire stale pending charges": the pattern on lines 15-17; the cutoff
+ *   comparison on line 12 is inverted, so fresh authorizations are released and stale ones kept.
  *
  * Both files are payment code, which the triage instructions place at least at `important`, so
  * they are reviewed (the first live run's case, a small retry job, was most likely triaged
- * `normal` and never reviewed: ADR 0037 §6). Neither path takes a rule floor, so a suppression can
- * stand on run 2 unless triage calls the file critical.
+ * `normal` and never reviewed: ADR 0037 §6; in the second live run pr-1302 was a receipts mailer
+ * and was triaged `normal` too, so it now releases payment authorizations). Neither path takes a
+ * rule floor, so a suppression can stand on run 2 unless triage calls the file critical.
  *
  * Run 1 analyses pr-1301; the reviewer dismisses the pattern as intentional and Rocky learns a
  * dismissal entry from it (core `learnedEntry`, then the store's own `prepareMemoryEntry`). Run 2
@@ -55,7 +56,7 @@ const PATTERN_KEYWORDS = [
 const PATTERN_TITLE = "Errors are swallowed silently in the per-item catch";
 
 const RETRY = "src/billing/jobs/retryFailedCharges.ts";
-const RECEIPTS = "src/billing/jobs/sendPaymentReceipts.ts";
+const EXPIRE = "src/billing/jobs/expireStaleCharges.ts";
 
 export const MEMORY_RUN_1: MemoryCasePr = {
   id: "pr-1301",
@@ -103,23 +104,25 @@ export const MEMORY_RUN_1: MemoryCasePr = {
 export const MEMORY_RUN_2: MemoryCasePr = {
   id: "pr-1302",
   number: 1302,
-  title: "Send payment receipts",
+  title: "Expire stale pending charges",
   base: "1302".padEnd(40, "a"),
   head: "1302".padEnd(40, "b"),
-  path: RECEIPTS,
+  path: EXPIRE,
   lines: [
     'import { db } from "../../db";',
-    'import { mailer } from "../../mailer";',
+    'import { payments } from "../../payments";',
     "",
-    "export async function sendPaymentReceipts(orgId: string) {",
-    "  const paid = await db.query(",
-    "    \"select c.id, c.amount_cents, u.email, u.receipts_opt_out from charges c join customers u on u.id = c.customer_id where c.org_id = $1 and c.status = 'paid' and c.receipt_sent_at is null\",",
+    "export async function expireStaleCharges(orgId: string, now: Date) {",
+    "  const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);",
+    "  const pending = await db.query(",
+    "    \"select id, provider_ref, created_at from charges where org_id = $1 and status = 'pending'\",",
     "    [orgId],",
     "  );",
-    "  for (const row of paid.rows) {",
+    "  for (const charge of pending.rows) {",
     "    try {",
-    '      if (row.receipts_opt_out) await mailer.send(row.email, "Your receipt", row.amount_cents);',
-    '      await db.query("update charges set receipt_sent_at = now() where id = $1", [row.id]);',
+    "      if (charge.created_at < cutoff) continue;",
+    "      await payments.releaseAuthorization(charge.provider_ref);",
+    "      await db.query(\"update charges set status = 'expired' where id = $1\", [charge.id]);",
     "    } catch {",
     "      continue;",
     "    }",
@@ -128,19 +131,19 @@ export const MEMORY_RUN_2: MemoryCasePr = {
   ],
   pattern: {
     id: "P2",
-    path: RECEIPTS,
+    path: EXPIRE,
     severity: "medium",
-    range: { start: 13, end: 15 },
+    range: { start: 15, end: 17 },
     title: PATTERN_TITLE,
     keywords: PATTERN_KEYWORDS,
   },
   bug: {
     id: "B2",
-    path: RECEIPTS,
+    path: EXPIRE,
     severity: "high",
-    range: { start: 11, end: 11 },
-    title: "Receipts go only to customers who opted out (inverted condition)",
-    keywords: ["opt", "invert", "condition", "unsubscri", "negat"],
+    range: { start: 12, end: 12 },
+    title: "The comparison is inverted: fresh charges are expired and stale ones kept",
+    keywords: ["invert", "comparison", "stale", "fresh", "recent", "cutoff", "revers", "backwards"],
   },
 };
 
