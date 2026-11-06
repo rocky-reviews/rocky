@@ -161,10 +161,6 @@ Task log for the project plan. Agents append a row when a task is merged.
   the fake only; a live trial where run 2 is triaged `critical` would show whether a real model
   keeps the pattern in `suppressed` on a critical file (unpinned, with the entry learned on a
   critical run 1).
-- `drafts.e2e.spec.ts` "own comments: add → refresh …" (and once "a comment the server refuses")
-  timed out on this machine (load average 44 from parallel worktrees) when the whole file ran;
-  each passes alone and the failure reproduces with the P8-2b file-view change reverted (the
-  virtualised line-10 button is "detached" under load). Not caused here; rerun on CI.
 - Restore is one-way (no "hide again"): dismissing a restored finding teaches the dismissal
   again, which is the same decision. A "hide again" that deletes the row could be added to the
   dismissed state if dogfooding asks for it.
@@ -177,6 +173,34 @@ Task log for the project plan. Agents append a row when a task is merged.
   draft instead) or when a unit was reused.
 - A member-written dismissal (P8-3) never stands on a critical file; if P8-3 wants a person's
   rule to apply there, it needs its own explicit flag, reviewed by an admin, not `learned_level`.
+- Fix round 1 (security review clean; reviewer: no blockers) applied: S1 the ADR's residual
+  risks now say what holds on critical files, and the M3a widening is blocked in code (a
+  higher role's entry of the opposite kind in the file's directory restores the finding with the
+  double-check marker; directory + opposite kind, no subject match, justified in ADR 0037 §7);
+  S2 root-level evidence stands on its own file only, `src/a` is not `src/ab`, a renamed file is
+  judged by its new path; the hidden list is capped at `MAX_FINDINGS` with the overflow raised as
+  drafts; a standing suppression that repeats a raised finding is not listed twice;
+  `applyKnownFields` drops a model-supplied `hidden`/`restored`.
+- UI verifier (fix round 1; no blockers: keyboard path and axe clean at every size, 168/168
+  visual tests): applied: the restored card is lifted clear of the toast (`liftAboveToast` in
+  `DiffBody`, for every card jump); the hidden card's focus ring is `--you`; baselines for the
+  restored card (`drafts-restored-*`) and the panel's expanded list
+  (`drafts-panel-hidden-open-*`). Nits not fixed: the collapsed line has a wide gap before
+  "· show/hide" (the sr-only " on this file" span); the panel's "Hidden by memory" heading is
+  followed by a toggle that repeats "… hidden by memory"; the panel section sits between
+  Decided and the dismissal-learning note that belongs to Decided; in `brief-map-unavailable-*`
+  the "Read by hand … drafted nothing" line does not mention the file's hidden finding.
+- Flake follow-up (not caused here; reproduced on main under heavy local load): four
+  `drafts.e2e.spec.ts` tests fail when the machine is loaded ("edit → save → refresh",
+  "dismiss with a reason → refresh", "own comments: add → refresh", "a comment the server
+  refuses"). Two read `reviewApi.decision("F1")` synchronously after the UI updates (a test
+  race; `expect.poll` would fix them); two time out on "Comment on line 10" as detached or not
+  stable (the virtualised row re-measures under load).
+- Nit: ids are not checked across `findings` and `hidden` (`integrity.ts`); the pipeline keeps
+  the collections apart (`F…` and `H…`), and a document with an `F1` in both would parse.
+- Nit: the reuse filter (`pipeline.ts`, `reused.hidden.filter(offered)`) drops a hidden finding
+  whose entry is no longer offered instead of raising it as a draft; in practice the unit key
+  changes with the selection, so the unit is not reused then.
 - Review nits go here.
 
 ### P8-2 follow-ups

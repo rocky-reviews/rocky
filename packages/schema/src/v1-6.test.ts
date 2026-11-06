@@ -71,17 +71,14 @@ describe("schema 1.6: version policy", () => {
       );
   });
 
-  it("the overlay stamps from the hidden list: 1.6.0 with one, 1.5.0 without", () => {
+  it("the overlay drops a model-supplied hidden list (pipeline-owned) and stamps without it", () => {
     const doc = pr847();
     const { briefing, triage, findings, hidden, graph, provenance } = doc;
-    const stamped = applyKnownFields({ briefing, triage, findings, hidden, graph }, provenance);
-    expect(expectAccepted(stamped).schemaVersion).toBe(SCHEMA_VERSION);
-    const older = pr847v15();
-    const without = applyKnownFields(
-      { briefing: older.briefing, triage, findings: older.findings, graph },
-      provenance,
+    const stamped = expectAccepted(
+      applyKnownFields({ briefing, triage, findings, hidden, graph }, provenance),
     );
-    expect(expectAccepted(without).schemaVersion).toBe(RESTORED_SCHEMA_VERSION);
+    expect(stamped.hidden).toBeUndefined();
+    expect(stamped.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
   });
 });
 

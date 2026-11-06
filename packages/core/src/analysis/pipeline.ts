@@ -711,11 +711,13 @@ const run = async (
     for (const item of cited.value.suppressed) {
       const entry = entryOfHandle(selection, item.entry);
       const covered = entry !== undefined && coversSeverity(entry, item.severity);
-      if (covered && suppressionStands(entry, filePath, risk)) {
+      if (covered && suppressionStands(entry, filePath, risk, memory.entries)) {
         stats.memorySuppressed++;
         if (risk.because === "critical_file") stats.memoryHiddenOnCritical++;
         if (!applied.includes(entry.id)) applied.push(entry.id);
-        hidden.push({ finding: withoutEntry(item), entryId: entry.id });
+        // Also raised as a draft (the same title and lines): the draft is enough, a hidden copy
+        // would show the finding twice (fix round 1).
+        if (raisedAt(item) === -1) hidden.push({ finding: withoutEntry(item), entryId: entry.id });
         continue;
       }
       if (entry === undefined || entry.kind !== "dismissal") stats.memoryStripped++;
@@ -980,14 +982,19 @@ const run = async (
   for (const { memory: cited } of raw)
     cited.slice(0, limits.MAX_MEMORY_REFS_PER_FINDING).forEach(cite);
   // A hidden finding must cite the entry that hid it. One whose entry cannot be cited (gone, or
-  // past the document's cap on applied entries) is not kept hidden: it is raised as a plain
-  // draft instead, so a suppression is never invisible (fail open to the reviewer).
+  // past the document's cap on applied entries), or past the document's cap on hidden findings
+  // (`MAX_FINDINGS`, fix round 1), is not kept hidden: it is raised as a plain draft instead, so
+  // a suppression is never invisible (fail open to the reviewer).
   rawHidden.sort(byRank);
   const hiddenFindings: HiddenFinding[] = [];
   for (const item of rawHidden) {
     const entry = entryById.get(item.entryId);
     const hiddenBy = entry === undefined ? undefined : hiddenByOf(entry);
-    if (hiddenBy === undefined || !cite(item.entryId)) {
+    if (
+      hiddenBy === undefined ||
+      hiddenFindings.length >= limits.MAX_FINDINGS ||
+      !cite(item.entryId)
+    ) {
       raw.push({
         finding: item.finding,
         path: item.path,

@@ -101,6 +101,54 @@ const STATES: State[] = [
     },
   },
   {
+    // P8-2b: H1 restored: a draft under its line that says Rocky had hidden it. The toast is
+    // hidden like in the other states; the card is lifted clear of it (`liftAboveToast`).
+    id: "drafts-restored",
+    poc: "02-file-critical",
+    run: async (page) => {
+      await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+      await openFile(page, "src/jobs/sendInviteEmail.ts");
+      await page
+        .locator(".hidden-memory")
+        .getByRole("button", { name: /hidden by memory/ })
+        .click();
+      await page
+        .locator('[data-hidden="H1"]')
+        .getByRole("button", { name: "Restore as a draft" })
+        .click();
+      await card(page, "H1").waitFor();
+      await expect(card(page, "H1").locator(".double-check")).toBeVisible();
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // P8-2b: the Review panel's "Hidden by memory" section expanded: items with the badge.
+    id: "drafts-panel-hidden-open",
+    poc: "04-draft-accepted",
+    run: async (page) => {
+      await page.locator("#review-panel .tally").waitFor({ state: "attached" });
+      if ((page.viewportSize()?.width ?? 1440) <= 1180)
+        await page.getByRole("button", { name: "Review panel" }).click();
+      await page
+        .locator("#review-panel")
+        .getByRole("button", { name: /hidden by memory/ })
+        .click();
+      await page.locator("#hidden-by-memory-list").evaluate((el) => {
+        for (let box = el.parentElement; box !== null; box = box.parentElement) {
+          if (
+            box.scrollHeight > box.clientHeight + 1 &&
+            getComputedStyle(box).overflowY !== "visible"
+          ) {
+            box.scrollTop +=
+              el.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom + 24;
+            return;
+          }
+        }
+      });
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
     id: "drafts-dismiss",
     poc: "03-draft-dismiss",
     run: async (page) => {

@@ -62,11 +62,14 @@ describe("schema 1.5: version policy", () => {
       );
   });
 
-  it("the overlay stamps from the findings: 1.5.0 with a restored one, 1.4.0 without", () => {
+  it("the overlay drops a model-supplied `restored` (pipeline-owned) and stamps 1.4.0", () => {
     const doc = pr847v15();
     const { briefing, triage, findings, graph, provenance } = doc;
-    const stamped = applyKnownFields({ briefing, triage, findings, graph }, provenance);
-    expect(expectAccepted(stamped).schemaVersion).toBe(RESTORED_SCHEMA_VERSION);
+    const stamped = expectAccepted(
+      applyKnownFields({ briefing, triage, findings, graph }, provenance),
+    );
+    expect(stamped.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
+    expect(stamped.findings.every((finding) => finding.restored === undefined)).toBe(true);
     const old = pr847v14();
     const without = applyKnownFields(
       { briefing: old.briefing, triage, findings: old.findings, graph },

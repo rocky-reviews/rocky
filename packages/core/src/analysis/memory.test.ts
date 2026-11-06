@@ -1242,3 +1242,272 @@ describe("fix round 4 nits (P8-2b)", () => {
     expect([...DISMISSAL_REASONS]).toEqual([...DISMISS_REASONS]);
   });
 });
+
+describe("P8-2b fix round 1: the critical path against role precedence and root-level evidence", () => {
+  const A = "src/billing/a.ts";
+  const B = "src/billing/b.ts";
+  const CRITICAL_SCRIPT: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const block = blockOf(call);
+      const covering = block?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value:
+          covering === undefined
+            ? { findings: [{ ...FINDING, memory: [] }], suppressed: [] }
+            : {
+                findings: [],
+                suppressed: [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+              },
+      };
+    }
+    return { status: "refused" };
+  };
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+  const conventionOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(2, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path,
+      learnerRole: "owner",
+      text: "Accepted in review: Retries must log the failure",
+      ...overrides,
+    });
+  const stood = (document: { readonly hidden?: unknown; readonly findings: readonly unknown[] }) =>
+    document.hidden !== undefined && document.findings.length === 0;
+
+  it("S1: an owner's accept on a.ts blocks a member's critical-learned dismissal from b.ts on critical a.ts (restored, double-check)", async () => {
+    const dismissal = dismissalOn(B);
+    const { outcome } = await analyze(CRITICAL_SCRIPT, {
+      diff: addedFile(A, LINES),
+      memory: [dismissal, conventionOn(A)],
+    });
+    const { document, stats } = done(outcome);
+    expect(stood(document)).toBe(false);
+    expect(document.findings.map((f) => [f.path, f.restored?.shownBecause])).toEqual([
+      [A, "critical_file"],
+    ]);
+    expect(document.findings[0]?.restored?.entry.entryId).toBe(dismissal.id);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryDoubleCheck: 1 });
+  });
+
+  it("S1: the block needs a higher role, the opposite kind, a learned entry, and the same directory", async () => {
+    const cases: [string, AnalysisMemoryEntry[], boolean][] = [
+      ["the same role: stands", [dismissalOn(B), conventionOn(A, { learnerRole: "member" })], true],
+      [
+        "an admin's dismissal against a member's convention: stands",
+        [dismissalOn(B, { learnerRole: "admin" }), conventionOn(A, { learnerRole: "member" })],
+        true,
+      ],
+      [
+        "an owner's dismissal, no higher role exists: stands",
+        [dismissalOn(B, { learnerRole: "owner" }), conventionOn(A)],
+        true,
+      ],
+      [
+        "a higher role's dismissal (the same kind): stands",
+        [
+          dismissalOn(B),
+          dismissalOn(A, {
+            id: uuid(3),
+            learnerRole: "owner",
+            text: "Dismissed as intentional: Something else",
+          }),
+        ],
+        true,
+      ],
+      [
+        "an owner's convention in another directory: stands",
+        [dismissalOn(B), conventionOn("src/other/a.ts")],
+        true,
+      ],
+      [
+        "a member-written convention (no role): stands",
+        [dismissalOn(B), conventionOn(A, { origin: "member", learnerRole: null })],
+        true,
+      ],
+      [
+        "an owner's convention with no recorded role on the dismissal: blocked",
+        [dismissalOn(B, { learnerRole: null }), conventionOn(A)],
+        false,
+      ],
+      [
+        "an admin's convention against a member's dismissal: blocked",
+        [dismissalOn(B), conventionOn(A, { learnerRole: "admin" })],
+        false,
+      ],
+      [
+        "an owner's decision (the other opposite kind): blocked",
+        [
+          dismissalOn(B),
+          conventionOn(A, { kind: "decision", text: "Decided: retries log their failure" }),
+        ],
+        false,
+      ],
+    ];
+    for (const [name, memory, stands] of cases) {
+      const { document } = done(
+        (await analyze(CRITICAL_SCRIPT, { diff: addedFile(A, LINES), memory })).outcome,
+      );
+      expect(stood(document), name).toBe(stands);
+    }
+    // The pure rule, with and without the other entries.
+    const risk: FileRisk = { because: "critical_file", ruleFloored: false };
+    expect(suppressionStands(dismissalOn(B), A, risk)).toBe(true);
+    expect(suppressionStands(dismissalOn(B), A, risk, [dismissalOn(B), conventionOn(A)])).toBe(
+      false,
+    );
+    // The block never widens the critical path: an entry that would not stand on its own still does not.
+    expect(suppressionStands(dismissalOn(B, { learnedLevel: "important" }), A, risk, [])).toBe(
+      false,
+    );
+  });
+
+  it("S1: the block only applies to the critical path: on an ordinary file the suppression stands as before", async () => {
+    const { document } = done(
+      (
+        await analyze(script(), {
+          memory: [dismissalOn("src/jobs/other.ts"), conventionOn("src/jobs/retry.ts")],
+        })
+      ).outcome,
+    );
+    expect(document.hidden?.map((f) => f.path)).toEqual(["src/jobs/retry.ts"]);
+  });
+
+  it("S2: root-level evidence stands on its own file only; `src/a` is not `src/ab`; a rename within the directory is near, across directories not", async () => {
+    const risk: FileRisk = { because: "critical_file", ruleFloored: false };
+    // Root-level: two root files are one directory to `pathRelevance` (N3), not to the critical path.
+    expect(pathRelevance("server.js", "payments.js")).toBe(2);
+    expect(suppressionStands(dismissalOn("server.js"), "payments.js", risk)).toBe(false);
+    expect(suppressionStands(dismissalOn("payments.js"), "payments.js", risk)).toBe(true);
+    // A directory is compared whole.
+    expect(suppressionStands(dismissalOn("src/a/x.ts"), "src/ab/y.ts", risk)).toBe(false);
+    expect(suppressionStands(dismissalOn("src/ab/x.ts"), "src/ab/y.ts", risk)).toBe(true);
+    // Through the pipeline: a flat repository.
+    const flat = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: addedFile("payments.js", LINES),
+          memory: [dismissalOn("server.js")],
+        })
+      ).outcome,
+    );
+    expect(flat.document.findings.map((f) => f.restored?.shownBecause)).toEqual(["critical_file"]);
+    const same = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: addedFile("payments.js", LINES),
+          memory: [dismissalOn("payments.js")],
+        })
+      ).outcome,
+    );
+    expect(same.document.hidden?.map((f) => f.path)).toEqual(["payments.js"]);
+    // A renamed file is reviewed under its new path; the evidence path is not followed through
+    // the rename, so what counts is where the new path sits.
+    const renamed = (from: string, to: string) =>
+      [
+        `diff --git a/${from} b/${to}`,
+        "similarity index 60%",
+        `rename from ${from}`,
+        `rename to ${to}`,
+        `--- a/${from}`,
+        `+++ b/${to}`,
+        `@@ -1,3 +1,3 @@`,
+        ` ${LINES[0]}`,
+        `-export const old = () => RETRIES;`,
+        `+${LINES[1]}`,
+        ` ${LINES[2]}`,
+      ].join("\n");
+    const within = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: renamed("src/billing/old.ts", A),
+          memory: [dismissalOn("src/billing/old.ts")],
+        })
+      ).outcome,
+    );
+    expect(within.document.hidden?.map((f) => f.path)).toEqual([A]);
+    const across = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: renamed("src/old/old.ts", A),
+          memory: [dismissalOn("src/old/old.ts")],
+        })
+      ).outcome,
+    );
+    expect(across.document.hidden).toBeUndefined();
+    expect(across.document.findings.map((f) => f.restored?.shownBecause)).toEqual([
+      "critical_file",
+    ]);
+  });
+
+  it("a learner role is accepted on learned entries only; an unknown role is refused", () => {
+    expect(usableMemory([dismissalOn(B)]).entries[0]?.learnerRole).toBe("member");
+    expect(
+      usableMemory([dismissalOn(B, { learnerRole: null })]).entries[0]?.learnerRole,
+    ).toBeNull();
+    expect(usableMemory([conventionOn(A, { origin: "member" })]).dropped).toBe(1);
+    expect(usableMemory([dismissalOn(B, { learnerRole: "root" as never })]).dropped).toBe(1);
+  });
+});
+
+describe("P8-2b fix round 1: hidden list nits", () => {
+  const dismissal = () => entry(1, { text: `Dismissed as intentional: ${FINDING.title}` });
+
+  it("a standing suppression that repeats a raised finding is shown once, as the draft", async () => {
+    const { outcome } = await analyze(
+      script(() => ({
+        findings: [{ ...FINDING, memory: [] }],
+        suppressed: [{ ...SUPPRESSED, entry: "M1" }],
+      })),
+      { memory: [dismissal()] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(document.hidden).toBeUndefined();
+    // The entry was still applied (the model relied on it), so it is cited.
+    expect(document.briefing.memoryApplied.map((ref) => ref.entryId)).toEqual([dismissal().id]);
+    expect(stats.memorySuppressed).toBe(1);
+  });
+
+  it("more hidden findings than the document holds: the overflow is raised as drafts, not failed", async () => {
+    // Nine files in src/jobs, each with 25 suppressed findings under the one dismissal: 225
+    // standing suppressions against a cap of 200.
+    const files = Array.from({ length: 9 }, (_, i) => `src/jobs/f${i}.ts`);
+    const lines = Array.from({ length: 25 }, (_, i) => `export const v${i} = ${i};`);
+    const diff = files.map((path) => addedFile(path, lines)).join("\n");
+    const many: Script = (call) => {
+      if (call.role === "triage") return { value: triage("important") };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: {
+            findings: [],
+            suppressed: lines.map((_, i) => ({
+              ...SUPPRESSED,
+              title: `Finding ${i}`,
+              range: { start: i + 1, end: i + 1 },
+              entry: "M1",
+            })),
+          },
+        };
+      return { status: "refused" };
+    };
+    const { document, stats } = done(
+      (await analyze(many, { diff, memory: [dismissal()] })).outcome,
+    );
+    expect(document.hidden).toHaveLength(200);
+    expect(document.findings).toHaveLength(25);
+    expect(document.findings.every((f) => f.restored === undefined)).toBe(true);
+    expect(stats.memorySuppressed).toBe(225);
+  });
+});

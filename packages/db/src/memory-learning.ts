@@ -73,13 +73,14 @@ export const loadAnalysisMemory = async (
     reason: AnalysisMemoryEntry["reason"];
     severity: AnalysisMemoryEntry["severity"];
     learned_level: TriagedFileLevel | null;
+    learner_role: AnalysisMemoryEntry["learnerRole"];
     content: string;
     evidence_path: string;
     source_pr_number: number;
     confidence: number;
   }>(
-    `select id, kind, origin, reason, severity, learned_level, content, evidence_path,
-            source_pr_number, confidence
+    `select id, kind, origin, reason, severity, learned_level, learner_role, content,
+            evidence_path, source_pr_number, confidence
        from (select e.*, row_number() over (
                       partition by case when origin = 'member' then 'member'
                                         when kind = 'dismissal' then 'dismissal'
@@ -111,6 +112,7 @@ export const loadAnalysisMemory = async (
     reason: row.reason,
     severity: row.severity,
     learnedLevel: row.learned_level,
+    learnerRole: row.learner_role,
     text: row.content,
     path: row.evidence_path,
     source: memorySourceLabel({

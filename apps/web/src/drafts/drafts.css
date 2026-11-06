@@ -458,8 +458,9 @@
   background: var(--panel-2);
   box-shadow: none;
 }
+/* The focus ring is the reviewer's colour, as everywhere (cyan would blend with the AI border). */
 .hidden-draft:focus-visible {
-  outline: 2px solid var(--ai);
+  outline: 2px solid var(--you);
   outline-offset: 2px;
 }
 .hidden-draft .draft-actions .private-note {

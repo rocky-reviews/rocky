@@ -216,8 +216,8 @@ export const DiffBody = ({
       reveal(at.i);
     }
   });
-  // A jump from the right panel (P6-4): bring the draft card (or the comment's line) into view
-  // and focus it, once its row has been rendered.
+  // A jump from the right panel (P6-4), or a restore (P8-2b): bring the draft card (or the
+  // comment's line) into view and focus it, once its row has been rendered.
   const pendingCard = useRef<{ i: number; selector: string; tries: number } | null>(null);
   useLayoutEffect(() => {
     const pending = pendingCard.current;
@@ -225,6 +225,7 @@ export const DiffBody = ({
     const el = listRef.current?.querySelector<HTMLElement>(pending.selector);
     if (el) {
       reveal(pending.i, el);
+      liftAboveToast(el);
       el.focus({ preventScroll: true });
       pendingCard.current = null;
     } else if (pending.tries++ < 10) {
@@ -458,6 +459,29 @@ export const DiffBody = ({
       )}
     </div>
   );
+};
+
+/**
+ * Room left under a revealed card for the toast region (P8-2b, UI verifier): `reveal` scrolls
+ * the least it can, so a card below the fold lands on the viewport's bottom edge, where the
+ * toast ("Restored as a draft…") covers its last lines and its actions. A card that ends within
+ * this much of the bottom is lifted, never past its own top (a tall card keeps its head on
+ * screen at 375 px).
+ */
+const TOAST_CLEARANCE = 96;
+const liftAboveToast = (el: HTMLElement): void => {
+  let box = el.parentElement;
+  while (
+    box !== null &&
+    !(box.scrollHeight > box.clientHeight + 1 && getComputedStyle(box).overflowY !== "visible")
+  )
+    box = box.parentElement;
+  if (box === null) return;
+  const card = el.getBoundingClientRect();
+  const view = box.getBoundingClientRect();
+  const overlap = card.bottom - (view.bottom - TOAST_CLEARANCE);
+  if (overlap <= 0) return;
+  box.scrollTop += Math.min(overlap, Math.max(0, card.top - view.top - 8));
 };
 
 const lineMax = (row: DiffRow): number =>

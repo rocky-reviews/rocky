@@ -24,7 +24,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * When the pipeline records that the change map is unavailable (`facts.graphUnavailable`), any
  * `graph` the model returned is dropped: the pipeline decides, as it does for `unanalysed`.
  * Otherwise a model could turn a failed graph into a failed review by returning a graph next to
- * the reason, and a missing graph never blocks the review (gate H2, #2).
+ * the reason, and a missing graph never blocks the review (gate H2, #2). The project-memory
+ * markers are pipeline-owned too (`findings[].restored`, 1.5; `hidden`, 1.6): a model cannot
+ * mark a draft "dismissed by your team" or hide a finding, so both are dropped here (P8-2b fix
+ * round 1), and the version is stamped from what remains.
  *
  * The facts object is copied, so later mutation of the caller's facts cannot leak into the
  * document.
@@ -33,10 +36,17 @@ export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unkno
   if (!isRecord(modelOutput)) return modelOutput;
   const result: Record<string, unknown> = { ...modelOutput };
   result.provenance = structuredClone(facts);
+  delete result.hidden;
+  if (Array.isArray(result.findings))
+    result.findings = result.findings.map((finding: unknown) => {
+      if (!isRecord(finding)) return finding;
+      const copy = { ...finding };
+      delete copy.restored;
+      return copy;
+    });
   result.schemaVersion = requiredSchemaVersion({
     briefing: result.briefing,
     findings: result.findings,
-    hidden: result.hidden,
     provenance: facts,
   });
   if (facts.graphUnavailable !== undefined) delete result.graph;

@@ -628,6 +628,7 @@ describe("loadAnalysisMemory (P8-2)", () => {
         reason: "intentional",
         severity: "high",
         learnedLevel: "critical",
+        learnerRole: "admin",
         text: "Dismissed as intentional: No permission check: any logged-in user can invite to any org",
         path: "src/api/routes/invitations.ts",
         source: "dismissal · PR #847",
