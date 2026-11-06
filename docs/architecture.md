@@ -212,6 +212,14 @@ packages/schema (analysis document; shared contract)
   covered finding comes back as a draft with `restored` (schema 1.5: the dismissal, its path and
   reason, and why), which the draft card shows as a double-check line. Only the review re-runs
   when a file's memory changes; triage is reused.
+- Memory decay (ADR 0038, P8-4): the worker's `memory_decay` job (every 6 h) visits every live
+  org (`worker.live_orgs`, ids only, worker login only) and runs `decayOrgMemory` inside that
+  org's `withOrg`: superseded learned entries go 180 days after they were superseded (tail
+  first), a current learned entry nobody cited for a year goes with its learned chain and its
+  embeddings, and a current learned entry idle for 90 days loses 10 confidence points per idle
+  period (`decayed_at`). Member-written entries are never touched. The windows are rows of
+  `app.retention_settings` (`RETENTION_MEMORY_*_DAYS`, CHECK floors), `as_of` is clamped to the
+  database clock, and each org's run writes one `memory.decayed` audit row with counts.
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is
@@ -315,9 +323,10 @@ packages/schema (analysis document; shared contract)
   it refuses transaction-control, role and `app.*` statements. Detached work (timers, listeners)
   must start its own `withOrg` from outside.
 - `audit_events` is append-only (trigger). Retention periods live in `app.retention_settings`
-  (analyses 90 d, finished jobs 30 d, audit 365 d, org deletion grace 7 d; `RETENTION_*_DAYS`,
-  `ORG_DELETION_GRACE_DAYS` applied by the migrator). Purge functions delete rows strictly older
-  than `period` before the database clock and audit the purge in the same statement.
+  (analyses 90 d, finished jobs 30 d, audit 365 d, org deletion grace 7 d, memory decay 90 d /
+  unused 365 d / superseded 180 d; `RETENTION_*_DAYS`, `ORG_DELETION_GRACE_DAYS` applied by the
+  migrator). Purge functions delete rows strictly older than `period` before the database clock
+  and audit the purge in the same statement; memory decay runs per org inside `withOrg` instead.
 - Integration tests run on Testcontainers with the pgvector image pinned in
   `docker-compose.dev.yml`; the isolation suite enumerates tables, views, SECURITY DEFINER
   functions and default ACLs from `pg_catalog` (`packages/db/THREATS.md` maps each threat to its

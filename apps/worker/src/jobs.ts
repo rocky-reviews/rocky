@@ -1,5 +1,5 @@
 import type { Clock, Forge, LlmRoles, OrgErasers, OrgId } from "@rocky-reviews/core";
-import { runRetention, type Db } from "@rocky-reviews/db";
+import { runMemoryDecay, runRetention, type Db } from "@rocky-reviews/db";
 import type { LlmUsageTargets } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 import { runAnalysis } from "./analysis.js";
@@ -25,6 +25,8 @@ export interface JobIntervals {
   readonly sweepMs: number;
   /** Retention purge (default 6 h). */
   readonly retentionMs: number;
+  /** Project memory decay (P8-4; default 6 h). */
+  readonly memoryDecayMs: number;
   /** Analysis queue claims (default 2 s). */
   readonly analysisMs: number;
 }
@@ -34,6 +36,7 @@ export const DEFAULT_INTERVALS: JobIntervals = {
   analysisMs: 2_000,
   sweepMs: 15 * 60_000,
   retentionMs: 6 * 60 * 60_000,
+  memoryDecayMs: 6 * 60 * 60_000,
 };
 
 export interface JobDeps {
@@ -238,6 +241,26 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
         deleted: Object.fromEntries(report.categories.map((c) => [c.category, c.deleted])),
       },
       "retention done",
+    );
+    return false;
+  });
+
+  // Project memory decay (P8-4, ADR 0038): per org inside withOrg, no GitHub read, so it runs
+  // without the app credentials like retention. Counts and codes only.
+  every("memory_decay", intervals.memoryDecayMs, async () => {
+    const report = await runMemoryDecay(deps.db, { clock: deps.clock });
+    deps.log.info(
+      {
+        job: "memory_decay",
+        orgs: report.orgs,
+        decayed: report.decayed,
+        retired: report.retired,
+        purged: report.purged,
+        failed: report.failures.length,
+        // Distinct error codes of the failed orgs (a key with "code" in it would be redacted).
+        failures: [...new Set(report.failures.map((f) => f.errorCode))],
+      },
+      "memory decay done",
     );
     return false;
   });

@@ -256,6 +256,8 @@ export const memoryEntries = pgTable("memory_entries", {
   learnerRole: text("learner_role", { enum: ["owner", "admin", "member"] }),
   createdBy: uuid("created_by"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  /** When the decay job (P8-4, migration 0020) last lowered the confidence; null until it does. */
+  decayedAt: timestamp("decayed_at", { withTimezone: true }),
   supersededBy: uuid("superseded_by"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),

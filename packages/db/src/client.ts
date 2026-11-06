@@ -150,6 +150,12 @@ export interface Db {
   /** The configured periods (read-only for the application role). */
   retentionSettings(): Promise<RetentionConfig>;
   /**
+   * Ids of the orgs a per-org job should visit (`worker.live_orgs`, migration 0020): in id
+   * order, at most `limit` (1..`MAX_LIVE_ORGS_PAGE`) after `after`; orgs being erased or
+   * scheduled for deletion are left out. Cross-tenant, ids only; worker login only.
+   */
+  liveOrgs(after: OrgId | null, limit: number): Promise<OrgId[]>;
+  /**
    * Records one authenticated webhook delivery in the inbox (`app.webhook_deliveries`, ADR 0007).
    * Not tenant-scoped: an installation can precede its org. `queued` when this call stored it,
    * `duplicate` when the same delivery id or the same body was stored before (concurrent calls
@@ -187,6 +193,9 @@ const ownPool = (options: { connectionString: string; max?: number }): pg.Pool =
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Most org ids one `liveOrgs` page returns (the function's own cap, migration 0020). */
+export const MAX_LIVE_ORGS_PAGE = 1000;
 
 /** One tenant transaction, shared by the root `withOrg` and every nested call inside it. */
 interface Scope {
@@ -651,7 +660,22 @@ export const createDb = (options: DbOptions): Db => {
       orgDeletionGraceDays: read("orgDeletionGraceDays"),
       webhookDeliveriesDays: read("webhookDeliveriesDays"),
       llmUsageDays: read("llmUsageDays"),
+      memoryDecayDays: read("memoryDecayDays"),
+      memoryUnusedDays: read("memoryUnusedDays"),
+      memorySupersededDays: read("memorySupersededDays"),
     };
+  };
+
+  const liveOrgs = async (after: OrgId | null, limit: number): Promise<OrgId[]> => {
+    if (after !== null) requireUuid(after, "liveOrgs");
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIVE_ORGS_PAGE) {
+      throw new Error(`liveOrgs: limit must be an integer in 1..${MAX_LIVE_ORGS_PAGE}`);
+    }
+    const { rows } = await pool.query<{ org_id: string }>(
+      "select org_id from worker.live_orgs($1, $2)",
+      [after, limit],
+    );
+    return rows.map((row) => row.org_id as OrgId);
   };
 
   return {
@@ -665,6 +689,7 @@ export const createDb = (options: DbOptions): Db => {
     completeWebhookDelivery,
     failWebhookDelivery,
     retentionSettings,
+    liveOrgs,
     recordWebhookDelivery,
     purgeWebhookDeliveries,
     sessions: createSessionStore(pool),

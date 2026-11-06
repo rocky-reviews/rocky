@@ -23,6 +23,9 @@ export const DEFAULT_RETENTION: RetentionConfig = {
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
   llmUsageDays: 730,
+  memoryDecayDays: 90,
+  memoryUnusedDays: 365,
+  memorySupersededDays: 180,
 };
 
 /** Mirrors the CHECK constraint on app.retention_settings (migration 0005). */
@@ -31,6 +34,12 @@ export const AUDIT_MIN_RETENTION_DAYS = 30;
 export const WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS = 7;
 /** Mirrors the CHECK in migration 0011: usage outlives a yearly billing period plus a margin. */
 export const LLM_USAGE_MIN_RETENTION_DAYS = 400;
+/**
+ * Mirror the CHECKs in migration 0020 (P8-4): a one-day "unused" window would erase every
+ * repository's learned memory on the first run; history outlives a week of review rounds.
+ */
+export const MEMORY_UNUSED_MIN_RETENTION_DAYS = 30;
+export const MEMORY_SUPERSEDED_MIN_RETENTION_DAYS = 7;
 
 const DAY_MS = 86_400_000;
 
@@ -49,6 +58,9 @@ const ENV_KEYS: Record<keyof RetentionConfig, string> = {
   orgDeletionGraceDays: "ORG_DELETION_GRACE_DAYS",
   webhookDeliveriesDays: "RETENTION_WEBHOOK_DELIVERIES_DAYS",
   llmUsageDays: "RETENTION_LLM_USAGE_DAYS",
+  memoryDecayDays: "RETENTION_MEMORY_DECAY_DAYS",
+  memoryUnusedDays: "RETENTION_MEMORY_UNUSED_DAYS",
+  memorySupersededDays: "RETENTION_MEMORY_SUPERSEDED_DAYS",
 };
 
 const MIN_DAYS: Record<keyof RetentionConfig, number> = {
@@ -58,6 +70,9 @@ const MIN_DAYS: Record<keyof RetentionConfig, number> = {
   orgDeletionGraceDays: 1,
   webhookDeliveriesDays: WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
   llmUsageDays: LLM_USAGE_MIN_RETENTION_DAYS,
+  memoryDecayDays: 1,
+  memoryUnusedDays: MEMORY_UNUSED_MIN_RETENTION_DAYS,
+  memorySupersededDays: MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
 };
 
 const SETTING_KEYS = Object.keys(MIN_DAYS) as (keyof RetentionConfig)[];
@@ -89,6 +104,9 @@ export const retentionFromEnv = (env: Record<string, string | undefined>): Reten
     orgDeletionGraceDays: read("orgDeletionGraceDays"),
     webhookDeliveriesDays: read("webhookDeliveriesDays"),
     llmUsageDays: read("llmUsageDays"),
+    memoryDecayDays: read("memoryDecayDays"),
+    memoryUnusedDays: read("memoryUnusedDays"),
+    memorySupersededDays: read("memorySupersededDays"),
   };
 };
 

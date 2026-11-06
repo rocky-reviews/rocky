@@ -1,0 +1,483 @@
+import { randomUUID } from "node:crypto";
+import type { Clock, OrgId } from "@rocky-reviews/core";
+import pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createDb, MAX_LIVE_ORGS_PAGE, type Db } from "./client.js";
+import { beginOrgErasure, scheduleOrgDeletion } from "./installations.js";
+import {
+  decayOrgMemory,
+  MEMORY_DECAY_ACTOR,
+  MEMORY_DECAY_STEP,
+  memoryDecayCutoff,
+  runMemoryDecay,
+  type MemoryDecayWindows,
+} from "./memory-decay.js";
+import { DEFAULT_RETENTION } from "./retention.js";
+import * as schema from "./schema.js";
+import {
+  asWorker,
+  CONTAINER_TIMEOUT_MS,
+  ignoreIdleError,
+  newOrgId,
+  seedOrg,
+  startPostgres,
+  type SeededOrg,
+  type TestPostgres,
+} from "./testing/index.js";
+
+/**
+ * P8-4 (migration 0020, ADR 0038): the decay job on a real Postgres as the application and the
+ * worker roles. Time-travel like retention.test.ts: the clock is injected as `as_of` and rows are
+ * planted just inside and just outside each boundary (an entry is idle iff its idle instant is
+ * strictly older than `as_of - window`). Member-written entries are never touched; a retired
+ * learned entry goes with the learned chain behind it and its embeddings; history goes tail
+ * first; the clock cannot be pushed forward; audit rows carry counts only; the org list is the
+ * worker's. Cross-tenant checks are in isolation.test.ts.
+ */
+
+const DAY = 86_400_000;
+const SHA = "d".repeat(40);
+const INSUFFICIENT_PRIVILEGE = "42501";
+const fixedClock = (at: Date): Clock => ({ now: () => at });
+/** Real "now" minus a day, so the injected clock is always behind the database clock. */
+const NOW = new Date(Date.now() - DAY);
+const ageDays = (days: number): Date => new Date(NOW.getTime() - days * DAY);
+const WINDOWS: MemoryDecayWindows = {
+  memoryDecayDays: DEFAULT_RETENTION.memoryDecayDays,
+  memoryUnusedDays: DEFAULT_RETENTION.memoryUnusedDays,
+  memorySupersededDays: DEFAULT_RETENTION.memorySupersededDays,
+};
+
+let pgs: TestPostgres;
+let db: Db;
+let worker: Db;
+let superuser: pg.Pool;
+let appPool: pg.Pool;
+let workerPool: pg.Pool;
+let A: SeededOrg;
+let B: SeededOrg;
+
+beforeAll(async () => {
+  pgs = await startPostgres();
+  appPool = new pg.Pool({ connectionString: pgs.appUrl, max: 2 }).on("error", ignoreIdleError);
+  workerPool = new pg.Pool({ connectionString: pgs.workerUrl, max: 2 }).on(
+    "error",
+    ignoreIdleError,
+  );
+  superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 2 }).on("error", ignoreIdleError);
+  db = createDb({ pool: appPool });
+  worker = createDb({ pool: workerPool });
+  [A, B] = await asWorker(pgs.workerUrl, async (w) => [
+    await seedOrg(w, newOrgId(), { installationId: 81 }),
+    await seedOrg(w, newOrgId(), { installationId: 82 }),
+  ]);
+}, CONTAINER_TIMEOUT_MS);
+
+afterAll(async () => {
+  await worker?.close();
+  await db?.close();
+  await superuser?.end();
+  await pgs?.stop();
+});
+
+interface Planted {
+  readonly origin?: "member" | "learned";
+  readonly kind?: "convention" | "dismissal";
+  readonly confidence?: number;
+  readonly createdAt: Date;
+  readonly lastUsedAt?: Date;
+  readonly decayedAt?: Date;
+  readonly supersededBy?: string;
+  /** Defaults to `createdAt`; a supersede stamps it. */
+  readonly updatedAt?: Date;
+}
+
+/** Plants one entry as the superuser (the app cannot backdate a supersede's `updated_at`). */
+const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
+  const id = randomUUID();
+  const kind = p.kind ?? "convention";
+  await superuser.query(
+    `insert into memory_entries (id, org_id, repo_id, kind, origin, content, evidence_path,
+       evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason, created_by,
+       created_at, updated_at, last_used_at, decayed_at, superseded_by)
+     values ($1, $2, $3, $4, $5, $6, 'src/jobs/retry.ts', $7, 1, 3, 612, $8, $9, $10,
+             $11, $12, $13, $14, $15)`,
+    [
+      id,
+      org.orgId,
+      org.repoId,
+      kind,
+      p.origin ?? "learned",
+      `Planted entry ${id.slice(0, 8)}: swallow the error and move on`,
+      SHA,
+      p.confidence ?? 80,
+      kind === "dismissal" ? "intentional" : null,
+      org.memberId,
+      p.createdAt,
+      p.updatedAt ?? p.createdAt,
+      p.lastUsedAt ?? null,
+      p.decayedAt ?? null,
+      p.supersededBy ?? null,
+    ],
+  );
+  return id;
+};
+
+const plantEmbedding = async (org: SeededOrg, entryId: string): Promise<string> => {
+  const id = randomUUID();
+  await superuser.query(
+    `insert into embeddings (id, org_id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
+     values ($1, $2, $3, $4, 'memory', $5, 'test-embed', $6::vector)`,
+    [
+      id,
+      org.orgId,
+      org.repoId,
+      entryId,
+      entryId,
+      `[${Array(schema.EMBEDDING_DIMENSIONS).fill(0).join(",")}]`,
+    ],
+  );
+  return id;
+};
+
+interface Row {
+  confidence: number;
+  decayed_at: Date | null;
+  superseded_by: string | null;
+  last_used_at: Date | null;
+}
+
+const row = async (id: string): Promise<Row | null> => {
+  const { rows } = await superuser.query<Row>(
+    "select confidence, decayed_at, superseded_by, last_used_at from memory_entries where id = $1",
+    [id],
+  );
+  return rows[0] ?? null;
+};
+
+const exists = async (table: "memory_entries" | "embeddings", id: string): Promise<boolean> =>
+  ((await superuser.query(`select 1 from ${table} where id = $1`, [id])).rowCount ?? 0) === 1;
+
+const run = (org: SeededOrg, asOf: Date = NOW, windows: MemoryDecayWindows = WINDOWS) =>
+  db.withOrg(org.orgId, (tx) => decayOrgMemory(tx, { asOf, windows }));
+
+const auditRows = (org: SeededOrg) =>
+  superuser.query<{ actor_type: string; actor_id: string; target_id: string; metadata: unknown }>(
+    `select actor_type, actor_id, target_id, metadata from audit_events
+      where org_id = $1 and action = 'memory.decayed' order by id`,
+    [org.orgId],
+  );
+
+describe("memoryDecayCutoff", () => {
+  it("subtracts whole days from the injected clock", () => {
+    expect(memoryDecayCutoff(new Date("2026-11-06T12:00:00Z"), 90).toISOString()).toBe(
+      "2026-08-08T12:00:00.000Z",
+    );
+  });
+});
+
+describe("decay: a confidence step per idle period (ADR 0038 §2.1)", () => {
+  it("lowers a learned entry's confidence one step after a period without a citation, and nothing else", async () => {
+    const idle = await plant(A, { createdAt: ageDays(91) });
+    const boundary = await plant(A, { createdAt: ageDays(90) });
+    const fresh = await plant(A, { createdAt: ageDays(89) });
+    const usedLately = await plant(A, { createdAt: ageDays(400), lastUsedAt: ageDays(10) });
+    const usedLongAgo = await plant(A, { createdAt: ageDays(300), lastUsedAt: ageDays(91) });
+    const member = await plant(A, { origin: "member", createdAt: ageDays(400), confidence: 90 });
+    const history = await plant(A, { createdAt: ageDays(100), supersededBy: fresh });
+    const dismissal = await plant(A, { kind: "dismissal", createdAt: ageDays(91), confidence: 70 });
+
+    const report = await run(A);
+    expect(report).toEqual({ decayed: 3, retired: 0, purged: 0 });
+    expect(await row(idle)).toMatchObject({ confidence: 80 - MEMORY_DECAY_STEP, decayed_at: NOW });
+    expect(await row(usedLongAgo)).toMatchObject({ confidence: 70, decayed_at: NOW });
+    expect(await row(dismissal)).toMatchObject({ confidence: 60, decayed_at: NOW });
+    for (const id of [boundary, fresh, usedLately, history]) {
+      expect(await row(id), id).toMatchObject({ confidence: 80, decayed_at: null });
+    }
+    expect(await row(member)).toMatchObject({ confidence: 90, decayed_at: null });
+    // The fixture's member-written entry is untouched too.
+    expect(await row(A.memoryEntryId)).toMatchObject({ confidence: 80, decayed_at: null });
+  });
+
+  it("is idempotent at the same instant, takes one step per period since the last step, and stops at 0", async () => {
+    // The clock cannot move forward past the database clock (the clamp below), so "a period
+    // later" is planted as an earlier decay step instead.
+    const low = await plant(A, { createdAt: ageDays(91), confidence: 5 });
+    const stepped = await plant(A, {
+      createdAt: ageDays(300),
+      decayedAt: ageDays(91),
+      confidence: 70,
+    });
+    const steppedBoundary = await plant(A, {
+      createdAt: ageDays(300),
+      decayedAt: ageDays(90),
+      confidence: 70,
+    });
+    expect(await run(A)).toEqual({ decayed: 2, retired: 0, purged: 0 });
+    expect(await row(low)).toMatchObject({ confidence: 0, decayed_at: NOW });
+    expect(await row(stepped)).toMatchObject({ confidence: 60, decayed_at: NOW });
+    expect(await row(steppedBoundary)).toMatchObject({ confidence: 70, decayed_at: ageDays(90) });
+    expect(await run(A)).toEqual({ decayed: 0, retired: 0, purged: 0 });
+    expect(await row(low)).toMatchObject({ confidence: 0, decayed_at: NOW });
+  });
+
+  it("a citation after a decay step restarts the clock", async () => {
+    const cited = await plant(A, {
+      createdAt: ageDays(300),
+      decayedAt: ageDays(200),
+      lastUsedAt: ageDays(89),
+      confidence: 70,
+    });
+    const citedLongAgo = await plant(A, {
+      createdAt: ageDays(300),
+      decayedAt: ageDays(200),
+      lastUsedAt: ageDays(91),
+      confidence: 70,
+    });
+    expect(await run(A)).toEqual({ decayed: 1, retired: 0, purged: 0 });
+    expect(await row(cited)).toMatchObject({ confidence: 70, decayed_at: ageDays(200) });
+    expect(await row(citedLongAgo)).toMatchObject({ confidence: 60, decayed_at: NOW });
+  });
+});
+
+describe("retire: an uncited learned entry goes with its learned chain and embeddings (§2.2)", () => {
+  it("deletes the head, the learned entries it superseded and their embeddings; keeps a cited or boundary entry", async () => {
+    const head = await plant(B, { createdAt: ageDays(400) });
+    const middle = await plant(B, {
+      createdAt: ageDays(500),
+      supersededBy: head,
+      updatedAt: ageDays(10),
+    });
+    const tail = await plant(B, {
+      createdAt: ageDays(600),
+      supersededBy: middle,
+      updatedAt: ageDays(10),
+    });
+    const headEmbedding = await plantEmbedding(B, head);
+    const tailEmbedding = await plantEmbedding(B, tail);
+    const cited = await plant(B, { createdAt: ageDays(400), lastUsedAt: ageDays(100) });
+    const boundary = await plant(B, { createdAt: ageDays(365) });
+    const justOver = await plant(B, { createdAt: new Date(ageDays(365).getTime() - 1000) });
+
+    const report = await run(B);
+    expect(report).toMatchObject({ retired: 4, purged: 0 });
+    for (const id of [head, middle, tail, justOver]) {
+      expect(await exists("memory_entries", id), id).toBe(false);
+    }
+    expect(await exists("embeddings", headEmbedding)).toBe(false);
+    expect(await exists("embeddings", tailEmbedding)).toBe(false);
+    expect(await exists("memory_entries", cited)).toBe(true);
+    expect(await exists("memory_entries", boundary)).toBe(true);
+    expect(await exists("embeddings", B.embeddingId)).toBe(true);
+  });
+
+  it("keeps a chain whole when a member-written entry is anywhere in it, and never retires member-written entries", async () => {
+    const learnedHead = await plant(B, { createdAt: ageDays(400) });
+    const memberHistory = await plant(B, {
+      origin: "member",
+      createdAt: ageDays(500),
+      supersededBy: learnedHead,
+      updatedAt: ageDays(400),
+    });
+    const learnedTail = await plant(B, {
+      createdAt: ageDays(600),
+      supersededBy: memberHistory,
+      updatedAt: ageDays(500),
+    });
+    const memberHead = await plant(B, { origin: "member", createdAt: ageDays(1000) });
+
+    const report = await run(B);
+    expect(report.retired).toBe(0);
+    for (const id of [learnedHead, memberHistory, memberHead]) {
+      expect(await exists("memory_entries", id), id).toBe(true);
+    }
+    // The learned tail is history past the window that nothing references: the history rule
+    // (§2.3) removes it, whatever superseded it. The member-written entry it led to stays.
+    expect(report.purged).toBe(1);
+    expect(await exists("memory_entries", learnedTail)).toBe(false);
+    expect(await row(memberHistory)).toMatchObject({ superseded_by: learnedHead });
+  });
+
+  it("neither hangs on nor deletes a crafted superseded_by loop", async () => {
+    const one = await plant(B, { createdAt: ageDays(400) });
+    const two = await plant(B, {
+      createdAt: ageDays(400),
+      supersededBy: one,
+      updatedAt: ageDays(400),
+    });
+    await superuser.query("update memory_entries set superseded_by = $2 where id = $1", [one, two]);
+    const report = await run(B);
+    expect(report).toMatchObject({ retired: 0, purged: 0 });
+    expect(await exists("memory_entries", one)).toBe(true);
+    expect(await exists("memory_entries", two)).toBe(true);
+    await superuser.query("delete from memory_entries where id = any($1::uuid[])", [[one, two]]);
+  });
+});
+
+describe("history: superseded learned entries past the window, tail first (§2.3)", () => {
+  it("removes the unreferenced tail first, then the next one on a later run; keeps the boundary row", async () => {
+    const current = await plant(A, { createdAt: ageDays(10), lastUsedAt: ageDays(1) });
+    const middle = await plant(A, {
+      createdAt: ageDays(300),
+      supersededBy: current,
+      updatedAt: ageDays(200),
+    });
+    const tail = await plant(A, {
+      createdAt: ageDays(400),
+      supersededBy: middle,
+      updatedAt: ageDays(200),
+    });
+    const boundary = await plant(A, {
+      createdAt: ageDays(400),
+      supersededBy: current,
+      updatedAt: ageDays(180),
+    });
+    const first = await run(A);
+    expect(first.purged).toBe(1);
+    expect(await exists("memory_entries", tail)).toBe(false);
+    expect(await exists("memory_entries", middle)).toBe(true);
+    expect(await exists("memory_entries", boundary)).toBe(true);
+    const second = await run(A);
+    expect(second.purged).toBe(1);
+    expect(await exists("memory_entries", middle)).toBe(false);
+    expect(await row(current)).toMatchObject({ superseded_by: null, confidence: 80 });
+    expect(await run(A, new Date(NOW.getTime() + DAY))).toMatchObject({ purged: 1 });
+    expect(await exists("memory_entries", boundary)).toBe(false);
+  });
+
+  it("never removes a superseded member-written entry, however old; learned history behind it still goes", async () => {
+    const current = await plant(A, { createdAt: ageDays(10), lastUsedAt: ageDays(1) });
+    const memberHistory = await plant(A, {
+      origin: "member",
+      createdAt: ageDays(900),
+      supersededBy: current,
+      updatedAt: ageDays(800),
+    });
+    const learnedBehind = await plant(A, {
+      createdAt: ageDays(950),
+      supersededBy: memberHistory,
+      updatedAt: ageDays(900),
+    });
+    expect(await run(A)).toMatchObject({ purged: 1, retired: 0 });
+    expect(await exists("memory_entries", learnedBehind)).toBe(false);
+    expect(await row(memberHistory)).toMatchObject({ superseded_by: current });
+    expect(await run(A)).toMatchObject({ purged: 0, retired: 0 });
+    expect(await exists("memory_entries", memberHistory)).toBe(true);
+  });
+});
+
+describe("the clock, the windows and the audit trail", () => {
+  it("cannot be pushed forward: a clock in the future is clamped to the database clock", async () => {
+    const fresh = await plant(A, { createdAt: NOW });
+    const old = await plant(A, { createdAt: ageDays(400) });
+    const report = await run(A, new Date(Date.now() + 1000 * DAY));
+    expect(report.retired).toBeGreaterThanOrEqual(1);
+    expect(await exists("memory_entries", fresh)).toBe(true);
+    expect(await row(fresh)).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(await exists("memory_entries", old)).toBe(false);
+  });
+
+  it("refuses invalid windows and an invalid clock before any SQL", async () => {
+    for (const windows of [
+      { ...WINDOWS, memoryDecayDays: 0 },
+      { ...WINDOWS, memoryUnusedDays: 1.5 },
+      { ...WINDOWS, memorySupersededDays: Number.NaN },
+    ]) {
+      await expect(run(A, NOW, windows)).rejects.toThrow(/must be an integer of at least 1/);
+    }
+    await expect(run(A, new Date("garbage"))).rejects.toThrow(/asOf must be a valid Date/);
+  });
+
+  it("audits counts only, once per run that changed something, and nothing on an idle run", async () => {
+    const before = (await auditRows(B)).rows.length;
+    const id = await plant(B, { createdAt: ageDays(91) });
+    const report = await run(B);
+    expect(report.decayed).toBeGreaterThanOrEqual(1);
+    const { rows } = await auditRows(B);
+    expect(rows).toHaveLength(before + 1);
+    const last = rows.at(-1);
+    expect(last).toMatchObject({
+      actor_type: "system",
+      actor_id: MEMORY_DECAY_ACTOR,
+      target_id: "memory_entries",
+      metadata: { ...report, asOf: NOW.toISOString() },
+    });
+    expect(JSON.stringify(last?.metadata)).not.toContain("Planted");
+    expect(JSON.stringify(last?.metadata)).not.toContain(id);
+    await run(B);
+    expect((await auditRows(B)).rows).toHaveLength(before + 1);
+  });
+});
+
+describe("liveOrgs (worker.live_orgs, migration 0020)", () => {
+  it("is the worker's alone: the application login is refused", async () => {
+    await expect(db.liveOrgs(null, 10)).rejects.toMatchObject({ code: INSUFFICIENT_PRIVILEGE });
+    const direct = await appPool
+      .query("select org_id from worker.live_orgs(null, 10)")
+      .catch((error: unknown) => error as pg.DatabaseError);
+    expect(direct).toMatchObject({ code: INSUFFICIENT_PRIVILEGE });
+  });
+
+  it("lists live org ids only, in id order, paged by `after`, leaving out scheduled and erasing orgs", async () => {
+    const [scheduled, erasing] = await asWorker(pgs.workerUrl, async (w) => [
+      await seedOrg(w, newOrgId(), { installationId: 83 }),
+      await seedOrg(w, newOrgId(), { installationId: 84 }),
+    ]);
+    await worker.withOrg(scheduled.orgId, (tx) => scheduleOrgDeletion(tx, 83));
+    await worker.withOrg(erasing.orgId, (tx) => scheduleOrgDeletion(tx, 84));
+    await superuser.query("alter table orgs disable trigger user");
+    try {
+      await superuser.query(
+        "update orgs set delete_after = now() - interval '1 second' where id = $1",
+        [erasing.orgId],
+      );
+    } finally {
+      await superuser.query("alter table orgs enable trigger user");
+    }
+    expect(await worker.withOrg(erasing.orgId, (tx) => beginOrgErasure(tx))).toBe("started");
+
+    const all = await worker.liveOrgs(null, MAX_LIVE_ORGS_PAGE);
+    expect(all).toEqual([...all].sort());
+    expect(all).toContain(A.orgId);
+    expect(all).toContain(B.orgId);
+    expect(all).not.toContain(scheduled.orgId);
+    expect(all).not.toContain(erasing.orgId);
+    const first = await worker.liveOrgs(null, 1);
+    expect(first).toEqual([all[0]]);
+    const rest = await worker.liveOrgs(first[0] as OrgId, MAX_LIVE_ORGS_PAGE);
+    expect(rest).toEqual(all.slice(1));
+    // Ids only: the function has one column.
+    const shape = await workerPool.query("select * from worker.live_orgs(null, 1)");
+    expect(shape.fields.map((f) => f.name)).toEqual(["org_id"]);
+  });
+
+  it("refuses a limit outside 1..MAX_LIVE_ORGS_PAGE and a malformed cursor before any SQL", async () => {
+    await expect(worker.liveOrgs(null, 0)).rejects.toThrow(/limit/);
+    await expect(worker.liveOrgs(null, MAX_LIVE_ORGS_PAGE + 1)).rejects.toThrow(/limit/);
+    await expect(worker.liveOrgs("not-a-uuid" as OrgId, 1)).rejects.toThrow(/uuid/);
+  });
+});
+
+describe("runMemoryDecay", () => {
+  it("visits every live org as the worker, each in its own tenant transaction, with the settings' windows", async () => {
+    const a = await plant(A, { createdAt: ageDays(400) });
+    const b = await plant(B, { createdAt: ageDays(91) });
+    const report = await runMemoryDecay(worker, { clock: fixedClock(NOW) });
+    expect(report.ranAt).toEqual(NOW);
+    expect(report.orgs).toBeGreaterThanOrEqual(2);
+    expect(report.failures).toEqual([]);
+    expect(report.retired).toBeGreaterThanOrEqual(1);
+    expect(report.decayed).toBeGreaterThanOrEqual(1);
+    expect(await exists("memory_entries", a)).toBe(false);
+    expect(await row(b)).toMatchObject({ confidence: 70, decayed_at: NOW });
+  });
+
+  it("fails closed as the application login: no org list, nothing touched", async () => {
+    const id = await plant(A, { createdAt: ageDays(400) });
+    await expect(runMemoryDecay(db, { clock: fixedClock(NOW) })).rejects.toMatchObject({
+      code: INSUFFICIENT_PRIVILEGE,
+    });
+    expect(await exists("memory_entries", id)).toBe(true);
+  });
+});
