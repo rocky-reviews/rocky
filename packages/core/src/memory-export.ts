@@ -4,7 +4,7 @@ import { isDismissReason, type DismissReason } from "./drafts.js";
 import { MEMORY_KINDS, type MemoryEvidence, type MemoryKind, type MemoryOrigin } from "./memory.js";
 
 /**
- * The export of a repository's project memory to `.rocky/context.md` (P8-3, ADR 0038): a
+ * The export of a repository's project memory to `.rocky/context.md` (P8-3, ADR 0039): a
  * markdown file the person downloads and commits themselves. Rocky never writes it to a disk or
  * to the repository.
  *

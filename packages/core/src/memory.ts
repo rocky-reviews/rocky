@@ -78,7 +78,7 @@ export interface MemoryEntry {
   readonly lastUsedAt: Date | null;
   /** The entry that replaced this one, or `null` while it is current. */
   readonly supersededBy: string | null;
-  /** When an admin switched the entry off (P8-3, ADR 0038); `null` while it applies. */
+  /** When an admin switched the entry off (P8-3, ADR 0039); `null` while it applies. */
   readonly disabledAt: Date | null;
 }
 

@@ -185,7 +185,7 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   // H4-3: the PR's diff, same names and checks (the reader is a stub here: no GitHub).
   "GET /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
   "HEAD /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
-  // P8-3 (ADR 0038): a repository's memory and its export, read by every member who reviews it
+  // P8-3 (ADR 0039): a repository's memory and its export, read by every member who reviews it
   // (the P3-6 check runs inside; from org B the same names find nothing). Changing it needs
   // memory.edit (admins and owners); an entry id nobody has is not found for them.
   "GET /api/repos/:owner/:repo/memory": review("GET", true),

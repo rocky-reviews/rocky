@@ -18,7 +18,7 @@ import {
 } from "./memory.js";
 
 /**
- * The memory page's wire format (P8-3, ADR 0038): the server's answer for one repository's
+ * The memory page's wire format (P8-3, ADR 0039): the server's answer for one repository's
  * entries, validated by the web app before anything is shown, and the edit request the server
  * reads. Entry text is untrusted (it comes from pull requests): the page renders it as text.
  */

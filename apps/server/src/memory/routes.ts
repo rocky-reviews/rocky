@@ -28,7 +28,7 @@ import { requires } from "../auth/policy.js";
 import type { ActiveMember } from "../auth/routes.js";
 
 /**
- * The project memory page's API (P8-3, ADR 0038), per repository, by its GitHub name:
+ * The project memory page's API (P8-3, ADR 0039), per repository, by its GitHub name:
  *
  *   GET    /api/repos/:owner/:repo/memory                          pull_requests.review
  *   GET    /api/repos/:owner/:repo/memory/export                   pull_requests.review

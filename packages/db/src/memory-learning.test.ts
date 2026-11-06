@@ -544,7 +544,7 @@ describe("loadAnalysisMemory bounds (fix round, M2/S5)", () => {
   });
 });
 
-describe("switching memory off (P8-3, ADR 0038)", () => {
+describe("switching memory off (P8-3, ADR 0039)", () => {
   const switchEntry = (entryId: string, disabled: boolean) =>
     db.withOrg(A.orgId, (tx) =>
       setMemoryEntryDisabled(tx, { actorMemberId: A.memberId, entryId, disabled }),

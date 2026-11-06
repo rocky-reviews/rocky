@@ -4,6 +4,7 @@ import { seriousViolations } from "./axe.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 import { openFile } from "./diff-support.js";
 import { openInbox } from "./inbox-support.js";
+import { entryItem, openMemory } from "./memory-support.js";
 import { mockPullApi, openRealPr, serverDiffData, serverShellData } from "./real-pr-support.js";
 import { MODES, openShell, WIDTHS } from "./support.js";
 
@@ -140,6 +141,27 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
     await page.keyboard.press("Escape");
     await page.getByRole("searchbox", { name: "Search" }).fill("nothing matches this");
     await check(page, found, "inbox, nothing matches");
+  },
+
+  // P8-3: a repository's project memory, as an admin and as a member.
+  "memory: list, earlier versions, edit, delete dialog, memory off, member": async (
+    page,
+    found,
+  ) => {
+    await openMemory(page);
+    await check(page, found, "memory");
+    await page.getByRole("checkbox", { name: /Show earlier versions/ }).check();
+    await check(page, found, "memory, earlier versions");
+    await entryItem(page, 1).getByRole("button", { name: "Edit" }).click();
+    await check(page, found, "memory, editing");
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await entryItem(page, 2).getByRole("button", { name: "Delete…" }).click();
+    await check(page, found, "memory, delete dialog");
+    await page.keyboard.press("Escape");
+    await page.getByRole("switch", { name: /Use project memory/ }).uncheck();
+    await check(page, found, "memory, switched off");
+    await openMemory(page, { as: "member" });
+    await check(page, found, "memory, member");
   },
 
   // H4-2: a real PR address, read from the server, and every state before it can be shown.

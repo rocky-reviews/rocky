@@ -14,7 +14,7 @@ import {
 import { MEMORY_CANARY, PROMPT_CANARY } from "./prompt.js";
 
 /**
- * P8-3 acceptance criterion "export round-trips" (ADR 0038 §3): the `context.md` Rocky exports
+ * P8-3 acceptance criterion "export round-trips" (ADR 0039 §3): the `context.md` Rocky exports
  * reads back to the same entries (kind, origin, text, reason, covered severity, evidence,
  * confidence, switched off), including text that looks like markdown, HTML or the file's own
  * structure; entry text can never become a heading, a link, HTML or another list item; no

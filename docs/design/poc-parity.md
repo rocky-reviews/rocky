@@ -143,6 +143,21 @@ The POC has no inbox; it follows the POC's top bar, cards, pills, dots and modal
 - [x] Outcome: approved, partly failed, refused (changed since you looked), unavailable; afterwards the approved PRs leave the group, a status line says so and focus stays on the group — [inbox-approved-1440-light](../../apps/web/e2e/__screenshots__/inbox-approved-1440-light.png), [inbox-approved-375-dark](../../apps/web/e2e/__screenshots__/inbox-approved-375-dark.png), [inbox-refused-1440-light](../../apps/web/e2e/__screenshots__/inbox-refused-1440-light.png), [inbox-refused-375-dark](../../apps/web/e2e/__screenshots__/inbox-refused-375-dark.png), [inbox-after-approval-1440-light](../../apps/web/e2e/__screenshots__/inbox-after-approval-1440-light.png), [inbox-after-approval-375-dark](../../apps/web/e2e/__screenshots__/inbox-after-approval-375-dark.png); `inbox.e2e.spec.ts`
 - [x] Keyboard path (filters → select → confirm → Close, focus kept) and axe 0 serious at 375/1024/1440 × light/dark in every state (selected, dialog, outcome, after closing, filtered empty); selection checkboxes in indigo with a 3:1 border; no horizontal scroll at 375 px — `inbox.e2e.spec.ts` "keyboard", "axe and layout"
 
+## Project memory (P8-3, not in the POC)
+
+The POC has no memory page (only "manage this in Project memory" in its finish modal); it
+follows the inbox's frame and the POC's cards, pills, memory mark (◆), AI mark (✦) and modal.
+
+- [x] Entries of one repository with kind, dismissal reason and what it covers, origin (✦ learned / written by a member), evidence (path, lines, short sha), source PR link, confidence, last used, who taught it ("former member") — [memory-1440-light](../../apps/web/e2e/__screenshots__/memory-1440-light.png), [memory-1440-dark](../../apps/web/e2e/__screenshots__/memory-1440-dark.png), [memory-375-light](../../apps/web/e2e/__screenshots__/memory-375-light.png)
+- [x] Switched-off and earlier-version states; filter by kind, "Show earlier versions" — [memory-history-1024-light](../../apps/web/e2e/__screenshots__/memory-history-1024-light.png), [memory-history-375-dark](../../apps/web/e2e/__screenshots__/memory-history-375-dark.png)
+- [x] Edit inline (kind, reason, text; Escape cancels) — [memory-edit-1440-light](../../apps/web/e2e/__screenshots__/memory-edit-1440-light.png), [memory-edit-375-dark](../../apps/web/e2e/__screenshots__/memory-edit-375-dark.png); `memory.e2e.spec.ts` "keyboard"
+- [x] Delete asks first (POC modal; Cancel focused, says how many earlier versions go with it) — [memory-delete-1024-light](../../apps/web/e2e/__screenshots__/memory-delete-1024-light.png), [memory-delete-375-dark](../../apps/web/e2e/__screenshots__/memory-delete-375-dark.png)
+- [x] Memory on/off for the repository, with the "Memory is off" banner — [memory-off-1440-dark](../../apps/web/e2e/__screenshots__/memory-off-1440-dark.png), [memory-off-375-light](../../apps/web/e2e/__screenshots__/memory-off-375-light.png)
+- [x] A member's view: no controls — [memory-member-1440-light](../../apps/web/e2e/__screenshots__/memory-member-1440-light.png), [memory-member-375-dark](../../apps/web/e2e/__screenshots__/memory-member-375-dark.png)
+- [x] Empty repository — [memory-empty-1024-dark](../../apps/web/e2e/__screenshots__/memory-empty-1024-dark.png)
+- [x] Export `context.md` (a download from the server) — `memory.e2e.spec.ts` "the export is a context.md download from the server"
+- [ ] A link to the page from the briefing's "Project memory applied" (follow-up, see `docs/progress.md` P8-3)
+
 ## Known POC defects (do NOT copy)
 
 Found while capturing the P0-8 screenshots.

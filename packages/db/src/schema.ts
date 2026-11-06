@@ -85,7 +85,7 @@ export const repos = pgTable("repos", {
   defaultBranch: text("default_branch").notNull().default("main"),
   private: boolean("private").notNull().default(true),
   enabled: boolean("enabled").notNull().default(true),
-  /** Whether reviews of the repository use project memory (P8-3, migration 0019). */
+  /** Whether reviews of the repository use project memory (P8-3, migration 0020). */
   memoryEnabled: boolean("memory_enabled").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -261,7 +261,7 @@ export const memoryEntries = pgTable("memory_entries", {
   /** When the decay job (P8-4, migration 0019) last lowered the confidence; null until it does. */
   decayedAt: timestamp("decayed_at", { withTimezone: true }),
   supersededBy: uuid("superseded_by"),
-  /** When an admin switched the entry off (P8-3, migration 0019); null while it applies. */
+  /** When an admin switched the entry off (P8-3, migration 0020); null while it applies. */
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),

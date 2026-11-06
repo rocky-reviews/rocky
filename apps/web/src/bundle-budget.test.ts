@@ -90,7 +90,7 @@ describe("the production build", () => {
     );
     expect(totalGz, "initial JavaScript, bytes gzipped").toBeLessThanOrEqual(INITIAL_JS_BUDGET_GZ);
     // H4-2 (review S2): no fixture ships to production, in any file of the build: pr-847's
-    // title and briefing, its diff, the 5,000-line diff and the inbox fixture.
+    // title and briefing, its diff, the 5,000-line diff, the inbox and memory fixtures.
     const built = readdirSync(join(outDir, "assets")).map((file) =>
       readFileSync(join(outDir, "assets", file), "utf8"),
     );
@@ -100,6 +100,8 @@ describe("the production build", () => {
       "Retry failed webhook deliveries with backoff",
       "ledger-rules",
       "feat/team-invites",
+      // P8-3: the memory page's fixture.
+      "Swallowed error in the nightly billing retry loop",
     ]) {
       expect(
         built.some((text) => text.includes(marker)),

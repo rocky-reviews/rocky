@@ -398,7 +398,7 @@ export const touchMemoryEntries = async (
   return rowCount ?? 0;
 };
 
-// ---------- P8-3: the memory page (ADR 0038) ----------
+// ---------- P8-3: the memory page (ADR 0039) ----------
 
 /** A repository of this org as the memory page names it (`owner/name`). */
 export interface MemoryRepository {

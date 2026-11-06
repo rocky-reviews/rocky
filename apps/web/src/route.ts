@@ -5,6 +5,8 @@
  *
  *   /:owner/:repo/pull/:number    a pull request, from the server (GitHub's address shape)
  *   /inbox                        the inbox, from the server; `?source=fixture` for the fixture
+ *   /:owner/:repo/memory          a repository's project memory (P8-3), from the server;
+ *                                 `?source=fixture` (`&as=member` for a member's view)
  *   /?fixture=pr-847              the pr-847 fixture; also `?fixture=large-diff`, `?pr=<n>`
  *                                 (`&repo=<owner>/<name>`) and `?diff=newer-push` (P6-2…P6-5)
  *   /                             without a switch (or in production): the inbox
@@ -15,12 +17,25 @@
  * cannot name a pull request is "not found".
  */
 import type { PullRef } from "./data/shell-data.js";
-import { pullRefFromPath } from "./lib/review-path.js";
+import { memoryRefFromPath, pullRefFromPath, type MemoryRef } from "./lib/review-path.js";
 
-export { pullRefFromPath, reviewPagePath } from "./lib/review-path.js";
+export {
+  memoryPagePath,
+  memoryRefFromPath,
+  pullRefFromPath,
+  reviewPagePath,
+} from "./lib/review-path.js";
 
 export type Page =
   | { readonly kind: "inbox"; readonly source: "server" | "fixture" }
+  | { readonly kind: "memory"; readonly source: "server"; readonly repo: MemoryRef }
+  /** The fixture memory (development and tests); `canEdit: false` is a member's view. */
+  | {
+      readonly kind: "memory";
+      readonly source: "fixture";
+      readonly repo: MemoryRef;
+      readonly canEdit: boolean;
+    }
   | { readonly kind: "pull"; readonly source: "server"; readonly ref: PullRef }
   /** A fixture PR page; `search` says which (`fixturePullFromSearch`). */
   | { readonly kind: "pull"; readonly source: "fixture"; readonly search: string }
@@ -47,6 +62,11 @@ export const pageFor = (
     if (!fixture || !FIXTURE_PARAMS.some((name) => params.has(name))) return { kind: "home" };
     return { kind: "pull", source: "fixture", search };
   }
+  const memory = memoryRefFromPath(pathname);
+  if (memory !== null)
+    return fixture && params.get("source") === "fixture"
+      ? { kind: "memory", source: "fixture", repo: memory, canEdit: params.get("as") !== "member" }
+      : { kind: "memory", source: "server", repo: memory };
   const ref = pullRefFromPath(pathname);
   return ref === null ? { kind: "not_found" } : { kind: "pull", source: "server", ref };
 };

@@ -31,7 +31,7 @@ import { CSRF_HEADER, csrfTokenFor, randomToken, sha256 } from "../auth/cookies.
 import { MEMORY_EXPORT_DISPOSITION } from "./routes.js";
 
 /**
- * P8-3 (ADR 0038): the memory page's API on a real Postgres, as the browser calls it (session
+ * P8-3 (ADR 0039): the memory page's API on a real Postgres, as the browser calls it (session
  * cookie, CSRF token on changes). Members read and export; admins edit, delete and switch; the
  * P3-6 check, RLS and "an entry of another repository is not found"; the export is a download
  * that round-trips; logs carry no entry text, path or login. Who may call each route (the

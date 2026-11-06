@@ -54,7 +54,7 @@ export const ANALYSIS_MEMORY_BOUNDS = {
  * The repository's current entries as the pipeline takes them (`AnalysisRequest.memory`): each
  * group of `ANALYSIS_MEMORY_BOUNDS`, newest first. The pipeline re-checks each one before use.
  * Entries an admin switched off, and every entry of a repository whose memory is switched off,
- * are never offered (P8-3, ADR 0038).
+ * are never offered (P8-3, ADR 0039).
  */
 export const loadAnalysisMemory = async (
   tx: TenantTx,

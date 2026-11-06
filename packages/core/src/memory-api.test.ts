@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryListResponse, parseMemoryEdit, parseMemorySwitch } from "./memory-api.js";
 
-/** P8-3 (ADR 0038 §2): the memory page's wire format and the requests the server reads. */
+/** P8-3 (ADR 0039 §2): the memory page's wire format and the requests the server reads. */
 
 const SHA = "c".repeat(40);
 const view = (patch: Record<string, unknown> = {}) => ({

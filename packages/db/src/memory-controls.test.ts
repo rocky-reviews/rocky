@@ -27,7 +27,7 @@ import {
 } from "./testing/index.js";
 
 /**
- * P8-3 (migration 0019, ADR 0038): what the memory page changes, on a real Postgres as the
+ * P8-3 (migration 0020, ADR 0039): what the memory page changes, on a real Postgres as the
  * application role. Edit keeps history (a new member-written entry supersedes the old one, and
  * the scrubber runs again); delete removes the entry with its older versions, so nothing comes
  * back; switching an entry or a repository off; `memory.edit` is re-checked in the transaction;

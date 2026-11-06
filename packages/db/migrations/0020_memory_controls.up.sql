@@ -1,4 +1,4 @@
--- 0019 switching project memory off, per entry and per repository (P8-3, ADR 0038).
+-- 0020 switching project memory off, per entry and per repository (P8-3, ADR 0039).
 --
 -- memory_entries.disabled_at: when an admin switched the entry off. A disabled entry is kept
 -- (and shown on the memory page) but never offered to a review (`loadAnalysisMemory`), and

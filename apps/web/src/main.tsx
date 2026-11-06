@@ -9,6 +9,7 @@ import "./drafts/drafts.css";
 import "./keyboard/keyboard.css";
 import "./finish/finish.css";
 import "./change-tree/change-tree.css";
+import "./memory/memory.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -21,6 +22,9 @@ import { createHttpShellSource } from "./data/shell-http-source.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
 import { createHttpInboxSource, type InboxSource } from "./inbox/inbox-source.js";
 import { InboxPage } from "./inbox/InboxPage.js";
+import type { MemoryRef } from "./lib/review-path.js";
+import { createHttpMemorySource, type MemorySource } from "./memory/memory-source.js";
+import { MemoryPage } from "./memory/MemoryPage.js";
 import { pageFor } from "./route.js";
 
 const root = document.querySelector("#app");
@@ -39,6 +43,13 @@ const renderInbox = (element: Element, source: InboxSource) =>
   createRoot(element).render(
     <StrictMode>
       <InboxPage source={source} />
+    </StrictMode>,
+  );
+
+const renderMemory = (element: Element, repo: MemoryRef, source: MemorySource) =>
+  createRoot(element).render(
+    <StrictMode>
+      <MemoryPage source={source} repo={repo} returnTo={window.location.pathname} />
     </StrictMode>,
   );
 
@@ -84,6 +95,15 @@ if (page.kind === "home") {
   );
 } else if (page.kind === "inbox") {
   renderInbox(root, createHttpInboxSource());
+} else if (FIXTURES_ENABLED && page.kind === "memory" && page.source === "fixture") {
+  // P8-3: the memory fixture (development and tests only).
+  const { canEdit, repo } = page;
+  void import("./memory/memory-source.js").then(({ createFixtureMemorySource }) =>
+    renderMemory(root, repo, createFixtureMemorySource({ canEdit })),
+  );
+} else if (page.kind === "memory") {
+  // P8-3: a repository's project memory, from the server.
+  renderMemory(root, page.repo, createHttpMemorySource());
 } else if (FIXTURES_ENABLED && page.kind === "pull" && page.source === "fixture") {
   // The fixture PRs (development and tests only): pr-847 (P6-1), the briefing's states
   // (`?pr=`, P6-2), the 5,000-line diff (`?fixture=large-diff`, P6-3) and a later push
