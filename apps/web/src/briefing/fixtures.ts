@@ -58,8 +58,10 @@ const briefingUnavailable = variant(BRIEFING_FIXTURE_PULLS.briefingUnavailable, 
   });
   doc.briefing.checkedOk = [];
   doc.briefing.memoryApplied = [];
-  // Memory a finding cites must be in the briefing's list, so the fallback cites none.
+  // Memory a finding cites must be in the briefing's list, so the fallback cites none; nor can
+  // a hidden finding cite the dismissal that hid it (P8-2b), so the fallback hides none.
   for (const finding of doc.findings) finding.memory = [];
+  delete (doc as { hidden?: unknown }).hidden;
   Object.assign(doc.provenance, { briefingUnavailable: { reason: "analysis-failed" } });
 });
 
@@ -70,6 +72,8 @@ const graphUnavailable = variant(BRIEFING_FIXTURE_PULLS.graphUnavailable, (doc) 
   const quiet = "src/jobs/sendInviteEmail.ts";
   doc.triage.files = doc.triage.files.filter((f) => f.path !== unanalysed);
   doc.findings = doc.findings.filter((f) => f.path !== quiet);
+  // The quiet file is read by hand: nothing of it is listed, hidden findings included (P8-2b).
+  doc.hidden = doc.hidden?.filter((h) => h.path !== quiet);
   Object.assign(doc.provenance, {
     graphUnavailable: { reason: "too-large" },
     unanalysed: [{ path: unanalysed, reason: "timeout" }],

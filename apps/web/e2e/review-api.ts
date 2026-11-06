@@ -6,6 +6,7 @@ import {
   DRAFT,
   type DraftDecision,
   parseDraftAction,
+  restoredAsDraft,
 } from "../../../packages/core/src/drafts.js";
 import {
   canonicalReviewPlan,
@@ -120,6 +121,10 @@ export type ReviewApi = {
 };
 
 const findings = new Map(pr847.findings.map((f) => [f.id, f]));
+/** P8-2b: the findings memory hid, decidable once restored (as the server does it). */
+const hidden = new Map(
+  pr847.hidden.map((h) => [h.id, restoredAsDraft(h as Parameters<typeof restoredAsDraft>[0])]),
+);
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 const uuid = (n: number, group: string) =>
@@ -373,7 +378,10 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
       return json(route, 200, {
         analysisId,
         drafts: [...draftsOf(analysisId)]
-          .filter(([, s]) => s.decision.state !== "draft" || s.copiedAt !== null)
+          // P8-2b: a restored hidden finding is listed even undecided (its row exists).
+          .filter(
+            ([id, s]) => s.decision.state !== "draft" || s.copiedAt !== null || hidden.has(id),
+          )
           .map(([id, s]) => wire(id, s, posted(id))),
         comments: commentsOf(analysisId).map((c) => ({
           ...c,
@@ -389,12 +397,19 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
     }
     const body = request.postDataJSON() as Record<string, unknown> | null;
     if (method === "POST" && kind === "drafts" && item !== undefined) {
-      const finding = findings.get(decodeURIComponent(item));
+      const id = decodeURIComponent(item);
+      const finding = findings.get(id) ?? hidden.get(id);
       if (finding === undefined) return json(route, 404, { error: "not_found" });
       const action = parseDraftAction(body);
       if (action === null) return json(route, 400, { error: "invalid_action" });
       const store = draftsOf(analysisId);
+      if (hidden.has(id) && action.kind !== "restore" && !store.has(id))
+        return json(route, 404, { error: "not_found" });
       const current = store.get(finding.id) ?? { decision: DRAFT, copiedAt: null };
+      if (hidden.has(id) && action.kind === "restore") {
+        store.set(finding.id, current);
+        return json(route, 200, { draft: wire(finding.id, current, null) });
+      }
       if (posted(finding.id) !== null)
         return json(route, 409, {
           error: "already_posted",

@@ -117,3 +117,36 @@ export type Finding = z.infer<typeof Finding>;
 export type FindingInput = z.input<typeof Finding>;
 
 export const Findings = z.array(Finding).max(MAX_FINDINGS);
+
+/**
+ * Schema 1.6 (P8-2b, ADR 0037 §7): why a finding is hidden rather than drafted. A dismissal
+ * entry covered it and the suppression stood (the pipeline's rules, never the model's word), so
+ * Rocky kept it out of the drafts but not out of sight: the page lists it under "hidden by
+ * memory" and the reviewer can restore it as a draft. Written by the pipeline only, from the
+ * stored entry. `entry` is also in `briefing.memoryApplied` (it was applied).
+ */
+export const HiddenByDismissal = z
+  .strictObject({
+    entry: MemoryRef.describe(
+      "The dismissal entry that covers this finding, quoted from the stored entry.",
+    ),
+    path: RepositoryPath.describe(
+      "Where the team took that dismissal (the entry's evidence path).",
+    ),
+    dismissedAs: z.enum(DISMISSAL_REASONS).describe("The dismissal's reason."),
+  })
+  .describe("Set by the pipeline on a finding a dismissal entry kept out of the drafts.");
+export type HiddenByDismissal = z.infer<typeof HiddenByDismissal>;
+
+/**
+ * A finding a dismissal entry kept out of the drafts (schema 1.6). The same shape as a draft
+ * minus what only a draft carries (a suggestion, memory backing, the double-check marker), plus
+ * `hiddenBy`. Ids are their own collection (`H1`, `H2`, …): a hidden finding is not a draft
+ * until the reviewer restores it.
+ */
+export const HiddenFinding = Finding.omit({ suggestion: true, memory: true, restored: true })
+  .extend({ hiddenBy: HiddenByDismissal })
+  .describe("A finding project memory hid; shown collapsed, restorable as a draft.");
+export type HiddenFinding = z.infer<typeof HiddenFinding>;
+
+export const HiddenFindings = z.array(HiddenFinding).max(MAX_FINDINGS);

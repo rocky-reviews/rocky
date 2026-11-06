@@ -4,8 +4,12 @@
  * first, by severity, then the other files' by severity; i/u walk them in this order), then the
  * decided ones, the note about dismissals, and the reviewer's own comments. Every item jumps to
  * its draft (or line) in the diff. Ask (P9-2) gets its own tab later.
+ *
+ * P8-2b: findings project memory hid are listed under "Hidden by memory", collapsed, each item
+ * opening its file on the hidden list; they are not drafts and count in no tally.
  */
-import type { Finding, Severity } from "@rocky-reviews/schema";
+import type { Finding, HiddenFinding, Severity } from "@rocky-reviews/schema";
+import { useState } from "react";
 import type { OwnComment } from "../diff/diff-model.js";
 import { SEVERITY_LABEL } from "./DraftCard.js";
 import { useReview } from "./ReviewProvider.js";
@@ -23,7 +27,9 @@ export const shorten = (text: string, max: number): string => {
 };
 
 /** Undecided first is the caller's job; this orders by severity, then document order. */
-export const bySeverity = (findings: readonly Finding[]): Finding[] =>
+export const bySeverity = <T extends { readonly severity: Severity }>(
+  findings: readonly T[],
+): T[] =>
   findings
     .map((finding, i) => ({ finding, i }))
     .sort(
@@ -72,13 +78,16 @@ export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) 
     status,
     stale,
     findings,
+    hidden,
     state,
     decisionOf,
     postedOf,
     focused,
     jumpToFinding,
     jumpToComment,
+    jumpToHidden,
   } = useReview();
+  const [showHidden, setShowHidden] = useState(false);
   const sorted = panelOrder(findings, current, files);
   // A draft whose content was already posted (from a re-run of this commit) is decided for
   // every purpose here: nothing can be done with it (P6-6).
@@ -135,6 +144,29 @@ export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) 
       </li>
     );
   };
+
+  const hiddenItem = (h: HiddenFinding) => (
+    <li key={h.id}>
+      <button
+        type="button"
+        className="f-item st-hidden"
+        disabled={stale}
+        onClick={() => jumpToHidden(h.id)}
+      >
+        <span className={`dot ${h.severity}`} aria-hidden="true" />
+        <span className="f-text">
+          <span className="t">
+            <bdi>{h.title}</bdi>
+          </span>
+          <span className="loc">
+            <bdi>{baseName(h.path)}</bdi>:{h.range.end}
+          </span>
+        </span>
+        <span className="st-badge is-hidden">hidden</span>
+        <span className="sr-only">, {SEVERITY_LABEL[h.severity]} severity</span>
+      </button>
+    </li>
+  );
 
   const comment = (c: OwnComment) => (
     <li key={c.id}>
@@ -245,6 +277,31 @@ export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) 
                   Decided
                 </h3>
                 <ul className="f-list">{decided.map(item)}</ul>
+              </section>
+            )}
+            {hidden.length > 0 && (
+              <section aria-labelledby="hidden-by-memory" className="hidden-section">
+                <h3 className="sub-h" id="hidden-by-memory">
+                  Hidden by memory
+                </h3>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost hidden-toggle"
+                  aria-expanded={showHidden}
+                  aria-controls="hidden-by-memory-list"
+                  onClick={() => setShowHidden((v) => !v)}
+                >
+                  <span className="mark" aria-hidden="true">
+                    ◆
+                  </span>{" "}
+                  {hidden.length} {hidden.length === 1 ? "finding" : "findings"} hidden by memory ·{" "}
+                  {showHidden ? "hide" : "show"}
+                </button>
+                {showHidden && (
+                  <ul className="f-list" id="hidden-by-memory-list">
+                    {bySeverity(hidden).map(hiddenItem)}
+                  </ul>
+                )}
               </section>
             )}
             {dismissed > 0 && (

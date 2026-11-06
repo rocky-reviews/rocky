@@ -1538,6 +1538,159 @@
       ],
       "type": "object"
     },
+    "hidden": {
+      "description": "Findings a project-memory dismissal hid (pipeline-written); absent when none.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A finding project memory hid; shown collapsed, restorable as a draft.",
+        "properties": {
+          "agentPrompt": {
+            "description": "Self-contained instruction for a coding agent to fix this finding. No invisible characters of any kind.",
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "body": {
+            "description": "Markdown subset: paragraphs, inline code, lists. No raw HTML.",
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "confidence": {
+            "description": "How sure the model is, in percent.",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "hiddenBy": {
+            "additionalProperties": false,
+            "description": "Set by the pipeline on a finding a dismissal entry kept out of the drafts.",
+            "properties": {
+              "dismissedAs": {
+                "description": "The dismissal's reason.",
+                "enum": [
+                  "not_an_issue",
+                  "intentional",
+                  "not_worth_it",
+                  "handled_elsewhere"
+                ],
+                "type": "string"
+              },
+              "entry": {
+                "additionalProperties": false,
+                "description": "The dismissal entry that covers this finding, quoted from the stored entry.",
+                "properties": {
+                  "entryId": {
+                    "description": "Id of the project-memory entry.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "source": {
+                    "description": "Where it came from, e.g. 'decision · PR #612'.",
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "The entry as quoted to the reviewer.",
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "entryId",
+                  "text",
+                  "source"
+                ],
+                "type": "object"
+              },
+              "path": {
+                "description": "Where the team took that dismissal (the entry's evidence path).",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "entry",
+              "path",
+              "dismissedAs"
+            ],
+            "type": "object"
+          },
+          "id": {
+            "description": "Stable identifier, unique within its collection in a document.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+            "type": "string"
+          },
+          "path": {
+            "description": "Must be one of the PR's triaged (non-noise) files.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+            "type": "string"
+          },
+          "range": {
+            "additionalProperties": false,
+            "description": "New-side lines the finding is about; must be inside a hunk.",
+            "properties": {
+              "end": {
+                "description": "Last line, 1-based, inclusive.",
+                "maximum": 10000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start": {
+                "description": "First line, 1-based, inclusive.",
+                "maximum": 10000000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "type": "object"
+          },
+          "severity": {
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "description": "One line, no trailing period.",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "confidence",
+          "path",
+          "range",
+          "title",
+          "body",
+          "agentPrompt",
+          "hiddenBy"
+        ],
+        "type": "object"
+      },
+      "maxItems": 200,
+      "type": "array"
+    },
     "provenance": {
       "additionalProperties": false,
       "description": "Known facts from git and the pipeline. Never written by a model.",
@@ -1925,8 +2078,8 @@
       "type": "object"
     },
     "schemaVersion": {
-      "description": "Contract version the document targets. Current: 1.5.0.",
-      "pattern": "^1\\.(0|1|2|3|4|5)\\.\\d+$",
+      "description": "Contract version the document targets. Current: 1.6.0.",
+      "pattern": "^1\\.(0|1|2|3|4|5|6)\\.\\d+$",
       "type": "string"
     },
     "triage": {
@@ -2098,5 +2251,5 @@
   ],
   "title": "Rocky Reviews analysis document",
   "type": "object",
-  "version": "1.5.0"
+  "version": "1.6.0"
 }

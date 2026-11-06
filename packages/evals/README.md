@@ -143,8 +143,13 @@ level the triage model answered (`pinned`, `modelLevel`), whether it was reviewe
 reason, the count of findings on it, the seeded ids they matched, the severity of the pattern
 finding, and the pipeline's suppressed, restored and double-check counts (`doubleCheck`: covered
 suppressions restored because the file is risky, which the document marks as `restored`). Codes,
-levels, counts and seeded ids only: never code or model text. `pnpm evals run` prints one line
-per trial. Reports made before the pin lack `pinned`, `modelLevel` and `doubleCheck`.
+levels, counts and seeded ids only: never code or model text. P8-2b adds, per analysis, `hidden`
+(findings the document lists as hidden by memory on the case file) and `hiddenOnCritical`
+(suppressions that stood on a critical file: a dismissal the team took on a critical file, see
+ADR 0037 §7), and over the run `pinDecided` (passing trials whose apply run the model itself
+called `critical`: there the pin, not memory, decided). `pnpm evals run` prints one line per
+trial. Reports made before the pin lack `pinned`, `modelLevel` and `doubleCheck`; reports made
+before P8-2b lack `hidden`, `hiddenOnCritical` and `pinDecided`.
 
 With `--fake` the model is scripted to obey the memory block, so the result checks the plumbing
 (learning, selection, the untrusted part, enforcement, citations); `memory.test.ts` also shows

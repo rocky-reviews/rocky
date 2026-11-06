@@ -8,7 +8,7 @@ import { DEFAULT_PULL } from "../data/fixture-source.js";
 import type { OwnComment } from "./diff-model.js";
 import { ReviewContext, type ReviewContextValue } from "../drafts/ReviewProvider.js";
 import { reviewWith } from "../drafts/testing.js";
-import type { DraftDecision } from "@rocky-reviews/core/drafts";
+import { type DraftDecision, restoredAsDraft } from "@rocky-reviews/core/drafts";
 import type { PullRef } from "../data/shell-data.js";
 import {
   DiffContext,
@@ -21,6 +21,9 @@ import { FileView } from "./FileView.js";
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("fixture invalid");
 const doc: AnalysisDocument = parsed.value;
+/** P8-2b: the finding memory hid on the jobs file (schema 1.6). */
+const H1 = doc.hidden?.[0];
+if (H1 === undefined) throw new Error("the fixture carries H1");
 const diff = parseDiffData(await createFixtureDiffSource().load(DEFAULT_PULL));
 
 const context = (
@@ -44,6 +47,8 @@ const render = (
     decisions?: Record<string, DraftDecision>;
     line?: number;
     status?: ReviewContextValue["status"];
+    /** P8-2b: the findings memory hid, as the review context lists them. */
+    hidden?: AnalysisDocument["hidden"];
     /** The PR the diff belongs to (`null`: none known, so no GitHub link can be built). */
     pull?: PullRef | null;
     returnTo?: string;
@@ -55,7 +60,7 @@ const render = (
         (options.analysis ?? doc).findings,
         options.decisions ?? {},
         options.comments ?? [],
-        { status: options.status ?? "ready" },
+        { status: options.status ?? "ready", hidden: options.hidden ?? [] },
       )}
     >
       <DiffContext value={context(load, options.pull, options.returnTo)}>
@@ -100,6 +105,51 @@ describe("file view", () => {
         "Why critical New path that grants org membership and sets the member's role. " +
         "Drafts 3 findings on this file. Accept, edit or dismiss each one inline.",
     );
+  });
+
+  it("P8-2b: a file with findings hidden by memory shows one collapsed line, nothing of them", () => {
+    const jobs = "src/jobs/sendInviteEmail.ts";
+    const withHidden = render(jobs, undefined, { hidden: doc.hidden });
+    const section = withHidden
+      .split('aria-labelledby="hidden-memory-title">')[1]
+      ?.split("</section>")[0];
+    expect(section).toBeDefined();
+    expect(text(section ?? "")).toBe(
+      "Findings hidden by project memory ◆ 1 finding hidden by memory on this file · show",
+    );
+    expect(section).toContain('aria-expanded="false"');
+    expect(section).toContain('aria-controls="hidden-memory-list"');
+    // Collapsed: neither the hidden finding's title nor its body is in the page.
+    expect(withHidden).not.toContain(H1.title);
+    expect(withHidden).not.toContain("Restore as a draft");
+    // The strip's draft count is the drafts', not the hidden one.
+    expect(text(withHidden.split('<dl class="file-ai">')[1]?.split("</dl>")[0] ?? "")).toContain(
+      "Drafts 1 finding on this file.",
+    );
+    // Another file, and the same file without hidden findings: no line at all.
+    expect(render("src/auth/invitations.ts", undefined, { hidden: doc.hidden })).not.toContain(
+      "hidden-memory",
+    );
+    expect(render(jobs)).not.toContain("hidden-memory");
+    // Not on a diff from a newer push: the hidden findings point at the analysed lines.
+    const stale = render(
+      jobs,
+      { kind: "ready", data: { ...diff, headSha: "f".repeat(40) } },
+      {
+        hidden: doc.hidden,
+      },
+    );
+    expect(stale).not.toContain("hidden-memory");
+  });
+
+  it("P8-2b: the drafts under the lines are the review context's (a restored finding included)", () => {
+    const jobs = "src/jobs/sendInviteEmail.ts";
+    const restored = restoredAsDraft(H1);
+    const html = render(jobs, undefined, {
+      analysis: { ...doc, findings: [...doc.findings, restored] },
+    });
+    expect(html).toContain('data-finding="H1"');
+    expect(html).toContain('data-finding="F6"');
   });
 
   it("opened at a finding's line (P5-3), that line is the diff's tab stop", () => {

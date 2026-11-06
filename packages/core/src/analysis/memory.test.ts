@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { MEMORY_CANARY, MEMORY_CANARY_MARKER, PROMPT_CANARY_MARKER } from "../prompt.js";
 import { REVIEW_INSTRUCTIONS, REVIEW_MEMORY_INSTRUCTIONS } from "./instructions.js";
 import { instructionLeaks, promptShare, PROMPT_TEXTS } from "./leak.js";
+import { DISMISSAL_REASONS } from "@rocky-reviews/schema";
+import { DISMISS_REASONS } from "../drafts.js";
 import {
   MAX_ANALYSIS_MEMORY,
   MAX_MEMORY_PER_FILE,
@@ -10,8 +12,10 @@ import {
   memoryPart,
   pathRelevance,
   selectMemory,
+  suppressionStands,
   usableMemory,
   type AnalysisMemoryEntry,
+  type FileRisk,
 } from "./memory.js";
 import { REVIEW_MEMORY_OUTPUT, REVIEW_OUTPUT } from "./outputs.js";
 import { analyzePullRequest, type AnalysisOutcome, type AnalysisRequest } from "./pipeline.js";
@@ -867,5 +871,836 @@ describe("a suppression restored on a risky file says so: the double-check marke
     expect(reviews.some((c) => c.repair)).toBe(true);
     expect(document.findings).toEqual([]);
     expect(document.provenance.unanalysed.map((f) => f.path)).toEqual([RETRY]);
+  });
+});
+
+describe("suppression on a critical file when the dismissal was taken on a critical file (P8-2b)", () => {
+  const RETRY = "src/jobs/retry.ts";
+  const SIBLING = "src/jobs/other.ts";
+  const COUSIN = "src/other/x.ts";
+  const AUTH = "src/auth/session.ts";
+  /** A learned dismissal with the triage level the team dismissed it at. */
+  const learnedOn = (
+    path: string,
+    learnedLevel: AnalysisMemoryEntry["learnedLevel"],
+    overrides: Partial<AnalysisMemoryEntry> = {},
+  ) =>
+    entry(1, {
+      path,
+      severity: "high",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      learnedLevel,
+      ...overrides,
+    });
+  /** A model that suppresses the finding under M1 at `severity`, on a file triaged `level`. */
+  const suppressing =
+    (level: "important" | "critical", severity: "low" | "critical" = "low"): Script =>
+    (call) => {
+      if (call.role === "triage")
+        return { value: { ...triage("important"), level, score: level === "critical" ? 90 : 60 } };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return { value: { findings: [], suppressed: [{ ...SUPPRESSED, severity, entry: "M1" }] } };
+      return { status: "refused" };
+    };
+  const hiddenByOf = (memoryEntry: AnalysisMemoryEntry) => ({
+    entry: { entryId: memoryEntry.id, text: memoryEntry.text, source: memoryEntry.source },
+    path: memoryEntry.path,
+    dismissedAs: "intentional",
+  });
+
+  it("the learned level never reaches the model: it is not in the memory part", async () => {
+    const { calls } = await analyze(suppressing("critical"), {
+      memory: [learnedOn(RETRY, "critical")],
+    });
+    const block = blockOf(reviewCall(calls)!)!;
+    expect(block.entries).toHaveLength(1);
+    expect(Object.keys(block.entries[0]!)).toEqual([
+      "id",
+      "kind",
+      "reason",
+      "coversUpTo",
+      "path",
+      "text",
+    ]);
+    expect(JSON.stringify(block)).not.toContain("critical");
+  });
+
+  it("stands on a critical file for a dismissal taken on a critical file: the finding is hidden, listed and cited", async () => {
+    const memoryEntry = learnedOn(RETRY, "critical");
+    const { outcome } = await analyze(suppressing("critical"), { memory: [memoryEntry] });
+    const { document, stats } = done(outcome);
+    expect(document.findings).toEqual([]);
+    expect(document.hidden).toEqual([
+      {
+        ...SUPPRESSED,
+        severity: "low",
+        id: "H1",
+        path: RETRY,
+        hiddenBy: hiddenByOf(memoryEntry),
+      },
+    ]);
+    expect(document.schemaVersion).toBe("1.6.0");
+    expect(document.briefing.memoryApplied).toEqual([hiddenByOf(memoryEntry).entry]);
+    // A critical file reviewed with no draft is still one to read by hand.
+    expect(document.provenance.readByHand).toEqual([{ path: RETRY }]);
+    expect(stats).toMatchObject({
+      memorySuppressed: 1,
+      memoryHiddenOnCritical: 1,
+      memoryRestored: 0,
+      memoryDoubleCheck: 0,
+    });
+  });
+
+  it.each([
+    ["the same directory", SIBLING, true],
+    ["only the same top-level directory", COUSIN, false],
+  ])(
+    "on a critical file the scope is the file or its directory: evidence in %s",
+    async (_name, path, stands) => {
+      const memoryEntry = learnedOn(path, "critical");
+      const { outcome } = await analyze(suppressing("critical"), { memory: [memoryEntry] });
+      const { document, stats } = done(outcome);
+      if (stands) {
+        expect(document.findings).toEqual([]);
+        expect(document.hidden?.map((f) => f.hiddenBy.path)).toEqual([path]);
+        expect(stats).toMatchObject({ memorySuppressed: 1, memoryHiddenOnCritical: 1 });
+      } else {
+        expect(document.hidden).toBeUndefined();
+        expect(document.findings.map((f) => f.restored?.shownBecause)).toEqual(["critical_file"]);
+        expect(stats).toMatchObject({ memorySuppressed: 0, memoryDoubleCheck: 1 });
+      }
+    },
+  );
+
+  it.each([
+    ["important", "important"],
+    ["normal", "normal"],
+    ["no recorded level (entries learned before P8-2b)", null],
+    ["no level at all", undefined],
+  ] as const)(
+    "a dismissal taken at %s is restored on a critical file with the double-check marker, as before",
+    async (_name, learnedLevel) => {
+      const memoryEntry = learnedOn(RETRY, learnedLevel);
+      const { outcome } = await analyze(suppressing("critical"), { memory: [memoryEntry] });
+      const { document, stats } = done(outcome);
+      expect(document.hidden).toBeUndefined();
+      expect(document.findings.map((f) => [f.title, f.restored?.shownBecause])).toEqual([
+        [FINDING.title, "critical_file"],
+      ]);
+      expect(document.briefing.memoryApplied).toEqual([]);
+      expect(stats).toMatchObject({
+        memorySuppressed: 0,
+        memoryHiddenOnCritical: 0,
+        memoryDoubleCheck: 1,
+      });
+    },
+  );
+
+  it("never on a rule-floored file, whatever the entry: restored with the marker", async () => {
+    const memoryEntry = learnedOn(AUTH, "critical");
+    // Rule-floored and, by the model, critical: `critical_file` is the marker's reason.
+    const { outcome } = await analyze(suppressing("critical"), {
+      diff: addedFile(AUTH, LINES),
+      memory: [memoryEntry],
+    });
+    const { document, stats } = done(outcome);
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings.map((f) => f.restored?.shownBecause)).toEqual(["critical_file"]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryDoubleCheck: 1 });
+    // Rule-floored and triaged important by the model: `rule_floor`.
+    const floored = done(
+      (
+        await analyze(suppressing("important"), {
+          diff: addedFile(AUTH, LINES),
+          memory: [memoryEntry],
+        })
+      ).outcome,
+    );
+    expect(floored.document.hidden).toBeUndefined();
+    expect(floored.document.findings.map((f) => f.restored?.shownBecause)).toEqual(["rule_floor"]);
+  });
+
+  it("the severity cap holds on a critical file: a critical finding is never hidden", async () => {
+    const memoryEntry = learnedOn(RETRY, "critical", { severity: "high" });
+    const { outcome } = await analyze(suppressing("critical", "critical"), {
+      memory: [memoryEntry],
+    });
+    const { document, stats } = done(outcome);
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings.map((f) => [f.severity, f.restored])).toEqual([
+      ["critical", undefined],
+    ]);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryRestored: 1, memoryDoubleCheck: 0 });
+  });
+
+  it("a member-written dismissal is not eligible on a critical file, and one claiming a learned level is dropped", async () => {
+    const member = learnedOn(RETRY, null, { origin: "member" });
+    const { outcome } = await analyze(suppressing("critical"), { memory: [member] });
+    const { document, stats } = done(outcome);
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings.map((f) => f.restored?.shownBecause)).toEqual(["critical_file"]);
+    expect(stats).toMatchObject({ memoryEntries: 1, memorySuppressed: 0, memoryDoubleCheck: 1 });
+    // The store never writes a level on a member-written entry (migration 0021): one that
+    // carries it anyway is refused before any use, like a severity on a convention.
+    expect(usableMemory([learnedOn(RETRY, "critical", { origin: "member" })])).toEqual({
+      entries: [],
+      dropped: 1,
+    });
+    expect(
+      usableMemory([
+        entry(2, { kind: "convention", reason: null, severity: null, learnedLevel: "critical" }),
+      ]).dropped,
+    ).toBe(1);
+    expect(usableMemory([learnedOn(RETRY, "elsewhere" as never)]).dropped).toBe(1);
+  });
+
+  it("`suppressionStands` by table", () => {
+    const critical = learnedOn(RETRY, "critical");
+    const stands = (
+      e: AnalysisMemoryEntry,
+      path: string,
+      because: FileRisk["because"],
+      floor = false,
+    ) => suppressionStands(e, path, { because, ruleFloored: floor });
+    // Not risky: stands (the severity cap is the caller's).
+    expect(stands(learnedOn(RETRY, null), RETRY, undefined)).toBe(true);
+    // Rule floor: never, even for a critical-learned entry on the same file.
+    expect(stands(critical, RETRY, "rule_floor", true)).toBe(false);
+    expect(stands(critical, RETRY, "critical_file", true)).toBe(false);
+    expect(stands(critical, RETRY, undefined, true)).toBe(false);
+    // Critical file: learned, dismissal, critical level, same file or directory.
+    expect(stands(critical, RETRY, "critical_file")).toBe(true);
+    expect(stands(critical, SIBLING, "critical_file")).toBe(true);
+    expect(stands(critical, COUSIN, "critical_file")).toBe(false);
+    expect(stands(learnedOn(RETRY, "important"), RETRY, "critical_file")).toBe(false);
+    expect(stands(learnedOn(RETRY, "critical", { origin: "member" }), RETRY, "critical_file")).toBe(
+      false,
+    );
+    expect(
+      stands(
+        learnedOn(RETRY, "critical", { kind: "convention", reason: null }),
+        RETRY,
+        "critical_file",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("a suppression that stands is never invisible: the hidden list (P8-2b, schema 1.6)", () => {
+  const RETRY = "src/jobs/retry.ts";
+  const dismissal = (overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, { text: `Dismissed as intentional: ${FINDING.title}`, ...overrides });
+
+  it("on an ordinary file the hidden finding is listed with the entry, as a 1.6 document", async () => {
+    const memoryEntry = dismissal();
+    const { outcome } = await analyze(script(), { memory: [memoryEntry] });
+    const { document, stats } = done(outcome);
+    expect(document.findings).toEqual([]);
+    expect(document.hidden).toEqual([
+      {
+        ...SUPPRESSED,
+        id: "H1",
+        path: RETRY,
+        hiddenBy: {
+          entry: { entryId: memoryEntry.id, text: memoryEntry.text, source: memoryEntry.source },
+          path: RETRY,
+          dismissedAs: "intentional",
+        },
+      },
+    ]);
+    expect(document.schemaVersion).toBe("1.6.0");
+    expect(document.briefing.memoryApplied.map((ref) => ref.entryId)).toEqual([memoryEntry.id]);
+    expect(stats).toMatchObject({ memorySuppressed: 1, memoryHiddenOnCritical: 0 });
+  });
+
+  it("without a standing suppression the document has no hidden list and keeps its older stamp", async () => {
+    const { outcome } = await analyze(script());
+    const { document } = done(outcome);
+    expect(document.hidden).toBeUndefined();
+    expect(JSON.stringify(document)).not.toContain('"hidden"');
+    // Rocky's fallback briefing (the script refuses the briefing call) needs nothing newer than 1.1.
+    expect(document.schemaVersion).toBe("1.1.0");
+  });
+
+  it("hidden findings are model text: one that carries the memory canary fails the file closed", async () => {
+    const leaking: Script = (call) => {
+      const answer = script()(call);
+      if (call.role === "review" && blockOf(call) !== undefined)
+        return {
+          value: {
+            findings: [],
+            suppressed: [{ ...SUPPRESSED, body: `See ${MEMORY_CANARY}.`, entry: "M1" }],
+          },
+        };
+      return answer;
+    };
+    const { outcome } = await analyze(leaking, { memory: [dismissal()] });
+    const { document } = done(outcome);
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings).toEqual([]);
+    expect(document.provenance.unanalysed.map((f) => f.path)).toEqual([RETRY]);
+  });
+
+  it("hidden findings are checked like drafts: an invalid one is repaired", async () => {
+    let repaired = false;
+    const invalid: Script = (call) => {
+      if (call.role === "review" && blockOf(call) !== undefined) {
+        if (call.repair) repaired = true;
+        return {
+          value: {
+            findings: [],
+            suppressed: [
+              {
+                ...SUPPRESSED,
+                range: call.repair ? { start: 1, end: 1 } : { start: 9, end: 9 },
+                entry: "M1",
+              },
+            ],
+          },
+        };
+      }
+      return script()(call);
+    };
+    const { outcome } = await analyze(invalid, { memory: [dismissal()] });
+    const { document } = done(outcome);
+    expect(repaired).toBe(true);
+    expect(document.hidden?.map((f) => f.range)).toEqual([{ start: 1, end: 1 }]);
+  });
+
+  it("a reused unit keeps its hidden findings, rebuilt from the current entry", async () => {
+    const memoryEntry = dismissal();
+    const first = done((await analyze(script(), { memory: [memoryEntry] })).outcome);
+    const previous = { document: first.document, units: first.units };
+    const { outcome, calls } = await analyze(script(), { previous, memory: [memoryEntry] });
+    const { document, stats } = done(outcome);
+    expect(stats.reused).toBe(2);
+    expect(reviewCall(calls)).toBeUndefined();
+    expect(document.hidden).toEqual(first.document.hidden);
+    expect(document.briefing.memoryApplied).toEqual(first.document.briefing.memoryApplied);
+    // The entry retired: the file's unit is not reused (its key changed; the docs file's is)
+    // and nothing is hidden.
+    const without = done((await analyze(script(), { previous })).outcome);
+    expect(without.stats.reused).toBe(1);
+    expect(without.document.hidden).toBeUndefined();
+    expect(without.document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+  });
+
+  it("ids follow severity, then file order; the hidden list and the drafts are separate collections", async () => {
+    const SECOND = {
+      ...SUPPRESSED,
+      severity: "high",
+      title: "Second",
+      range: { start: 2, end: 2 },
+    };
+    const both: Script = (call) => {
+      const block = call.role === "review" ? blockOf(call) : undefined;
+      if (block !== undefined)
+        return {
+          value: {
+            findings: [{ ...FINDING, title: "Raised", range: { start: 3, end: 3 }, memory: [] }],
+            suppressed: [
+              { ...SUPPRESSED, entry: "M1" },
+              { ...SECOND, entry: "M1" },
+            ],
+          },
+        };
+      return script()(call);
+    };
+    const { outcome } = await analyze(both, { memory: [dismissal({ severity: "high" })] });
+    const { document } = done(outcome);
+    expect(document.findings.map((f) => [f.id, f.title])).toEqual([["F1", "Raised"]]);
+    expect(document.hidden?.map((f) => [f.id, f.title])).toEqual([
+      ["H1", "Second"],
+      ["H2", FINDING.title],
+    ]);
+  });
+});
+
+describe("fix round 4 nits (P8-2b)", () => {
+  const AUTH = "src/auth/session.ts";
+  const dismissalOn = (path: string) =>
+    entry(1, { path, severity: "high", text: `Dismissed as intentional: ${FINDING.title}` });
+
+  it("N1: a finding the model both raises and suppresses on a risky file keeps one copy, with the marker", async () => {
+    const memoryEntry = dismissalOn(AUTH);
+    const { outcome } = await analyze(
+      script(() => ({
+        findings: [{ ...FINDING, memory: [] }],
+        suppressed: [{ ...SUPPRESSED, entry: "M1" }],
+      })),
+      { diff: addedFile(AUTH, LINES), memory: [memoryEntry] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => [f.title, f.restored?.shownBecause])).toEqual([
+      [FINDING.title, "rule_floor"],
+    ]);
+    expect(document.findings[0]?.restored?.entry.entryId).toBe(memoryEntry.id);
+    expect(stats).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 1 });
+  });
+
+  it("N4: the schema's dismissal reasons are core's", () => {
+    expect([...DISMISSAL_REASONS]).toEqual([...DISMISS_REASONS]);
+  });
+});
+
+describe("P8-2b fix round 1: the critical path against role precedence and root-level evidence", () => {
+  const A = "src/billing/a.ts";
+  const B = "src/billing/b.ts";
+  const CRITICAL_SCRIPT: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const block = blockOf(call);
+      const covering = block?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value:
+          covering === undefined
+            ? { findings: [{ ...FINDING, memory: [] }], suppressed: [] }
+            : {
+                findings: [],
+                suppressed: [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+              },
+      };
+    }
+    return { status: "refused" };
+  };
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+  const conventionOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(2, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path,
+      learnerRole: "owner",
+      text: "Accepted in review: Retries must log the failure",
+      ...overrides,
+    });
+  const stood = (document: { readonly hidden?: unknown; readonly findings: readonly unknown[] }) =>
+    document.hidden !== undefined && document.findings.length === 0;
+
+  it("S1: an owner's accept on a.ts blocks a member's critical-learned dismissal from b.ts on critical a.ts (restored, double-check)", async () => {
+    const dismissal = dismissalOn(B);
+    const { outcome } = await analyze(CRITICAL_SCRIPT, {
+      diff: addedFile(A, LINES),
+      memory: [dismissal, conventionOn(A)],
+    });
+    const { document, stats } = done(outcome);
+    expect(stood(document)).toBe(false);
+    expect(document.findings.map((f) => [f.path, f.restored?.shownBecause])).toEqual([
+      [A, "critical_file"],
+    ]);
+    expect(document.findings[0]?.restored?.entry.entryId).toBe(dismissal.id);
+    expect(stats).toMatchObject({ memorySuppressed: 0, memoryDoubleCheck: 1 });
+  });
+
+  it("S1: the block needs a higher role, the opposite kind, a learned entry, and the same directory", async () => {
+    const cases: [string, AnalysisMemoryEntry[], boolean][] = [
+      ["the same role: stands", [dismissalOn(B), conventionOn(A, { learnerRole: "member" })], true],
+      [
+        "an admin's dismissal against a member's convention: stands",
+        [dismissalOn(B, { learnerRole: "admin" }), conventionOn(A, { learnerRole: "member" })],
+        true,
+      ],
+      [
+        "an owner's dismissal, no higher role exists: stands",
+        [dismissalOn(B, { learnerRole: "owner" }), conventionOn(A)],
+        true,
+      ],
+      [
+        "a higher role's dismissal (the same kind): stands",
+        [
+          dismissalOn(B),
+          dismissalOn(A, {
+            id: uuid(3),
+            learnerRole: "owner",
+            text: "Dismissed as intentional: Something else",
+          }),
+        ],
+        true,
+      ],
+      [
+        "an owner's convention in another directory: stands",
+        [dismissalOn(B), conventionOn("src/other/a.ts")],
+        true,
+      ],
+      [
+        "a convention a person wrote from scratch (no role): stands",
+        [dismissalOn(B), conventionOn(A, { origin: "member", learnerRole: null })],
+        true,
+      ],
+      [
+        "an owner's convention a person edited (person-written, the role kept, P8-3): blocked",
+        [dismissalOn(B), conventionOn(A, { origin: "member" })],
+        false,
+      ],
+      [
+        "an owner's convention with no recorded role on the dismissal: blocked",
+        [dismissalOn(B, { learnerRole: null }), conventionOn(A)],
+        false,
+      ],
+      [
+        "an admin's convention against a member's dismissal: blocked",
+        [dismissalOn(B), conventionOn(A, { learnerRole: "admin" })],
+        false,
+      ],
+      [
+        "an owner's decision (the other opposite kind): blocked",
+        [
+          dismissalOn(B),
+          conventionOn(A, { kind: "decision", text: "Decided: retries log their failure" }),
+        ],
+        false,
+      ],
+    ];
+    for (const [name, memory, stands] of cases) {
+      const { document } = done(
+        (await analyze(CRITICAL_SCRIPT, { diff: addedFile(A, LINES), memory })).outcome,
+      );
+      expect(stood(document), name).toBe(stands);
+    }
+    // The pure rule, with and without the other entries.
+    const risk: FileRisk = { because: "critical_file", ruleFloored: false };
+    expect(suppressionStands(dismissalOn(B), A, risk)).toBe(true);
+    expect(suppressionStands(dismissalOn(B), A, risk, [dismissalOn(B), conventionOn(A)])).toBe(
+      false,
+    );
+    // The block never widens the critical path: an entry that would not stand on its own still does not.
+    expect(suppressionStands(dismissalOn(B, { learnedLevel: "important" }), A, risk, [])).toBe(
+      false,
+    );
+  });
+
+  it("S1: the block only applies to the critical path: on an ordinary file the suppression stands as before", async () => {
+    const { document } = done(
+      (
+        await analyze(script(), {
+          memory: [dismissalOn("src/jobs/other.ts"), conventionOn("src/jobs/retry.ts")],
+        })
+      ).outcome,
+    );
+    expect(document.hidden?.map((f) => f.path)).toEqual(["src/jobs/retry.ts"]);
+  });
+
+  it("S2: root-level evidence stands on its own file only; `src/a` is not `src/ab`; a rename within the directory is near, across directories not", async () => {
+    const risk: FileRisk = { because: "critical_file", ruleFloored: false };
+    // Root-level: two root files are one directory to `pathRelevance` (N3), not to the critical path.
+    expect(pathRelevance("server.js", "payments.js")).toBe(2);
+    expect(suppressionStands(dismissalOn("server.js"), "payments.js", risk)).toBe(false);
+    expect(suppressionStands(dismissalOn("payments.js"), "payments.js", risk)).toBe(true);
+    // A directory is compared whole.
+    expect(suppressionStands(dismissalOn("src/a/x.ts"), "src/ab/y.ts", risk)).toBe(false);
+    expect(suppressionStands(dismissalOn("src/ab/x.ts"), "src/ab/y.ts", risk)).toBe(true);
+    // Through the pipeline: a flat repository.
+    const flat = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: addedFile("payments.js", LINES),
+          memory: [dismissalOn("server.js")],
+        })
+      ).outcome,
+    );
+    expect(flat.document.findings.map((f) => f.restored?.shownBecause)).toEqual(["critical_file"]);
+    const same = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: addedFile("payments.js", LINES),
+          memory: [dismissalOn("payments.js")],
+        })
+      ).outcome,
+    );
+    expect(same.document.hidden?.map((f) => f.path)).toEqual(["payments.js"]);
+    // A renamed file is reviewed under its new path; the evidence path is not followed through
+    // the rename, so what counts is where the new path sits.
+    const renamed = (from: string, to: string) =>
+      [
+        `diff --git a/${from} b/${to}`,
+        "similarity index 60%",
+        `rename from ${from}`,
+        `rename to ${to}`,
+        `--- a/${from}`,
+        `+++ b/${to}`,
+        `@@ -1,3 +1,3 @@`,
+        ` ${LINES[0]}`,
+        `-export const old = () => RETRIES;`,
+        `+${LINES[1]}`,
+        ` ${LINES[2]}`,
+      ].join("\n");
+    const within = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: renamed("src/billing/old.ts", A),
+          memory: [dismissalOn("src/billing/old.ts")],
+        })
+      ).outcome,
+    );
+    expect(within.document.hidden?.map((f) => f.path)).toEqual([A]);
+    const across = done(
+      (
+        await analyze(CRITICAL_SCRIPT, {
+          diff: renamed("src/old/old.ts", A),
+          memory: [dismissalOn("src/old/old.ts")],
+        })
+      ).outcome,
+    );
+    expect(across.document.hidden).toBeUndefined();
+    expect(across.document.findings.map((f) => f.restored?.shownBecause)).toEqual([
+      "critical_file",
+    ]);
+  });
+
+  it("a learner role is accepted on any origin (an edit keeps the decision's role, P8-3); an unknown role is refused", () => {
+    expect(usableMemory([dismissalOn(B)]).entries[0]?.learnerRole).toBe("member");
+    expect(
+      usableMemory([dismissalOn(B, { learnerRole: null })]).entries[0]?.learnerRole,
+    ).toBeNull();
+    expect(usableMemory([conventionOn(A, { origin: "member" })]).entries[0]?.learnerRole).toBe(
+      "owner",
+    );
+    // A person-written entry never stands on a critical file, role or not: it has no learned
+    // level (migration 0021's CHECK), and an edit does not copy one.
+    expect(
+      suppressionStands(dismissalOn(B, { origin: "member", learnedLevel: null }), A, {
+        because: "critical_file",
+        ruleFloored: false,
+      }),
+    ).toBe(false);
+    expect(usableMemory([dismissalOn(B, { learnerRole: "root" as never })]).dropped).toBe(1);
+  });
+});
+
+describe("P8-2b fix round 1: hidden list nits", () => {
+  const dismissal = () => entry(1, { text: `Dismissed as intentional: ${FINDING.title}` });
+
+  it("a standing suppression that repeats a raised finding is shown once, as the draft", async () => {
+    const { outcome } = await analyze(
+      script(() => ({
+        findings: [{ ...FINDING, memory: [] }],
+        suppressed: [{ ...SUPPRESSED, entry: "M1" }],
+      })),
+      { memory: [dismissal()] },
+    );
+    const { document, stats } = done(outcome);
+    expect(document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(document.hidden).toBeUndefined();
+    // The entry was still applied (the model relied on it), so it is cited.
+    expect(document.briefing.memoryApplied.map((ref) => ref.entryId)).toEqual([dismissal().id]);
+    expect(stats.memorySuppressed).toBe(1);
+  });
+
+  it("more hidden findings than the document holds: the overflow is raised as drafts, not failed", async () => {
+    // Nine files in src/jobs, each with 25 suppressed findings under the one dismissal: 225
+    // standing suppressions against a cap of 200.
+    const files = Array.from({ length: 9 }, (_, i) => `src/jobs/f${i}.ts`);
+    const lines = Array.from({ length: 25 }, (_, i) => `export const v${i} = ${i};`);
+    const diff = files.map((path) => addedFile(path, lines)).join("\n");
+    const many: Script = (call) => {
+      if (call.role === "triage") return { value: triage("important") };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: {
+            findings: [],
+            suppressed: lines.map((_, i) => ({
+              ...SUPPRESSED,
+              title: `Finding ${i}`,
+              range: { start: i + 1, end: i + 1 },
+              entry: "M1",
+            })),
+          },
+        };
+      return { status: "refused" };
+    };
+    const { document, stats } = done(
+      (await analyze(many, { diff, memory: [dismissal()] })).outcome,
+    );
+    expect(document.hidden).toHaveLength(200);
+    expect(document.findings).toHaveLength(25);
+    expect(document.findings.every((f) => f.restored === undefined)).toBe(true);
+    expect(stats.memorySuppressed).toBe(225);
+  });
+});
+
+describe("P8-2b fix round 2: the block holds on reused units", () => {
+  const A = "src/billing/a.ts";
+  const critical: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const covering = blockOf(call)?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value:
+          covering === undefined
+            ? { findings: [{ ...FINDING, memory: [] }], suppressed: [] }
+            : {
+                findings: [],
+                suppressed: [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+              },
+      };
+    }
+    return { status: "refused" };
+  };
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+
+  it("a reused unit re-checks the block: an owner's accept learned since the last push restores the hidden finding", async () => {
+    const diff = addedFile(A, LINES);
+    // D hides the finding; eleven more dismissals on a.ts fill the selection (relevance 3), so
+    // an owner's convention on c.ts (relevance 2, a convention) is never selected and the unit
+    // key does not change when it is learned.
+    const D = dismissalOn(A);
+    const fillers = Array.from({ length: 11 }, (_, i) =>
+      dismissalOn(A, { id: uuid(10 + i), text: `Dismissed as intentional: Other ${i}` }),
+    );
+    const first = done((await analyze(critical, { diff, memory: [D, ...fillers] })).outcome);
+    expect(first.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(first.units[0]?.memoryApplied).toEqual([D.id]);
+    const previous = { document: first.document, units: first.units };
+    const owner = entry(2, {
+      kind: "convention",
+      reason: null,
+      severity: null,
+      path: "src/billing/c.ts",
+      learnerRole: "owner",
+      text: "Accepted in review: Retries must log the failure",
+    });
+    const { outcome, calls } = await analyze(critical, {
+      diff,
+      previous,
+      memory: [D, ...fillers, owner],
+    });
+    const { document, stats, units } = done(outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(calls)).toBeUndefined();
+    expect(document.hidden).toBeUndefined();
+    expect(
+      document.findings.map((f) => [f.title, f.restored?.shownBecause, f.restored?.entry.entryId]),
+    ).toEqual([[FINDING.title, "critical_file", D.id]]);
+    // The entry no longer applies on this file: not cited, and the unit no longer lists it.
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(units[0]?.memoryApplied).toBeUndefined();
+    expect(stats).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 1 });
+    // Without the owner's entry the unit is reused as it was.
+    const same = done(
+      (await analyze(critical, { diff, previous, memory: [D, ...fillers] })).outcome,
+    );
+    expect(same.stats.reused).toBe(1);
+    expect(same.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(same.stats.memoryRestored).toBe(0);
+  });
+});
+
+describe("P8-2b fix round 3: every applied entry is re-checked on reuse", () => {
+  const A = "src/billing/a.ts";
+  const dismissalOn = (path: string, overrides: Partial<AnalysisMemoryEntry> = {}) =>
+    entry(1, {
+      path,
+      severity: "high",
+      learnedLevel: "critical",
+      learnerRole: "member",
+      text: `Dismissed as intentional: ${FINDING.title}`,
+      ...overrides,
+    });
+  const owner = entry(2, {
+    kind: "convention",
+    reason: null,
+    severity: null,
+    path: "src/billing/c.ts",
+    learnerRole: "owner",
+    text: "Accepted in review: Retries must log the failure",
+  });
+  /** On a critical file the model both raises F and suppresses it under the first dismissal. */
+  const raisesAndSuppresses: Script = (call) => {
+    if (call.role === "triage")
+      return { value: { ...triage("important"), level: "critical", score: 90 } };
+    if (call.role === "review" && call.part("file_path") !== undefined) {
+      const covering = blockOf(call)?.entries.find((e) => e.kind === "dismissal");
+      return {
+        value: {
+          findings: [{ ...FINDING, memory: [] }],
+          suppressed:
+            covering === undefined ? [] : [{ ...SUPPRESSED, severity: "low", entry: covering.id }],
+        },
+      };
+    }
+    return { status: "refused" };
+  };
+
+  it("an entry applied without a hidden finding (its suppression repeated a draft) is dropped on reuse once an owner's accept blocks it", async () => {
+    const diff = addedFile(A, LINES);
+    const D = dismissalOn(A);
+    const fillers = Array.from({ length: 11 }, (_, i) =>
+      dismissalOn(A, { id: uuid(10 + i), text: `Dismissed as intentional: Other ${i}` }),
+    );
+    const first = done(
+      (await analyze(raisesAndSuppresses, { diff, memory: [D, ...fillers] })).outcome,
+    );
+    // Fresh: the draft is shown once, the suppression stood and was applied, nothing hidden.
+    expect(first.document.findings.map((f) => f.title)).toEqual([FINDING.title]);
+    expect(first.document.hidden).toBeUndefined();
+    expect(first.document.briefing.memoryApplied.map((ref) => ref.entryId)).toEqual([D.id]);
+    expect(first.units[0]?.memoryApplied).toEqual([D.id]);
+    const previous = { document: first.document, units: first.units };
+    const { outcome, calls } = await analyze(raisesAndSuppresses, {
+      diff,
+      previous,
+      memory: [D, ...fillers, owner],
+    });
+    const { document, stats, units } = done(outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(calls)).toBeUndefined();
+    // Reused: the draft stays, the entry is no longer applied (a fresh run would not apply it
+    // either); the marker a fresh run would put on the draft cannot be rebuilt here.
+    expect(document.findings.map((f) => [f.title, f.restored])).toEqual([
+      [FINDING.title, undefined],
+    ]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(units[0]?.memoryApplied).toBeUndefined();
+  });
+
+  it("a reused restore for another reason: the entry's level is no longer critical on the next push", async () => {
+    // A rule floor cannot change between pushes (it is a path rule), so the other input the
+    // unit key does not cover is used: the stored entry's learned level (edited since).
+    const diff = addedFile(A, LINES);
+    const D = dismissalOn(A);
+    const critical: Script = (call) => {
+      if (call.role === "triage")
+        return { value: { ...triage("important"), level: "critical", score: 90 } };
+      if (call.role === "review" && call.part("file_path") !== undefined)
+        return {
+          value: { findings: [], suppressed: [{ ...SUPPRESSED, severity: "low", entry: "M1" }] },
+        };
+      return { status: "refused" };
+    };
+    const first = done((await analyze(critical, { diff, memory: [D] })).outcome);
+    expect(first.document.hidden?.map((f) => f.title)).toEqual([FINDING.title]);
+    const previous = { document: first.document, units: first.units };
+    const second = await analyze(critical, {
+      diff,
+      previous,
+      memory: [{ ...D, learnedLevel: "important" }],
+    });
+    const { document, stats } = done(second.outcome);
+    expect(stats.reused).toBe(1);
+    expect(reviewCall(second.calls)).toBeUndefined();
+    expect(document.hidden).toBeUndefined();
+    expect(document.findings.map((f) => [f.title, f.restored?.shownBecause])).toEqual([
+      [FINDING.title, "critical_file"],
+    ]);
+    expect(document.briefing.memoryApplied).toEqual([]);
+    expect(stats).toMatchObject({ memoryRestored: 1, memoryDoubleCheck: 1 });
   });
 });

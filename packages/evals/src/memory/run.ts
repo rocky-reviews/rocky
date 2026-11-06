@@ -25,7 +25,7 @@ import {
   type AnalysisOutcome,
   type AnalysisRequest,
 } from "@rocky-reviews/core";
-import type { Finding } from "@rocky-reviews/schema";
+import type { AnalysisDocument, Finding, TriagedFileLevel } from "@rocky-reviews/schema";
 import { scoreFindings, type SeededFinding } from "../score.js";
 import { MEMORY_RUN_1, MEMORY_RUN_2, memoryCaseDiff, type MemoryCasePr } from "./case.js";
 
@@ -82,6 +82,10 @@ export interface MemoryRunDiagnosis {
   readonly restored: number;
   /** Of the restored, covered suppressions restored because the file is risky (`Finding.restored`). */
   readonly doubleCheck: number;
+  /** Findings the document lists as hidden by memory on the case file (P8-2b, `document.hidden`). */
+  readonly hidden: number;
+  /** Of the suppressed, those that stood on a critical file (P8-2b, `memoryHiddenOnCritical`). */
+  readonly hiddenOnCritical: number;
 }
 
 /** One trial: the conditions, and what each of its three analyses did. */
@@ -125,6 +129,12 @@ export interface MemoryEvalResult {
   readonly pass: boolean;
   /** Trials that passed, of `trials.length`. */
   readonly passes: number;
+  /**
+   * Of the passing trials, those whose apply run the model itself called `critical` (fix round 4,
+   * N3): there the pin, not memory, decided the result (unpinned, the entry would have had to be
+   * learned on a critical file to stand, P8-2b).
+   */
+  readonly pinDecided: number;
   readonly trials: readonly MemoryTrialResult[];
 }
 
@@ -140,6 +150,8 @@ const request = (pr: MemoryCasePr, memory?: readonly AnalysisMemoryEntry[]): Ana
 
 const findingsOf = (outcome: AnalysisOutcome | "capped"): readonly Finding[] =>
   outcome !== "capped" && outcome.status === "done" ? outcome.document.findings : [];
+const documentOf = (outcome: AnalysisOutcome | "capped"): AnalysisDocument | undefined =>
+  outcome !== "capped" && outcome.status === "done" ? outcome.document : undefined;
 
 /** The triage level the pipeline would give the case file, for the diagnosis. */
 interface TriagePinned {
@@ -157,10 +169,13 @@ const matchOf = (seeded: SeededFinding, findings: readonly Finding[]): Finding |
 /**
  * The entry a reviewer's "dismiss as intentional" of `finding` teaches, as the store would hold
  * it (scrubbed and validated by `prepareMemoryEntry`) and the worker would give the pipeline.
+ * `learnedLevel` is what the learner records from the stored document's triage of the finding's
+ * file (P8-2b, migration 0021): `null` stands for an entry learned before it was recorded.
  */
 export const learnedFrom = (
   finding: Finding,
   pr: MemoryCasePr,
+  learnedLevel: TriagedFileLevel | null = null,
 ): AnalysisMemoryEntry | undefined => {
   const learned = learnedEntry({ kind: "dismissed", reason: "intentional" }, finding, {
     pullRequestNumber: pr.number,
@@ -177,6 +192,7 @@ export const learnedFrom = (
     reason: draft.reason,
     // What the learner records on a dismissal: the dismissed finding's severity.
     severity: draft.kind === "dismissal" ? finding.severity : null,
+    learnedLevel: draft.kind === "dismissal" ? learnedLevel : null,
     text: draft.text,
     path: draft.evidence.path,
     source: memorySourceLabel(draft),
@@ -214,12 +230,15 @@ export const diagnose = (
     suppressed: 0,
     restored: 0,
     doubleCheck: 0,
+    hidden: 0,
+    hiddenOnCritical: 0,
   } as const;
   if (outcome === "capped") return { status: "capped", failure: null, ...empty };
   const counts = {
     suppressed: outcome.stats.memorySuppressed,
     restored: outcome.stats.memoryRestored,
     doubleCheck: outcome.stats.memoryDoubleCheck,
+    hiddenOnCritical: outcome.stats.memoryHiddenOnCritical,
   };
   if (outcome.status !== "done")
     return { status: "failed", failure: outcome.code, ...empty, ...counts };
@@ -238,6 +257,7 @@ export const diagnose = (
     reviewed: level !== null && REVIEWED.has(level) && unanalysed === null,
     unanalysed,
     findings: own.length,
+    hidden: (document.hidden ?? []).filter((finding) => finding.path === pr.path).length,
     matched: score.pairs.map((pair) => pair.seeded).sort(),
     patternSeverity:
       patternPair === undefined ? null : (own[patternPair.produced]?.severity ?? null),
@@ -253,7 +273,12 @@ const trial = async (
   const learn = await analyse("learn", request(MEMORY_RUN_1), options);
   const run1 = learn.outcome;
   const dismissed = matchOf(MEMORY_RUN_1.pattern, findingsOf(run1));
-  const entry = dismissed === undefined ? undefined : learnedFrom(dismissed, MEMORY_RUN_1);
+  // What the learner records as the level the team dismissed it at: the stored document's triage
+  // of the case file (after the pin, when pinned: the pin is what the document holds).
+  const learnedLevel =
+    documentOf(run1)?.triage.files.find((file) => file.path === MEMORY_RUN_1.path)?.level ?? null;
+  const entry =
+    dismissed === undefined ? undefined : learnedFrom(dismissed, MEMORY_RUN_1, learnedLevel);
   const controlled = await analyse("control", request(MEMORY_RUN_2), options);
   const control = controlled.outcome;
   const applied = await analyse(
@@ -332,6 +357,7 @@ export const runMemoryEval = async (
     run2BugFound: every("run2BugFound"),
     pass: trials.length === count && trials.every((t) => t.pass),
     passes: trials.filter((t) => t.pass).length,
+    pinDecided: trials.filter((t) => t.pass && t.runs.apply.modelLevel === "critical").length,
     trials,
   };
 };

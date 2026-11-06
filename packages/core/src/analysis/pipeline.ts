@@ -34,6 +34,7 @@ import {
   type ChangedFile,
   type Finding,
   type GraphUnavailable,
+  type HiddenFinding,
   type MapSectionUnavailable,
   type MapSectionUnavailableReason,
   type NoiseFile,
@@ -66,15 +67,17 @@ import {
 import {
   coversSeverity,
   entryOfHandle,
+  hiddenByOf,
   memoryKeyOf,
   memoryPart,
   memoryRefOf,
   resolveHandles,
   restoredDismissalOf,
   selectMemory,
+  suppressionStands,
   usableMemory,
   type AnalysisMemoryEntry,
-  type RestoredBecause,
+  type FileRisk,
   type RestoredByRisk,
   type SelectedMemory,
 } from "./memory.js";
@@ -251,6 +254,11 @@ export interface AnalysisStats {
    * stored with the "double-check" marker (`Finding.restored`, fix round 3).
    */
   memoryDoubleCheck: number;
+  /**
+   * Suppressions that stood on a file triaged critical because the dismissal was taken on a
+   * critical file nearby (P8-2b, `suppressionStands`); counted in `memorySuppressed` too.
+   */
+  memoryHiddenOnCritical: number;
 }
 
 /**
@@ -484,12 +492,32 @@ interface UnitOutcome extends UnreviewedRisk {
    * file, for the document's double-check marker (fix round 3); undefined for the others.
    */
   readonly restored?: readonly (RestoredByRisk | undefined)[];
+  /**
+   * Findings a dismissal kept out of the drafts (P8-2b, schema 1.6), each with the stored id of
+   * the entry that hid it: the document lists them so a suppression is never invisible.
+   */
+  readonly hidden?: readonly HiddenUnitItem[];
 }
 
 interface UnitMemory {
   readonly findings: readonly (readonly string[])[];
   readonly applied: readonly string[];
 }
+
+interface HiddenUnitItem {
+  readonly finding: ReviewFinding;
+  readonly entryId: string;
+}
+
+/**
+ * What memory must not override on a file (`FileRisk`): why a suppression would be restored
+ * (`critical_file` when the floored triage is critical, `rule_floor` for a floored file that is
+ * not) and whether the path takes a rule floor at all.
+ */
+const fileRisk = (level: TriagedFile["level"], floor: FloorLevel | undefined): FileRisk => ({
+  because: level === "critical" ? "critical_file" : floor === undefined ? undefined : "rule_floor",
+  ruleFloored: floor !== undefined,
+});
 
 /** Keeps the PR estimate within the document's cap: per-file minutes are scaled down to fit. */
 const fitMinutes = (files: readonly TriagedFile[]): TriagedFile[] => {
@@ -513,6 +541,7 @@ const run = async (
   const memory = usableMemory(request.memory);
   stats.memoryEntries = memory.entries.length;
   stats.memoryDropped = memory.dropped;
+  const entryById = new Map(memory.entries.map((entry) => [entry.id, entry] as const));
   if (request.diffTruncated) throw new Failed("diff_truncated");
   const parsed = parseUnifiedDiff(request.diff);
   if (!parsed.ok) throw new Failed(parsed.code);
@@ -589,10 +618,11 @@ const run = async (
     check: (findings: readonly ReviewFinding[]) => ReturnType<typeof checkReview>,
     unitSignal: AbortSignal,
     /**
-     * Why no suppression is honoured on this file (critical triage or a rule floor), or
-     * undefined when a covering dismissal may keep a finding out.
+     * What the file's triage and the rules say (`FileRisk`): whether a covering dismissal may
+     * keep a finding out, and why one would be restored otherwise.
      */
-    risk: RestoredBecause | undefined,
+    risk: FileRisk,
+    filePath: string,
   ): Promise<
     | {
         readonly ok: true;
@@ -600,6 +630,7 @@ const run = async (
           findings: ReviewFinding[];
           memory: UnitMemory;
           restored: (RestoredByRisk | undefined)[];
+          hidden: HiddenUnitItem[];
         };
       }
     | { readonly ok: false; readonly reason: UnitFailure }
@@ -625,6 +656,7 @@ const run = async (
               findings: plain.value.findings,
               memory: { findings: plain.value.findings.map(() => []), applied: [] },
               restored: plain.value.findings.map(() => undefined),
+              hidden: [],
             },
           }
         : plain;
@@ -668,17 +700,20 @@ const run = async (
     const memoryFindings = cited.value.findings.map((finding) => resolve(finding.memory));
     const restored: (RestoredByRisk | undefined)[] = findings.map(() => undefined);
     const applied: string[] = [];
+    const hidden: HiddenUnitItem[] = [];
     // A suppression stands only when the entry it names is a dismissal this call was given and
     // covers the finding's severity (never a critical one): anything else is raised as a draft,
     // so neither an invented handle nor a misread entry can make a finding disappear (fix round,
     // M2/S1, ADR 0037). The severity is the model's own label, so on a file triage or the rules
-    // call risky (triage never sees memory) no suppression stands at all (fix round 2, S2); a
-    // suppression a dismissal did cover is then restored with the double-check marker, so the
-    // reviewer sees what the team dismissed and why Rocky shows it anyway (fix round 3). Other
-    // restorations (an invented handle, a convention, a severity above the cap) get no marker:
-    // the team did not dismiss those.
-    const raised = (item: SuppressedFinding) =>
-      findings.some(
+    // call risky (triage never sees memory) a suppression stands only under `suppressionStands`
+    // (P8-2b: a dismissal the team took on a critical file, on this file or its directory; never
+    // on a rule-floored file); otherwise a suppression a dismissal did cover is restored with the
+    // double-check marker, so the reviewer sees what the team dismissed and why Rocky shows it
+    // anyway (fix round 3). Other restorations (an invented handle, a convention, a severity
+    // above the cap) get no marker: the team did not dismiss those. A suppression that stands
+    // goes in `hidden` with its entry, so the page can show it (schema 1.6).
+    const raisedAt = (item: SuppressedFinding) =>
+      findings.findIndex(
         (f) =>
           f.title === item.title &&
           f.range.start === item.range.start &&
@@ -687,19 +722,33 @@ const run = async (
     for (const item of cited.value.suppressed) {
       const entry = entryOfHandle(selection, item.entry);
       const covered = entry !== undefined && coversSeverity(entry, item.severity);
-      if (risk === undefined && covered) {
+      if (covered && suppressionStands(entry, filePath, risk, memory.entries)) {
         stats.memorySuppressed++;
+        if (risk.because === "critical_file") stats.memoryHiddenOnCritical++;
         if (!applied.includes(entry.id)) applied.push(entry.id);
+        // Also raised as a draft (the same title and lines): the draft is enough, a hidden copy
+        // would show the finding twice (fix round 1).
+        if (raisedAt(item) === -1) hidden.push({ finding: withoutEntry(item), entryId: entry.id });
         continue;
       }
       if (entry === undefined || entry.kind !== "dismissal") stats.memoryStripped++;
       stats.memoryRestored++;
       const marker =
-        covered && risk !== undefined && restoredDismissalOf(entry, risk) !== undefined
-          ? { entryId: entry.id, because: risk }
+        covered &&
+        risk.because !== undefined &&
+        restoredDismissalOf(entry, risk.because) !== undefined
+          ? { entryId: entry.id, because: risk.because }
           : undefined;
-      // Already raised as a draft (the same title and lines): one copy is enough.
-      if (raised(item)) continue;
+      // Already raised as a draft (the same title and lines): one copy is enough, and it carries
+      // the marker the restored copy would have (fix round 4, N1).
+      const at = raisedAt(item);
+      if (at !== -1) {
+        if (marker !== undefined && restored[at] === undefined) {
+          restored[at] = marker;
+          stats.memoryDoubleCheck++;
+        }
+        continue;
+      }
       findings.push(withoutEntry(item));
       memoryFindings.push([]);
       restored.push(marker);
@@ -707,7 +756,7 @@ const run = async (
     }
     return {
       ok: true,
-      value: { findings, memory: { findings: memoryFindings, applied }, restored },
+      value: { findings, memory: { findings: memoryFindings, applied }, restored, hidden },
     };
   };
 
@@ -738,11 +787,53 @@ const run = async (
     if (reused !== undefined && instructionLeaks(reused, fileParts).length === 0) {
       stats.reused++;
       const triage = applyFloor(reused.triage, floor);
-      const applied = keep(reused.memory.applied);
+      const risk = fileRisk(triage.level, floor);
+      // A reused unit's hidden findings are re-checked against the current memory (P8-2b fix
+      // round 2): the unit key covers the file's selection, not the entries `overruledNearby`
+      // reads, so a higher role's entry learned since the last push (and never selected for
+      // this file) would otherwise keep the finding hidden where a fresh review would restore
+      // it. Coverage cannot have changed (the entry's severity is in the key), so only
+      // `suppressionStands` is re-run; a suppression that no longer stands is restored as a
+      // draft with the double-check marker, as on the fresh path, and its entry is no longer
+      // "applied" by this unit unless another hidden finding still stands under it.
+      const findings: ReviewFinding[] = [...reused.findings];
+      const memoryFindings = reused.memory.findings.map(keep);
+      const restored = reused.restored.map((mark) =>
+        mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
+      );
+      const hidden: HiddenUnitItem[] = [];
+      const stands = (id: string): boolean => {
+        const entry = entryById.get(id);
+        return entry !== undefined && suppressionStands(entry, file.path, risk, memory.entries);
+      };
+      for (const item of reused.hidden) {
+        if (!offered.has(item.entryId)) continue;
+        if (stands(item.entryId)) {
+          hidden.push(item);
+          continue;
+        }
+        const entry = entryById.get(item.entryId);
+        stats.memoryRestored++;
+        const marker =
+          entry !== undefined &&
+          risk.because !== undefined &&
+          restoredDismissalOf(entry, risk.because) !== undefined
+            ? { entryId: entry.id, because: risk.because }
+            : undefined;
+        if (marker !== undefined) stats.memoryDoubleCheck++;
+        findings.push(item.finding);
+        memoryFindings.push([]);
+        restored.push(marker);
+      }
+      // Every applied entry is re-checked, not only those with a hidden finding: a suppression
+      // that repeated a raised draft was applied without one (fix round 3). The marker that
+      // draft would carry on a fresh run cannot be rebuilt here: the unit holds no record of
+      // which raised draft the suppression repeated.
+      const applied = keep(reused.memory.applied).filter(stands);
       return {
         path: file.path,
         triage,
-        findings: reused.findings,
+        findings,
         reviewed: REVIEWED_LEVELS.has(triage.level) && hasNewSide(file),
         ruleFloor: floor,
         unit: {
@@ -751,10 +842,9 @@ const run = async (
           reviewMinutes: reused.triage.reviewMinutes,
           ...(applied.length === 0 ? {} : { memoryApplied: applied }),
         },
-        memory: { findings: reused.memory.findings.map(keep), applied },
-        restored: reused.restored.map((mark) =>
-          mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
-        ),
+        memory: { findings: memoryFindings, applied },
+        restored,
+        hidden,
       };
     }
     const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
@@ -815,11 +905,8 @@ const run = async (
       selection,
       (findings) => checkReview(context, triage, findings),
       unitSignal,
-      triage.level === "critical"
-        ? "critical_file"
-        : floor === undefined
-          ? undefined
-          : "rule_floor",
+      fileRisk(triage.level, floor),
+      file.path,
     );
     if (!reviewed.ok) {
       // A file that should have been reviewed and was not must not look reviewed and clean, and
@@ -842,6 +929,7 @@ const run = async (
       unit: applied.length === 0 ? unit : { ...unit, memoryApplied: [...applied] },
       memory: reviewed.value.memory,
       restored: reviewed.value.restored,
+      hidden: reviewed.value.hidden,
     };
   };
   const outcomes = await mapBounded(
@@ -861,6 +949,8 @@ const run = async (
     restored: RestoredByRisk | undefined;
   }[] = [];
   const units: FileUnit[] = [];
+  /** Findings a dismissal hid (P8-2b): listed in the document, never counted as drafts. */
+  const rawHidden: { finding: ReviewFinding; path: string; seq: number; entryId: string }[] = [];
   for (const outcome of outcomes) {
     if (outcome.unanalysed !== undefined) {
       unanalysed.push({
@@ -881,6 +971,8 @@ const run = async (
         memory: outcome.memory?.findings[index] ?? [],
         restored: outcome.restored?.[index],
       });
+    for (const item of outcome.hidden ?? [])
+      rawHidden.push({ ...item, path: outcome.path, seq: rawHidden.length });
   }
   const byFileOrder = (a: { path: string }, b: { path: string }) =>
     (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0);
@@ -900,18 +992,20 @@ const run = async (
   stats.unanalysed = unanalysed.length;
 
   // Ids by severity, then file order, then line: stable and independent of call timing.
-  raw.sort(
-    (a, b) =>
-      SEVERITY_RANK[b.finding.severity] - SEVERITY_RANK[a.finding.severity] ||
-      byFileOrder(a, b) ||
-      a.finding.range.start - b.finding.range.start ||
-      a.seq - b.seq,
-  );
+  const byRank = (
+    a: { finding: ReviewFinding; path: string; seq: number },
+    b: { finding: ReviewFinding; path: string; seq: number },
+  ) =>
+    SEVERITY_RANK[b.finding.severity] - SEVERITY_RANK[a.finding.severity] ||
+    byFileOrder(a, b) ||
+    a.finding.range.start - b.finding.range.start ||
+    a.seq - b.seq;
+  raw.sort(byRank);
   // Project memory cited anywhere (P8-2): each finding's refs first (in finding order), then the
-  // entries reviews applied without a finding (in file order). The document requires every
-  // finding's ref in `briefing.memoryApplied`, quoted identically: both are built here, from the
-  // stored entries, never from model text.
-  const entryById = new Map(memory.entries.map((entry) => [entry.id, entry] as const));
+  // entries that hid a finding (P8-2b, in hidden order), then the entries reviews applied without
+  // a finding (in file order). The document requires every finding's ref, and every hidden
+  // finding's entry, in `briefing.memoryApplied`, quoted identically: all are built here, from
+  // the stored entries, never from model text.
   const appliedIds: string[] = [];
   const cite = (id: string): boolean => {
     if (!entryById.has(id)) return false;
@@ -927,6 +1021,46 @@ const run = async (
         const entry = entryById.get(id);
         return entry === undefined ? [] : [memoryRefOf(entry)];
       });
+  for (const { memory: cited } of raw)
+    cited.slice(0, limits.MAX_MEMORY_REFS_PER_FINDING).forEach(cite);
+  // A hidden finding must cite the entry that hid it. One whose entry cannot be cited (gone, or
+  // past the document's cap on applied entries), or past the document's cap on hidden findings
+  // (`MAX_FINDINGS`, fix round 1), is not kept hidden: it is raised as a plain draft instead, so
+  // a suppression is never invisible (fail open to the reviewer).
+  rawHidden.sort(byRank);
+  const hiddenFindings: HiddenFinding[] = [];
+  for (const item of rawHidden) {
+    const entry = entryById.get(item.entryId);
+    const hiddenBy = entry === undefined ? undefined : hiddenByOf(entry);
+    if (
+      hiddenBy === undefined ||
+      hiddenFindings.length >= limits.MAX_FINDINGS ||
+      !cite(item.entryId)
+    ) {
+      raw.push({
+        finding: item.finding,
+        path: item.path,
+        seq: raw.length,
+        memory: [],
+        restored: undefined,
+      });
+      continue;
+    }
+    // A hidden finding carries no suggestion (the answer's `suppressed` items have none).
+    const { severity, confidence, range, title, body, agentPrompt } = item.finding;
+    hiddenFindings.push({
+      severity,
+      confidence,
+      range,
+      title,
+      body,
+      agentPrompt,
+      id: `H${hiddenFindings.length + 1}`,
+      path: item.path,
+      hiddenBy,
+    });
+  }
+  if (hiddenFindings.length < rawHidden.length) raw.sort(byRank);
   /** The double-check marker, from the stored entry (never model text); none if it is gone. */
   const restoredOf = (mark: RestoredByRisk | undefined) => {
     const entry = mark === undefined ? undefined : entryById.get(mark.entryId);
@@ -954,6 +1088,8 @@ const run = async (
   /** A briefing no other part's check can trip over, with the memory the findings cite. */
   const stub: Briefing = { ...STUB_BRIEFING, memoryApplied };
   stats.findings = findings.length;
+  /** Written only when there are some: a 1.5 reader keeps reading every other document. */
+  const hidden = hiddenFindings.length === 0 ? {} : { hidden: hiddenFindings };
   const triageFiles = fitMinutes(triaged.sort(byFileOrder));
 
   const fileLines = Object.fromEntries(
@@ -979,6 +1115,7 @@ const run = async (
         schemaVersion: requiredSchemaVersion({
           briefing,
           findings,
+          ...hidden,
           provenance: { graphUnavailable, ...sections },
         }),
         provenance: {
@@ -999,6 +1136,7 @@ const run = async (
         briefing,
         triage: { files: triageFiles, noise },
         findings,
+        ...hidden,
         ...(graph === undefined ? {} : { graph }),
       }),
       { newFileLines: fileLines },
@@ -1346,6 +1484,7 @@ const run = async (
       ...finding.memory,
       ...(finding.restored === undefined ? [] : [finding.restored.entry]),
     ]),
+    ...(final.value.hidden ?? []).map((finding) => finding.hiddenBy.entry),
   ];
   if (refs.some((ref) => containsPromptCanaryFragment(ref.text)))
     throw new Failed("document_invalid");
@@ -1356,6 +1495,12 @@ const run = async (
     findings: final.value.findings.map((finding) => {
       const copy: Record<string, unknown> = { ...finding, memory: [] };
       delete copy["restored"];
+      return copy;
+    }),
+    // Hidden findings are model text like any draft (P8-2b); their marker is the stored entry's.
+    hidden: (final.value.hidden ?? []).map((finding) => {
+      const copy: Record<string, unknown> = { ...finding };
+      delete copy["hiddenBy"];
       return copy;
     }),
     graph: final.value.graph,
@@ -1420,6 +1565,7 @@ const newStats = (): AnalysisStats => ({
   memorySuppressed: 0,
   memoryRestored: 0,
   memoryDoubleCheck: 0,
+  memoryHiddenOnCritical: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

@@ -14,14 +14,20 @@
  * Also the UI state the draft cards share with the right panel: which draft is being edited or
  * dismissed (the text survives the diff's virtualisation), which one has the focus ring, and
  * jump requests from the panel to a draft or a comment.
+ *
+ * P8-2b: the findings project memory hid (`document.hidden`) are not drafts. The page lists them
+ * collapsed; `restore` asks the server to bring one into the reviewer's drafts (its decision row
+ * is created, undecided), after which it is a draft like any other: `findings` here is the
+ * document's drafts plus the hidden findings the server reports restored (a record exists).
  */
 import {
   applyDraftAction,
   DRAFT,
   type DraftAction,
   type DraftDecision,
+  restoredAsDraft,
 } from "@rocky-reviews/core/drafts";
-import type { Finding } from "@rocky-reviews/schema";
+import type { Finding, HiddenByDismissal, HiddenFinding } from "@rocky-reviews/schema";
 import {
   createContext,
   type ReactNode,
@@ -62,6 +68,8 @@ export const TOAST = {
   copied: "Fix prompt copied. Paste it into your coding agent.",
   copyFailed: "The fix prompt could not be copied: the browser blocked the clipboard.",
   saveFailed: "Your decision could not be saved. Try again.",
+  restored: "Restored as a draft. It is yours to accept, edit or dismiss.",
+  restoreFailed: "The finding could not be restored. Try again.",
   conflict: "This draft was decided in another tab. It now shows that decision.",
   commentFailed: "Your comment could not be saved. Try again.",
   deleteFailed: "Your comment could not be deleted. Try again.",
@@ -82,6 +90,13 @@ export type Jump =
       readonly path: string;
       readonly line: number;
       readonly seq: number;
+    }
+  /** P8-2b: a hidden finding; the file view opens its "hidden by memory" list on it. */
+  | {
+      readonly kind: "hidden";
+      readonly findingId: string;
+      readonly path: string;
+      readonly seq: number;
     };
 
 export type ReviewContextValue = {
@@ -89,7 +104,14 @@ export type ReviewContextValue = {
   readonly status: "none" | "loading" | "ready" | "failed";
   /** The diff on screen is from a newer push than the analysis: drafts and comments are hidden. */
   readonly stale: boolean;
+  /** The drafts: the document's findings, then the hidden findings the reviewer restored. */
   readonly findings: readonly Finding[];
+  /** P8-2b: the findings project memory hid that are not restored (yet). */
+  readonly hidden: readonly HiddenFinding[];
+  /** P8-2b: for a restored finding, the dismissal that had hidden it; undefined otherwise. */
+  readonly hiddenBy: (findingId: string) => HiddenByDismissal | undefined;
+  /** P8-2b: brings a hidden finding into the drafts (the server creates its decision row). */
+  readonly restore: (hidden: HiddenFinding) => Promise<void>;
   readonly state: ReviewState;
   readonly decisionOf: (findingId: string) => DraftDecision;
   /** Carried by a review attempt (posted, or being posted): read-only, even if undecided. */
@@ -108,6 +130,8 @@ export type ReviewContextValue = {
   readonly doneJump: (seq: number) => void;
   readonly jumpToFinding: (findingId: string) => void;
   readonly jumpToComment: (comment: OwnComment) => void;
+  /** P8-2b: opens the hidden finding's file on its "hidden by memory" list. */
+  readonly jumpToHidden: (findingId: string) => void;
   /**
    * Reads the review again from the server (after a post) and replaces the decisions and
    * comments, keeping the page's own state: the draft being edited or dismissed, its text, the
@@ -121,6 +145,9 @@ export const NO_REVIEW: ReviewContextValue = {
   status: "none",
   stale: false,
   findings: [],
+  hidden: [],
+  hiddenBy: () => undefined,
+  restore: async () => {},
   state: EMPTY_REVIEW,
   decisionOf: () => DRAFT,
   postedOf: () => null,
@@ -137,8 +164,11 @@ export const NO_REVIEW: ReviewContextValue = {
   doneJump: () => {},
   jumpToFinding: () => {},
   jumpToComment: () => {},
+  jumpToHidden: () => {},
   refresh: () => {},
 };
+
+const NO_HIDDEN: readonly HiddenFinding[] = [];
 
 export const ReviewContext = createContext<ReviewContextValue>(NO_REVIEW);
 
@@ -150,7 +180,10 @@ type Props = {
   analysisId: string | null;
   /** The head commit that analysis is for (to tell when the diff is from a newer push). */
   analysisHead: string | null;
+  /** The document's drafts. */
   findings: readonly Finding[];
+  /** The document's hidden findings (P8-2b); restored ones become drafts here. */
+  hidden?: readonly HiddenFinding[] | undefined;
   /** Opens a file in the main column (a jump from the panel). */
   onOpenFile: (path: string) => void;
   children: ReactNode;
@@ -160,7 +193,8 @@ export const ReviewProvider = ({
   source,
   analysisId,
   analysisHead,
-  findings,
+  findings: drafted,
+  hidden: allHidden = NO_HIDDEN,
   onOpenFile,
   children,
 }: Props) => {
@@ -252,6 +286,22 @@ export const ReviewProvider = ({
   const savingNow = useRef<ReadonlySet<string>>(saving);
   savingNow.current = saving;
 
+  // A hidden finding with a record is restored (the server lists it even undecided): it is a
+  // draft from then on, built from the document, never from the answer.
+  const findings = useMemo<readonly Finding[]>(
+    () => [...drafted, ...allHidden.filter((h) => state.drafts.has(h.id)).map(restoredAsDraft)],
+    [drafted, allHidden, state.drafts],
+  );
+  const hidden = useMemo(
+    () => allHidden.filter((h) => !state.drafts.has(h.id)),
+    [allHidden, state.drafts],
+  );
+  const hiddenBy = useCallback(
+    (findingId: string) =>
+      state.drafts.has(findingId) ? allHidden.find((h) => h.id === findingId)?.hiddenBy : undefined,
+    [allHidden, state.drafts],
+  );
+
   const decisionOf = useCallback(
     (findingId: string) => state.drafts.get(findingId)?.decision ?? DRAFT,
     [state],
@@ -336,6 +386,34 @@ export const ReviewProvider = ({
       return run;
     },
     [step],
+  );
+
+  // P8-2b: not optimistic. The finding becomes a draft only once the server has its row, so a
+  // refused or failed restore shows nothing that would then have to be taken back.
+  const restore = useCallback(
+    async (target: HiddenFinding) => {
+      const scope = session.current;
+      if (analysisId === null || !ready.current || scope.aborted) return;
+      if (drafts.current.has(target.id)) return;
+      busy(target.id, true);
+      try {
+        const answer = await untilAborted(
+          source.decide(analysisId, target.id, { kind: "restore" }),
+          scope,
+        );
+        if (answer.kind === "too_long") throw new Error("unexpected");
+        putDraft(target.id, parseDraftRecord(answer.draft));
+        setFocused(target.id);
+        setJump({ kind: "finding", findingId: target.id, seq: ++seq.current });
+        toast(TOAST.restored);
+      } catch {
+        if (scope.aborted) return;
+        toast(TOAST.restoreFailed);
+      } finally {
+        if (!scope.aborted) busy(target.id, false);
+      }
+    },
+    [analysisId, source, toast, busy, putDraft],
   );
 
   const sendToAgent = useCallback(
@@ -431,11 +509,24 @@ export const ReviewProvider = ({
     [onOpenFile],
   );
 
+  const jumpToHidden = useCallback(
+    (findingId: string) => {
+      const target = hidden.find((h) => h.id === findingId);
+      if (target === undefined) return;
+      onOpenFile(target.path);
+      setJump({ kind: "hidden", findingId, path: target.path, seq: ++seq.current });
+    },
+    [hidden, onOpenFile],
+  );
+
   const value = useMemo<ReviewContextValue>(
     () => ({
       status,
       stale,
       findings,
+      hidden,
+      hiddenBy,
+      restore,
       state,
       decisionOf,
       postedOf,
@@ -452,12 +543,16 @@ export const ReviewProvider = ({
       doneJump,
       jumpToFinding,
       jumpToComment,
+      jumpToHidden,
       refresh,
     }),
     [
       status,
       stale,
       findings,
+      hidden,
+      hiddenBy,
+      restore,
       state,
       decisionOf,
       postedOf,

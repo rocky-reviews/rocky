@@ -100,6 +100,11 @@ comments moved from the P6-3 in-memory store to the same provider.
 
 - A reload shows the same review; P3-5 and P6-6 read `comments_pending` for "what will be
   posted".
+- P8-2b ([ADR 0037 §7](0037-learning-and-applying-project-memory.md)): a finding project memory
+  hid (`document.hidden`, schema 1.6) becomes one of the reviewer's drafts through the `restore`
+  action on the same route: the store creates its decision row, undecided, and from there the
+  state machine above applies. `applyDraftAction` refuses `restore` (it is not a transition);
+  every other action on a hidden finding needs the row first.
 - Until the repository access check is wired in `startServer` (ADR 0024 residual risk; done by
   H4-1, [ADR 0033](0033-repository-access-check-wiring.md)), these
   routes answer 503 in a running server; until the server serves the shell data, the dev page has

@@ -16,14 +16,25 @@
  *   the pipeline resolves them against the call's own selection, so an id the call was not given
  *   (another repository's, another file's, an invented one) can never be stored.
  * - A dismissal covers findings up to its severity (`coversSeverity`), never a critical one.
- * - On a risky file (triaged critical, or a rule floor) no suppression stands; a covered one is
- *   restored as a draft that says so (`restoredDismissalOf`, `Finding.restored`, schema 1.5), so
- *   the reviewer double-checks it against what the team dismissed. Only the pipeline writes it.
+ * - On a risky file no suppression stands, with one exception (P8-2b, `suppressionStands`): a
+ *   dismissal the team took **on a file that was itself triaged critical** (`learnedLevel`,
+ *   recorded by the learner from the document's triage, never from a model) may stand on a
+ *   critical file within the same file or directory as its evidence. Never on a rule-floored
+ *   file, never for a member-written entry, never above the severity cap. A covered suppression
+ *   that does not stand is restored as a draft that says so (`restoredDismissalOf`,
+ *   `Finding.restored`, schema 1.5), so the reviewer double-checks it against what the team
+ *   dismissed. Only the pipeline writes it.
+ * - A suppression that stands is not invisible: the finding goes in the document's `hidden`
+ *   list with the entry that hid it (`hiddenByOf`, schema 1.6), where the page shows it
+ *   collapsed and the reviewer can restore it as a draft.
+ * - The learned level never travels in the memory part: the model cannot claim it.
  */
 import {
   MemoryRef,
   pathProblem,
   Severity,
+  TriagedFileLevel,
+  type HiddenByDismissal,
   type MemoryRef as MemoryRefValue,
   type RESTORED_BECAUSE,
   type RestoredDismissal,
@@ -61,13 +72,38 @@ export interface AnalysisMemoryEntry {
   readonly source: string;
   /** 0..100. */
   readonly confidence: number;
+  /**
+   * For a learned dismissal: the triage level (after the rule floor) the dismissed finding's
+   * file had in the analysis the team dismissed it on (P8-2b). `critical` is what lets the entry
+   * stand on a critical file. Absent or `null` for entries learned before it was recorded and
+   * for every other entry: they rank as non-critical. Never offered to the model.
+   */
+  readonly learnedLevel?: TriagedFileLevel | null | undefined;
+  /**
+   * The role of the decision the entry came from (`learner_role`, migration 0018): the
+   * reviewer's role when it was learned, kept by a person's edit of it (P8-3). On a critical
+   * file a dismissal does not stand against a nearby entry of the opposite kind taught by a
+   * higher role (P8-2b fix round 1, `suppressionStands`). Absent or `null` (an entry a person
+   * wrote from scratch, or one learned before 0018) ranks as `member`. Never offered to the model.
+   */
+  readonly learnerRole?: LearnerRole | null | undefined;
 }
+
+export const LEARNER_ROLES = ["owner", "admin", "member"] as const;
+export type LearnerRole = (typeof LEARNER_ROLES)[number];
+const ROLE_RANK: Readonly<Record<LearnerRole, number>> = { owner: 2, admin: 1, member: 0 };
+const isLearnerRole = (value: unknown): value is LearnerRole =>
+  typeof value === "string" && (LEARNER_ROLES as readonly string[]).includes(value);
+/** A learned entry without a recorded role ranks as `member` (the learner's own rule). */
+const roleRank = (entry: AnalysisMemoryEntry): number =>
+  isLearnerRole(entry.learnerRole) ? ROLE_RANK[entry.learnerRole] : 0;
 
 /**
  * Most entries one analysis takes from the request. The worker loads member-written entries,
- * learned dismissals and other learned entries under separate bounds that add up to this.
+ * learned dismissals, owner- and admin-taught conventions and decisions, and other learned
+ * entries under separate bounds that add up to this (`ANALYSIS_MEMORY_BOUNDS`).
  */
-export const MAX_ANALYSIS_MEMORY = 250;
+export const MAX_ANALYSIS_MEMORY = 300;
 export const MEMORY_LABEL = "memory";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -85,12 +121,38 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
   if (!isRecord(value)) return undefined;
-  const { id, kind, origin, reason, severity, text, path, source, confidence } = value;
+  const {
+    id,
+    kind,
+    origin,
+    reason,
+    severity,
+    text,
+    path,
+    source,
+    confidence,
+    learnedLevel,
+    learnerRole,
+  } = value;
   if (typeof id !== "string" || !UUID.test(id)) return undefined;
   if (!isMemoryKind(kind) || !isMemoryOrigin(origin)) return undefined;
   if (kind === "dismissal" ? !isDismissReason(reason) : reason !== null) return undefined;
   const level = severity === null ? null : Severity.safeParse(severity);
   if (level !== null && (!level.success || kind !== "dismissal")) return undefined;
+  // The learned level is the store's (migration 0021): only on a learned dismissal, as the
+  // database's CHECKs say. An entry that contradicts them is dropped, like one with a severity
+  // on a convention.
+  const learnedAt =
+    learnedLevel === undefined || learnedLevel === null
+      ? null
+      : TriagedFileLevel.safeParse(learnedLevel);
+  if (learnedAt !== null && (!learnedAt.success || kind !== "dismissal" || origin !== "learned"))
+    return undefined;
+  // The learner's role (0018): the role of the decision the entry came from. A person's edit
+  // of a learned entry keeps it on the person-written row (P8-3, migration 0020), so it is
+  // accepted on any origin; only the value is checked.
+  if (learnerRole !== undefined && learnerRole !== null && !isLearnerRole(learnerRole))
+    return undefined;
   if (typeof path !== "string" || pathProblem(path) !== undefined) return undefined;
   if (typeof confidence !== "number" || !Number.isSafeInteger(confidence)) return undefined;
   if (confidence < 0 || confidence > 100) return undefined;
@@ -114,6 +176,8 @@ const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
     path,
     source: source as string,
     confidence,
+    learnedLevel: learnedAt === null || !learnedAt.success ? null : learnedAt.data,
+    learnerRole: isLearnerRole(learnerRole) ? learnerRole : null,
   };
 };
 
@@ -265,6 +329,99 @@ export const memoryRefOf = (entry: AnalysisMemoryEntry): MemoryRefValue => ({
 
 /** Why no suppression stands on a file: it is triaged critical, or its path takes a rule floor. */
 export type RestoredBecause = (typeof RESTORED_BECAUSE)[number];
+
+/**
+ * What the pipeline knows about the reviewed file that memory must not override: whether its
+ * path takes a rule floor (auth, migrations: always reviewed in full) and why, if at all, a
+ * suppression would be restored (`critical_file` when triage, after the floor, is critical;
+ * `rule_floor` for a floored file that is not; undefined on any other file).
+ */
+export interface FileRisk {
+  readonly because: RestoredBecause | undefined;
+  readonly ruleFloored: boolean;
+}
+
+/**
+ * Whether the evidence of `entry` is close enough to a critical file for it to stand there: the
+ * same file, or the same directory **below the repository root** (P8-2b fix round 1, S2). Root
+ * files share the directory `""` (`dirname`), so for root-level evidence only the same file
+ * counts: in a flat repository a dismissal on `server.js` must not stand on every critical file.
+ * Directories are compared whole, so `src/a` never matches `src/ab`.
+ */
+const nearOnCriticalFile = (entryPath: string, filePath: string): boolean =>
+  entryPath === filePath || (dirname(entryPath) !== "" && dirname(entryPath) === dirname(filePath));
+
+/**
+ * A current learned entry of the opposite kind, taught by a higher role, in the reviewed file's
+ * directory (P8-2b fix round 1, S1). The learner's opposite-decision rule (ADR 0037 §3) matches
+ * the exact path and title, so a member's dismissal of a reworded pattern on a sibling file
+ * slips past it and, with `learned_level = critical`, could hide an owner's pattern on a critical
+ * file next door. Here the rule is deliberately wider and deterministic: directory and opposite
+ * kind, no subject match. Titles are model-written and vary between runs, so a subject match
+ * would give the author of the reworded entry a way around the block; the cost of blocking is
+ * only the double-check line (the finding is restored, never hidden), so the critical path fails
+ * closed. What blocks is an entry with a role, whatever its origin: a learned one, or a
+ * person's edit of it, which keeps the decision's role (P8-3). An entry a person wrote from
+ * scratch carries no role and does not block; nor does one an admin switched off, which the
+ * worker never loads (P8-3), and a person-written entry never stands here itself (no learned
+ * level, by the CHECK of migration 0021).
+ */
+const overruledNearby = (
+  entry: AnalysisMemoryEntry,
+  filePath: string,
+  entries: readonly AnalysisMemoryEntry[],
+): boolean =>
+  entries.some(
+    (other) =>
+      other.id !== entry.id &&
+      other.kind !== "dismissal" &&
+      roleRank(other) > roleRank(entry) &&
+      nearOnCriticalFile(other.path, filePath),
+  );
+
+/**
+ * Whether a covered suppression stands on this file (P8-2b). Memory never decides this: the
+ * pipeline does, from the file's triage (which never sees memory), its rule floor and what the
+ * store recorded about the entry.
+ *
+ * - Not risky: it stands (the caller has already checked `coversSeverity`).
+ * - A rule-floored file (auth, migrations): never, whatever the entry.
+ * - A file triaged critical: only a **learned** dismissal the team took on a file that was
+ *   itself triaged critical (`learnedLevel === "critical"`), only on the same file or in the
+ *   same directory below the root (`nearOnCriticalFile`: tighter than the usual top-level
+ *   scope; root-level evidence counts for its own file only), and not when a higher role taught
+ *   an entry of the opposite kind in that directory (`overruledNearby`, over every entry the
+ *   analysis was given: `entries`). A member-written entry is not eligible: it records a
+ *   person's rule, not a decision taken in critical context, and it carries no learned level by
+ *   construction (migration 0021).
+ *
+ * `coversSeverity` stays the caller's check, so a critical-severity finding is never hidden.
+ */
+export const suppressionStands = (
+  entry: AnalysisMemoryEntry,
+  filePath: string,
+  risk: FileRisk,
+  entries: readonly AnalysisMemoryEntry[] = [],
+): boolean => {
+  if (risk.ruleFloored) return false;
+  if (risk.because === undefined) return true;
+  return (
+    entry.kind === "dismissal" &&
+    entry.origin === "learned" &&
+    entry.learnedLevel === "critical" &&
+    nearOnCriticalFile(entry.path, filePath) &&
+    !overruledNearby(entry, filePath, entries)
+  );
+};
+
+/**
+ * The document's marker on a hidden finding (schema 1.6): the dismissal that hid it as a ref,
+ * the path the team took it on and its reason. Only a dismissal with a reason can hide.
+ */
+export const hiddenByOf = (entry: AnalysisMemoryEntry): HiddenByDismissal | undefined =>
+  entry.kind !== "dismissal" || entry.reason === null
+    ? undefined
+    : { entry: memoryRefOf(entry), path: entry.path, dismissedAs: entry.reason };
 
 /**
  * A covered suppression the pipeline restored because the file is risky (fix round 3): the

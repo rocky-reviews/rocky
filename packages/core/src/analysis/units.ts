@@ -27,7 +27,7 @@ import { MAX_MEMORY_PER_FILE, type ReviewFinding } from "./outputs.js";
  * Bump when instructions, output contracts, rules or anything else that shapes a unit's answer
  * changes: no stored unit is reused across versions.
  */
-export const PIPELINE_VERSION = "p4-4.2";
+export const PIPELINE_VERSION = "p8-2b.1";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -108,6 +108,11 @@ export interface ReusedUnit {
    * the stored id and why (`Finding.restored`, schema 1.5); undefined for the others.
    */
   readonly restored: readonly (RestoredByRisk | undefined)[];
+  /**
+   * Findings a dismissal kept out of the drafts on this file (P8-2b, schema 1.6), each with the
+   * stored id of the entry that hid it. The key covers that entry; the pipeline checks it again.
+   */
+  readonly hidden: readonly { readonly finding: ReviewFinding; readonly entryId: string }[];
 }
 
 const sameFacts = (a: ChangedFile, b: ChangedFile): boolean =>
@@ -153,6 +158,12 @@ export const reusableUnit = (
         ? undefined
         : { entryId: finding.restored.entry.entryId, because: finding.restored.shownBecause },
     ),
+    hidden: (document.hidden ?? [])
+      .filter((finding) => finding.path === facts.path)
+      .map(({ severity, confidence, range, title, body, agentPrompt, hiddenBy }) => ({
+        finding: { severity, confidence, range, title, body, agentPrompt },
+        entryId: hiddenBy.entry.entryId,
+      })),
   };
 };
 

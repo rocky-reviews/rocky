@@ -1,5 +1,9 @@
-import { type DraftDecision, postedCommentParts } from "@rocky-reviews/core/drafts";
-import { type Finding, parseAnalysisDocument } from "@rocky-reviews/schema";
+import {
+  type DraftDecision,
+  postedCommentParts,
+  restoredAsDraft,
+} from "@rocky-reviews/core/drafts";
+import { type Finding, type HiddenByDismissal, parseAnalysisDocument } from "@rocky-reviews/schema";
 import pr847 from "@rocky-reviews/schema/fixtures/pr-847.json";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -13,6 +17,9 @@ import { reviewWith } from "./testing.js";
 const parsed = parseAnalysisDocument(pr847);
 if (!parsed.ok) throw new Error("fixture invalid");
 const findings = parsed.value.findings;
+/** P8-2b: the finding memory hid on the jobs file, as the draft it becomes once restored. */
+const H1 = parsed.value.hidden?.find((h) => h.id === "H1");
+if (H1 === undefined) throw new Error("the fixture carries H1");
 const byId = (id: string) => {
   const found = findings.find((f) => f.id === id);
   if (found === undefined) throw new Error(`no finding ${id}`);
@@ -35,6 +42,8 @@ const render = (
     posted?: "posting" | "posted";
     /** H4-14: the draft the on-screen tracker reports. */
     onScreen?: string;
+    /** P8-2b: the dismissal that had hidden this draft (it was restored). */
+    hiddenBy?: HiddenByDismissal;
   } = {},
 ) => {
   const value = reviewWith(
@@ -46,6 +55,7 @@ const render = (
       focused: options.focused ?? null,
       saving: new Set(options.saving === true ? [finding.id] : []),
       status: options.status ?? "ready",
+      hiddenBy: (id) => (id === finding.id ? options.hiddenBy : undefined),
     },
     options.posted === undefined ? {} : { [finding.id]: options.posted },
   );
@@ -170,9 +180,22 @@ describe("an undecided draft", () => {
     expect(html).toContain('class="evidence double-check"');
     // The entry's path and text are stored data, rendered as text (never markup).
     expect(html).toContain("<code><bdi>src/auth/invitations.ts</bdi></code>");
-    const fixture = JSON.stringify(F3.restored);
-    expect(fixture).toContain("Invitations can be reused");
-    expect(html).not.toContain("Invitations can be reused after they&#x27;re accepted · dismissal");
+    const restoredText = F3.restored?.entry.text ?? "";
+    expect(restoredText).toContain("Invitations can be reused");
+    // Fix round 4, N2: the double-check line itself does not quote the entry's text (the title
+    // above is the same issue; P8-3's view is where to read the entry) ...
+    const line = text(html.split('class="evidence double-check"')[1]?.split("</p>")[0] ?? "");
+    expect(line).toContain("Your team dismissed this as intentional");
+    expect(line).not.toContain(restoredText);
+    expect(line).not.toContain(F3.title);
+    // ... and a path shaped like markup renders escaped, as text.
+    if (F3.restored === undefined) throw new Error("F3 carries a restored marker");
+    const scripted = render({
+      ...F3,
+      restored: { ...F3.restored, path: "src/<script>alert(1)</script>.ts" },
+    });
+    expect(scripted).not.toContain("<script>");
+    expect(scripted).toContain("src/&lt;script&gt;alert(1)&lt;/script&gt;.ts");
     // The other reasons and the rule-floor wording.
     const restored = F3.restored;
     if (restored === undefined) throw new Error("F3 carries a restored marker");
@@ -191,6 +214,21 @@ describe("an undecided draft", () => {
     expect(variant({ dismissedAs: "not_worth_it" })).toContain("dismissed this as not worth it");
     // Without the marker (every other draft) there is no such line.
     expect(render(F1)).not.toContain("double-check");
+  });
+
+  it("P8-2b: a draft restored from the hidden list says which dismissal had hidden it", () => {
+    const draft = restoredAsDraft(H1);
+    const html = render(draft, { hiddenBy: H1.hiddenBy });
+    const line = text(html.split('class="evidence double-check">')[1]?.split("</p>")[0] ?? "");
+    expect(line).toBe(
+      `◆ Your team dismissed this as intentional on src/jobs/sendInviteEmail.ts · ${H1.hiddenBy.entry.source} . Rocky had hidden it; you restored it.`,
+    );
+    expect(line).not.toContain(H1.hiddenBy.entry.text);
+    // A restored draft is a draft: the same actions.
+    expect(text(html.split('class="draft-actions"')[1] ?? "")).toContain("Accept");
+    // Not restored (no record): no such line; nor on any other draft.
+    expect(render(draft)).not.toContain("you restored it");
+    expect(render(F1)).not.toContain("you restored it");
   });
 
   it("has the focus ring when focused, and notes a copied fix prompt", () => {

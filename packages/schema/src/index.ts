@@ -72,6 +72,9 @@ export {
 export {
   Finding,
   Findings,
+  HiddenByDismissal,
+  HiddenFinding,
+  HiddenFindings,
   MemoryRef,
   RestoredDismissal,
   DISMISSAL_REASONS,
@@ -126,6 +129,7 @@ export {
   NO_LOGIC_SCHEMA_VERSION,
   MAP_SECTIONS_SCHEMA_VERSION,
   TLDR_SCHEMA_VERSION,
+  RESTORED_SCHEMA_VERSION,
   requiredSchemaVersion,
   type StampedSchemaVersion,
   SchemaVersionField,

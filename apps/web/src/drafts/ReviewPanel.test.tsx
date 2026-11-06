@@ -237,6 +237,26 @@ describe("review panel", () => {
     );
   });
 
+  it("P8-2b: lists findings hidden by memory in a collapsed section that counts in no tally", () => {
+    const hidden = parsed.value.hidden ?? [];
+    const first = hidden[0];
+    if (first === undefined || hidden.length !== 1) throw new Error("the fixture carries H1");
+    const html = render(reviewWith(findings, {}, [], { hidden }));
+    const section =
+      html
+        .split('aria-labelledby="hidden-by-memory" class="hidden-section">')[1]
+        ?.split("</section>")[0] ?? "";
+    expect(text(section)).toBe("Hidden by memory ◆ 1 finding hidden by memory · show");
+    expect(section).toContain('aria-expanded="false"');
+    expect(html).not.toContain(first.title);
+    // The tally and the heading count drafts only.
+    expect(text(html.split('<dl class="tally">')[1]?.split("</dl>")[0] ?? "")).toBe(
+      "AI drafts to decide 10 Your comments 0 Dismissed 0",
+    );
+    // Without hidden findings there is no section.
+    expect(panel()).not.toContain("hidden-section");
+  });
+
   it("says when every draft has a decision", () => {
     const all = Object.fromEntries(
       findings.map((f) => [f.id, { state: "dismissed", reason: "not_an_issue" } as const]),

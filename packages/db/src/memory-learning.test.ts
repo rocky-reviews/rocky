@@ -282,6 +282,76 @@ describe("learnFromReviewSubmission (P8-2)", () => {
     ]);
   });
 
+  it("records the triage level of the dismissed finding's file, from the document (P8-2b)", async () => {
+    // F3 is a high finding on src/auth/invitations.ts, triaged critical; F6 a medium one on the
+    // important jobs file; F2 an accept. The level is the stored document's triage, so a
+    // reviewer (or a client) cannot claim one: there is no input for it.
+    await decide(A, "F3", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F6", { kind: "dismiss", reason: "not_an_issue" });
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    const { rows } = await superuser.query<{
+      kind: string;
+      evidence_path: string;
+      learned_level: string | null;
+    }>(
+      "select kind, evidence_path, learned_level from memory_entries where org_id = $1 order by kind, evidence_path",
+      [A.orgId],
+    );
+    expect(rows).toEqual([
+      { kind: "convention", evidence_path: "src/api/routes/invitations.ts", learned_level: null },
+      { kind: "dismissal", evidence_path: "src/auth/invitations.ts", learned_level: "critical" },
+      {
+        kind: "dismissal",
+        evidence_path: "src/jobs/sendInviteEmail.ts",
+        learned_level: "important",
+      },
+    ]);
+    const memory = await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
+    expect(memory.map((entry) => [entry.kind, entry.path, entry.learnedLevel]).sort()).toEqual([
+      ["convention", "src/api/routes/invitations.ts", null],
+      ["dismissal", "src/auth/invitations.ts", "critical"],
+      ["dismissal", "src/jobs/sendInviteEmail.ts", "important"],
+    ]);
+    // The database holds the level to a learned dismissal (migration 0021): not a convention,
+    // and not a member-written entry (the origin check runs on the same row rule).
+    await expect(
+      superuser.query(
+        `update memory_entries set learned_level = 'critical'
+          where org_id = $1 and kind = 'convention'`,
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_learned_dismissal" });
+    await expect(
+      superuser.query(
+        `update memory_entries set origin = 'member', learner_role = null
+          where org_id = $1 and kind = 'dismissal' and learned_level = 'critical'`,
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_learned_dismissal" });
+    await expect(
+      superuser.query(
+        "update memory_entries set learned_level = 'noise' where org_id = $1 and kind = 'dismissal'",
+        [A.orgId],
+      ),
+    ).rejects.toMatchObject({ constraint: "memory_entries_learned_level_code" });
+  });
+
+  it("a hidden finding the reviewer restored teaches like a draft (P8-2b)", async () => {
+    // H1 (hidden by a dismissal on the jobs file) restored and accepted: a convention on that
+    // path; posting it is what teaches, like any accepted draft.
+    await decide(A, "H1", { kind: "restore" });
+    await decide(A, "H1", { kind: "accept" });
+    await learn(A, await post(A));
+    expect((await entriesOf(A)).map((e) => [e.kind, e.evidence.path, e.text])).toEqual([
+      [
+        "convention",
+        "src/jobs/sendInviteEmail.ts",
+        "Accepted in review: Invite emails are not retried on a transient send failure",
+      ],
+    ]);
+  });
+
   it("a reviewer who wrote the pull request teaches no dismissal from it, only conventions", async () => {
     await db.withOrg(A.orgId, (tx) =>
       tx.query("update pull_requests set author_login = 'ALICE' where id = $1", [A.pullRequestId]),
@@ -557,6 +627,8 @@ describe("loadAnalysisMemory (P8-2)", () => {
         origin: "learned",
         reason: "intentional",
         severity: "high",
+        learnedLevel: "critical",
+        learnerRole: "admin",
         text: "Dismissed as intentional: No permission check: any logged-in user can invite to any org",
         path: "src/api/routes/invitations.ts",
         source: "dismissal · PR #847",
@@ -568,30 +640,62 @@ describe("loadAnalysisMemory (P8-2)", () => {
   });
 });
 
-describe("loadAnalysisMemory bounds (fix round, M2/S5)", () => {
-  it("member-written entries, learned dismissals and other learned entries are bounded apart", async () => {
-    const insert = (count: number, kind: string, origin: string, offset: number) =>
+describe("loadAnalysisMemory bounds (fix round, M2/S5; P8-2b fix round 2)", () => {
+  it("member-written entries, learned dismissals, owner/admin-taught entries and other learned entries are bounded apart", async () => {
+    const insert = (
+      count: number,
+      kind: string,
+      origin: string,
+      offset: number,
+      role: string | null = origin === "learned" ? "member" : null,
+    ) =>
       superuser.query(
         `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
            evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason,
-           created_at)
+           learner_role, created_at)
          select $1, $2, $3, $4, $3 || ' ' || g, 'src/a.ts', $5, 1, 1, 847, 70,
-                case when $3 = 'dismissal' then 'intentional' end,
+                case when $3 = 'dismissal' then 'intentional' end, $8,
                 now() - make_interval(secs => g + $7)
            from generate_series(1, $6) g`,
-        [A.orgId, A.repoId, kind, origin, DOC_HEAD, count, offset],
+        [A.orgId, A.repoId, kind, origin, DOC_HEAD, count, offset, role],
       );
-    // Oldest first: the dismissals, then members' entries, then a burst of newer conventions.
+    // Oldest first: an owner's and an admin's conventions, then the dismissals, then members'
+    // entries, then a burst of newer member-taught conventions (and a few without a role, as
+    // learned before 0018).
+    await insert(30, "convention", "learned", 3000, "owner");
+    await insert(30, "decision", "learned", 2900, "admin");
     await insert(130, "dismissal", "learned", 2000);
     await insert(120, "decision", "member", 1000);
-    await insert(300, "convention", "learned", 0);
+    await insert(290, "convention", "learned", 0);
+    await insert(10, "convention", "learned", 0, null);
     const memory = await db.withOrg(A.orgId, (tx) => loadAnalysisMemory(tx, A.repoId));
-    const count = (kind: string, origin: string) =>
-      memory.filter((e) => e.kind === kind && e.origin === origin).length;
-    expect(count("convention", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedOther);
-    expect(count("dismissal", "learned")).toBe(ANALYSIS_MEMORY_BOUNDS.learnedDismissals);
-    expect(count("decision", "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
+    const count = (pick: (e: (typeof memory)[number]) => boolean) => memory.filter(pick).length;
+    // The owner's and admin's entries are the oldest of all and still loaded, bounded apart:
+    // a member's run of accepts cannot push them out (and with them the block they exert on the
+    // critical path, `overruledNearby`).
+    expect(count((e) => e.learnerRole === "owner" || e.learnerRole === "admin")).toBe(
+      ANALYSIS_MEMORY_BOUNDS.learnedOverruling,
+    );
+    // Newest first within the group: all 30 of the admin's, then the 20 newest of the owner's.
+    expect(count((e) => e.learnerRole === "admin")).toBe(30);
+    expect(count((e) => e.learnerRole === "owner")).toBe(20);
+    expect(
+      count(
+        (e) =>
+          e.kind !== "dismissal" &&
+          e.origin === "learned" &&
+          e.learnerRole !== "owner" &&
+          e.learnerRole !== "admin",
+      ),
+    ).toBe(ANALYSIS_MEMORY_BOUNDS.learnedOther);
+    expect(count((e) => e.kind === "dismissal" && e.origin === "learned")).toBe(
+      ANALYSIS_MEMORY_BOUNDS.learnedDismissals,
+    );
+    expect(count((e) => e.origin === "member")).toBe(ANALYSIS_MEMORY_BOUNDS.member);
     expect(memory).toHaveLength(MAX_ANALYSIS_MEMORY);
+    expect(Object.values(ANALYSIS_MEMORY_BOUNDS).reduce((total, bound) => total + bound, 0)).toBe(
+      MAX_ANALYSIS_MEMORY,
+    );
   });
 });
 
@@ -618,6 +722,43 @@ describe("switching memory off (P8-3, ADR 0039)", () => {
     expect(offered.map((e) => e.id)).not.toContain(first!.id);
     await switchEntry(first!.id, false);
     expect(await analysisMemory()).toHaveLength(2);
+  });
+
+  it("P8-2b with P8-3: an edit keeps the role but never copies the learned level; a switched-off higher-role entry is not loaded", async () => {
+    // F3 sits on a critical file: its dismissal is learned at `critical`; F2's accept is an
+    // admin's convention (A.memberId is an admin).
+    await decide(A, "F3", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    const entries = await entriesOf(A);
+    const dismissal = entries.find((e) => e.kind === "dismissal");
+    const convention = entries.find((e) => e.kind === "convention");
+    expect(
+      (await analysisMemory()).map((e) => [e.kind, e.origin, e.learnedLevel, e.learnerRole]).sort(),
+    ).toEqual([
+      ["convention", "learned", null, "admin"],
+      ["dismissal", "learned", "critical", "admin"],
+    ]);
+    // Edited (same kind): a person-written row that keeps the decision's role, with no level.
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      editMemoryEntry(tx, {
+        actorMemberId: A.memberId,
+        entryId: dismissal!.id,
+        edit: { kind: "dismissal", reason: "intentional", text: `${dismissal!.text}.` },
+      }),
+    );
+    expect(edited.outcome).toBe("edited");
+    const loaded = await analysisMemory();
+    expect(loaded.map((e) => [e.kind, e.origin, e.learnedLevel, e.learnerRole]).sort()).toEqual([
+      ["convention", "learned", null, "admin"],
+      ["dismissal", "member", null, "admin"],
+    ]);
+    // Switched off, the admin's convention is not loaded at all: it cannot block the critical
+    // path (ADR 0037 §7), and switched on it is loaded again.
+    expect(await switchEntry(convention!.id, true)).toMatchObject({ outcome: "switched" });
+    expect((await analysisMemory()).map((e) => e.kind)).toEqual(["dismissal"]);
+    await switchEntry(convention!.id, false);
+    expect((await analysisMemory()).map((e) => e.kind).sort()).toEqual(["convention", "dismissal"]);
   });
 
   it("memory switched off for the repository offers nothing and learns nothing; the entries stay", async () => {

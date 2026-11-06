@@ -3,6 +3,7 @@ import {
   can,
   canonicalReviewPlan,
   composePostedComment,
+  draftableFindings,
   isReviewVerdict,
   validateReviewSubmission,
   type ReviewComment,
@@ -294,8 +295,9 @@ const acceptedDrafts = async (
   const byFinding = new Map(accepted.map((row) => [row.finding_id, row]));
   const carried = await carriedDraftContent(tx, memberId, revisionId);
   const items: ReviewPlanItem[] = [];
-  // Document order: the order the person saw the drafts in.
-  for (const finding of parsed.value.findings) {
+  // Document order: the order the person saw the drafts in; then the hidden findings the
+  // reviewer restored and accepted (P8-2b; only a restored one has a decision row).
+  for (const finding of draftableFindings(parsed.value, new Set(byFinding.keys()))) {
     const row = byFinding.get(finding.id);
     if (row === undefined) continue;
     const content = postedDraftContent(finding, row.body);
