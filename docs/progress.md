@@ -135,6 +135,14 @@ Task log for the project plan. Agents append a row when a task is merged.
   without touching `updated_at`; the cross-repository route test asserts 404 but not that the
   entry is unchanged; the store's role re-check (a role lowered between the route check and the
   transaction) is tested in the store, not through the routes.
+- (from P8-2) Beside an edited entry that is not switched off, learning still adds an enabled
+  opposite decision or a near-duplicate, because learning never supersedes member-written rows.
+- Decay versus switched-off entries: P8-4's decay retires current learned entries uncited for
+  365 days and decays idle ones. A switched-off entry is never cited, so it always looks idle;
+  a year after a switch-off it is deleted and the pattern can be learned enabled again. After
+  the rebase onto P8-4, exclude `disabled_at is not null` from the decay and retire scans in
+  `packages/db/src/memory-decay.ts` (or count a switch-off as use), test it, and record it in
+  ADR 0038/0039.
 - Switching a learned-switched-off entry on again is per entry: an opposite decision learned
   switched off (ADR 0039) must be switched on by hand.
 

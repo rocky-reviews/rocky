@@ -254,7 +254,7 @@ export const memoryEntries = pgTable("memory_entries", {
   reason: text("reason"),
   /** For a learned dismissal: the dismissed finding's severity, the highest it covers (0018). */
   severity: text("severity", { enum: ["critical", "high", "medium", "low"] }),
-  /** The reviewer's role when the entry was learned (0018); null for member-written entries. */
+  /** The reviewer's role when the entry was learned (0018), kept by an edit (0020). */
   learnerRole: text("learner_role", { enum: ["owner", "admin", "member"] }),
   createdBy: uuid("created_by"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
@@ -263,6 +263,8 @@ export const memoryEntries = pgTable("memory_entries", {
   supersededBy: uuid("superseded_by"),
   /** When an admin switched the entry off (P8-3, migration 0020); null while it applies. */
   disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  /** What a learned entry is about, kept across edits (P8-3, migration 0020); null otherwise. */
+  learnedSubject: text("learned_subject"),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

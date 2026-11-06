@@ -178,9 +178,10 @@ describe("renderMemoryContext / parseMemoryContext", () => {
     }
   });
 
-  it("round-trips any valid one-line text (property)", () => {
+  it("round-trips any valid one-line text and never renders a link (property)", () => {
+    // `w`, `.`, `:`, `/` and `@` so that GFM autolink shapes (www., http://, a@b.c) come up.
     const alphabet = fc.constantFrom(
-      ..."abcXYZ019 .,;:'\"()-+=/\\`*_[]<>#|~&!$%^{}@?éß東🎉".split(/(?:)/u),
+      ..."abcwWXYZ019 .,;:'\"()-+=/\\`*_[]<>#|~&!$%^{}@?éß東🎉".split(/(?:)/u),
     );
     fc.assert(
       fc.property(fc.array(alphabet, { minLength: 1, maxLength: 120 }), (chars) => {
@@ -188,10 +189,18 @@ describe("renderMemoryContext / parseMemoryContext", () => {
         fc.pre(text.length > 0 && textProblem(text, "line") === undefined);
         fc.pre(!containsPromptCanaryFragment(text));
         const e = entry({ text });
-        const parsed = parseMemoryContext(
-          renderMemoryContext({ repository: "acme/api", entries: [e] }).markdown,
-        );
-        expect(parsed).toEqual({ ok: true, repository: "acme/api", entries: [e] });
+        const { markdown } = renderMemoryContext({ repository: "acme/api", entries: [e] });
+        expect(parseMemoryContext(markdown)).toEqual({
+          ok: true,
+          repository: "acme/api",
+          entries: [e],
+        });
+        const html = micromark(markdown, {
+          allowDangerousHtml: true,
+          extensions: [gfm()],
+          htmlExtensions: [gfmHtml()],
+        });
+        expect(html).not.toContain("<a ");
       }),
       { numRuns: 400, seed: 3803 },
     );

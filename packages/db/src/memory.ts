@@ -496,6 +496,8 @@ interface LockedEntry {
   source_pr_number: number;
   superseded_by: string | null;
   disabled_at: Date | null;
+  learner_role: string | null;
+  learned_subject: string | null;
 }
 
 /**
@@ -512,7 +514,8 @@ const lockEntry = async (tx: TenantTx, entryId: string): Promise<LockedEntry | n
   await lockRepoMemory(tx, repoId);
   const { rows } = await tx.query<LockedEntry>(
     `select id, repo_id, kind, confidence, severity, evidence_path, evidence_sha, evidence_start,
-            evidence_end, source_pr_number, superseded_by, disabled_at
+            evidence_end, source_pr_number, superseded_by, disabled_at, learner_role,
+            learned_subject
        from memory_entries where org_id = $1 and id = $2 for update`,
     [tx.orgId, entryId],
   );
@@ -535,7 +538,9 @@ export type EditMemoryEntryResult =
  * "member"`, written by the actor, scrubbed and checked by `createMemoryEntry`) with the edited
  * kind, text and reason and the old entry's evidence and confidence, that supersedes the old one,
  * so history is kept. A dismissal that stays a dismissal keeps the severity it covers; the new
- * entry is switched off when the old one was. Needs `memory.edit`, re-checked here.
+ * entry is switched off when the old one was, and keeps the old one's learned subject and learner
+ * role, so learning still matches it and its precedence holds whatever the new text says (P8-3
+ * fix round 2). Needs `memory.edit`, re-checked here.
  */
 export const editMemoryEntry = async (
   tx: TenantTx,
@@ -569,9 +574,10 @@ export const editMemoryEntry = async (
   if (created.outcome !== "created") return created;
   const severity = edit.kind === "dismissal" && old.kind === "dismissal" ? old.severity : null;
   await tx.query(
-    `update memory_entries set severity = $3, disabled_at = $4
+    `update memory_entries
+        set severity = $3, disabled_at = $4, learner_role = $5, learned_subject = $6
       where org_id = $1 and id = $2`,
-    [tx.orgId, created.entry.id, severity, old.disabled_at],
+    [tx.orgId, created.entry.id, severity, old.disabled_at, old.learner_role, old.learned_subject],
   );
   const superseded = await supersedeMemoryEntry(tx, {
     actorMemberId: actor,
