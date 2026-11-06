@@ -510,11 +510,12 @@ const LineRow = memo(function LineRow({
           {newNo}
         </button>
       )}
-      <span className="sign" aria-hidden="true">
-        {SIGN[row.type]}
+      {/* H4-17: the sign is announced from its unselectable column, so copied code is only code. */}
+      <span className="sign">
+        <span aria-hidden="true">{SIGN[row.type]}</span>
+        {SIGN_TEXT[row.type] !== "" && <span className="sr-only">{SIGN_TEXT[row.type]}: </span>}
       </span>
       <code className="src">
-        {SIGN_TEXT[row.type] !== "" && <span className="sr-only">{SIGN_TEXT[row.type]}: </span>}
         <Code text={row.text} language={language} />
       </code>
     </div>
@@ -528,7 +529,7 @@ const FlagNote = ({ flag }: { flag: Flag }) => (
         {flag.kind === "ok" ? "✓" : "✦"}
       </span>{" "}
       {FLAG_LABEL[flag.kind]}
-      <span className="sr-only"> (AI)</span>
+      <span className="sr-only no-copy"> (AI)</span>
     </span>
     <bdi>
       <Prose text={flag.text} />

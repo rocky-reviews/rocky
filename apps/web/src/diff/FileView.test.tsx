@@ -133,6 +133,27 @@ describe("file view", () => {
     expect(html).toMatch(/class="ln add hot hot-critical"[^>]*>(?:(?!class="ln ).)*data-line="28"/);
   });
 
+  it("H4-17: each line's sign is announced from the unselectable sign column, not its code", () => {
+    // An added line: "added: " for screen readers, beside (not inside) the code element.
+    expect(html).toMatch(
+      /<span class="sign"><span aria-hidden="true">\+<\/span><span class="sr-only">added: <\/span><\/span><code class="src"><span class="tk-kw">import<\/span>/,
+    );
+    // No line's code element holds screen-reader text, so a copied selection is only code.
+    const code = [...html.matchAll(/<code class="src">(.*?)<\/code>/g)].map((m) => m[1] ?? "");
+    expect(code.length).toBeGreaterThan(30);
+    for (const c of code) expect(c).not.toContain("sr-only");
+    // A modified file's context line has no sign word; its sign column is a hidden space.
+    const modified = render("src/api/index.ts");
+    expect(modified).toMatch(
+      /<div[^>]*class="ln ctx"[^>]*>(?:(?!<\/div>).)*<span class="sign"><span aria-hidden="true"> <\/span><\/span><code class="src">/,
+    );
+  });
+
+  it("H4-17: the AI marker on a flag is announced and never copied", () => {
+    expect(html).toContain('<span class="sr-only no-copy"> (AI)</span>');
+    expect(text(html)).toContain("✓ Checked (AI) Token uses 32 bytes");
+  });
+
   it("shows the reviewer's own comments as pending, with Delete", () => {
     const withComment = render("src/auth/invitations.ts", undefined, {
       comments: [

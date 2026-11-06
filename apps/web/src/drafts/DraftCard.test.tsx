@@ -102,6 +102,20 @@ describe("an undecided draft", () => {
     );
   });
 
+  it("H4-17: a suggested line's sign word is announced from the sign column, not its code", () => {
+    const figure = html.split('<figure class="suggestion">')[1]?.split("</figure>")[0] ?? "";
+    expect(figure).toContain(
+      '<span class="sign"><span aria-hidden="true">+</span><span class="sr-only">added: </span></span>',
+    );
+    expect(figure).toContain(
+      '<span class="sign"><span aria-hidden="true">−</span><span class="sr-only">removed: </span></span>',
+    );
+    // The code elements hold only the code.
+    const code = [...figure.matchAll(/<code class="src">(.*?)<\/code>/g)].map((m) => m[1] ?? "");
+    expect(code).toHaveLength(3);
+    for (const c of code) expect(c).not.toMatch(/sr-only|added|removed/);
+  });
+
   it("offers Accept, Edit, Dismiss and Send to agent", () => {
     expect(text(html.split('class="draft-actions"')[1] ?? "")).toBe(
       "> Accept Edit Dismiss Send to agent ↗",
@@ -242,6 +256,8 @@ describe("decided drafts", () => {
     expect(posted).not.toContain('data-role="undo"');
     expect(posted).toContain('data-posted="posted"');
     expect(posted).toContain('class="pending posted"');
+    // H4-17: its screen-reader words are not copied with a selection across the diff.
+    expect(posted).toContain('<span class="sr-only no-copy"> to GitHub, read-only</span>');
     const posting = render(F1, { decision, posted: "posting" });
     expect(text(posting)).toContain("you Posting… , read-only");
     expect(posting).not.toContain("<button");
