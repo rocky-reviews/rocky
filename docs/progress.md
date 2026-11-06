@@ -80,9 +80,8 @@ Task log for the project plan. Agents append a row when a task is merged.
 - **Migration numbering:** this task was assigned 0020 with 0019 reserved by a parallel task, but
   the migrator refuses gaps (`versions must be 1..n`), so it was renumbered to 0019 because it was
   ready first. A later memory task takes the next free number when it is rebased.
-- **P8-3's disabled switch** (ADR 0038 §4): the job does not know it. A disabled entry is never
-  cited and is retired a year after its last citation like any other learned entry; decide
-  whether disabled entries should be exempt or go sooner, and add the flag to the three rules.
+- ~~**P8-3's disabled switch** (ADR 0038 §4)~~: done in P8-3 (switched-off entries and
+  repositories are exempt from decay and retirement).
 - `decayed_at` is not exposed through `MemoryEntry`; P8-3 can show "fading since …" from it.
 - Windows are per deployment (`app.retention_settings`), not per org or repository; a
   per-repository window is a P8-3 setting if usage shows the need.
@@ -137,12 +136,11 @@ Task log for the project plan. Agents append a row when a task is merged.
   transaction) is tested in the store, not through the routes.
 - (from P8-2) Beside an edited entry that is not switched off, learning still adds an enabled
   opposite decision or a near-duplicate, because learning never supersedes member-written rows.
-- Decay versus switched-off entries: P8-4's decay retires current learned entries uncited for
-  365 days and decays idle ones. A switched-off entry is never cited, so it always looks idle;
-  a year after a switch-off it is deleted and the pattern can be learned enabled again. After
-  the rebase onto P8-4, exclude `disabled_at is not null` from the decay and retire scans in
-  `packages/db/src/memory-decay.ts` (or count a switch-off as use), test it, and record it in
-  ADR 0038/0039.
+- [x] Decay versus switched-off entries (done after the rebase onto P8-4): the decay and retire
+      scans in `packages/db/src/memory-decay.ts` skip `disabled_at is not null` and repositories
+      with memory off; their clocks pause (ADR 0038 §4, ADR 0039). Open: switching an old entry on
+      resumes its clocks, so it may decay or retire at the next run; a grace period on switch-on
+      is possible if that surprises people.
 - Switching a learned-switched-off entry on again is per entry: an opposite decision learned
   switched off (ADR 0039) must be switched on by hand.
 

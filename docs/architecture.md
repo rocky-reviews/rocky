@@ -217,7 +217,7 @@ packages/schema (analysis document; shared contract)
   org's `withOrg`: superseded learned entries go 180 days after they were superseded (tail
   first), a current learned entry nobody cited for a year goes with its learned chain and its
   embeddings, and a current learned entry idle for 90 days loses 10 confidence points per idle
-  period (`decayed_at`). Member-written entries are never touched. The windows are rows of
+  period (`decayed_at`). Member-written entries are never touched, nor switched-off entries or a repository with memory off (P8-3). The windows are rows of
   `app.retention_settings` (`RETENTION_MEMORY_*_DAYS`, CHECK floors), `as_of` is clamped to the
   database clock, and each org's run writes one `memory.decayed` audit row with counts.
 - The memory page and export (ADR 0039, P8-3): `/:owner/:repo/memory` in the web app reads

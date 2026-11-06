@@ -95,6 +95,7 @@ interface Planted {
   readonly lastUsedAt?: Date;
   readonly decayedAt?: Date;
   readonly supersededBy?: string;
+  readonly disabledAt?: Date;
   /** Defaults to `createdAt`; a supersede stamps it. */
   readonly updatedAt?: Date;
 }
@@ -106,9 +107,9 @@ const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
   await superuser.query(
     `insert into memory_entries (id, org_id, repo_id, kind, origin, content, evidence_path,
        evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason, created_by,
-       created_at, updated_at, last_used_at, decayed_at, superseded_by)
+       created_at, updated_at, last_used_at, decayed_at, superseded_by, disabled_at)
      values ($1, $2, $3, $4, $5, $6, 'src/jobs/retry.ts', $7, 1, 3, 612, $8, $9, $10,
-             $11, $12, $13, $14, $15)`,
+             $11, $12, $13, $14, $15, $16)`,
     [
       id,
       org.orgId,
@@ -125,6 +126,7 @@ const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
       p.lastUsedAt ?? null,
       p.decayedAt ?? null,
       p.supersededBy ?? null,
+      p.disabledAt ?? null,
     ],
   );
   return id;
@@ -319,6 +321,42 @@ describe("retire: an uncited learned entry goes with its learned chain and embed
     expect(await exists("memory_entries", one)).toBe(true);
     expect(await exists("memory_entries", two)).toBe(true);
     await superuser.query("delete from memory_entries where id = any($1::uuid[])", [[one, two]]);
+  });
+});
+
+describe("switched off (P8-3, ADR 0039): neither decayed nor retired while off", () => {
+  it("leaves a switched-off entry alone however idle, and takes it again once it is switched on", async () => {
+    const off = await plant(B, { createdAt: ageDays(400), disabledAt: ageDays(300) });
+    const idleOff = await plant(B, { createdAt: ageDays(91), disabledAt: ageDays(50) });
+    const on = await plant(B, { createdAt: ageDays(400) });
+    await run(B);
+    expect(await row(off)).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(await row(idleOff)).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(await exists("memory_entries", on)).toBe(false);
+
+    // Switched on again, its clocks run from where they stood.
+    await superuser.query("update memory_entries set disabled_at = null where id = any($1)", [
+      [off, idleOff],
+    ]);
+    await run(B);
+    expect(await exists("memory_entries", off)).toBe(false);
+    expect(await row(idleOff)).toMatchObject({ confidence: 70, decayed_at: NOW });
+  });
+
+  it("leaves every entry of a repository whose memory is switched off alone", async () => {
+    const old = await plant(B, { createdAt: ageDays(400) });
+    const idle = await plant(B, { createdAt: ageDays(91) });
+    await superuser.query("update repos set memory_enabled = false where id = $1", [B.repoId]);
+    try {
+      await run(B);
+      expect(await exists("memory_entries", old)).toBe(true);
+      expect(await row(idle)).toMatchObject({ confidence: 80, decayed_at: null });
+    } finally {
+      await superuser.query("update repos set memory_enabled = true where id = $1", [B.repoId]);
+    }
+    await run(B);
+    expect(await exists("memory_entries", old)).toBe(false);
+    expect(await row(idle)).toMatchObject({ confidence: 70, decayed_at: NOW });
   });
 });
 

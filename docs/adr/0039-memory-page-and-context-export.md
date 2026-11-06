@@ -149,6 +149,9 @@ is a follow-up: it changes every briefing screenshot baseline, which parallel ta
 - The scrub runs again on an edit, with the current member list; untouched entries are not
   re-scrubbed (ADR 0036 residual; a re-scrub job is still open).
 - The export is a snapshot; nothing reads `.rocky/context.md` back into Rocky yet.
+- P8-4's decay job (ADR 0038 §4) neither decays nor retires a switched-off entry, nor any entry
+  of a repository with memory off; their clocks pause and resume when switched on, so an entry
+  switched on after a long time off may decay or retire at the job's next run.
 - The no-link proof renders with micromark and its GFM extension, not cmark-gfm, which GitHub
   runs; GitHub's filters after rendering (such as `@mention` links) ignore the escaping. Low
   risk: logins are scrubbed from entries and a file in a repository notifies nobody.
