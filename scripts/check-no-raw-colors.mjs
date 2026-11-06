@@ -12,7 +12,8 @@ const SKIP_DIRS = new Set([
   "test-results",
   "playwright-report",
 ]);
-const ALLOWED = new Set(["apps/web/src/styles/tokens.css"]);
+// H4-18: the favicon is drawn outside the page (no tokens there); it repeats two Slate values.
+const ALLOWED = new Set(["apps/web/src/styles/tokens.css", "apps/web/public/favicon.svg"]);
 const EXTENSIONS = /\.(css|scss|sass|less|ts|tsx|js|jsx|mjs|cjs|html|svg|vue|md)$/i;
 
 const HEX = /#[0-9a-f]{3,8}\b/gi;

@@ -18,6 +18,7 @@ import {
 } from "@rocky-reviews/core";
 import { useId, useMemo, useState } from "react";
 import { timeAgo } from "../lib/time.js";
+import { BrandMark } from "../shell/BrandMark.js";
 import type { Mode } from "../theme.js";
 import { ApproveDialog } from "./ApproveDialog.js";
 import {
@@ -104,7 +105,7 @@ export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload
         </a>
         <header className="topbar">
           <div className="brand">
-            <div className="brand-mark" aria-hidden="true" />
+            <BrandMark />
             <span className="hide-sm">Rocky Reviews</span>
           </div>
           <div className="inbox-head">

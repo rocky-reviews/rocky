@@ -13,6 +13,7 @@ import { pullRequestUrl } from "../lib/github-url.js";
 import { timeAgo } from "../lib/time.js";
 import { useKeyboard, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import type { Mode } from "../theme.js";
+import { BrandMark } from "./BrandMark.js";
 import { PanelIcon, SidebarIcon } from "./icons.js";
 import { statusOf } from "./status.js";
 
@@ -66,7 +67,7 @@ export const TopBar = ({
         <SidebarIcon />
       </button>
       <div className="brand">
-        <div className="brand-mark" aria-hidden="true" />
+        <BrandMark />
         <span className="hide-sm">Rocky Reviews</span>
       </div>
       <div className="pr-meta">

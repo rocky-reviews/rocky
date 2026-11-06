@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -20 128 128" fill="none">
+  <!-- H4-18: the Rocky mark from the website (rocky-website public/icons/rocky-mark.svg), on a
+       square canvas. The website draws it white on its dark page; a tab can be light or dark,
+       so the stroke follows the browser's colour scheme (Slate text colours, as in tokens.css). -->
+  <style>
+    g { stroke: #0f172a; }
+    @media (prefers-color-scheme: dark) { g { stroke: #e5e9f2; } }
+  </style>
+  <g stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M5 78 31 40l8 8L64 8l25 35 8-10 26 45H91L71 55 64 66 48 48 25 78H5Z" stroke-width="4"/>
+    <path d="m18 78 17-25 10 10 14-19m-23 6 8 8 4-10m-17 20 17-22 9 10m-21 13 21-25 7 8" stroke-width="2.4"/>
+    <path d="m36 54 6-19 7-11m-10 28 11-10V29m-5 21 10-17 8-11" stroke-width="1.8"/>
+    <path d="m64 8 1 31-10 11 10 11m0-53 12 19 8 15-13-8m-7-26 1 18 11 12m-11-5 9 9m-9 0 8 8m-8-1 7 8" stroke-width="2.2"/>
+    <path d="m69 17 10 15m-9-7 13 18m-11-6 13 11" stroke-width="1.5"/>
+    <path d="m89 43 7 13 9-10 17 32H91L73 55m23-19 1 19-9 7 6 16m7-35 12 17-5 7 8 11m-29-5 12-12m-19 0 14-13" stroke-width="2.5"/>
+    <path d="m101 51 8 11-7 3 9 12m-28-16-9 9 15 0 9 9" stroke-width="1.8"/>
+    <path d="m5 78 20 0 23-30 23 27 20-32m-27 23 8 12 19-22m-48-8 16 19 8-8" stroke-width="2.2"/>
+  </g>
+</svg>
