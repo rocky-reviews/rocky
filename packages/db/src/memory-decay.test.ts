@@ -4,15 +4,21 @@ import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, MAX_LIVE_ORGS_PAGE, type Db } from "./client.js";
 import { beginOrgErasure, scheduleOrgDeletion } from "./installations.js";
+import { supersedeMemoryEntry, touchMemoryEntries } from "./memory.js";
 import {
   decayOrgMemory,
   MEMORY_DECAY_ACTOR,
+  MEMORY_DECAY_MIN_DAYS,
   MEMORY_DECAY_STEP,
   memoryDecayCutoff,
   runMemoryDecay,
   type MemoryDecayWindows,
 } from "./memory-decay.js";
-import { DEFAULT_RETENTION } from "./retention.js";
+import {
+  DEFAULT_RETENTION,
+  MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+  MEMORY_UNUSED_MIN_RETENTION_DAYS,
+} from "./retention.js";
 import * as schema from "./schema.js";
 import {
   asWorker,
@@ -376,16 +382,39 @@ describe("the clock, the windows and the audit trail", () => {
     expect(await exists("memory_entries", fresh)).toBe(true);
     expect(await row(fresh)).toMatchObject({ confidence: 80, decayed_at: null });
     expect(await exists("memory_entries", old)).toBe(false);
+    // The audit row records the clamped instant, not the clock the caller claimed (N2).
+    const last = (await auditRows(A)).rows.at(-1);
+    const recorded = new Date(String((last?.metadata as { asOf: string }).asOf));
+    expect(recorded.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(recorded.getTime()).toBeGreaterThan(Date.now() - 60_000);
   });
 
-  it("refuses invalid windows and an invalid clock before any SQL", async () => {
-    for (const windows of [
-      { ...WINDOWS, memoryDecayDays: 0 },
-      { ...WINDOWS, memoryUnusedDays: 1.5 },
-      { ...WINDOWS, memorySupersededDays: Number.NaN },
-    ]) {
-      await expect(run(A, NOW, windows)).rejects.toThrow(/must be an integer of at least 1/);
+  it("refuses windows under the settings table's floors, and an invalid clock, before any SQL (fix round 1, S1)", async () => {
+    const victim = await plant(A, { createdAt: ageDays(29) });
+    for (const [windows, message] of [
+      [{ ...WINDOWS, memoryDecayDays: 0 }, /memoryDecayDays must be an integer of at least 1/],
+      [{ ...WINDOWS, memoryUnusedDays: 1.5 }, /memoryUnusedDays must be an integer of at least 30/],
+      [
+        { ...WINDOWS, memoryUnusedDays: MEMORY_DECAY_MIN_DAYS.memoryUnusedDays - 1 },
+        /memoryUnusedDays must be an integer of at least 30/,
+      ],
+      [
+        { ...WINDOWS, memorySupersededDays: MEMORY_DECAY_MIN_DAYS.memorySupersededDays - 1 },
+        /memorySupersededDays must be an integer of at least 7/,
+      ],
+      [{ ...WINDOWS, memorySupersededDays: Number.NaN }, /memorySupersededDays/],
+    ] as const) {
+      await expect(run(A, NOW, windows)).rejects.toThrow(message);
     }
+    expect(MEMORY_DECAY_MIN_DAYS).toEqual({
+      memoryDecayDays: 1,
+      memoryUnusedDays: MEMORY_UNUSED_MIN_RETENTION_DAYS,
+      memorySupersededDays: MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+    });
+    // The floor itself is accepted; a 29-day-old entry is inside it and survives (older learned
+    // entries of this org from earlier tests go, as the window says).
+    await run(A, NOW, { ...WINDOWS, memoryUnusedDays: MEMORY_DECAY_MIN_DAYS.memoryUnusedDays });
+    expect(await exists("memory_entries", victim)).toBe(true);
     await expect(run(A, new Date("garbage"))).rejects.toThrow(/asOf must be a valid Date/);
   });
 
@@ -407,6 +436,64 @@ describe("the clock, the windows and the audit trail", () => {
     expect(JSON.stringify(last?.metadata)).not.toContain(id);
     await run(B);
     expect((await auditRows(B)).rows).toHaveLength(before + 1);
+  });
+});
+
+describe("races with a concurrent tenant transaction (fix round 1, S2 and N4)", () => {
+  /**
+   * Two connections of the application pool: one holds a tenant transaction open on `held`
+   * after `act` ran (its row locks stay), the job runs on the other and blocks on those locks;
+   * `release` commits the first and the job continues on the newest row versions.
+   */
+  const raceWith = async (
+    act: (tx: Parameters<Parameters<Db["withOrg"]>[1]>[0]) => Promise<void>,
+  ) => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let acted!: () => void;
+    const hasActed = new Promise<void>((resolve) => {
+      acted = resolve;
+    });
+    const held = db.withOrg(B.orgId, async (tx) => {
+      await act(tx);
+      acted();
+      await gate;
+    });
+    await hasActed;
+    const job = run(B);
+    // The job is now waiting on the locks held by `held`; let that transaction commit.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    release();
+    await held;
+    return job;
+  };
+
+  it("a supersede that commits while retire waits for the head keeps the chain whole: the member-written entry is not made current again (S2)", async () => {
+    const head = await plant(B, { createdAt: ageDays(400) });
+    const written = await plant(B, { origin: "member", createdAt: ageDays(5), confidence: 90 });
+    await raceWith(async (tx) => {
+      expect(
+        await supersedeMemoryEntry(tx, {
+          actorMemberId: B.memberId,
+          entryId: written,
+          byEntryId: head,
+        }),
+      ).toBe("superseded");
+    });
+    expect(await exists("memory_entries", head)).toBe(true);
+    expect(await row(written)).toMatchObject({ superseded_by: head, confidence: 90 });
+  });
+
+  it("a citation that commits while decay waits for the entry keeps its confidence (N4)", async () => {
+    const entry = await plant(B, { createdAt: ageDays(91) });
+    await raceWith(async (tx) => {
+      expect(await touchMemoryEntries(tx, [entry])).toBe(1);
+    });
+    const after = await row(entry);
+    expect(after).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(after?.last_used_at).not.toBeNull();
   });
 });
 

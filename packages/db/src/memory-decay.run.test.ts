@@ -38,7 +38,13 @@ const fakeDb = (options: {
       }
       const tx = {
         orgId: id,
-        query: () => Promise.resolve({ rowCount: 0, rows: [] }),
+        // The clamp query answers the instant; every rule's lock query answers no candidates.
+        query: (sql: string) =>
+          Promise.resolve(
+            sql.includes("least(")
+              ? { rowCount: 1, rows: [{ t: new Date(0) }] }
+              : { rowCount: 0, rows: [] },
+          ),
       } as unknown as TenantTx;
       return fn(tx);
     },
@@ -69,11 +75,17 @@ describe("runMemoryDecay (the loop)", () => {
     expect(JSON.stringify(report)).not.toContain("Planted");
   });
 
-  it("refuses settings below the floor before visiting any org", async () => {
-    const { db, visited } = fakeDb({ orgs: [orgId(1)], settings: { memoryUnusedDays: 0 } });
-    await expect(runMemoryDecay(db, { clock: { now: () => new Date(0) } })).rejects.toThrow(
-      /memoryUnusedDays/,
-    );
-    expect(visited).toEqual([]);
+  it("refuses settings one day under each floor before visiting any org (fix round 1, S1)", async () => {
+    for (const [settings, message] of [
+      [{ memoryUnusedDays: 29 }, /memoryUnusedDays must be an integer of at least 30/],
+      [{ memorySupersededDays: 6 }, /memorySupersededDays must be an integer of at least 7/],
+      [{ memoryDecayDays: 0 }, /memoryDecayDays must be an integer of at least 1/],
+    ] as const) {
+      const { db, visited } = fakeDb({ orgs: [orgId(1)], settings });
+      await expect(runMemoryDecay(db, { clock: { now: () => new Date(0) } })).rejects.toThrow(
+        message,
+      );
+      expect(visited).toEqual([]);
+    }
   });
 });

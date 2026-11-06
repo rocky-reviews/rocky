@@ -94,6 +94,18 @@ Task log for the project plan. Agents append a row when a task is merged.
   nor deletes one (test), but a cycle-proof trigger is still not written.
 - A re-scrub of older entries with the current member list (ADR 0036 residual risk, nit 10)
   is not part of this job; it would be a fourth rule here or a P8-3 action.
+- Review nit N5: retiring a higher-role learned entry lifts ADR 0037's "overruled" protection
+  (`memory-learning.ts`, `overruled`): a member's opposite dismissal about that pattern can be
+  learned once the owner's entry is gone after a year without a citation (ADR 0038 §2 says so).
+  If that should hold longer, exempt entries with `learner_role` owner/admin from retirement.
+- Review nit N6: a dismissal that keeps being applied bumps `last_used_at` every time and never
+  decays or retires; superseding it (P8-2's newer decision, P8-3's edit or delete) is the only
+  bound. A cap on the age of an entry regardless of use, or a P8-3 "review this entry" nudge
+  after N applications, if usage shows dismissals outliving their reason.
+- Fix round 1 (fixed): S1 floors enforced in `checkWindows` for every caller (`MEMORY_DECAY_MIN_DAYS`);
+  S2 lock-first in every rule (two-connection race tests); N1/N2/N3/N7 doc and audit
+  corrections (four steps before retirement; the audit row records the clamped instant; the
+  batch bounds candidates, not chain rows; the docstring lists the rules in run order).
 
 ### P8-2 follow-ups
 

@@ -2,38 +2,50 @@ import type { Clock, OrgId } from "@rocky-reviews/core";
 import { audit } from "./audit.js";
 import { MAX_LIVE_ORGS_PAGE, type Db, type TenantTx } from "./client.js";
 import type { RetentionConfig } from "./retention-sql.js";
+import {
+  MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+  MEMORY_UNUSED_MIN_RETENTION_DAYS,
+} from "./retention.js";
 
 /**
  * Project memory decay (P8-4, migration 0019, ADR 0038). A scheduled job that, per org and inside
  * that org's `withOrg` transaction (RLS on `memory_entries` and `embeddings`; the explicit
- * `org_id` filters are defence in depth), applies three time-based rules to **learned** entries:
+ * `org_id` filters are defence in depth), applies three time-based rules to **learned** entries,
+ * in this order:
  *
- * 1. **Decay:** a current learned entry that no review has cited for `memoryDecayDays` (since its
- *    last citation, its creation or its last decay step) loses `MEMORY_DECAY_STEP` confidence
- *    points, down to 0, and records the step in `decayed_at`, so a run takes at most one step per
- *    idle period.
+ * 1. **History:** a superseded learned entry is deleted `memorySupersededDays` after it was
+ *    superseded (`updated_at`, stamped by the supersede), tail first: never while another entry
+ *    still points at it.
  * 2. **Retire:** a current learned entry that no review has cited for `memoryUnusedDays` is
  *    deleted together with the learned entries it superseded (the chain behind it), because
  *    `superseded_by … ON DELETE SET NULL` would otherwise make the older entry current again. A
  *    chain that holds a member-written entry anywhere is left alone.
- * 3. **History:** a superseded learned entry is deleted `memorySupersededDays` after it was
- *    superseded (`updated_at`, stamped by the supersede), tail first: never while another entry
- *    still points at it.
+ * 3. **Decay:** a current learned entry that no review has cited for `memoryDecayDays` (since its
+ *    last citation, its creation or its last decay step) loses `MEMORY_DECAY_STEP` confidence
+ *    points, down to 0, and records the step in `decayed_at`, so a run takes at most one step per
+ *    idle period.
  *
  * Member-written entries are never decayed, retired or purged, current or as history: a person
  * wrote them and P8-3 is where people edit and delete them. Deletion is permanent; the entries
  * are derived data (GitHub holds the reviews they came from).
  *
+ * Each rule **locks first**: it selects its candidates `FOR UPDATE` with the rule's predicate
+ * (under READ COMMITTED the predicate is re-evaluated on the newest row version, so an entry
+ * cited or superseded by a transaction that committed meanwhile drops out), then acts on exactly
+ * those ids with a fresh snapshot. A concurrent supersede or citation of a locked entry waits
+ * for this transaction and then finds the entry gone or already stepped (fix round 1, S2).
+ *
  * The windows come from `app.retention_settings` (migrator-owned, read-only for the application,
- * with CHECK floors) and `as_of` is clamped to the database clock, so a caller can only move the
- * cutoffs into the past (the 0005 contract). Each statement is bounded to `MAX_MEMORY_DECAY_BATCH`
- * rows per org per run; the next run continues. Results are counts; nothing here reads, returns
- * or logs entry text.
+ * with CHECK floors that `checkWindows` repeats here for every caller) and `as_of` is clamped to
+ * the database clock once, so a caller can only move the cutoffs into the past (the 0005
+ * contract). Each rule takes at most `MAX_MEMORY_DECAY_BATCH` candidates per org per run (for
+ * retirement, the chain heads: the learned history behind them goes with them); the next run
+ * continues. Results are counts; nothing here reads, returns or logs entry text.
  */
 
 /** Confidence points a learned entry loses per idle period. */
 export const MEMORY_DECAY_STEP = 10;
-/** Most rows one rule touches per org per run (keeps the tenant transaction short). */
+/** Most candidates one rule takes per org per run (keeps the tenant transaction short). */
 export const MAX_MEMORY_DECAY_BATCH = 10_000;
 /** The system actor the audit rows name. */
 export const MEMORY_DECAY_ACTOR = "memory_decay";
@@ -42,6 +54,17 @@ export type MemoryDecayWindows = Pick<
   RetentionConfig,
   "memoryDecayDays" | "memoryUnusedDays" | "memorySupersededDays"
 >;
+
+/**
+ * The floors of migration 0019's CHECKs, held here too so `decayOrgMemory` cannot be handed a
+ * window the settings table would refuse (a one-day unused window would erase every repository's
+ * learned memory).
+ */
+export const MEMORY_DECAY_MIN_DAYS: Readonly<Record<keyof MemoryDecayWindows, number>> = {
+  memoryDecayDays: 1,
+  memoryUnusedDays: MEMORY_UNUSED_MIN_RETENTION_DAYS,
+  memorySupersededDays: MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+};
 
 export interface MemoryDecayOrgReport {
   /** Current learned entries whose confidence dropped one step. */
@@ -64,8 +87,9 @@ export const memoryDecayCutoff = (now: Date, days: number): Date =>
 const checkWindows = (windows: MemoryDecayWindows): void => {
   for (const key of ["memoryDecayDays", "memoryUnusedDays", "memorySupersededDays"] as const) {
     const value = windows[key];
-    if (!Number.isInteger(value) || value < 1) {
-      throw new Error(`memory decay: ${key} must be an integer of at least 1 (days)`);
+    const min = MEMORY_DECAY_MIN_DAYS[key];
+    if (!Number.isInteger(value) || value < min) {
+      throw new Error(`memory decay: ${key} must be an integer of at least ${min} (days)`);
     }
   }
 };
@@ -80,40 +104,45 @@ const checkAsOf = (asOf: Date): void => {
  * Superseded learned entries past the history window that nothing points at any more. Tail
  * first: an entry still referenced by an older one waits until that one is gone, so the
  * `ON DELETE SET NULL` of the self-reference never fires and no entry becomes current again.
+ * `$2` is the clamped instant.
  */
+const LOCK_HISTORY_SQL = `
+  select e.id from memory_entries e
+   where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is not null
+     and e.updated_at < $2::timestamptz - make_interval(days => $3)
+     and not exists (select 1 from memory_entries x
+                      where x.org_id = $1 and x.superseded_by = e.id)
+   order by e.updated_at, e.id
+   limit $4
+   for update`;
 const PURGE_HISTORY_SQL = `
-  with as_of as (select least($2::timestamptz, now()) as t),
-  victims as (
-    select e.id from memory_entries e, as_of
-     where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is not null
-       and e.updated_at < as_of.t - make_interval(days => $3)
-       and not exists (select 1 from memory_entries x
-                        where x.org_id = $1 and x.superseded_by = e.id)
-     order by e.updated_at, e.id
-     limit $4
-  )
-  delete from memory_entries e using victims v where e.org_id = $1 and e.id = v.id`;
+  delete from memory_entries e
+   where e.org_id = $1 and e.id = any($2::uuid[]) and e.superseded_by is not null
+     and not exists (select 1 from memory_entries x
+                      where x.org_id = $1 and x.superseded_by = e.id)`;
 
 /**
- * Current learned entries past the unused window, with the chain behind each (every entry that
- * leads to it through `superseded_by`). Each entry points at one successor, so the entries that
- * lead to a current head form a tree and the walk ends; a loop a crafted update could plant
- * (ADR 0036 nit 6) has no path to a head and is never reached. `union` (not `union all`) is
- * belt and braces: a repeated (id, head) pair ends the recursion anyway. A chain with a
- * member-written entry anywhere is kept whole: the job never deletes what a person wrote.
+ * Current learned entries past the unused window (locked first), then the chain behind each
+ * (every entry that leads to it through `superseded_by`). Each entry points at one successor, so
+ * the entries that lead to a current head form a tree and the walk ends; a loop a crafted update
+ * could plant (ADR 0036 nit 6) has no path to a head and is never reached. `union` (not `union
+ * all`) is belt and braces: a repeated (id, head) pair ends the recursion anyway. A chain with a
+ * member-written entry anywhere is kept whole: the job never deletes what a person wrote. The
+ * chain is computed after the heads are locked, so a supersede that made a locked head the
+ * successor of a member-written entry is either visible here (the chain is then skipped) or
+ * waiting on the lock (and then finds the head gone).
  */
+const LOCK_HEADS_SQL = `
+  select e.id from memory_entries e
+   where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
+     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at))
+           < $2::timestamptz - make_interval(days => $3)
+   order by e.created_at, e.id
+   limit $4
+   for update`;
 const RETIRE_SQL = `
-  with recursive as_of as (select least($2::timestamptz, now()) as t),
-  heads as (
-    select e.id from memory_entries e, as_of
-     where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
-       and greatest(e.created_at, coalesce(e.last_used_at, e.created_at))
-             < as_of.t - make_interval(days => $3)
-     order by e.created_at, e.id
-     limit $4
-  ),
-  chain as (
-    select h.id, h.id as head from heads h
+  with recursive chain as (
+    select h.id, h.id as head from unnest($2::uuid[]) as h(id)
     union
     select e.id, c.head from memory_entries e
       join chain c on e.org_id = $1 and e.superseded_by = c.id
@@ -129,30 +158,31 @@ const RETIRE_SQL = `
 
 /**
  * Current learned entries idle for a decay period since their last citation, creation or decay
- * step, whichever is latest. `decayed_at` is set to the clamped `as_of`, so the same instant
- * never decays twice and a later citation restarts the clock.
+ * step, whichever is latest (locked first, so a citation that committed meanwhile keeps the
+ * entry out). `decayed_at` is set to the clamped instant, so the same instant never decays twice
+ * and a later citation restarts the clock.
  */
+const LOCK_DECAY_SQL = `
+  select e.id from memory_entries e
+   where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
+     and e.confidence > 0
+     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
+                  coalesce(e.decayed_at, e.created_at))
+           < $2::timestamptz - make_interval(days => $3)
+   order by e.created_at, e.id
+   limit $4
+   for update`;
 const DECAY_SQL = `
-  with as_of as (select least($2::timestamptz, now()) as t),
-  candidates as (
-    select e.id from memory_entries e, as_of
-     where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
-       and e.confidence > 0
-       and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
-                    coalesce(e.decayed_at, e.created_at))
-             < as_of.t - make_interval(days => $3)
-     order by e.created_at, e.id
-     limit $4
-  )
   update memory_entries e
-     set confidence = greatest(0, e.confidence - $5), decayed_at = as_of.t
-    from candidates c, as_of
-   where e.org_id = $1 and e.id = c.id`;
+     set confidence = greatest(0, e.confidence - $4), decayed_at = $3::timestamptz
+   where e.org_id = $1 and e.id = any($2::uuid[])`;
+
+const ids = (rows: { id: string }[]): string[] => rows.map((row) => row.id);
 
 /**
  * Applies the three rules to the current org as of `asOf` (clamped to the database clock) and,
- * when anything changed, writes one `memory.decayed` audit event with the counts. Idempotent at
- * any instant.
+ * when anything changed, writes one `memory.decayed` audit event with the counts and the clamped
+ * instant. Idempotent at any instant.
  */
 export const decayOrgMemory = async (
   tx: TenantTx,
@@ -160,32 +190,50 @@ export const decayOrgMemory = async (
 ): Promise<MemoryDecayOrgReport> => {
   checkAsOf(input.asOf);
   checkWindows(input.windows);
-  const { asOf, windows } = input;
-  const purged = await tx.query(PURGE_HISTORY_SQL, [
+  const { windows } = input;
+  // Clamped once: every rule and the audit row use the same instant, never one past the clock.
+  const clamped = await tx.query<{ t: Date }>("select least($1::timestamptz, now()) as t", [
+    input.asOf,
+  ]);
+  const asOf = clamped.rows[0]?.t;
+  if (!(asOf instanceof Date)) throw new Error("memory decay: the database clock is unavailable");
+
+  const history = await tx.query<{ id: string }>(LOCK_HISTORY_SQL, [
     tx.orgId,
     asOf,
     windows.memorySupersededDays,
     MAX_MEMORY_DECAY_BATCH,
   ]);
-  const retired = await tx.query(RETIRE_SQL, [
+  const purged =
+    history.rows.length === 0
+      ? 0
+      : ((await tx.query(PURGE_HISTORY_SQL, [tx.orgId, ids(history.rows)])).rowCount ?? 0);
+
+  const heads = await tx.query<{ id: string }>(LOCK_HEADS_SQL, [
     tx.orgId,
     asOf,
     windows.memoryUnusedDays,
     MAX_MEMORY_DECAY_BATCH,
   ]);
-  const decayed = await tx.query(DECAY_SQL, [
+  const retired =
+    heads.rows.length === 0
+      ? 0
+      : ((await tx.query(RETIRE_SQL, [tx.orgId, ids(heads.rows)])).rowCount ?? 0);
+
+  const candidates = await tx.query<{ id: string }>(LOCK_DECAY_SQL, [
     tx.orgId,
     asOf,
     windows.memoryDecayDays,
     MAX_MEMORY_DECAY_BATCH,
-    MEMORY_DECAY_STEP,
   ]);
-  const report: MemoryDecayOrgReport = {
-    decayed: decayed.rowCount ?? 0,
-    retired: retired.rowCount ?? 0,
-    purged: purged.rowCount ?? 0,
-  };
-  if (report.decayed + report.retired + report.purged > 0) {
+  const decayed =
+    candidates.rows.length === 0
+      ? 0
+      : ((await tx.query(DECAY_SQL, [tx.orgId, ids(candidates.rows), asOf, MEMORY_DECAY_STEP]))
+          .rowCount ?? 0);
+
+  const report: MemoryDecayOrgReport = { decayed, retired, purged };
+  if (decayed + retired + purged > 0) {
     await audit(
       tx,
       { type: "system", id: MEMORY_DECAY_ACTOR },
