@@ -85,6 +85,8 @@ export const repos = pgTable("repos", {
   defaultBranch: text("default_branch").notNull().default("main"),
   private: boolean("private").notNull().default(true),
   enabled: boolean("enabled").notNull().default(true),
+  /** Whether reviews of the repository use project memory (P8-3, migration 0020). */
+  memoryEnabled: boolean("memory_enabled").notNull().default(true),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -252,13 +254,19 @@ export const memoryEntries = pgTable("memory_entries", {
   reason: text("reason"),
   /** For a learned dismissal: the dismissed finding's severity, the highest it covers (0018). */
   severity: text("severity", { enum: ["critical", "high", "medium", "low"] }),
-  /** The reviewer's role when the entry was learned (0018); null for member-written entries. */
+  /** The reviewer's role when the entry was learned (0018), kept by an edit (0020). */
   learnerRole: text("learner_role", { enum: ["owner", "admin", "member"] }),
   createdBy: uuid("created_by"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   /** When the decay job (P8-4, migration 0019) last lowered the confidence; null until it does. */
   decayedAt: timestamp("decayed_at", { withTimezone: true }),
   supersededBy: uuid("superseded_by"),
+  /** When an admin switched the entry off (P8-3, migration 0020); null while it applies. */
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  /** What a learned entry is about, kept across edits (P8-3, migration 0020); null otherwise. */
+  learnedSubject: text("learned_subject"),
+  /** When the entry was last switched on again (P8-3, migration 0020); decay counts from it. */
+  enabledAt: timestamp("enabled_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

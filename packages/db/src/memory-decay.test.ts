@@ -15,6 +15,7 @@ import {
   runMemoryDecay,
   type MemoryDecayWindows,
 } from "./memory-decay.js";
+import { setMemoryEntryDisabled, setRepoMemoryEnabled } from "./memory.js";
 import {
   DEFAULT_RETENTION,
   MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
@@ -95,6 +96,7 @@ interface Planted {
   readonly lastUsedAt?: Date;
   readonly decayedAt?: Date;
   readonly supersededBy?: string;
+  readonly disabledAt?: Date;
   /** Defaults to `createdAt`; a supersede stamps it. */
   readonly updatedAt?: Date;
 }
@@ -106,9 +108,9 @@ const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
   await superuser.query(
     `insert into memory_entries (id, org_id, repo_id, kind, origin, content, evidence_path,
        evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason, created_by,
-       created_at, updated_at, last_used_at, decayed_at, superseded_by)
+       created_at, updated_at, last_used_at, decayed_at, superseded_by, disabled_at)
      values ($1, $2, $3, $4, $5, $6, 'src/jobs/retry.ts', $7, 1, 3, 612, $8, $9, $10,
-             $11, $12, $13, $14, $15)`,
+             $11, $12, $13, $14, $15, $16)`,
     [
       id,
       org.orgId,
@@ -125,6 +127,7 @@ const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
       p.lastUsedAt ?? null,
       p.decayedAt ?? null,
       p.supersededBy ?? null,
+      p.disabledAt ?? null,
     ],
   );
   return id;
@@ -319,6 +322,68 @@ describe("retire: an uncited learned entry goes with its learned chain and embed
     expect(await exists("memory_entries", one)).toBe(true);
     expect(await exists("memory_entries", two)).toBe(true);
     await superuser.query("delete from memory_entries where id = any($1::uuid[])", [[one, two]]);
+  });
+});
+
+describe("switched off (P8-3, ADR 0039): the time off never counts as idle", () => {
+  const switchEntry = (entryId: string, disabled: boolean) =>
+    db.withOrg(B.orgId, (tx) =>
+      setMemoryEntryDisabled(tx, { actorMemberId: B.memberId, entryId, disabled }),
+    );
+  const switchRepo = (enabled: boolean) =>
+    db.withOrg(B.orgId, (tx) =>
+      setRepoMemoryEnabled(tx, { actorMemberId: B.memberId, repoId: B.repoId, enabled }),
+    );
+  const backdateSwitchOn = (id: string, at: Date) =>
+    superuser.query("update memory_entries set enabled_at = $2 where id = $1", [id, at]);
+
+  it("leaves a switched-off entry alone however idle", async () => {
+    const off = await plant(B, { createdAt: ageDays(400), disabledAt: ageDays(300) });
+    const idleOff = await plant(B, { createdAt: ageDays(91), disabledAt: ageDays(50) });
+    const on = await plant(B, { createdAt: ageDays(400) });
+    await run(B);
+    expect(await row(off)).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(await row(idleOff)).toMatchObject({ confidence: 80, decayed_at: null });
+    expect(await exists("memory_entries", on)).toBe(false);
+  });
+
+  it("13 months off, then on: the next run neither retires nor decays it; it ages from the switch-on (fix round 4)", async () => {
+    const entry = await plant(B, { createdAt: ageDays(500), disabledAt: ageDays(395) });
+    expect(await switchEntry(entry, false)).toMatchObject({ outcome: "switched" });
+    await run(B);
+    expect(await row(entry)).toMatchObject({ confidence: 80, decayed_at: null });
+
+    // A decay period after the switch-on: one step, not retired.
+    await backdateSwitchOn(entry, ageDays(91));
+    await run(B);
+    expect(await row(entry)).toMatchObject({ confidence: 70, decayed_at: NOW });
+    // A year after the switch-on without a citation: retired like any other entry.
+    await backdateSwitchOn(entry, ageDays(366));
+    await run(B);
+    expect(await exists("memory_entries", entry)).toBe(false);
+  });
+
+  it("a repository's memory off for 13 months, then on: its entries are not retired or decayed at the next run", async () => {
+    const old = await plant(B, { createdAt: ageDays(400) });
+    const idle = await plant(B, { createdAt: ageDays(91) });
+    expect(await switchRepo(false)).toBe("switched");
+    try {
+      await run(B);
+      expect(await exists("memory_entries", old)).toBe(true);
+      expect(await row(idle)).toMatchObject({ confidence: 80, decayed_at: null });
+    } finally {
+      expect(await switchRepo(true)).toBe("switched");
+    }
+    await run(B);
+    expect(await exists("memory_entries", old)).toBe(true);
+    expect(await row(idle)).toMatchObject({ confidence: 80, decayed_at: null });
+
+    // From the switch-on, they age normally.
+    await backdateSwitchOn(old, ageDays(366));
+    await backdateSwitchOn(idle, ageDays(91));
+    await run(B);
+    expect(await exists("memory_entries", old)).toBe(false);
+    expect(await row(idle)).toMatchObject({ confidence: 70, decayed_at: NOW });
   });
 });
 

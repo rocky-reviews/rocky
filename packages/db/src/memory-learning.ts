@@ -53,6 +53,8 @@ export const ANALYSIS_MEMORY_BOUNDS = {
 /**
  * The repository's current entries as the pipeline takes them (`AnalysisRequest.memory`): each
  * group of `ANALYSIS_MEMORY_BOUNDS`, newest first. The pipeline re-checks each one before use.
+ * Entries an admin switched off, and every entry of a repository whose memory is switched off,
+ * are never offered (P8-3, ADR 0039).
  */
 export const loadAnalysisMemory = async (
   tx: TenantTx,
@@ -77,7 +79,12 @@ export const loadAnalysisMemory = async (
                                         else 'other' end
                       order by created_at desc, id desc) as n
                from memory_entries e
-              where org_id = $1 and repo_id = $2 and superseded_by is null) ranked
+              where org_id = $1 and repo_id = $2 and superseded_by is null
+                and disabled_at is null
+                -- P8-3: memory switched off for the repository offers nothing.
+                and exists (select 1 from repos r
+                             where r.org_id = e.org_id and r.id = e.repo_id and r.memory_enabled)
+            ) ranked
       where (origin = 'member' and n <= $3)
          or (origin = 'learned' and kind = 'dismissal' and n <= $4)
          or (origin = 'learned' and kind <> 'dismissal' and n <= $5)
@@ -122,7 +129,9 @@ export type LearnFromReviewResult =
   /** The submission is not `posted` (yet): nothing is learned from an unposted review. */
   | { readonly outcome: "not_posted" }
   /** The reviewer is no longer an active member: entries are written in their name only. */
-  | { readonly outcome: "not_a_member" };
+  | { readonly outcome: "not_a_member" }
+  /** Memory is switched off for the repository (P8-3): nothing is learned. */
+  | { readonly outcome: "memory_disabled" };
 
 interface Decided {
   readonly analysisId: string;
@@ -192,6 +201,13 @@ export const learnFromReviewSubmission = async (
   const reviewer = submission.submitted_by;
   const role = isLearnerRole(submission.reviewer_role) ? submission.reviewer_role : "member";
   await lockRepoMemory(tx, submission.repo_id);
+  // Read again under the lock: switching memory off takes it too (P8-3), so the switch and a
+  // learner in flight never interleave.
+  const enabled = await tx.query<{ memory_enabled: boolean }>(
+    "select memory_enabled from repos where org_id = $1 and id = $2",
+    [tx.orgId, submission.repo_id],
+  );
+  if (enabled.rows[0]?.memory_enabled !== true) return { outcome: "memory_disabled" };
   const ownPullRequest =
     submission.author_login !== null &&
     submission.reviewer_login !== null &&
@@ -328,19 +344,54 @@ export const learnFromReviewSubmission = async (
       confidence: number;
       source_pr_number: number;
       learner_role: string | null;
+      origin: string;
+      learned_subject: string | null;
+      disabled: boolean;
     }>(
-      `select id, kind, content, confidence, source_pr_number, learner_role from memory_entries
-        where org_id = $1 and repo_id = $2 and evidence_path = $3 and origin = 'learned'
+      // Current entries of either origin: an edited entry (origin member) still holds its
+      // pattern's switch-off and its decision (P8-3 fix round, S2), matched on the subject it was
+      // learned with, whatever its text says now (fix round 2).
+      `select id, kind, content, confidence, source_pr_number, learner_role, origin,
+              learned_subject, (disabled_at is not null) as disabled
+         from memory_entries
+        where org_id = $1 and repo_id = $2 and evidence_path = $3
           and superseded_by is null
         order by created_at desc, id desc`,
       [tx.orgId, submission.repo_id, evidence.path],
     );
+    // A row learned before 0020 has no stored subject: fill it from its text, with the same
+    // `memorySubject` that writes new ones (fix round 4), under the lock taken above.
+    for (const row of near.rows) {
+      if (row.origin !== "learned" || row.learned_subject !== null) continue;
+      row.learned_subject = memorySubject(row.content);
+      if (row.learned_subject === null) continue;
+      await tx.query(
+        "update memory_entries set learned_subject = $3 where org_id = $1 and id = $2",
+        [tx.orgId, row.id, row.learned_subject],
+      );
+    }
     const subject = memorySubject(candidate.text);
+    // An admin switched this very pattern off (P8-3): learning it again beside the switched-off
+    // entry would undo that, so nothing is learned. The opposite decision is learned, and it
+    // stays switched off (below).
+    const switchedOff = near.rows.some(
+      (row) =>
+        row.disabled &&
+        row.kind === candidate.kind &&
+        subject !== null &&
+        row.learned_subject === subject,
+    );
+    if (switchedOff) {
+      skipped++;
+      continue;
+    }
     const corroborating = near.rows.find(
       (row) =>
+        !row.disabled &&
+        row.origin === "learned" &&
         row.kind === candidate.kind &&
         row.source_pr_number !== evidence.pullRequestNumber &&
-        memorySubject(row.content) === subject,
+        row.learned_subject === subject,
     );
     // A higher role's opposite decision about the pattern stands: a member's dismissal must not
     // switch off what an owner asked for (nor the reverse), so nothing is learned (fix round 2,
@@ -349,7 +400,7 @@ export const learnFromReviewSubmission = async (
       (row) =>
         row.kind !== candidate.kind &&
         roleRank(row.learner_role) > ROLE_RANK[role] &&
-        memorySubject(row.content) === subject,
+        row.learned_subject === subject,
     );
     if (overruled) {
       skipped++;
@@ -372,15 +423,22 @@ export const learnFromReviewSubmission = async (
       continue;
     }
     created++;
-    await tx.query(
-      `update memory_entries set severity = $3, learner_role = $4
-        where org_id = $1 and id = $2`,
-      [tx.orgId, result.entry.id, severity, role],
-    );
     // Compared on the stored (scrubbed) texts, so a scrubbed title still matches its older entry.
     const storedSubject = memorySubject(result.entry.text);
+    await tx.query(
+      `update memory_entries set severity = $3, learner_role = $4, learned_subject = $5
+        where org_id = $1 and id = $2`,
+      [tx.orgId, result.entry.id, severity, role, storedSubject],
+    );
+    // The opposite decision about a switched-off pattern is learned switched off too, so learning
+    // never undoes an admin's decision in two steps (P8-3 fix round, S3); only a person switches
+    // it on again. Compared on the stored subject, like superseding below.
+    const carriesSwitchOff =
+      storedSubject !== null &&
+      near.rows.some((row) => row.disabled && row.learned_subject === storedSubject);
     for (const row of near.rows) {
-      if (storedSubject === null || memorySubject(row.content) !== storedSubject) continue;
+      if (row.origin !== "learned") continue;
+      if (storedSubject === null || row.learned_subject !== storedSubject) continue;
       // A higher role's decision is not overturned by a lower one's (L2).
       if (roleRank(row.learner_role) > ROLE_RANK[role]) continue;
       const replaced = await supersedeMemoryEntry(tx, {
@@ -391,6 +449,12 @@ export const learnFromReviewSubmission = async (
       });
       if (replaced === "superseded") superseded++;
     }
+    if (carriesSwitchOff)
+      await tx.query(
+        `update memory_entries set disabled_at = now(), updated_at = now()
+          where org_id = $1 and id = $2`,
+        [tx.orgId, result.entry.id],
+      );
   }
   return { outcome: "learned", created, superseded, repeated, skipped };
 };

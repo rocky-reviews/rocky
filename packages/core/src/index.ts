@@ -311,6 +311,27 @@ export {
   type ReviewVerdict,
 } from "./review-posting.js";
 export {
+  MAX_MEMORY_PAGE_ENTRIES,
+  MemoryEntryView,
+  MemoryListResponse,
+  parseMemoryEdit,
+  parseMemorySwitch,
+  type MemoryEdit,
+} from "./memory-api.js";
+export {
+  escapeMarkdownText,
+  exportOrder,
+  MEMORY_EXPORT_FILENAME,
+  MEMORY_EXPORT_FORMAT_LINE,
+  MEMORY_EXPORT_REPO_PATH,
+  parseMemoryContext,
+  renderMemoryContext,
+  unescapeMarkdownText,
+  type MemoryExportEntry,
+  type ParseMemoryContextResult,
+  type RenderedMemoryContext,
+} from "./memory-export.js";
+export {
   FORMER_MEMBER_LABEL,
   isMemoryKind,
   isMemoryOrigin,

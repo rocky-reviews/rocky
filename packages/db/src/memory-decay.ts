@@ -127,6 +127,16 @@ const PURGE_HISTORY_SQL = `
                       where x.org_id = $1 and x.superseded_by = e.id)`;
 
 /**
+ * Neither the retire nor the decay rule takes an entry an admin switched off (`disabled_at`) or
+ * one of a repository whose memory is switched off (`repos.memory_enabled`, both P8-3): such an
+ * entry is never offered to a review, so it is never cited, and its idleness says nothing about
+ * the pattern. Retiring it would also undo the switch-off: the pattern could be learned again,
+ * switched on (ADR 0039). Switching it (or its repository's memory) on again sets `enabled_at`,
+ * and both rules measure idleness from the latest of creation, citation, decay step and
+ * `enabled_at`: the time it spent off never counts.
+ */
+
+/**
  * Current learned entries past the unused window (locked first), then the chain behind each
  * (every entry that leads to it through `superseded_by`). Each entry points at one successor, so
  * the entries that lead to a current head form a tree and the walk ends; a loop a crafted update
@@ -141,7 +151,11 @@ const PURGE_HISTORY_SQL = `
 const LOCK_HEADS_SQL = `
   select e.id from memory_entries e
    where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
-     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at))
+     and e.disabled_at is null
+     and exists (select 1 from repos r
+                  where r.org_id = $1 and r.id = e.repo_id and r.memory_enabled)
+     and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
+                  coalesce(e.enabled_at, e.created_at))
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4
@@ -172,9 +186,12 @@ const DELETE_ROWS_SQL = `delete from memory_entries e where e.org_id = $1 and e.
 const LOCK_DECAY_SQL = `
   select e.id from memory_entries e
    where e.org_id = $1 and e.origin = 'learned' and e.superseded_by is null
+     and e.disabled_at is null
+     and exists (select 1 from repos r
+                  where r.org_id = $1 and r.id = e.repo_id and r.memory_enabled)
      and e.confidence > 0
      and greatest(e.created_at, coalesce(e.last_used_at, e.created_at),
-                  coalesce(e.decayed_at, e.created_at))
+                  coalesce(e.decayed_at, e.created_at), coalesce(e.enabled_at, e.created_at))
            < $2::timestamptz - make_interval(days => $3)
    order by e.created_at, e.id
    limit $4

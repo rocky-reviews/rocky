@@ -128,9 +128,22 @@ the cutoffs into the past, as with every purge (THREATS T13).
 
 ### 4. What P8-3 should know
 
-- A per-repository **disabled** switch, if P8-3 stores one, is not known to this job: a disabled
-  entry is never cited, so it will be retired a year after its last citation like any other
-  learned entry. If disabled entries should be kept (or removed sooner), the rules need the flag.
+- **Switched off** (P8-3, [ADR 0039](0039-memory-page-and-context-export.md), migration 0020):
+  neither the retire nor the decay rule takes an entry with `disabled_at` set, or any entry of a
+  repository with `memory_enabled = false`. Such an entry is never offered to a review, so it is
+  never cited and its idleness says nothing about the pattern; retiring it would also undo the
+  switch-off (the pattern could be learned again, switched on). Switching the entry (or its
+  repository's memory) on again sets `memory_entries.enabled_at`, and both rules measure
+  idleness from the latest of `created_at`, `last_used_at`, `decayed_at` (decay only) and
+  `enabled_at`. A switch-on counts as a **fresh start**, not a pause: the idle clock restarts
+  from it, whatever the entry's age when it was switched off (an entry idle for 11 months,
+  switched off and on a minute later, gets a full year again). Switching a repository's memory
+  on does this for every current entry of the repository, including entries that were never
+  off, so an off/on toggle is in effect a "keep" for every current entry it touches. That is
+  accepted: it needs `memory.edit` and is audited.
+  `last_used_at` is not touched (it means a review cited the entry). History (superseded rows) is purged as before: the switch-off
+  lives on the current entry. Tests: `memory-decay.test.ts` "switched off (P8-3, ADR 0039)…".
+  _Amended by P8-3 after this ADR was accepted._
 - `decayed_at` is not exposed through `MemoryEntry`; P8-3 can read it to show "fading since …".
 - An admin who supersedes a learned entry with a member-written one protects the chain from
   retirement (the member-written entry is current); the learned history behind it still ages out.
@@ -183,7 +196,10 @@ deleted (it cannot: the rules read timestamps and origins only).
   keeps the previous version forever. Bounded by the cap, visible in P8-3's history view.
 - **Deletion is permanent and the audit row holds counts.** Which entries went is not
   recorded; a team that wants to know what Rocky forgot can read P8-3's export before and after.
-- **P8-3's disabled switch** (§4) is not known to the job.
+- **A switch-on is a fresh start** (`enabled_at`, §4), not a pause: an off/on toggle of an
+  entry, or of a repository's memory (every current entry of it, also those never off), resets
+  the idle clock fully, in effect a "keep". Accepted: it needs `memory.edit` and is audited
+  (`memory.enabled`, `memory.repo_enabled`).
 - **A citation racing a retirement, the other way round.** Lock-first (D10) keeps a citation
   that committed before the lock from losing the entry or a step, and one still in flight keeps
   the entry out of this run. A citation that starts after the job holds the lock waits, then
