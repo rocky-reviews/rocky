@@ -23,6 +23,9 @@ const settings = {
   orgDeletionGraceDays: 7,
   webhookDeliveriesDays: 30,
   llmUsageDays: 730,
+  memoryDecayDays: 90,
+  memoryUnusedDays: 365,
+  memorySupersededDays: 180,
 };
 
 const stubDb = (overrides: Partial<Db> = {}) => {
@@ -48,6 +51,11 @@ const stubDb = (overrides: Partial<Db> = {}) => {
       calls.push("purge_inbox");
       return Promise.resolve(0);
     },
+    // P8-4: the memory decay job lists the live orgs (none here) before any tenant transaction.
+    liveOrgs: () => {
+      calls.push("live_orgs");
+      return Promise.resolve([]);
+    },
     ...overrides,
   } as unknown as Db;
   return { db, calls };
@@ -70,7 +78,7 @@ const base = {
     embeddings: nothingStoredYet("embeddings"),
   },
   newOrgId: () => "00000000-0000-4000-8000-000000000000" as OrgId,
-  intervals: { inboxMs: 5, sweepMs: 5, retentionMs: 5 },
+  intervals: { inboxMs: 5, sweepMs: 5, retentionMs: 5, memoryDecayMs: 5 },
 };
 
 const forge = {
@@ -92,6 +100,16 @@ describe("startJobs", () => {
     expect(calls).not.toContain("claim");
     // P7-2: departures from the GitHub org only take access away and need no GitHub read.
     expect(calls).toContain("claim:org_member");
+    // P8-4: memory decay reads nothing from GitHub either.
+    expect(calls).toContain("live_orgs");
+    expect(lines.find((l) => l["msg"] === "memory decay done")).toMatchObject({
+      job: "memory_decay",
+      orgs: 0,
+      decayed: 0,
+      retired: 0,
+      purged: 0,
+      failed: 0,
+    });
     // The sweep re-verifies every uninstall with GitHub first (review round 1, S1c).
     expect(calls).not.toContain("due");
     expect(
@@ -131,6 +149,30 @@ describe("startJobs", () => {
     const failed = lines.filter((l) => l["msg"] === "job failed");
     expect(failed[0]).toMatchObject({ job: "org_deletion_sweep", errorCode: "internal_error" });
     expect(JSON.stringify(lines)).not.toContain("10.0.0.5");
+  });
+
+  it("P8-4: logs the memory decay's per-org failures as counts and codes, never an org's error text", async () => {
+    const orgs = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+    let runs = 0;
+    const { db } = stubDb({
+      liveOrgs: () => Promise.resolve(orgs as OrgId[]),
+      withOrg: () => {
+        runs++;
+        return Promise.reject(
+          Object.assign(new Error("could not delete 'Dismissed as intentional: secret thing'"), {
+            code: "40P01",
+          }),
+        );
+      },
+    });
+    const { log, lines } = capture();
+    const jobs = startJobs({ ...base, db, log, forge: undefined });
+    await expect.poll(() => runs).toBeGreaterThan(3);
+    await jobs.stop();
+    const done = lines.find((l) => l["msg"] === "memory decay done");
+    expect(done).toMatchObject({ job: "memory_decay", orgs: 2, failed: 2, failures: ["40P01"] });
+    expect(JSON.stringify(lines)).not.toContain("Dismissed");
+    expect(JSON.stringify(lines)).not.toContain("secret");
   });
 });
 

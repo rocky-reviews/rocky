@@ -2,12 +2,14 @@ import type { OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
+import { decayOrgMemory, type MemoryDecayWindows } from "./memory-decay.js";
 import {
   listMemoryEntries,
   loadMemoryEntry,
   supersedeMemoryEntry,
   touchMemoryEntries,
 } from "./memory.js";
+import { DEFAULT_RETENTION } from "./retention.js";
 import { APP_ROLE, LIFECYCLE_ROLE, RETENTION_ROLE, WORKER_ROLE } from "./roles.js";
 import {
   asWorker,
@@ -70,6 +72,8 @@ const ALLOWED_WORKER_SECURITY_DEFINER = [
   "worker.complete_webhook_delivery",
   "worker.fail_webhook_delivery",
   "worker.installation_orgs",
+  // Project memory decay (P8-4, migration 0019, ADR 0038): the per-org job's org list, ids only.
+  "worker.live_orgs",
 ].sort();
 
 /**
@@ -714,6 +718,145 @@ describe("memory entries (P8-1, migration 0017, ADR 0036 P1)", () => {
   });
 });
 
+describe("memory decay (P8-4, migration 0019, ADR 0038 D1, D5)", () => {
+  const DAY = 86_400_000;
+  /** Behind the database clock, so nothing is clamped. */
+  const NOW = new Date(Date.now() - DAY);
+  const windows: MemoryDecayWindows = {
+    memoryDecayDays: DEFAULT_RETENTION.memoryDecayDays,
+    memoryUnusedDays: DEFAULT_RETENTION.memoryUnusedDays,
+    memorySupersededDays: DEFAULT_RETENTION.memorySupersededDays,
+  };
+  let superuser: pg.Pool;
+  /** Org B's rows the job must never reach from org A: an idle head with an embedding, history. */
+  let idleHead: string;
+  let idleEmbedding: string;
+  let history: string;
+
+  const planted = async () => {
+    const { rows } = await superuser.query<{ id: string; confidence: number; decayed: boolean }>(
+      `select id, confidence, decayed_at is not null as decayed from memory_entries
+        where id = any($1::uuid[]) order by id`,
+      [[idleHead, history]],
+    );
+    const embedding = await superuser.query("select 1 from embeddings where id = $1", [
+      idleEmbedding,
+    ]);
+    return { entries: rows, embedding: embedding.rowCount };
+  };
+
+  beforeAll(async () => {
+    superuser = new pg.Pool({ connectionString: pgs.superUrl, max: 1 }).on(
+      "error",
+      ignoreIdleError,
+    );
+    const plant = async (
+      createdAt: Date,
+      updatedAt: Date,
+      supersededBy: string | null,
+    ): Promise<string> => {
+      const { rows } = await superuser.query<{ id: string }>(
+        `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
+           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, created_by,
+           created_at, updated_at, superseded_by)
+         values ($1, $2, 'convention', 'learned', 'Accepted in review: planted for P8-4',
+                 'src/b.ts', $3, 1, 2, 9, 80, $4, $5, $6, $7)
+         returning id`,
+        [b.orgId, b.repoId, "b".repeat(40), b.memberId, createdAt, updatedAt, supersededBy],
+      );
+      return rows[0]!.id;
+    };
+    const old = new Date(NOW.getTime() - 400 * DAY);
+    idleHead = await plant(old, old, null);
+    // Superseded recently: inside the history window, so only the retire rule can remove it.
+    history = await plant(old, new Date(NOW.getTime() - 10 * DAY), idleHead);
+    const embedding = await superuser.query<{ id: string }>(
+      `insert into embeddings (org_id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
+       values ($1, $2, $3, 'memory', $4, 'test-embed', $5::vector) returning id`,
+      [b.orgId, b.repoId, idleHead, idleHead, `[${Array(1536).fill(0).join(",")}]`],
+    );
+    idleEmbedding = embedding.rows[0]!.id;
+  });
+
+  afterAll(async () => {
+    await superuser?.end();
+  });
+
+  it("the job run inside org A's transaction changes nothing of org B, not even through its embeddings", async () => {
+    const before = await planted();
+    expect(before.entries).toHaveLength(2);
+    expect(before.embedding).toBe(1);
+    const report = await db.withOrg(a.orgId, (tx) => decayOrgMemory(tx, { asOf: NOW, windows }));
+    // A holds only its member-written fixture entry, which the job never touches.
+    expect(report).toEqual({ decayed: 0, retired: 0, purged: 0 });
+    expect(await planted()).toEqual(before);
+    expect(await countAs(a.orgId, table("memory_entries"))).toBe(1);
+    expect(await countAs(a.orgId, table("embeddings"))).toBe(1);
+  });
+
+  it("crafted decay statements inside org A's transaction reach org A's rows only", async () => {
+    const before = await planted();
+    const deleted = await db.withOrg(a.orgId, (tx) =>
+      tx.query("delete from memory_entries where origin = 'learned' or org_id = $1", [b.orgId]),
+    );
+    expect(deleted.rowCount).toBe(0);
+    const decayed = await db.withOrg(a.orgId, (tx) =>
+      tx.query(
+        "update memory_entries set confidence = 0, decayed_at = now() where id = $1 or true",
+        [idleHead],
+      ),
+    );
+    // `or true` reached A's own fixture row only.
+    expect(decayed.rowCount).toBe(1);
+    await db.withOrg(a.orgId, (tx) =>
+      tx.query("update memory_entries set confidence = 80, decayed_at = null where id = $1", [
+        a.memoryEntryId,
+      ]),
+    );
+    const embeddings = await db.withOrg(a.orgId, (tx) =>
+      tx.query("delete from embeddings where memory_entry_id = $1 or true", [idleHead]),
+    );
+    expect(embeddings.rowCount).toBe(1);
+    expect(await planted()).toEqual(before);
+    // Put A's fixture embedding back for the later per-table checks.
+    await db.withOrg(a.orgId, (tx) =>
+      tx.query(
+        `insert into embeddings (id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
+         values ($1, $2, $3, 'memory', $4, 'test-embed', $5::vector)`,
+        [
+          a.embeddingId,
+          a.repoId,
+          a.memoryEntryId,
+          a.memoryEntryId,
+          `[${Array(1536).fill(0).join(",")}]`,
+        ],
+      ),
+    );
+  });
+
+  it("the job run inside org B's transaction retires B's idle chain and its embedding, and A keeps its rows", async () => {
+    const report = await db.withOrg(b.orgId, (tx) => decayOrgMemory(tx, { asOf: NOW, windows }));
+    expect(report).toEqual({ decayed: 0, retired: 2, purged: 0 });
+    const after = await planted();
+    expect(after.entries).toEqual([]);
+    expect(after.embedding).toBe(0);
+    expect(await countAs(a.orgId, table("memory_entries"))).toBe(1);
+    expect(await countAs(a.orgId, table("embeddings"))).toBe(1);
+    expect(await countAs(b.orgId, table("memory_entries"))).toBe(1);
+    expect(await countAs(b.orgId, table("embeddings"))).toBe(1);
+  });
+
+  it("the org list behind the job is the worker's: the application login is refused, and it carries ids only", async () => {
+    const refused = await pgError(appPool.query("select * from worker.live_orgs(null, 10)"));
+    expect(refused.code).toBe(INSUFFICIENT_PRIVILEGE);
+    const listed = await workerPool.query<{ org_id: string }>(
+      "select * from worker.live_orgs(null, 1000)",
+    );
+    expect(listed.fields.map((f) => f.name)).toEqual(["org_id"]);
+    expect(listed.rows.map((r) => r.org_id)).toEqual(expect.arrayContaining([a.orgId, b.orgId]));
+  });
+});
+
 describe("tenant context outside and around withOrg", () => {
   it("returns zero rows with no app.org_id, an empty one, or after RESET", async () => {
     for (const t of tables) {
@@ -1003,6 +1146,9 @@ describe("other catalog objects (review #8)", () => {
       "audit",
       "llm_usage",
       "logs",
+      "memory_decay",
+      "memory_superseded",
+      "memory_unused",
       "org_deletion_grace",
       "webhook_deliveries",
     ]);

@@ -21,6 +21,12 @@ export interface RetentionConfig {
   webhookDeliveriesDays: number;
   /** LLM usage rows (P4-5), what billing reconciles against. At least 400 days. */
   llmUsageDays: number;
+  /** Days without a citation after which a learned memory entry loses a confidence step (P8-4). */
+  memoryDecayDays: number;
+  /** Days without a citation after which a learned memory entry is removed. At least 30. */
+  memoryUnusedDays: number;
+  /** Days after which a superseded learned memory entry (history) is removed. At least 7. */
+  memorySupersededDays: number;
 }
 
 /** `category` column value for each setting. */
@@ -31,6 +37,9 @@ export const SETTING_CATEGORIES: Readonly<Record<keyof RetentionConfig, string>>
   orgDeletionGraceDays: "org_deletion_grace",
   webhookDeliveriesDays: "webhook_deliveries",
   llmUsageDays: "llm_usage",
+  memoryDecayDays: "memory_decay",
+  memoryUnusedDays: "memory_unused",
+  memorySupersededDays: "memory_superseded",
 };
 
 /** The webhook inbox purge (migration 0006): not per org, returns a count. `$1` is `as_of`. */

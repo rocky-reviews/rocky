@@ -374,7 +374,8 @@ export const touchMemoryEntries = async (
   if (entryIds.length > MAX_MEMORY_TOUCH) {
     throw new MemoryStoreError(`memory: at most ${MAX_MEMORY_TOUCH} entries per touch`);
   }
-  const ids = [...new Set(entryIds.map((id) => uuid(id, "entry id")))];
+  // Sorted: one lock order against every other writer of these rows (P8-4 fix round 2).
+  const ids = [...new Set(entryIds.map((id) => uuid(id, "entry id")))].sort();
   if (ids.length === 0) return 0;
   const { rowCount } = await tx.query(
     `update memory_entries set last_used_at = now()

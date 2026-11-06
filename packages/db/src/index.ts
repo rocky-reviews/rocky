@@ -34,6 +34,7 @@ export {
 export { audit, AUDIT_METADATA_MAX_BYTES, type AuditActor, type AuditTarget } from "./audit.js";
 export {
   createDb,
+  MAX_LIVE_ORGS_PAGE,
   TenantContextError,
   type Db,
   type DbOptions,
@@ -108,6 +109,8 @@ export {
   DEFAULT_RETENTION,
   expiryCutoff,
   LLM_USAGE_MIN_RETENTION_DAYS,
+  MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+  MEMORY_UNUSED_MIN_RETENTION_DAYS,
   retentionFromEnv,
   RETENTION_CATEGORIES,
   runRetention,
@@ -204,6 +207,17 @@ export {
   MemoryLearningError,
   type LearnFromReviewResult,
 } from "./memory-learning.js";
+export {
+  decayOrgMemory,
+  MAX_MEMORY_DECAY_BATCH,
+  MEMORY_DECAY_ACTOR,
+  MEMORY_DECAY_STEP,
+  memoryDecayCutoff,
+  runMemoryDecay,
+  type MemoryDecayOrgReport,
+  type MemoryDecayReport,
+  type MemoryDecayWindows,
+} from "./memory-decay.js";
 export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
 export {
   loadPullRequestDiffTarget,

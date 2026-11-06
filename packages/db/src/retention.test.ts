@@ -11,6 +11,8 @@ import {
   runRetention,
   setRetentionSettings,
   LLM_USAGE_MIN_RETENTION_DAYS,
+  MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
+  MEMORY_UNUSED_MIN_RETENTION_DAYS,
   WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS,
 } from "./retention.js";
 import * as schema from "./schema.js";
@@ -114,6 +116,9 @@ describe("retentionFromEnv", () => {
       orgDeletionGraceDays: 7,
       webhookDeliveriesDays: 30,
       llmUsageDays: 730,
+      memoryDecayDays: 90,
+      memoryUnusedDays: 365,
+      memorySupersededDays: 180,
     });
     expect(
       retentionFromEnv({
@@ -123,6 +128,9 @@ describe("retentionFromEnv", () => {
         ORG_DELETION_GRACE_DAYS: "30",
         RETENTION_WEBHOOK_DELIVERIES_DAYS: "60",
         RETENTION_LLM_USAGE_DAYS: "1000",
+        RETENTION_MEMORY_DECAY_DAYS: "30",
+        RETENTION_MEMORY_UNUSED_DAYS: "200",
+        RETENTION_MEMORY_SUPERSEDED_DAYS: "45",
       }),
     ).toEqual({
       analysesDays: 7,
@@ -131,6 +139,34 @@ describe("retentionFromEnv", () => {
       orgDeletionGraceDays: 30,
       webhookDeliveriesDays: 60,
       llmUsageDays: 1000,
+      memoryDecayDays: 30,
+      memoryUnusedDays: 200,
+      memorySupersededDays: 45,
+    });
+  });
+
+  it("rejects memory windows under their floors (P8-4): a day-long unused window would wipe every memory", () => {
+    expect(() => retentionFromEnv({ RETENTION_MEMORY_DECAY_DAYS: "0" })).toThrow(
+      /RETENTION_MEMORY_DECAY_DAYS/,
+    );
+    expect(() =>
+      retentionFromEnv({
+        RETENTION_MEMORY_UNUSED_DAYS: String(MEMORY_UNUSED_MIN_RETENTION_DAYS - 1),
+      }),
+    ).toThrow(/RETENTION_MEMORY_UNUSED_DAYS/);
+    expect(() =>
+      retentionFromEnv({
+        RETENTION_MEMORY_SUPERSEDED_DAYS: String(MEMORY_SUPERSEDED_MIN_RETENTION_DAYS - 1),
+      }),
+    ).toThrow(/RETENTION_MEMORY_SUPERSEDED_DAYS/);
+    expect(
+      retentionFromEnv({
+        RETENTION_MEMORY_UNUSED_DAYS: String(MEMORY_UNUSED_MIN_RETENTION_DAYS),
+        RETENTION_MEMORY_SUPERSEDED_DAYS: String(MEMORY_SUPERSEDED_MIN_RETENTION_DAYS),
+      }),
+    ).toMatchObject({
+      memoryUnusedDays: MEMORY_UNUSED_MIN_RETENTION_DAYS,
+      memorySupersededDays: MEMORY_SUPERSEDED_MIN_RETENTION_DAYS,
     });
   });
 
@@ -172,6 +208,22 @@ describe("retention settings", () => {
         auditDays: AUDIT_MIN_RETENTION_DAYS - 1,
       }),
     ).rejects.toThrow(/auditDays/);
+    expect(await db.retentionSettings()).toEqual(DEFAULT_RETENTION);
+  });
+
+  it("the database itself holds the memory windows' floors (migration 0019), whatever the writer says", async () => {
+    for (const [category, days] of [
+      ["memory_unused", MEMORY_UNUSED_MIN_RETENTION_DAYS - 1],
+      ["memory_superseded", MEMORY_SUPERSEDED_MIN_RETENTION_DAYS - 1],
+      ["memory_decay", 0],
+    ] as const) {
+      await expect(
+        pgs.migrator.query("update app.retention_settings set days = $2 where category = $1", [
+          category,
+          days,
+        ]),
+      ).rejects.toMatchObject({ code: "23514" });
+    }
     expect(await db.retentionSettings()).toEqual(DEFAULT_RETENTION);
   });
 });

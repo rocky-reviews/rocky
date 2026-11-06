@@ -195,7 +195,8 @@ owns their lifetime (`last_used_at`, `superseded_by` and `confidence` are its in
   stored text as is (already scrubbed) and `memoryAuthorLabel` for authors.
 - **P8-4 (decay):** `last_used_at`, `created_at`, `confidence` and `superseded_by` are in place;
   the job must run per org inside `withOrg` (never cross-tenant SQL); the isolation suite already
-  enumerates both tables.
+  enumerates both tables. Done in [ADR 0038](0038-project-memory-decay.md) (migration 0019:
+  `decayed_at`, three windows in `app.retention_settings`, `worker.live_orgs`).
 
 ## Threat model
 
