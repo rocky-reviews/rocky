@@ -28,7 +28,7 @@ import { buildPrompt, checkOutputCap } from "./untrusted.js";
 
 const SCHEMA_NAME = /[^A-Za-z0-9_-]/g;
 
-const endpoint = (baseUrl: string, path: string): string =>
+export const endpoint = (baseUrl: string, path: string): string =>
   `${baseUrl.replace(/\/+$/, "")}/${path}`;
 
 /** Reads at most `cap` bytes; more is a broken server, not an answer. */
@@ -71,17 +71,17 @@ const errorMessage = (body: unknown): string | undefined => {
   return typeof message === "string" ? message : undefined;
 };
 
-interface Exchange {
+export interface Exchange {
   readonly fetch: typeof globalThis.fetch;
   readonly timeoutMs: number;
   readonly maxResponseBytes: number;
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
+export const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** One POST; failures become `LlmCallError` with only the status kind and retry hint (T7). */
-const post = async (
+export const post = async (
   exchange: Exchange,
   url: string,
   key: string | undefined,
@@ -175,7 +175,7 @@ const stopOf = (choice: unknown): StopKind => {
  * Embeddings by `index`, which must be exactly 0..n-1 (each once, integers only); anything else
  * could pair a vector with the wrong input (review round 1, item 3).
  */
-const inInputOrder = (data: unknown, count: number): unknown[] => {
+export const inInputOrder = (data: unknown, count: number): unknown[] => {
   if (!Array.isArray(data) || data.length !== count) throw new LlmCallError("invalid_request");
   const vectors: unknown[] = new Array<unknown>(count);
   const seen = new Set<number>();

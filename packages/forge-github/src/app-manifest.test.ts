@@ -35,7 +35,7 @@ describe("GitHub App manifest (P3-1)", () => {
       redirect_url: "https://rocky.example.com/setup/github-app/callback",
       callback_urls: ["https://rocky.example.com/auth/github/callback"],
       public: false,
-      default_events: ["pull_request", "organization"],
+      default_events: ["pull_request", "organization", "push"],
       default_permissions: {
         contents: "read",
         pull_requests: "write",
@@ -48,7 +48,7 @@ describe("GitHub App manifest (P3-1)", () => {
     });
   });
 
-  it("requests exactly the four permissions of the plan, org Members: read (P7-1), and two events (organization: P7-2)", () => {
+  it("requests exactly the four permissions of the plan, org Members: read (P7-1), and three events (organization: P7-2; push: P9-1)", () => {
     expect(GITHUB_APP_PERMISSIONS).toStrictEqual({
       contents: "read",
       pull_requests: "write",
@@ -56,7 +56,7 @@ describe("GitHub App manifest (P3-1)", () => {
       metadata: "read",
       members: "read",
     });
-    expect(GITHUB_APP_EVENTS).toStrictEqual(["pull_request", "organization"]);
+    expect(GITHUB_APP_EVENTS).toStrictEqual(["pull_request", "organization", "push"]);
     expect(Object.isFrozen(GITHUB_APP_PERMISSIONS)).toBe(true);
     expect(Object.isFrozen(GITHUB_APP_EVENTS)).toBe(true);
   });
@@ -404,10 +404,10 @@ describe("convertManifestCode: GitHub's documented response (review round 1, ite
       events: body.events,
     });
     // The documented example is wider than Rocky's manifest: the caller refuses to save it.
+    // (Its `push` subscription is one Rocky asks for since P9-1.)
     expect(widenedGrants(result.permissions, result.events)).toStrictEqual([
       "permission:issues",
       "permission:single_file",
-      "event:push",
     ]);
   });
 
@@ -473,13 +473,13 @@ describe("widenedGrants", () => {
     expect(
       widenedGrants(
         { ...GITHUB_APP_PERMISSIONS, contents: "write", administration: "read", checks: "admin" },
-        ["pull_request", "push"],
+        ["pull_request", "push", "issues"],
       ),
     ).toStrictEqual([
       "permission:contents",
       "permission:checks",
       "permission:administration",
-      "event:push",
+      "event:issues",
     ]);
     expect(widenedGrants({ metadata: "weird" }, [])).toStrictEqual(["permission:metadata"]);
     expect(

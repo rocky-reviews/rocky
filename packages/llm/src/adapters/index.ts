@@ -5,6 +5,7 @@ import {
   foundryAdapter,
   vertexAdapter,
 } from "./claude-platforms.js";
+import { openAiAdapter, voyageAdapter } from "./embedding-providers.js";
 import { openAiCompatibleAdapter } from "./openai-compatible.js";
 import type { AdapterTransport } from "./transport.js";
 
@@ -18,6 +19,8 @@ export const providerAdapters = (transport: AdapterTransport = {}): ProviderAdap
   vertex: vertexAdapter(transport),
   foundry: foundryAdapter(transport),
   "openai-compatible": openAiCompatibleAdapter(transport),
+  openai: openAiAdapter(transport),
+  voyage: voyageAdapter(transport),
 });
 
 export type { AdapterTransport, VertexAuthSource } from "./transport.js";

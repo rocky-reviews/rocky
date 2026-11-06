@@ -89,7 +89,7 @@ describe("the price table", () => {
   });
 
   it("is frozen at runtime, rates included", () => {
-    const anthropic = latest.providers.anthropic;
+    const anthropic = latest.providers.anthropic!;
     expect(Object.isFrozen(PRICE_TABLES)).toBe(true);
     expect(Object.isFrozen(latest)).toBe(true);
     expect(anthropic.status).toBe("verified");
@@ -133,9 +133,9 @@ describe("the price table", () => {
       expect(modelPrice(latest, "bedrock", model)).toBeUndefined();
       expect(modelPrice(latest, "vertex", model)).toBeUndefined();
     }
-    expect(latest.providers.bedrock.status).toBe("unverified");
-    expect(latest.providers.vertex.status).toBe("unverified");
-    expect(latest.providers["openai-compatible"].status).toBe("unverified");
+    expect(latest.providers.bedrock!.status).toBe("unverified");
+    expect(latest.providers.vertex!.status).toBe("unverified");
+    expect(latest.providers["openai-compatible"]!.status).toBe("unverified");
   });
 
   it("has no price for an unknown model, provider or prototype key", () => {

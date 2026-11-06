@@ -3,6 +3,7 @@
  * nullability and table set are checked against the live database by schema-drift.test.ts;
  * constraints, RLS policies and triggers live only in SQL.
  */
+import { INDEX_VECTOR_DIMENSIONS } from "@rocky-reviews/core";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import { sql } from "drizzle-orm";
 import {
@@ -22,8 +23,11 @@ import {
 /** Ciphertext written by packages/crypto. Never store plaintext secrets in any column. */
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
 
-/** `vector(1536)` in the migration; P9-1 settles the final dimension and index. */
-export const EMBEDDING_DIMENSIONS = 1536;
+/**
+ * `vector(1024)` since migration 0022 (P9-1, ADR 0040 §3): every embedding space is stored at
+ * this one indexed width, its own `dimensions` on the row, zero-padded beyond them.
+ */
+export const EMBEDDING_DIMENSIONS = INDEX_VECTOR_DIMENSIONS;
 
 const orgIdColumn = () =>
   uuid("org_id")
@@ -286,6 +290,69 @@ export const embeddings = pgTable("embeddings", {
   model: text("model").notNull(),
   embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }).notNull(),
   createdAt: createdAt(),
+  /** The embedding space of the vector (migration 0022): never compared across spaces. */
+  provider: text("provider").notNull(),
+  dimensions: integer("dimensions").notNull(),
+  /** A code chunk's vector (P9-1); null for memory entries. */
+  codeChunkId: uuid("code_chunk_id"),
+});
+
+/** One per repository (P9-1, migration 0022): the index's state and its job. */
+export const codeIndexes = pgTable("code_indexes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: orgIdColumn(),
+  repoId: uuid("repo_id").notNull(),
+  status: text("status", { enum: ["queued", "running", "done", "failed", "over_limit"] })
+    .notNull()
+    .default("queued"),
+  requestedSha: text("requested_sha"),
+  generation: integer("generation").notNull().default(1),
+  indexedSha: text("indexed_sha"),
+  embeddingProvider: text("embedding_provider"),
+  embeddingModel: text("embedding_model"),
+  embeddingDimensions: integer("embedding_dimensions"),
+  attempts: integer("attempts").notNull().default(0),
+  availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+  claimedAt: timestamp("claimed_at", { withTimezone: true }),
+  leaseId: uuid("lease_id"),
+  leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  errorCode: text("error_code"),
+  estimatedTokens: integer("estimated_tokens"),
+  limitTokens: integer("limit_tokens"),
+  approvedTokens: integer("approved_tokens"),
+  filesIndexed: integer("files_indexed").notNull().default(0),
+  chunksIndexed: integer("chunks_indexed").notNull().default(0),
+  spentTokens: integer("spent_tokens").notNull().default(0),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+/** A file the index holds (P9-1): which blob it was read from. Never its content. */
+export const codeFiles = pgTable("code_files", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: orgIdColumn(),
+  repoId: uuid("repo_id").notNull(),
+  path: text("path").notNull(),
+  blobSha: text("blob_sha").notNull(),
+  language: text("language").notNull(),
+  status: text("status", { enum: ["indexed", "skipped"] }).notNull(),
+  skipReason: text("skip_reason"),
+  chunkCount: integer("chunk_count").notNull().default(0),
+  indexedAt: timestamp("indexed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** A chunk of an indexed file (P9-1): its line range and the sha256 of its text. */
+export const codeChunks = pgTable("code_chunks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: orgIdColumn(),
+  repoId: uuid("repo_id").notNull(),
+  fileId: uuid("file_id").notNull(),
+  ordinal: integer("ordinal").notNull(),
+  startLine: integer("start_line").notNull(),
+  endLine: integer("end_line").notNull(),
+  kind: text("kind").notNull(),
+  contentSha256: bytea("content_sha256").notNull(),
 });
 
 /** Append-only (trigger in migration 0004). Identifiers only, never code/diffs/tokens/emails. */

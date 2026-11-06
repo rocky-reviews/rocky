@@ -170,8 +170,16 @@ export type StructuredCompletionResult<T> = ProviderCompletionResult<T> & {
   readonly provider: string;
 };
 
+/**
+ * What the vectors are for (P9-1). Retrieval models embed the indexed text and the question
+ * differently (Voyage `input_type`); providers without the distinction ignore it. Omitted:
+ * `document`.
+ */
+export type EmbeddingPurpose = "document" | "query";
+
 export interface EmbeddingRequest {
   readonly inputs: readonly string[];
+  readonly purpose?: EmbeddingPurpose;
   readonly signal?: AbortSignal;
 }
 

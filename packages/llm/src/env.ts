@@ -34,6 +34,20 @@ export const DEFAULT_ROLE_TARGETS: Readonly<
 
 export const DEFAULT_PROVIDER = "anthropic";
 
+/**
+ * The embedding provider when the embed role is turned on without naming one (P9-1, ADR 0040
+ * §1): OpenAI, unless `ROCKY_LLM_PROVIDER` names a provider that has embeddings.
+ */
+export const DEFAULT_EMBED_PROVIDER = "openai";
+
+/** Each hosted embedding provider's default model, at the index width (ADR 0040 §1). */
+export const DEFAULT_EMBED_TARGETS: Readonly<
+  Partial<Record<string, { readonly model: string; readonly dimensions: number }>>
+> = {
+  openai: { model: "text-embedding-3-small", dimensions: 1024 },
+  voyage: { model: "voyage-code-3", dimensions: 1024 },
+};
+
 /** Provider settings by variable suffix; `default` applies when the provider is in use. */
 const PROVIDER_VARS = {
   anthropic: {
@@ -56,6 +70,18 @@ const PROVIDER_VARS = {
     prefix: "OPENAI",
     fields: { BASE_URL: "baseUrl", API_KEY_ENV: "apiKeyEnv" },
     defaults: {},
+  },
+  // `ROCKY_LLM_OPENAI_*` already belongs to OpenAI-compatible servers, so the hosted API has its
+  // own prefix.
+  openai: {
+    prefix: "OPENAI_PLATFORM",
+    fields: { API_KEY_ENV: "apiKeyEnv", BASE_URL: "baseUrl" },
+    defaults: { apiKeyEnv: "OPENAI_API_KEY" },
+  },
+  voyage: {
+    prefix: "VOYAGE",
+    fields: { API_KEY_ENV: "apiKeyEnv", BASE_URL: "baseUrl" },
+    defaults: { apiKeyEnv: "VOYAGE_API_KEY" },
   },
 } as const satisfies Record<
   (typeof PROVIDER_KINDS)[number],
@@ -137,17 +163,23 @@ const completionRole = (env: Env, role: LlmCompletionRole, provider: string) => 
   };
 };
 
-const embedRole = (env: Env, fallbackProvider: string) => {
+const embedRole = (env: Env, everyRole: string | undefined) => {
   const provider = valueOf(env, roleVar("embed", "PROVIDER"));
   const model = valueOf(env, roleVar("embed", "MODEL"));
   const dimensions = valueOf(env, roleVar("embed", "DIMENSIONS"));
   if (provider === undefined && model === undefined && dimensions === undefined) return null;
+  const resolved =
+    provider ??
+    (isProviderKind(everyRole) && PROVIDER_CAPABILITIES[everyRole].embeddings
+      ? everyRole
+      : DEFAULT_EMBED_PROVIDER);
+  const target = DEFAULT_EMBED_TARGETS[resolved];
   return {
-    provider: provider ?? fallbackProvider,
-    model,
+    provider: resolved,
+    model: model ?? target?.model,
     dimensions:
       dimensions === undefined
-        ? undefined
+        ? target?.dimensions
         : /^\d{1,6}$/.test(dimensions)
           ? Number(dimensions)
           : dimensions,
@@ -182,7 +214,7 @@ export const llmConfigFromEnv = (env: Env): LlmConfig => {
   for (const role of LLM_COMPLETION_ROLES) {
     roles[role] = completionRole(env, role, valueOf(env, roleVar(role, "PROVIDER")) ?? fallback);
   }
-  const embed = embedRole(env, fallback);
+  const embed = embedRole(env, valueOf(env, `${PREFIX}PROVIDER`));
   roles["embed"] = embed;
 
   const used = new Set(

@@ -53,13 +53,14 @@ packages/schema (analysis document; shared contract)
 | Path                         | Role                                                                                                                                                                                                                                                                                                                                                  |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `apps/server`                | Fastify HTTP API, GitHub webhook receiver, login and sessions (P7-1), the access policy and org administration routes (P7-2), posting a review as the user (P3-5: the only process that holds a `ReviewPoster`), security headers and rate limits (P7-3), serves the web build (`ROCKY_WEB_DIR`)                                                      |
-| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror, members who left the GitHub org), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); later indexing. Never posts (P3-5)                                                                                             |
+| `apps/worker`                | Background jobs: webhook inbox consumer (installations, pull request mirror, members who left the GitHub org), org deletion sweep, retention; `pnpm mirror:rebuild`; the analysis lane and `runAnalysis` (P4-3, P4-6); the push lane and the repository index lane (`runCodeIndex`, P9-1, ADR 0040); `pnpm index:bench`. Never posts (P3-5)           |
 | `apps/web`                   | React SPA on Vite (ADR 0019): PR review page (P6-1…P6-6) at `/:owner/:repo/pull/:number` and the inbox at `/inbox`, both read from the server (H4-2; fixtures behind `?fixture=`/`?source=fixture`), and a repository's project memory at `/:owner/:repo/memory` (P8-3); in development Vite proxies `/api` and `/auth` to the server; later settings |
 | `packages/core`              | Domain logic and ports (`Entitlements`, `Clock`, `Forge`, `WebhookIngress`, `WebhookInbox`, `UserAccessReader`, the repository access check, `ReviewPoster` and the review plan (P3-5), `LlmProvider`/`LlmRoles`, the analysis pipeline, later `Storage`, `Billing`)                                                                                  |
 | `packages/schema`            | Analysis document (graph + triage + findings), JSON Schema emit, fixtures                                                                                                                                                                                                                                                                             |
 | `packages/db`                | SQL migrations + Drizzle mirror, RLS policies, `withOrg` client, append-only audit, retention purge                                                                                                                                                                                                                                                   |
 | `packages/forge-github`      | GitHub App auth, webhooks, PR mirror, posting reviews                                                                                                                                                                                                                                                                                                 |
-| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible), metering (`meterRoles`) and the versioned list-price table (`prices.ts`, ADR 0016)                                                                                                                     |
+| `packages/llm`               | Role config (`ROCKY_LLM_*`), provider capabilities, role registry, provider adapters (Anthropic, Bedrock, Vertex, Foundry, OpenAI-compatible; OpenAI and Voyage AI for embeddings), metering (`meterRoles`) and the versioned list-price table (`prices.ts`, ADR 0016)                                                                                |
+| `packages/indexer`           | Tree-sitter chunking of source files (WebAssembly grammars) and the deterministic embedder for tests and `pnpm index:bench` (P9-1, ADR 0040)                                                                                                                                                                                                          |
 | `packages/renderer`          | Deterministic change-map SVG (adapted from PR Lens, MIT)                                                                                                                                                                                                                                                                                              |
 | `packages/crypto`            | Envelope encryption for tokens and customer API keys                                                                                                                                                                                                                                                                                                  |
 | `packages/log`               | Pino with redaction, request ids, OpenTelemetry ids — see [logging.md](logging.md)                                                                                                                                                                                                                                                                    |
@@ -233,6 +234,17 @@ packages/schema (analysis document; shared contract)
   `renderMemoryContext` with every markdown syntax character escaped, no authors, ids or dates;
   `parseMemoryContext` reads it back to the same entries. Rocky writes no file and pushes
   nothing.
+- The repository index (ADR 0040, P9-1): a `push` to a default branch (`repository.push` in the
+  inbox) makes the worker's `repository` lane re-check the installation and queue the
+  repository's `code_indexes` row; the index lane claims it (`worker.claim_code_indexes`, one
+  running index per org), reads the branch head and tree on a `contents: read` token scoped to
+  the repository, fetches only new or changed blobs (one archive when there are many), chunks
+  them with tree-sitter (`packages/indexer`), embeds them through the metered embed role and
+  stores `code_files`, `code_chunks` and `embeddings` (path, blob id, line range, sha256, the
+  vector and its space; never the code) under RLS; gone paths are removed. Vectors are
+  `vector(1024)` for every embedding space (zero-padded) with the space on every row and one
+  HNSW index; a model change re-indexes. `searchCodeChunks` returns the nearest chunks of one
+  repository in one space (exact below 20 000 vectors, HNSW with an iterative scan above).
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is
@@ -329,8 +341,9 @@ packages/schema (analysis document; shared contract)
 - GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
   only, one-time token printed to the terminal); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
-  ADR 0020) and two subscribed events
-  (`pull_request`; `organization` for members who leave, ADR 0024), pinned by a test. The conversion's credentials are written once to a
+  ADR 0020) and three subscribed events
+  (`pull_request`; `organization` for members who leave, ADR 0024; `push` for the repository
+  index, ADR 0040), pinned by a test. The conversion's credentials are written once to a
   `0600` file for the operator's secret manager; they are never logged or stored in the database.
 - `withOrg` hands out a transaction-bound handle: it is refused after the transaction ends, and
   it refuses transaction-control, role and `app.*` statements. Detached work (timers, listeners)

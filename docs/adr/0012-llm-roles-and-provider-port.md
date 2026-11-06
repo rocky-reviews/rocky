@@ -21,6 +21,10 @@
   - Bedrock catalogue limited to the models Mantle serves;
   - per-platform `platformModel` shapes for Vertex and Foundry;
   - the Foundry model form confirmed.
+- **Amended:** P9-1 ([ADR 0040](0040-repository-index-and-embedding-spaces.md)): §6 resolved:
+  OpenAI is the default embedding provider (Voyage AI and self-hosted as alternatives),
+  embeddings stay off until configured, the vector column is `vector(1024)` with the embedding
+  space stored on every row.
 
 ## Context
 
@@ -257,6 +261,9 @@ never learn the provider. `registry.test.ts` runs one pipeline stand-in against 
 environments (Anthropic, Bedrock, a local server) with the same code and the same adapters.
 
 ### 6. The embed role has no default (needs a human decision)
+
+> **Resolved by [ADR 0040](0040-repository-index-and-embedding-spaces.md) §1–§3 (P9-1).** The
+> text below is the original decision, kept for the record.
 
 Anthropic has no embeddings endpoint on any of its platforms. So no default can share the
 completion roles' provider, and any default would add a vendor and a data processor on behalf of

@@ -86,6 +86,7 @@ const forge = {
   getInstallation: () => Promise.resolve(null),
   verifyApp: () => Promise.resolve(),
   openRepository: () => Promise.resolve(null),
+  openCode: () => Promise.resolve(null),
   locateRepository: () => Promise.resolve(null),
   isCollaborator: () => Promise.reject(new Error("must not be called")),
 };
@@ -207,6 +208,38 @@ describe("the analysis lane (P4-6)", () => {
     await expect.poll(() => claims.length).toBeGreaterThan(2);
     await jobs.stop();
     expect(claims[0]).toEqual({ limit: 3, leaseSeconds: 600, orgConcurrency: 2 });
+  });
+
+  it("P9-1: claims index runs only with indexing configured and app credentials", async () => {
+    const claims: unknown[] = [];
+    const claimCodeIndexes = (options: unknown) => {
+      claims.push(options);
+      return Promise.resolve([]);
+    };
+    const index = {
+      llm: { completion: () => ({}), embedding: () => undefined } as never,
+      usageTargets: usageTargetsFor(llmConfigFromEnv({})),
+      space: { provider: "openai", model: "text-embedding-3-small", dimensions: 1024 },
+      chunker: { chunk: () => Promise.resolve([]) },
+      tokenLimit: 1_000_000,
+    };
+    const { log } = capture();
+    const intervals = { ...base.intervals, indexMs: 5 };
+    for (const deps of [{ forge: undefined, index }, { forge }]) {
+      const { db } = stubDb({ claimCodeIndexes } as Partial<Db>);
+      const jobs = startJobs({ ...base, intervals, db, log, ...deps });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await jobs.stop();
+    }
+    expect(claims).toEqual([]);
+
+    const { db, calls } = stubDb({ claimCodeIndexes } as Partial<Db>);
+    const jobs = startJobs({ ...base, intervals, db, log, forge, index });
+    await expect.poll(() => claims.length).toBeGreaterThan(2);
+    await jobs.stop();
+    expect(claims[0]).toEqual({ limit: 1, leaseSeconds: 900 });
+    // The push lane drains with the other GitHub-backed lanes.
+    expect(calls).toContain("claim");
   });
 });
 

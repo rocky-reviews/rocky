@@ -46,6 +46,15 @@ const assertEventInvariants = (event: ForgeEvent): void => {
       expect(Object.keys(event.sender).sort()).toEqual(["id", "login"]);
     }
     expect(Object.keys(event).sort()).toEqual(["account", "installationId", "sender", "type"]);
+  } else if (event.type === "repository.push") {
+    expect(ID(event.repositoryId)).toBe(true);
+    expect(event.headSha).toMatch(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
+    expect(Object.keys(event).sort()).toEqual([
+      "headSha",
+      "installationId",
+      "repositoryId",
+      "type",
+    ]);
   } else {
     expect(ID(event.repositoryId)).toBe(true);
     expect(Number.isInteger(event.number) && event.number > 0 && event.number < 2 ** 31).toBe(true);
