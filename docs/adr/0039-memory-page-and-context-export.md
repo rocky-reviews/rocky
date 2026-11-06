@@ -153,7 +153,9 @@ is a follow-up: it changes every briefing screenshot baseline, which parallel ta
 - The export is a snapshot; nothing reads `.rocky/context.md` back into Rocky yet.
 - P8-4's decay job (ADR 0038 §4) neither decays nor retires a switched-off entry, nor any entry
   of a repository with memory off, and measures idleness from the last switch-on
-  (`enabled_at`), so the time off never counts.
+  (`enabled_at`). A switch-on is a fresh start, not a pause: the idle clock restarts fully, and
+  switching a repository's memory on restarts it for every current entry, also those never
+  off, so an off/on toggle is in effect a "keep" (needs `memory.edit`, audited).
 - The no-link proof renders with micromark and its GFM extension, not cmark-gfm, which GitHub
   runs; GitHub's filters after rendering (such as `@mention` links) ignore the escaping. Low
   risk: logins are scrubbed from entries and a file in a repository notifies nobody.

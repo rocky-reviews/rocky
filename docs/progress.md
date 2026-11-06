@@ -140,6 +140,9 @@ Task log for the project plan. Agents append a row when a task is merged.
       scans in `packages/db/src/memory-decay.ts` skip `disabled_at is not null` and repositories
       with memory off, and both measure idleness from the last switch-on (`enabled_at`, fix
       round 4), so the time off never counts (ADR 0038 §4, ADR 0039).
+- The export property test's random alphabet essentially never produces `http://` or `www.`;
+  mixing tokens such as `"http://"`, `"www."`, `"@"` and `"a.b"` into the arbitrary would make
+  it meaningful for autolinks (the explicit tricky cases cover them today).
 - Switching a learned-switched-off entry on again is per entry: an opposite decision learned
   switched off (ADR 0039) must be switched on by hand.
 

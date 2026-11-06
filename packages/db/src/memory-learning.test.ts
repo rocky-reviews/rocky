@@ -751,7 +751,7 @@ describe("switching memory off (P8-3, ADR 0039)", () => {
     );
 
     await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
-    expect(await learn(A, await post(A))).toMatchObject({ created: 0 });
+    expect(await learn(A, await post(A))).toMatchObject({ created: 0, skipped: 1 });
     const { rows } = await superuser.query<{ id: string; content: string; s: string | null }>(
       "select id, content, learned_subject as s from memory_entries where id = any($1::uuid[])",
       [[...others, switchedOff]],

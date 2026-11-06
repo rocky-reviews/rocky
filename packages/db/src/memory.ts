@@ -578,9 +578,15 @@ export const editMemoryEntry = async (
   const severity = edit.kind === "dismissal" && old.kind === "dismissal" ? old.severity : null;
   // The same decision keeps its role; a changed kind is the editor's decision, not the learner's
   // (fix round 4). A row learned before 0020 gets its subject here (TypeScript is its source).
-  const learnerRole = edit.kind === old.kind ? old.learner_role : await activeRole(tx, actor);
+  // Only an entry that came from learning carries a learner role (fix round 5).
   const subject =
     old.learned_subject ?? (old.origin === "learned" ? memorySubject(old.content) : null);
+  const learnerRole =
+    old.origin !== "learned" && old.learned_subject === null
+      ? null
+      : edit.kind === old.kind
+        ? old.learner_role
+        : await activeRole(tx, actor);
   await tx.query(
     `update memory_entries
         set severity = $3, disabled_at = $4, learner_role = $5, learned_subject = $6
