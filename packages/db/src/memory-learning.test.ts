@@ -724,6 +724,43 @@ describe("switching memory off (P8-3, ADR 0039)", () => {
     expect(await analysisMemory()).toHaveLength(2);
   });
 
+  it("P8-2b with P8-3: an edit keeps the role but never copies the learned level; a switched-off higher-role entry is not loaded", async () => {
+    // F3 sits on a critical file: its dismissal is learned at `critical`; F2's accept is an
+    // admin's convention (A.memberId is an admin).
+    await decide(A, "F3", { kind: "dismiss", reason: "intentional" });
+    await decide(A, "F2", { kind: "accept" });
+    await learn(A, await post(A));
+    const entries = await entriesOf(A);
+    const dismissal = entries.find((e) => e.kind === "dismissal");
+    const convention = entries.find((e) => e.kind === "convention");
+    expect(
+      (await analysisMemory()).map((e) => [e.kind, e.origin, e.learnedLevel, e.learnerRole]).sort(),
+    ).toEqual([
+      ["convention", "learned", null, "admin"],
+      ["dismissal", "learned", "critical", "admin"],
+    ]);
+    // Edited (same kind): a person-written row that keeps the decision's role, with no level.
+    const edited = await db.withOrg(A.orgId, (tx) =>
+      editMemoryEntry(tx, {
+        actorMemberId: A.memberId,
+        entryId: dismissal!.id,
+        edit: { kind: "dismissal", reason: "intentional", text: `${dismissal!.text}.` },
+      }),
+    );
+    expect(edited.outcome).toBe("edited");
+    const loaded = await analysisMemory();
+    expect(loaded.map((e) => [e.kind, e.origin, e.learnedLevel, e.learnerRole]).sort()).toEqual([
+      ["convention", "learned", null, "admin"],
+      ["dismissal", "member", null, "admin"],
+    ]);
+    // Switched off, the admin's convention is not loaded at all: it cannot block the critical
+    // path (ADR 0037 §7), and switched on it is loaded again.
+    expect(await switchEntry(convention!.id, true)).toMatchObject({ outcome: "switched" });
+    expect((await analysisMemory()).map((e) => e.kind)).toEqual(["dismissal"]);
+    await switchEntry(convention!.id, false);
+    expect((await analysisMemory()).map((e) => e.kind).sort()).toEqual(["convention", "dismissal"]);
+  });
+
   it("memory switched off for the repository offers nothing and learns nothing; the entries stay", async () => {
     await decide(A, "F2", { kind: "dismiss", reason: "intentional" });
     await learn(A, await post(A));

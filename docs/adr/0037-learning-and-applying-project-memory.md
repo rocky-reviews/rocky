@@ -342,6 +342,17 @@ The follow-up lets it stand under guards the pipeline enforces (`suppressionStan
     way around the block; the cost of blocking is only the double-check line, so the exception
     fails closed. The learner's role travels with the entry (`AnalysisMemoryEntry.learnerRole`,
     from `learner_role`; `null` ranks as member) and, like the level, never reaches the model.
+    **With P8-3's controls (ADR 0039, after the rebase):** a person's edit of a learned entry
+    keeps the decision's role on the person-written row (migration 0020 dropped 0018's "only
+    learned entries carry a role"), so an edited owner convention still blocks; an entry a
+    person wrote from scratch carries no role and does not. No edit copies `learned_level`
+    (migration 0021's CHECK ties it to a learned dismissal), so a person-written entry never
+    stands on a critical file. An entry an admin **switched off**, and every entry of a
+    repository whose memory is off, is not loaded for analyses (`disabled_at is null`,
+    `repos.memory_enabled`), so it neither stands nor blocks: the switch-off is the admin's
+    decision that the entry says nothing any more, and a block from an invisible entry would
+    make it partial and unexplainable. The decay job (ADR 0038) and the lazily filled
+    `learned_subject` need nothing from this amendment.
     The rule is checked over every entry the analysis was given (300), not only the file's
     selection of 12, so a convention the selection's cap would drop still blocks; and it is
     re-run for a **reused unit's hidden findings** (fix round 2): the unit key covers the

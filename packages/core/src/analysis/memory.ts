@@ -80,10 +80,11 @@ export interface AnalysisMemoryEntry {
    */
   readonly learnedLevel?: TriagedFileLevel | null | undefined;
   /**
-   * For a learned entry: the role the reviewer held when it was learned (`learner_role`,
-   * migration 0018). On a critical file a dismissal does not stand against a nearby entry of the
-   * opposite kind taught by a higher role (P8-2b fix round 1, `suppressionStands`). Absent or
-   * `null` ranks as `member`, as the learner ranks it. Never offered to the model.
+   * The role of the decision the entry came from (`learner_role`, migration 0018): the
+   * reviewer's role when it was learned, kept by a person's edit of it (P8-3). On a critical
+   * file a dismissal does not stand against a nearby entry of the opposite kind taught by a
+   * higher role (P8-2b fix round 1, `suppressionStands`). Absent or `null` (an entry a person
+   * wrote from scratch, or one learned before 0018) ranks as `member`. Never offered to the model.
    */
   readonly learnerRole?: LearnerRole | null | undefined;
 }
@@ -147,10 +148,11 @@ const usable = (value: unknown): AnalysisMemoryEntry | undefined => {
       : TriagedFileLevel.safeParse(learnedLevel);
   if (learnedAt !== null && (!learnedAt.success || kind !== "dismissal" || origin !== "learned"))
     return undefined;
-  // The learner's role (0018) is recorded on learned entries only, like the CHECK says.
-  if (learnerRole !== undefined && learnerRole !== null) {
-    if (!isLearnerRole(learnerRole) || origin !== "learned") return undefined;
-  }
+  // The learner's role (0018): the role of the decision the entry came from. A person's edit
+  // of a learned entry keeps it on the person-written row (P8-3, migration 0020), so it is
+  // accepted on any origin; only the value is checked.
+  if (learnerRole !== undefined && learnerRole !== null && !isLearnerRole(learnerRole))
+    return undefined;
   if (typeof path !== "string" || pathProblem(path) !== undefined) return undefined;
   if (typeof confidence !== "number" || !Number.isSafeInteger(confidence)) return undefined;
   if (confidence < 0 || confidence > 100) return undefined;
@@ -358,8 +360,11 @@ const nearOnCriticalFile = (entryPath: string, filePath: string): boolean =>
  * kind, no subject match. Titles are model-written and vary between runs, so a subject match
  * would give the author of the reworded entry a way around the block; the cost of blocking is
  * only the double-check line (the finding is restored, never hidden), so the critical path fails
- * closed. Only learned entries carry a role; a member-written entry (P8-3) neither blocks nor is
- * blocked here (it never stands on a critical file).
+ * closed. What blocks is an entry with a role, whatever its origin: a learned one, or a
+ * person's edit of it, which keeps the decision's role (P8-3). An entry a person wrote from
+ * scratch carries no role and does not block; nor does one an admin switched off, which the
+ * worker never loads (P8-3), and a person-written entry never stands here itself (no learned
+ * level, by the CHECK of migration 0021).
  */
 const overruledNearby = (
   entry: AnalysisMemoryEntry,
@@ -369,7 +374,6 @@ const overruledNearby = (
   entries.some(
     (other) =>
       other.id !== entry.id &&
-      other.origin === "learned" &&
       other.kind !== "dismissal" &&
       roleRank(other) > roleRank(entry) &&
       nearOnCriticalFile(other.path, filePath),

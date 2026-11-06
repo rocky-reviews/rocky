@@ -1332,9 +1332,14 @@ describe("P8-2b fix round 1: the critical path against role precedence and root-
         true,
       ],
       [
-        "a member-written convention (no role): stands",
+        "a convention a person wrote from scratch (no role): stands",
         [dismissalOn(B), conventionOn(A, { origin: "member", learnerRole: null })],
         true,
+      ],
+      [
+        "an owner's convention a person edited (person-written, the role kept, P8-3): blocked",
+        [dismissalOn(B), conventionOn(A, { origin: "member" })],
+        false,
       ],
       [
         "an owner's convention with no recorded role on the dismissal: blocked",
@@ -1451,12 +1456,22 @@ describe("P8-2b fix round 1: the critical path against role precedence and root-
     ]);
   });
 
-  it("a learner role is accepted on learned entries only; an unknown role is refused", () => {
+  it("a learner role is accepted on any origin (an edit keeps the decision's role, P8-3); an unknown role is refused", () => {
     expect(usableMemory([dismissalOn(B)]).entries[0]?.learnerRole).toBe("member");
     expect(
       usableMemory([dismissalOn(B, { learnerRole: null })]).entries[0]?.learnerRole,
     ).toBeNull();
-    expect(usableMemory([conventionOn(A, { origin: "member" })]).dropped).toBe(1);
+    expect(usableMemory([conventionOn(A, { origin: "member" })]).entries[0]?.learnerRole).toBe(
+      "owner",
+    );
+    // A person-written entry never stands on a critical file, role or not: it has no learned
+    // level (migration 0021's CHECK), and an edit does not copy one.
+    expect(
+      suppressionStands(dismissalOn(B, { origin: "member", learnedLevel: null }), A, {
+        because: "critical_file",
+        ruleFloored: false,
+      }),
+    ).toBe(false);
     expect(usableMemory([dismissalOn(B, { learnerRole: "root" as never })]).dropped).toBe(1);
   });
 });
