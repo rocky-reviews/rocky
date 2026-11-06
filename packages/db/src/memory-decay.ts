@@ -4,7 +4,7 @@ import { MAX_LIVE_ORGS_PAGE, type Db, type TenantTx } from "./client.js";
 import type { RetentionConfig } from "./retention-sql.js";
 
 /**
- * Project memory decay (P8-4, migration 0020, ADR 0038). A scheduled job that, per org and inside
+ * Project memory decay (P8-4, migration 0019, ADR 0038). A scheduled job that, per org and inside
  * that org's `withOrg` transaction (RLS on `memory_entries` and `embeddings`; the explicit
  * `org_id` filters are defence in depth), applies three time-based rules to **learned** entries:
  *

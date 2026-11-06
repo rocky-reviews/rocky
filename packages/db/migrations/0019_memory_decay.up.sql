@@ -1,4 +1,4 @@
--- 0020 project memory decay (P8-4, ADR 0038).
+-- 0019 project memory decay (P8-4, ADR 0038).
 --
 -- Three windows, in app.retention_settings like every retention period (migrator-owned, the
 -- application reads them and cannot shorten them):

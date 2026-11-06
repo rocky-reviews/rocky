@@ -29,7 +29,7 @@ org inside `withOrg`, never cross-tenant SQL. This ADR follows that.
 
 ## Decision
 
-### 1. Shape: a worker job, per org, inside `withOrg` (migration 0020)
+### 1. Shape: a worker job, per org, inside `withOrg` (migration 0019)
 
 `runMemoryDecay` (`packages/db/src/memory-decay.ts`) runs on the worker's timer like retention
 (`memory_decay`, every 6 hours, no GitHub read, no app credentials). It reads the windows from
@@ -138,7 +138,7 @@ deleted (it cannot: the rules read timestamps and origins only).
 
 ## Consequences
 
-- Migration 0020: `memory_entries.decayed_at`, two partial indexes for the candidate scans, three
+- Migration 0019: `memory_entries.decayed_at`, two partial indexes for the candidate scans, three
   settings rows with CHECK floors, `worker.live_orgs`. The Drizzle schema mirrors the column.
 - `RetentionConfig` gains `memoryDecayDays`, `memoryUnusedDays`, `memorySupersededDays`;
   `Db` gains `liveOrgs`; the worker gains the `memory_decay` job (`memoryDecayMs`).

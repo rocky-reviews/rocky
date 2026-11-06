@@ -35,7 +35,7 @@ export const WEBHOOK_DELIVERIES_MIN_RETENTION_DAYS = 7;
 /** Mirrors the CHECK in migration 0011: usage outlives a yearly billing period plus a margin. */
 export const LLM_USAGE_MIN_RETENTION_DAYS = 400;
 /**
- * Mirror the CHECKs in migration 0020 (P8-4): a one-day "unused" window would erase every
+ * Mirror the CHECKs in migration 0019 (P8-4): a one-day "unused" window would erase every
  * repository's learned memory on the first run; history outlives a week of review rounds.
  */
 export const MEMORY_UNUSED_MIN_RETENTION_DAYS = 30;

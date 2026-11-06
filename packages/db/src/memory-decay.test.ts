@@ -26,7 +26,7 @@ import {
 } from "./testing/index.js";
 
 /**
- * P8-4 (migration 0020, ADR 0038): the decay job on a real Postgres as the application and the
+ * P8-4 (migration 0019, ADR 0038): the decay job on a real Postgres as the application and the
  * worker roles. Time-travel like retention.test.ts: the clock is injected as `as_of` and rows are
  * planted just inside and just outside each boundary (an entry is idle iff its idle instant is
  * strictly older than `as_of - window`). Member-written entries are never touched; a retired
@@ -410,7 +410,7 @@ describe("the clock, the windows and the audit trail", () => {
   });
 });
 
-describe("liveOrgs (worker.live_orgs, migration 0020)", () => {
+describe("liveOrgs (worker.live_orgs, migration 0019)", () => {
   it("is the worker's alone: the application login is refused", async () => {
     await expect(db.liveOrgs(null, 10)).rejects.toMatchObject({ code: INSUFFICIENT_PRIVILEGE });
     const direct = await appPool

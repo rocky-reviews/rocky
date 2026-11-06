@@ -72,7 +72,7 @@ const ALLOWED_WORKER_SECURITY_DEFINER = [
   "worker.complete_webhook_delivery",
   "worker.fail_webhook_delivery",
   "worker.installation_orgs",
-  // Project memory decay (P8-4, migration 0020, ADR 0038): the per-org job's org list, ids only.
+  // Project memory decay (P8-4, migration 0019, ADR 0038): the per-org job's org list, ids only.
   "worker.live_orgs",
 ].sort();
 
@@ -718,7 +718,7 @@ describe("memory entries (P8-1, migration 0017, ADR 0036 P1)", () => {
   });
 });
 
-describe("memory decay (P8-4, migration 0020, ADR 0038 D1, D5)", () => {
+describe("memory decay (P8-4, migration 0019, ADR 0038 D1, D5)", () => {
   const DAY = 86_400_000;
   /** Behind the database clock, so nothing is clamped. */
   const NOW = new Date(Date.now() - DAY);

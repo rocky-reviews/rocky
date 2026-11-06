@@ -150,7 +150,7 @@ export interface Db {
   /** The configured periods (read-only for the application role). */
   retentionSettings(): Promise<RetentionConfig>;
   /**
-   * Ids of the orgs a per-org job should visit (`worker.live_orgs`, migration 0020): in id
+   * Ids of the orgs a per-org job should visit (`worker.live_orgs`, migration 0019): in id
    * order, at most `limit` (1..`MAX_LIVE_ORGS_PAGE`) after `after`; orgs being erased or
    * scheduled for deletion are left out. Cross-tenant, ids only; worker login only.
    */
@@ -194,7 +194,7 @@ const ownPool = (options: { connectionString: string; max?: number }): pg.Pool =
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Most org ids one `liveOrgs` page returns (the function's own cap, migration 0020). */
+/** Most org ids one `liveOrgs` page returns (the function's own cap, migration 0019). */
 export const MAX_LIVE_ORGS_PAGE = 1000;
 
 /** One tenant transaction, shared by the root `withOrg` and every nested call inside it. */

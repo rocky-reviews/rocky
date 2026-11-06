@@ -211,7 +211,7 @@ describe("retention settings", () => {
     expect(await db.retentionSettings()).toEqual(DEFAULT_RETENTION);
   });
 
-  it("the database itself holds the memory windows' floors (migration 0020), whatever the writer says", async () => {
+  it("the database itself holds the memory windows' floors (migration 0019), whatever the writer says", async () => {
     for (const [category, days] of [
       ["memory_unused", MEMORY_UNUSED_MIN_RETENTION_DAYS - 1],
       ["memory_superseded", MEMORY_SUPERSEDED_MIN_RETENTION_DAYS - 1],
