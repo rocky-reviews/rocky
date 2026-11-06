@@ -276,6 +276,26 @@ Task log for the project plan. Agents append a row when a task is merged.
   `src/auth/invitations.ts`); a fixture change would break it. Selecting by `data-line` and
   reading those rows' code would not.
 
+### H4-18 follow-ups
+
+- At 16 px the tab icon is thin and light next to typical solid favicons (the inner hatching
+  blurs to grey). A simpler, bolder small variant would read better; the website's unused
+  `rocky-mountains-0x` candidates are a starting point.
+- `favicon.svg` follows the OS/browser colour scheme, not Rocky's own light/dark toggle, so a
+  light OS with a dark browser theme gives a dark-on-dark tab icon. A faint contrasting outline,
+  or a tile behind the mark in the SVG, would keep it visible in every pairing.
+- Review nit: the raw-colour allow-list exempts the whole of `apps/web/public/favicon.svg`, but
+  `BrandMark.test.tsx` only collects `stroke: #hex;` declarations. Assert that every colour
+  literal in the file (hex, colour functions, named colours) is one of the two `--text` values;
+  the test also assumes light comes before dark in `tokens.css`.
+- Review nit: "draws the same mountain" compares `d` attributes only; compare
+  `(d, stroke-width)` pairs so the two marks cannot drift in weight.
+- Review nit (hardening): the favicon's stroke comes only from its `<style>`. Put
+  `stroke="#0f172a"` on the `<g>` and keep the `<style>` for the dark override, so the icon still
+  draws if an engine ever blocks the style.
+- Review note: `index.html` declares the ICO as `sizes="32x32"` although it holds 16/32/48, the
+  usual way to make browsers prefer the SVG. Intended.
+
 ### H4-15 follow-ups
 
 - `map-styles.e2e.spec.ts` "Flow playback › Play runs to the end" timed out once in a full e2e run with 4 workers (10.6 s; 7 s alone, passed 3/3 alone). A timing flake under load, unrelated to this change; its budget could take the run's CPU into account.
