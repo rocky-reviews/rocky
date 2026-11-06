@@ -6,7 +6,7 @@ import {
   MAP_SECTIONS_SCHEMA_VERSION,
   NO_LOGIC_SCHEMA_VERSION,
   requiredSchemaVersion,
-  SCHEMA_VERSION,
+  TLDR_SCHEMA_VERSION,
 } from "./document.js";
 import { applyKnownFields } from "./known-fields.js";
 import {
@@ -20,6 +20,7 @@ import {
   expectRejected,
   loadFixture,
   pr847,
+  pr847v14,
   pr847WithSummary,
 } from "./test-helpers.js";
 
@@ -40,22 +41,22 @@ const legacy = () => {
 };
 
 describe("schema 1.4: version policy", () => {
-  it("is 1.4.0 and still reads 1.0 to 1.3 documents, but no newer minor", () => {
-    expect(SCHEMA_VERSION).toBe("1.4.0");
+  it("1.4 is the TL;DR stamp, and 1.0 to 1.4 documents are still read", () => {
+    expect(TLDR_SCHEMA_VERSION).toBe("1.4.0");
     for (const version of ["1.0.0", "1.1.3", "1.2.0", "1.3.0", "1.4.0", "1.4.9"])
       expect(isSupportedVersion(version), version).toBe(true);
-    for (const version of ["1.5.0", "1.40.0", "2.0.0"])
+    for (const version of ["1.40.0", "2.0.0"])
       expect(isSupportedVersion(version), version).toBe(false);
   });
 
   it("stamps 1.4.0 only on a document with a TL;DR, and the older stamps otherwise", () => {
-    expect(requiredSchemaVersion({ briefing: { tldr: ["a", "b"] } })).toBe(SCHEMA_VERSION);
+    expect(requiredSchemaVersion({ briefing: { tldr: ["a", "b"] } })).toBe(TLDR_SCHEMA_VERSION);
     expect(
       requiredSchemaVersion({
         briefing: { tldr: ["a", "b"] },
         provenance: { flowsUnavailable: { reason: "timeout" } },
       }),
-    ).toBe(SCHEMA_VERSION);
+    ).toBe(TLDR_SCHEMA_VERSION);
     expect(requiredSchemaVersion({ briefing: { summary: "s" } })).toBe(BASE_SCHEMA_VERSION);
     expect(requiredSchemaVersion({ briefing: { summary: "s", tldr: undefined } })).toBe(
       BASE_SCHEMA_VERSION,
@@ -81,10 +82,10 @@ describe("schema 1.4: version policy", () => {
   });
 
   it("the overlay stamps from the model's briefing: 1.4.0 with a TL;DR, 1.1.0 without", () => {
-    const doc = pr847();
+    const doc = pr847v14();
     const { briefing, triage, findings, graph, provenance } = doc;
     const withTldr = applyKnownFields({ briefing, triage, findings, graph }, provenance);
-    expect(expectAccepted(withTldr).schemaVersion).toBe(SCHEMA_VERSION);
+    expect(expectAccepted(withTldr).schemaVersion).toBe(TLDR_SCHEMA_VERSION);
     const old = legacy();
     const withoutTldr = applyKnownFields(
       { briefing: old.briefing, triage, findings, graph },
@@ -96,7 +97,7 @@ describe("schema 1.4: version policy", () => {
 
 describe("schema 1.4: briefing.tldr", () => {
   it("the fixture carries a TL;DR and no summary, and it reads back as written", () => {
-    const value = expectAccepted(pr847());
+    const value = expectAccepted(pr847v14());
     expect(value.schemaVersion).toBe("1.4.0");
     expect(value.briefing.summary).toBeUndefined();
     expect(value.briefing.tldr).toHaveLength(4);

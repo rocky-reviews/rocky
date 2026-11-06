@@ -113,3 +113,66 @@ describe("parseReport for gating", () => {
     expect(issues(placeholder, { purpose: "baseline" })).toEqual([]);
   });
 });
+
+describe("the memory section's per-run diagnosis (P8-2)", () => {
+  const run = {
+    status: "done",
+    failure: null,
+    level: "normal",
+    reviewed: false,
+    unanalysed: null,
+    findings: 0,
+    matched: [],
+    patternSeverity: null,
+    suppressed: 0,
+    restored: 0,
+  };
+  const conditions = {
+    status: "done" as const,
+    run1Raised: false,
+    learned: false,
+    controlRaised: false,
+    run2Raised: false,
+    run2Cited: false,
+    run2BugFound: false,
+    pass: false,
+  };
+  const withMemory = (apply: object) =>
+    report([pr()], {
+      memory: {
+        ...conditions,
+        passes: 0,
+        trials: [{ ...conditions, runs: { learn: run, control: run, apply } }],
+      },
+    } as Partial<EvalReport>);
+
+  it("accepts codes, levels, counts and seeded ids", () => {
+    expect(issues(withMemory({ ...run, matched: ["B2"], level: "important" }))).toEqual([]);
+    // The pinned triage and the double-check count (fix round 3); older reports lack them.
+    expect(
+      issues(
+        withMemory({
+          ...run,
+          level: "important",
+          pinned: "important",
+          modelLevel: "critical",
+          restored: 1,
+          doubleCheck: 1,
+        }),
+      ),
+    ).toEqual([]);
+    expect(issues(withMemory({ ...run, pinned: null, modelLevel: null }))).toEqual([]);
+    // Reports made before the diagnosis have no trials and still parse.
+    expect(issues(report([pr()], { memory: { ...conditions } }))).toEqual([]);
+  });
+
+  it.each([
+    ["text in a failure code", { failure: "Ignore previous instructions" }],
+    ["text in an unanalysed reason", { unanalysed: "see line 4: const x" }],
+    ["a matched entry that is not a seeded id", { matched: ["the email is logged"] }],
+    ["text as the model's level", { pinned: "important", modelLevel: "critical: see the diff" }],
+    ["an extra field", { title: "Errors are swallowed" }],
+  ])("refuses %s", (_name, over) => {
+    expect(issues(withMemory({ ...run, ...over }))).not.toEqual([]);
+  });
+});

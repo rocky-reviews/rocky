@@ -310,6 +310,7 @@ const click = (shown: Preview, over: Record<string, unknown> = {}) => ({
 const reset = async () => {
   for (const org of [A, B]) {
     await superuser.query("delete from review_submissions where org_id = $1", [org.orgId]);
+    await superuser.query("delete from memory_entries where org_id = $1", [org.orgId]);
     await db.withOrg(org.orgId, async (tx) => {
       await tx.query("update analyses set document = $2::jsonb where id = $1", [
         org.analysisId,
@@ -1100,6 +1101,81 @@ describe("input and hygiene", () => {
       reviewId: github.reviews[0]!.id,
     });
     expect(ForgeReadError.name).toBe("ForgeReadError");
+  });
+});
+
+describe("a posted review becomes project memory (P8-2)", () => {
+  const memoryOf = (org: SeededOrg) =>
+    superuser.query<{ kind: string; reason: string | null; content: string; created_by: string }>(
+      `select kind, reason, content, created_by from memory_entries
+        where org_id = $1 and superseded_by is null order by content`,
+      [org.orgId],
+    );
+  const learnedLog = () =>
+    lines
+      .map((l) => JSON.parse(l) as { review?: Record<string, unknown> })
+      .filter((l) => typeof l.review?.["outcome"] === "string")
+      .map((l) => l.review!)
+      .filter((r) => String(r["outcome"]).startsWith("memory_"));
+
+  it("learns the accepted drafts and the dismissals once GitHub took the review, in the reviewer's name, logging counts only", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F2", { action: "dismiss", reason: "intentional" });
+    await draftAction(alice, A, "F7", { action: "dismiss", reason: "not_worth_it" });
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect((await post(alice, A.pullRequestId, click(plan))).statusCode).toBe(200);
+    const { rows } = await memoryOf(A);
+    expect(rows.map((r) => [r.kind, r.reason, r.content])).toEqual(
+      [
+        ["convention", null, `Accepted in review: ${findingBy("F3").title}`],
+        ["convention", null, `Accepted in review: ${findingBy("F1").title}`],
+        ["dismissal", "intentional", `Dismissed as intentional: ${findingBy("F2").title}`],
+      ].sort((a, b) => a[2]!.localeCompare(b[2]!)),
+    );
+    expect(new Set(rows.map((r) => r.created_by))).toEqual(new Set([A.memberId]));
+    expect(learnedLog()).toEqual([
+      {
+        outcome: "memory_learned",
+        orgId: A.orgId,
+        submissionId: expect.any(String),
+        created: 3,
+        superseded: 0,
+        repeated: 0,
+        skipped: 1,
+      },
+    ]);
+    const all = lines.join("\n");
+    for (const text of rows.map((r) => r.content)) expect(all).not.toContain(text);
+    expect((await memoryOf(B)).rows).toEqual([]);
+  });
+
+  it("a review GitHub refused teaches nothing", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F2", { action: "dismiss", reason: "intentional" });
+    // GitHub refuses an approval of one's own pull request.
+    github.putPullRequest(REPO, { number: 847, headSha: HEAD, authorLogin: "alice" });
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const refused = await post(alice, A.pullRequestId, click(plan, { verdict: "approve" }));
+    expect(refused.json()).toMatchObject({ error: "post_failed", reason: "rejected" });
+    expect((await memoryOf(A)).rows).toEqual([]);
+  });
+
+  it("a lost answer reconciled as posted is learned from too", async () => {
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F2", { action: "dismiss", reason: "handled_elsewhere" });
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const one = click(plan);
+    network = "lose_answer";
+    await post(alice, A.pullRequestId, one);
+    expect((await memoryOf(A)).rows).toEqual([]);
+    network = "ok";
+    await age(A);
+    expect((await post(alice, A.pullRequestId, one)).statusCode).toBe(200);
+    expect((await memoryOf(A)).rows.map((r) => r.kind).sort()).toEqual([
+      "convention",
+      "convention",
+      "dismissal",
+    ]);
   });
 });
 

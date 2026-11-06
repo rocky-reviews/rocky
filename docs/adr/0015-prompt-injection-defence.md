@@ -95,17 +95,18 @@ for P4-7, which can reuse the data and the checks.
 These are all the pipeline inputs written by the PR author or by a model. Each one travels only
 as an `untrusted` part under a fixed label:
 
-| Channel                   | Reaches                                   | Label(s)                                      |
-| ------------------------- | ----------------------------------------- | --------------------------------------------- |
-| PR title                  | graph, briefing                           | `pr_title`                                    |
-| File paths                | triage, review, graph; briefing (as JSON) | `file_path`, `file.N.path`, `triage`, `noise` |
-| A rename's old path       | triage, review, graph (patch header)      | `diff`, `file.N.diff`                         |
-| Diff: added/removed lines | triage, review, graph                     | `diff`, `file.N.diff`                         |
-| Diff: comments, new files | as above                                  | as above                                      |
-| Triage reasons            | briefing                                  | `triage` (JSON)                               |
-| Finding titles            | briefing                                  | `findings` (JSON)                             |
-| Repair issue list         | the same unit's repair call               | `validation_issues`                           |
-| Change map                | stored only; not fed to another stage     | n/a                                           |
+| Channel                   | Reaches                                   | Label(s)                                          |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------- |
+| PR title                  | graph, briefing                           | `pr_title`                                        |
+| File paths                | triage, review, graph; briefing (as JSON) | `file_path`, `file.N.path`, `triage`, `noise`     |
+| A rename's old path       | triage, review, graph (patch header)      | `diff`, `file.N.diff`                             |
+| Diff: added/removed lines | triage, review, graph                     | `diff`, `file.N.diff`                             |
+| Diff: comments, new files | as above                                  | as above                                          |
+| Triage reasons            | briefing                                  | `triage` (JSON)                                   |
+| Finding titles            | briefing                                  | `findings` (JSON)                                 |
+| Repair issue list         | the same unit's repair call               | `validation_issues`                               |
+| Change map                | stored only; not fed to another stage     | n/a                                               |
+| Project memory (P8-2)     | review (only files with relevant entries) | `memory` (JSON, with the memory canary; ADR 0037) |
 
 **Not inputs today:** the PR body, commit messages, review comments and issue comments.
 `AnalysisRequest` has no field for them, and a type test pins its keys, so adding one is a visible

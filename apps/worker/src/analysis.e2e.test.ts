@@ -77,6 +77,8 @@ beforeAll(async () => {
   A = await asWorker(pgs.workerUrl, (w) => seedOrg(w, newOrgId(), { installationId: 81 }));
   B = await asWorker(pgs.workerUrl, (w) => seedOrg(w, newOrgId(), { installationId: 82 }));
   await superuser.query("update pull_requests set title = $1", [TITLE]);
+  // The fixture's memory entry would reach every review; P8-2's tests below plant their own.
+  await superuser.query("delete from memory_entries");
 }, CONTAINER_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -708,6 +710,103 @@ describe("runAnalysis under prompt injection (P4-4, ADR 0015)", () => {
     ).toEqual([]);
     expect(findLeaks(lines, [])).toEqual([]);
     expect(lines.join("\n")).not.toContain(leakCase.trigger);
+  });
+});
+
+/** A finding as a suppressed one carries it: without a suggestion. */
+const withoutSuggestion = <T extends object>(finding: T): Omit<T, "suggestion"> => {
+  const copy: Record<string, unknown> = { ...(finding as Record<string, unknown>) };
+  delete copy["suggestion"];
+  return copy as Omit<T, "suggestion">;
+};
+
+describe("project memory in the analysis (P8-2)", () => {
+  /**
+   * pr847Script, answering a review that carries memory by suppressing its low and medium
+   * findings under the first entry it was given (a dismissal covering up to medium).
+   */
+  const citing: Script = async (call) => {
+    const answer = await pr847Script(call);
+    const memory = call.part("memory");
+    if (memory === undefined || !("value" in answer)) return answer;
+    const [first] = (JSON.parse(memory) as { entries: { id: string }[] }).entries;
+    const value = answer.value as { findings: Record<string, unknown>[] };
+    const covered = (f: Record<string, unknown>) =>
+      f["severity"] === "low" || f["severity"] === "medium";
+    return {
+      value: {
+        findings: value.findings.filter((f) => !covered(f)).map((f) => ({ ...f, memory: [] })),
+        suppressed: value.findings
+          .filter(covered)
+          .map((f) => ({ ...withoutSuggestion(f), entry: first!.id })),
+      },
+    };
+  };
+  const plant = (org: SeededOrg, path: string, text: string) =>
+    superuser
+      .query<{ id: string }>(
+        `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
+           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason)
+         values ($1, $2, 'dismissal', 'learned', $3, $4, $5, 1, 1, 847, 80, 'intentional')
+         returning id`,
+        [org.orgId, org.repoId, text, path, "a".repeat(40)],
+      )
+      .then((r) => r.rows[0]!.id);
+
+  it("sends the repository's entries to the reviews as untrusted text, stores the citations and touches what was cited", async () => {
+    const ours = await plant(
+      A,
+      "src/auth/invitations.ts",
+      "Dismissed as intentional: memory-marker-ours",
+    );
+    const theirs = await plant(
+      B,
+      "src/auth/invitations.ts",
+      "Dismissed as intentional: memory-marker-theirs",
+    );
+    const id = await newRevision(A, "5".repeat(40));
+    const forge = recordingForge({ ["5".repeat(40)]: diffOf(pr847Diff()) });
+    const { runner, calls, lines } = deps(forge.forge, citing);
+    expect(await runAnalysis(runner, await claimed(A, id))).toEqual({ outcome: "done" });
+
+    const withMemory = calls.filter((c) => c.labels.includes("memory"));
+    expect(withMemory.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      // Never in the instructions; another org's entry nowhere.
+      expect(call.instructions.text).not.toContain("memory-marker");
+      for (const part of call.untrusted) expect(part.text).not.toContain("memory-marker-theirs");
+    }
+    expect(withMemory.every((c) => c.part("memory")!.includes("memory-marker-ours"))).toBe(true);
+
+    const parsed = parseAnalysisDocument((await stored(id)).document);
+    if (!parsed.ok) throw new Error("document");
+    expect(parsed.value.briefing.memoryApplied).toEqual([
+      {
+        entryId: ours,
+        text: "Dismissed as intentional: memory-marker-ours",
+        source: "dismissal · PR #847",
+      },
+    ]);
+    const used = await superuser.query<{ id: string; last_used_at: Date | null }>(
+      "select id, last_used_at from memory_entries where id = any($1::uuid[])",
+      [[ours, theirs]],
+    );
+    const lastUsed = Object.fromEntries(used.rows.map((r) => [r.id, r.last_used_at]));
+    expect(lastUsed[ours]).toBeInstanceOf(Date);
+    expect(lastUsed[theirs]).toBeNull();
+
+    // Counts in the log, never the entries' text.
+    const ran = JSON.parse(lines.find((l) => l.includes("analysis ran"))!) as Record<
+      string,
+      unknown
+    >;
+    expect(ran).toMatchObject({ memoryEntries: 1, memoryCited: 1, memoryDropped: 0 });
+    // One per file reviewed with memory (a repair round is the same review).
+    expect(ran["memoryReviews"]).toBe(withMemory.filter((c) => !c.repair).length);
+    expect(lines.join("\n")).not.toContain("memory-marker");
+    await superuser.query("delete from memory_entries where id = any($1::uuid[])", [
+      [ours, theirs],
+    ]);
   });
 });
 

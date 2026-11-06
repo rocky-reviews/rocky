@@ -67,7 +67,7 @@ jobs:
         run: |
           # On pull_request the checkout is the merge commit: HEAD^1 is the base branch tip.
           git rev-parse -q --verify 'HEAD^2' > /dev/null || { echo "::error::expected a merge commit"; exit 1; }
-          changed=$(git diff --name-only 'HEAD^1' HEAD | grep -E '^(packages/evals/(baselines/|src/seeded/|src/score\.ts|src/run/)|scripts/evals\.ts|\.github/workflows/evals\.yml|\.github/CODEOWNERS)' || true)
+          changed=$(git diff --name-only 'HEAD^1' HEAD | grep -E '^(packages/evals/(baselines/|src/seeded/|src/memory/|src/memory\.test\.ts|src/injection/check\.ts|src/score\.ts|src/run/)|scripts/evals\.ts|\.github/workflows/evals\.yml|\.github/CODEOWNERS)' || true)
           if [ -z "$changed" ]; then
             echo "No protected eval files changed."
           elif [ "$APPROVED" = "true" ]; then
@@ -93,7 +93,8 @@ jobs:
       - name: Run the evals on the scripted roles
         # The baseline is regenerated with the same 2M cap (H4-7, H4-8); the default 1M is too
         # close to what the injection run uses.
-        run: pnpm evals run --fake --injection --max-tokens 2000000 --out "$RUNNER_TEMP/fake.json"
+        # --memory (P8-2): the project-memory eval, gated once the baseline passed it.
+        run: pnpm evals run --fake --injection --memory --max-tokens 2000000 --out "$RUNNER_TEMP/fake.json"
 
       - name: Gate against the base branch's fake baseline
         env:
@@ -161,7 +162,8 @@ jobs:
           NIGHTLY: ${{ github.event_name != 'pull_request' }}
           MAX_TOKENS: ${{ github.event_name == 'pull_request' && (vars.ROCKY_EVALS_MAX_TOKENS || '1000000') || (vars.ROCKY_EVALS_NIGHTLY_MAX_TOKENS || '8000000') }}
         run: |
-          set -- --max-tokens "$MAX_TOKENS" --out "$RUNNER_TEMP/live.json"
+          # --memory (P8-2): three small analyses; the gate holds it once a live baseline passed it.
+          set -- --max-tokens "$MAX_TOKENS" --memory --out "$RUNNER_TEMP/live.json"
           if [ "$NIGHTLY" = "true" ]; then set -- "$@" --injection; fi
           status=0
           pnpm evals run "$@" > "$RUNNER_TEMP/run.txt" || status=$?

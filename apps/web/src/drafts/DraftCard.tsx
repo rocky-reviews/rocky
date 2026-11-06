@@ -2,8 +2,9 @@
  * One AI draft under its line in the diff (P6-4, POC `renderFinding`):
  *
  * - undecided: "✦ AI draft", severity, confidence, "Only you can see this until you accept it",
- *   title, body, suggested change, project-memory evidence, and Accept / Edit / Dismiss /
- *   Send to agent;
+ *   title, body, suggested change, project-memory evidence, the double-check line when a
+ *   dismissal covered the draft but the file is critical or always reviewed (P8-2,
+ *   `finding.restored`), and Accept / Edit / Dismiss / Send to agent;
  * - editing: the body in a textarea, "Save as my comment" (⌘/Ctrl+Enter) or Cancel (Escape);
  * - dismissing: the four reasons (1–4, H4-14) or Cancel (Escape);
  * - accepted: the reviewer's pending comment, "from AI draft" or "edited from AI draft", Undo;
@@ -17,7 +18,7 @@
  * output about PR content, the edit is the reviewer's own.
  */
 import { type DismissReason, postedCommentParts } from "@rocky-reviews/core/drafts";
-import type { Finding, Severity } from "@rocky-reviews/schema";
+import type { Finding, RestoredDismissal, Severity } from "@rocky-reviews/schema";
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { Code } from "../diff/Code.js";
 import { Prose } from "../diff/Prose.js";
@@ -34,6 +35,19 @@ export const REASON_LABEL: Record<DismissReason, string> = {
   intentional: "Intentional",
   not_worth_it: "Not worth it here",
   handled_elsewhere: "Already handled elsewhere",
+};
+
+/** How the double-check line says what the team decided (P8-2, `finding.restored`). */
+const DISMISSED_AS: Record<RestoredDismissal["dismissedAs"], string> = {
+  not_an_issue: "not a real issue",
+  intentional: "intentional",
+  not_worth_it: "not worth it",
+  handled_elsewhere: "already handled elsewhere",
+};
+/** Why Rocky shows the draft anyway: the file is one where no dismissal stands. */
+const SHOWN_BECAUSE: Record<RestoredDismissal["shownBecause"], string> = {
+  critical_file: "This file is critical",
+  rule_floor: "This file always gets a full review",
 };
 
 const REASONS = Object.keys(REASON_LABEL) as DismissReason[];
@@ -249,6 +263,22 @@ export const DraftCard = ({ finding, original, language }: Props) => {
           </span>
         </p>
       ))}
+      {finding.restored !== undefined && (
+        <p className="evidence double-check">
+          <span className="mark" aria-hidden="true">
+            ◆
+          </span>
+          <span>
+            Your team dismissed this as {DISMISSED_AS[finding.restored.dismissedAs]} on{" "}
+            <code>
+              <bdi>{finding.restored.path}</bdi>
+            </code>{" "}
+            <span className="source">· {finding.restored.entry.source}</span>.{" "}
+            {SHOWN_BECAUSE[finding.restored.shownBecause]}, so Rocky is showing it anyway:{" "}
+            <b>double-check</b>.
+          </span>
+        </p>
+      )}
       {dismissing ? (
         <div
           className="dismiss-reasons"

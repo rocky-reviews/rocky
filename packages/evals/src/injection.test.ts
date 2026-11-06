@@ -164,8 +164,18 @@ describe("the injection corpus (P4-4)", () => {
       "instructions" | "untrusted" | "output" | "maxOutputTokens" | "signal"
     >();
     expectTypeOf<keyof AnalysisRequest["pullRequest"]>().toEqualTypeOf<"number" | "title">();
+    // `memory` (P8-2) is the one channel added since P4-4: stored entries, sent only as the
+    // untrusted part labelled memory; `memory-injection.test.ts` runs this corpus through it.
     expectTypeOf<keyof AnalysisRequest>().toEqualTypeOf<
-      "repo" | "pullRequest" | "base" | "head" | "diff" | "diffTruncated" | "previous" | "signal"
+      | "repo"
+      | "pullRequest"
+      | "base"
+      | "head"
+      | "diff"
+      | "diffTruncated"
+      | "previous"
+      | "memory"
+      | "signal"
     >();
   });
 });

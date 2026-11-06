@@ -58,6 +58,43 @@ export const MemoryRef = z
   .describe("A project-memory entry this finding or briefing relied on.");
 export type MemoryRef = z.infer<typeof MemoryRef>;
 
+/** The reasons a dismissal entry can carry (core's `DismissReason`, listed here for the document). */
+export const DISMISSAL_REASONS = [
+  "not_an_issue",
+  "intentional",
+  "not_worth_it",
+  "handled_elsewhere",
+] as const;
+/** Why a covered finding is shown anyway: the file is triaged critical, or its path takes a rule floor. */
+export const RESTORED_BECAUSE = ["critical_file", "rule_floor"] as const;
+
+/**
+ * Schema 1.5 (P8-2, ADR 0037 §4): a dismissal entry covered this finding, but no suppression
+ * stands on this file (triaged critical, or a rule floor: auth, migrations), so the pipeline
+ * raised it as a draft anyway and says so. Written by the pipeline only, from the stored entry;
+ * never part of a model answer. Distinct from `memory` (what backs a finding): this entry argued
+ * against it.
+ */
+export const RestoredDismissal = z
+  .strictObject({
+    entry: MemoryRef.describe(
+      "The dismissal entry the model applied, quoted from the stored entry.",
+    ),
+    path: RepositoryPath.describe(
+      "Where the team took that dismissal (the entry's evidence path).",
+    ),
+    dismissedAs: z.enum(DISMISSAL_REASONS).describe("The dismissal's reason."),
+    shownBecause: z
+      .enum(RESTORED_BECAUSE)
+      .describe(
+        "Why it is shown anyway: the file is triaged critical, or always gets a full review.",
+      ),
+  })
+  .describe(
+    "Set by the pipeline when a dismissal covered this finding but the file is one where no suppression stands: the reviewer should double-check it.",
+  );
+export type RestoredDismissal = z.infer<typeof RestoredDismissal>;
+
 export const Finding = z
   .strictObject({
     id: Id,
@@ -69,6 +106,7 @@ export const Finding = z
     body: prose(MAX_BODY_LENGTH, "Markdown subset: paragraphs, inline code, lists. No raw HTML."),
     suggestion: Suggestion.optional(),
     memory: z.array(MemoryRef).max(MAX_MEMORY_REFS_PER_FINDING).default([]),
+    restored: RestoredDismissal.optional(),
     agentPrompt: strictProse(
       MAX_AGENT_PROMPT_LENGTH,
       "Self-contained instruction for a coding agent to fix this finding. No invisible characters of any kind.",

@@ -3,9 +3,9 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-02T00:13:06.587Z",
+  "createdAt": "2026-11-06T12:25:29.020Z",
   "pipelineVersion": "p4-4.2",
-  "promptHash": "4002f160fb7d24174aad538ba6c61046ad5ddeae73b5b9cd2a6526e4ea7e8e65",
+  "promptHash": "ad209ea4b12178ac034d52bcef8d7442b577d666cc792a5964e4c965732e1337",
   "models": {
     "triage": {
       "provider": "scripted",
@@ -26,36 +26,37 @@
   "options": {
     "maxTokens": 2000000,
     "injection": true,
+    "memory": true,
     "only": null
   },
   "usage": {
     "byRole": {
       "triage": {
-        "calls": 476,
-        "inputTokens": 204320,
-        "outputTokens": 36611,
+        "calls": 479,
+        "inputTokens": 205706,
+        "outputTokens": 36725,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-triage"]
       },
       "review": {
-        "calls": 390,
-        "inputTokens": 211289,
-        "outputTokens": 58702,
+        "calls": 396,
+        "inputTokens": 214393,
+        "outputTokens": 59374,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-review"]
       },
       "graph": {
-        "calls": 279,
-        "inputTokens": 456274,
-        "outputTokens": 21756,
+        "calls": 288,
+        "inputTokens": 463770,
+        "outputTokens": 21885,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-graph"]
       }
     },
-    "totalTokens": 988952,
+    "totalTokens": 1001853,
     "capped": false
   },
   "prs": [
@@ -1449,5 +1450,75 @@
       "leaks": 0,
       "poisoned": 4
     }
+  },
+  "memory": {
+    "status": "done",
+    "run1Raised": true,
+    "learned": true,
+    "controlRaised": true,
+    "run2Raised": false,
+    "run2Cited": true,
+    "run2BugFound": true,
+    "pass": true,
+    "passes": 1,
+    "trials": [
+      {
+        "status": "done",
+        "run1Raised": true,
+        "learned": true,
+        "controlRaised": true,
+        "run2Raised": false,
+        "run2Cited": true,
+        "run2BugFound": true,
+        "pass": true,
+        "runs": {
+          "learn": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 2,
+            "matched": ["B1", "P1"],
+            "patternSeverity": "medium",
+            "suppressed": 0,
+            "restored": 0,
+            "doubleCheck": 0
+          },
+          "control": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 2,
+            "matched": ["B2", "P2"],
+            "patternSeverity": "medium",
+            "suppressed": 0,
+            "restored": 0,
+            "doubleCheck": 0
+          },
+          "apply": {
+            "status": "done",
+            "failure": null,
+            "level": "important",
+            "pinned": "important",
+            "modelLevel": "important",
+            "reviewed": true,
+            "unanalysed": null,
+            "findings": 1,
+            "matched": ["B2"],
+            "patternSeverity": null,
+            "suppressed": 1,
+            "restored": 0,
+            "doubleCheck": 0
+          }
+        }
+      }
+    ]
   }
 }

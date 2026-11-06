@@ -9,7 +9,7 @@ import { runEvals } from "./runner.js";
  * P4-7 acceptance: a baseline report is committed, and the gate fails if recall drops more than
  * 5 points. The `--fake` baseline is what CI's harness check compares a fresh `--fake` run with;
  * the live baseline stays a clearly marked placeholder until a human runs the suite with a key.
- * Regenerate the fake one with `pnpm evals run --fake --injection --out packages/evals/baselines/fake.json`.
+ * Regenerate the fake one with `pnpm evals run --fake --injection --memory --max-tokens 2000000 --out packages/evals/baselines/fake.json`.
  */
 
 const load = async (name: string): Promise<EvalReport> => {
@@ -24,6 +24,9 @@ describe("committed baselines", () => {
     const baseline = await load("fake.json");
     expect(baseline.kind).toBe("fake");
     expect(baseline.options.injection).toBe(true);
+    // P8-2: the baseline carries the project-memory eval, passed, so the gate holds it.
+    expect(baseline.options.memory).toBe(true);
+    expect(baseline.memory?.pass).toBe(true);
     const target = fakeTarget();
     const fresh = await runEvals({
       kind: "fake",
@@ -31,12 +34,14 @@ describe("committed baselines", () => {
       rolesFor: target.rolesFor,
       maxTokens: baseline.options.maxTokens,
       injection: true,
+      memory: true,
       clock: { now: () => new Date() },
     });
     expect(compareReports(baseline, fresh).ok).toBe(true);
     expect(fresh.total).toEqual(baseline.total);
     expect(fresh.prs).toEqual(baseline.prs);
     expect(fresh.injection?.total).toEqual(baseline.injection?.total);
+    expect(fresh.memory).toEqual(baseline.memory);
     // A whole injection run through the pipeline (three graph-role calls per map since H4-7):
     // over the 5 s default when the test runner instruments coverage.
   }, 60_000);

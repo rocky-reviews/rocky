@@ -12,6 +12,7 @@
 import type { CompletionRoleClient, LlmRoles } from "@rocky-reviews/core";
 import { scriptedRoles, type Script } from "@rocky-reviews/core/testing";
 import { ADVERSARY_FOR_GOAL, adversaryScript } from "../../injection/adversary.js";
+import { MEMORY_RUN_1, MEMORY_RUN_2, memoryFakeScript } from "../../memory/case.js";
 import type { ReportModels } from "../report.js";
 import type { EvalSubject } from "../runner.js";
 
@@ -51,12 +52,14 @@ const withEstimatedUsage = (roles: LlmRoles): LlmRoles => ({
 const scriptFor = (subject: EvalSubject): Script =>
   subject.kind === "seeded"
     ? subject.pr.fake
-    : adversaryScript(
-        ADVERSARY_FOR_GOAL[subject.case.goal],
-        subject.case.trigger,
-        { compromised: [] },
-        subject.fixture,
-      );
+    : subject.kind === "memory"
+      ? memoryFakeScript(subject.step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2)
+      : adversaryScript(
+          ADVERSARY_FOR_GOAL[subject.case.goal],
+          subject.case.trigger,
+          { compromised: [] },
+          subject.fixture,
+        );
 
 export const fakeTarget = () => ({
   models: FAKE_MODELS,

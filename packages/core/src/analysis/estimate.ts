@@ -11,6 +11,8 @@
  *   call on the graph role (the map, its flows, its walkthrough), reused units included, since
  *   those calls run on every push; nothing when there is nothing to map or the mapped diff is
  *   over the map's input budget, because then no call on the graph role is made;
+ * - the project-memory part a file's review would carry (P8-2), for every file sent, as if each
+ *   were reviewed (an upper bound: only critical and important files are);
  * - a fixed overhead per file call (instructions, labels, the answer) and per stage: the unit
  *   stages (triage, review, briefing) always, the map's stages only when there is a map.
  *
@@ -21,6 +23,7 @@
  */
 import { parseUnifiedDiff } from "./diff.js";
 import { changeMapScope, GRAPH_MAX_INPUT_CHARS, type ScopedFile } from "./map-scope.js";
+import { memoryKeyOf, memoryPart, selectMemory, type AnalysisMemoryEntry } from "./memory.js";
 import { preTriage } from "./rules.js";
 import { unitKey, type PreviousAnalysis, type Sha256Hex } from "./units.js";
 
@@ -97,6 +100,12 @@ export interface EstimateOptions {
   readonly sha256Hex?: Sha256Hex;
   /** The same salt the pipeline mixes into unit keys. */
   readonly unitKeySalt?: string;
+  /**
+   * The repository's project memory, as the pipeline will be given it (P8-2): it is part of a
+   * file's unit key, and its part is sent with the file's review. The pipeline re-checks entries
+   * (`usableMemory`); the estimate counts them as given, which can only count more.
+   */
+  readonly memory?: readonly AnalysisMemoryEntry[] | undefined;
 }
 
 /**
@@ -114,6 +123,7 @@ export const estimateAnalysisTokens = (
   const keys = new Set(
     previous === undefined ? [] : previous.units.map((unit) => `${unit.path}\0${unit.key}`),
   );
+  const memory = options.memory ?? [];
   let patch = 0;
   let sent = 0;
   let noise = 0;
@@ -134,15 +144,17 @@ export const estimateAnalysisTokens = (
       continue;
     }
     patchOf.set(file.path, file.patch);
+    const selection = selectMemory(memory, file.path);
     if (
       sha256Hex !== undefined &&
       keys.size > 0 &&
-      keys.has(`${file.path}\0${unitKey(sha256Hex, salt, file)}`)
+      keys.has(`${file.path}\0${unitKey(sha256Hex, salt, file, memoryKeyOf(selection))}`)
     ) {
       reused++;
     } else {
       sent++;
       patch += patchTokens(file.patch);
+      if (selection.length > 0) patch += patchTokens(memoryPart(selection).text);
     }
   }
   // The map's calls read the mapped diffs again, on every push, unless there is no map.

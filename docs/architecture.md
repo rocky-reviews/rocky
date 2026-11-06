@@ -196,6 +196,22 @@ packages/schema (analysis document; shared contract)
   `createMemoryEntry` (`packages/db/src/memory.ts`) stores it. People are stored as member ids
   only; a reader shows "former member" once the member row is gone or removed. Learning and
   prompt use (P8-2), the UI and export (P8-3) and decay (P8-4) build on this.
+- Learning and applying memory (ADR 0037, P8-2): once a review is posted, the server learns from
+  it (`learnFromReviewSubmission`): dismissals as intentional, not an issue or handled elsewhere
+  become `dismissal` entries, posted accepted drafts `convention` entries, with deterministic
+  text from the finding's title; a reviewer teaches no dismissal from their own PR, a dismissal
+  covers up to the dismissed finding's severity (never critical), repeats are skipped and the
+  newest decision about a pattern supersedes older learned entries unless a higher role taught
+  them. The worker loads the repository's current entries for an analysis (member-written,
+  learned dismissals and other learned entries bounded apart); each review call gets at most 12
+  on the file's top-level directory or closer as the untrusted part `memory`, behind the memory
+  canary. The model cites per-call handles and moves covered findings to `suppressed`; the
+  pipeline keeps a finding out only when a dismissal it was given covers its severity, builds
+  `MemoryRef`s from the stored entries, and the worker touches `last_used_at` for what the stored
+  document cites. On a file triaged critical or with a rule floor no suppression stands: a
+  covered finding comes back as a draft with `restored` (schema 1.5: the dismissal, its path and
+  reason, and why), which the draft card shows as a double-check line. Only the review re-runs
+  when a file's memory changes; triage is reused.
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is

@@ -29,15 +29,15 @@ type State = {
 
 const card = (page: Page, id = "F1") => page.locator(`[data-finding="${id}"]`);
 
-/** The file, scrolled so the F1 draft card sits in view (it is virtualised). */
-const atF1 = async (page: Page) => {
+/** The file, scrolled so the draft card `id` sits in view (it is virtualised). */
+const atCard = async (page: Page, id = "F1") => {
   await page.locator("#review-panel .tally").waitFor({ state: "attached" });
   await openFile(page, FILE);
-  for (let i = 0; i < 30 && (await card(page).count()) === 0; i++) {
+  for (let i = 0; i < 30 && (await card(page, id).count()) === 0; i++) {
     await page.locator("#main").evaluate((main) => main.scrollBy({ top: 400 }));
   }
   // Scroll the main column only (scrollIntoView would also move the page under the top bar).
-  await card(page).evaluate((el) => {
+  await card(page, id).evaluate((el) => {
     const main = el.closest("#main");
     if (main === null) return;
     const top = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
@@ -45,6 +45,7 @@ const atF1 = async (page: Page) => {
   });
   await page.mouse.move(0, 0);
 };
+const atF1 = (page: Page) => atCard(page);
 
 const panelStored = (api: ReviewApi) => {
   api.set("F1", { state: "accepted", edited: false, body: "x" });
@@ -65,6 +66,13 @@ const panelOpen = async (page: Page) => {
 
 const STATES: State[] = [
   { id: "drafts-card", poc: "02-file-critical", run: atF1 },
+  {
+    // P8-2: F3's draft with the double-check line (a dismissal covered it; the file is
+    // critical). No POC state draws it; the card state is the nearest reference.
+    id: "drafts-double-check",
+    poc: "02-file-critical",
+    run: (page) => atCard(page, "F3"),
+  },
   {
     id: "drafts-dismiss",
     poc: "03-draft-dismiss",

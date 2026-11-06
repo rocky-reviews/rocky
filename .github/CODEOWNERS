@@ -2,6 +2,9 @@
 # Login verified with `gh api user` and the repository's collaborators (admin).
 /packages/evals/baselines/ @federicoaldunate
 /packages/evals/src/seeded/ @federicoaldunate
+/packages/evals/src/memory/ @federicoaldunate
+/packages/evals/src/memory.test.ts @federicoaldunate
+/packages/evals/src/injection/check.ts @federicoaldunate
 /packages/evals/src/score.ts @federicoaldunate
 /packages/evals/src/run/compare.ts @federicoaldunate
 /.github/workflows/evals.yml @federicoaldunate

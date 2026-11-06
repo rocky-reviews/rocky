@@ -118,6 +118,71 @@ export const InjectionTotals = z.strictObject({
 });
 export type InjectionTotals = z.infer<typeof InjectionTotals>;
 
+import { MAX_MEMORY_TRIALS } from "../memory/run.js";
+
+const MemoryStatus = z.enum(["done", "failed", "capped"]);
+/** A fixed code (a failure or an unanalysed reason): never text from a model or the diff. */
+const Code = z.string().regex(/^[a-z][a-z_-]{0,63}$/);
+const Level = z.enum(["critical", "important", "normal", "low"]);
+const SeverityLevel = z.enum(["critical", "high", "medium", "low"]);
+
+/** What one analysis of the memory case did with the case's file (codes and counts only). */
+export const MemoryRunDiagnosis = z.strictObject({
+  status: MemoryStatus,
+  failure: Code.nullable(),
+  /** The level the pipeline saw (after the pin, if any, and the rule floor). */
+  level: Level.nullable(),
+  /** The level triage was pinned to (fix round 3), or null; absent in reports made before it. */
+  pinned: Level.nullable().optional(),
+  /** With a pin: the level the triage model answered itself; absent in older reports. */
+  modelLevel: Level.nullable().optional(),
+  reviewed: z.boolean(),
+  unanalysed: Code.nullable(),
+  findings: count,
+  matched: z.array(z.string().regex(/^[A-Z][0-9]{1,3}$/)).max(2),
+  patternSeverity: SeverityLevel.nullable(),
+  suppressed: count,
+  restored: count,
+  /** Covered suppressions restored for a double-check (`Finding.restored`); absent in older reports. */
+  doubleCheck: count.optional(),
+});
+
+const MemoryConditions = {
+  status: MemoryStatus,
+  run1Raised: z.boolean(),
+  learned: z.boolean(),
+  controlRaised: z.boolean(),
+  run2Raised: z.boolean(),
+  run2Cited: z.boolean(),
+  run2BugFound: z.boolean(),
+  pass: z.boolean(),
+};
+
+export const MemoryTrialReport = z.strictObject({
+  ...MemoryConditions,
+  runs: z.strictObject({
+    learn: MemoryRunDiagnosis,
+    control: MemoryRunDiagnosis,
+    apply: MemoryRunDiagnosis,
+  }),
+});
+
+/**
+ * The project-memory eval (P8-2, `src/memory/`): learn from a dismissal on pr-1301, then pr-1302
+ * must not raise the pattern again, must cite the entry, and must still find its real bug. The
+ * conditions hold over every trial (`run2Raised`: in any trial); `trials` records each trial's
+ * conditions and what each analysis did with the case file (status, failure code, triage level,
+ * reviewed, counts, matched seeded ids). No code and no model text. Absent from reports made
+ * before P8-2 (and from runs without `--memory`); `passes` and `trials` are absent from reports
+ * made before the per-run diagnosis.
+ */
+export const MemoryEvalReport = z.strictObject({
+  ...MemoryConditions,
+  passes: count.optional(),
+  trials: z.array(MemoryTrialReport).max(MAX_MEMORY_TRIALS).optional(),
+});
+export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;
+
 export const EvalReport = z
   .strictObject({
     format: z.literal(REPORT_FORMAT),
@@ -132,6 +197,8 @@ export const EvalReport = z
     options: z.strictObject({
       maxTokens: z.number().int().positive(),
       injection: z.boolean(),
+      /** `--memory` (P8-2); absent in reports made before it. */
+      memory: z.boolean().optional(),
       only: z.array(z.string()).nullable(),
     }),
     usage: UsageReport,
@@ -140,6 +207,7 @@ export const EvalReport = z
     injection: z
       .strictObject({ cases: z.array(InjectionResult), total: InjectionTotals })
       .nullable(),
+    memory: MemoryEvalReport.nullable().optional(),
   })
   .refine((report) => (report.kind === "placeholder") === (report.notice === PLACEHOLDER_NOTICE), {
     message: "a placeholder carries PLACEHOLDER_NOTICE, and only a placeholder does",
@@ -161,7 +229,8 @@ export const EvalReport = z
         issue(["total", key], "totals must be the sums of the PRs");
     const anyCapped =
       report.prs.some((pr) => pr.status === "capped") ||
-      (report.injection?.cases ?? []).some((c) => c.status === "capped");
+      (report.injection?.cases ?? []).some((c) => c.status === "capped") ||
+      report.memory?.status === "capped";
     if (anyCapped !== report.usage.capped)
       issue(["usage", "capped"], "capped must be set exactly when a PR or case was capped");
   });

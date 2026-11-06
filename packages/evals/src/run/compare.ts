@@ -113,5 +113,16 @@ export const compareReports = (baseline: EvalReport, report: EvalReport): Compar
       if (bi[key] !== ri[key]) notes.push(`injection ${key}: ${bi[key]} → ${ri[key]} cases`);
   }
 
+  // The project-memory eval (P8-2): once a baseline passed it, a report must run it and pass.
+  if (baseline.memory?.pass === true) {
+    if (report.memory === null || report.memory === undefined)
+      reasons.push("the baseline ran the memory eval (--memory); this report did not");
+    else if (!report.memory.pass)
+      reasons.push(
+        `the memory eval failed (run 2 raised ${report.memory.run2Raised}, cited ${report.memory.run2Cited}, bug found ${report.memory.run2BugFound})`,
+      );
+  } else if (report.memory?.pass === false)
+    notes.push("memory eval: fail (not gated: the baseline did not pass it)");
+
   return { ok: reasons.length === 0, reasons, notes, common, baseline: before, report: after };
 };

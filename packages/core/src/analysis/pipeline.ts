@@ -48,6 +48,7 @@ import {
   type LlmCompletionRole,
   type LlmFatalErrorKind,
   type LlmRoles,
+  joinInstructions,
   type LlmUntrustedText,
   type LlmUsage,
 } from "../llm.js";
@@ -58,14 +59,32 @@ import {
   FLOWS_INSTRUCTIONS,
   GRAPH_INSTRUCTIONS,
   REVIEW_INSTRUCTIONS,
+  REVIEW_MEMORY_INSTRUCTIONS,
   TRIAGE_INSTRUCTIONS,
   WALKTHROUGH_INSTRUCTIONS,
 } from "./instructions.js";
+import {
+  coversSeverity,
+  entryOfHandle,
+  memoryKeyOf,
+  memoryPart,
+  memoryRefOf,
+  resolveHandles,
+  restoredDismissalOf,
+  selectMemory,
+  usableMemory,
+  type AnalysisMemoryEntry,
+  type RestoredBecause,
+  type RestoredByRisk,
+  type SelectedMemory,
+} from "./memory.js";
 import {
   BRIEFING_OUTPUT,
   FLOWS_OUTPUT,
   GRAPH_OUTPUT,
   MAX_OUTPUT_TOKENS,
+  MAX_REPAIR_ISSUES,
+  REVIEW_MEMORY_OUTPUT,
   REVIEW_OUTPUT,
   TRIAGE_OUTPUT,
   WALKTHROUGH_OUTPUT,
@@ -73,8 +92,9 @@ import {
   type FlowsAnswer,
   type GraphAnswer,
   type ReviewFinding,
+  type SuppressedFinding,
 } from "./outputs.js";
-import { instructionLeaks } from "./leak.js";
+import { containsPromptCanaryFragment, instructionLeaks } from "./leak.js";
 import { changeMapScope, GRAPH_MAX_INPUT_CHARS } from "./map-scope.js";
 import { completeWithRepair, type CallObserver, type UnitFailure } from "./repair.js";
 import { applyFloor, NOISE_SUMMARIES, preTriage, type FloorLevel } from "./rules.js";
@@ -88,6 +108,7 @@ import {
 } from "./verdict.js";
 import {
   FileUnits,
+  reusableTriage,
   reusableUnit,
   unitKey,
   type FileUnit,
@@ -126,6 +147,12 @@ export interface AnalysisRequest {
   readonly diffTruncated: boolean;
   /** The pull request's last good analysis, loaded inside the org's tenant transaction. */
   readonly previous?: PreviousAnalysis | undefined;
+  /**
+   * The repository's current project-memory entries (P8-2), loaded inside the org's tenant
+   * transaction for this analysis's repository only, newest first. Untrusted text: each review
+   * call gets the relevant ones as an untrusted part (`memory.ts`), never as instructions.
+   */
+  readonly memory?: readonly AnalysisMemoryEntry[] | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -200,6 +227,30 @@ export interface AnalysisStats {
   walkthroughStripped: number;
   /** Token counts per stage, as the provider reported them (H4-7). */
   usageByStage: Record<AnalysisStage, StageUsage>;
+  /** Project-memory entries the request carried that the analysis could use (P8-2). */
+  memoryEntries: number;
+  /** Entries refused before any use: malformed, or carrying a canary or prompt text (P8-2). */
+  memoryDropped: number;
+  /** Review calls sent with project memory (P8-2). */
+  memoryReviews: number;
+  /** Entries cited in the stored document (`briefing.memoryApplied`) (P8-2). */
+  memoryCited: number;
+  /**
+   * Handles dropped (P8-2): cited but not given to the call, a dismissal cited as a finding's
+   * backing, or a suppression naming an entry that is not a dismissal the call was given.
+   */
+  memoryStripped: number;
+  /** Files whose triage was reused while their review ran again on changed memory (fix round). */
+  triageReused: number;
+  /** Findings a dismissal entry kept out of the review (fix round, M2). */
+  memorySuppressed: number;
+  /** Findings the model suppressed without a covering dismissal, raised as drafts (fix round). */
+  memoryRestored: number;
+  /**
+   * Of those, suppressions a dismissal did cover, restored only because the file is risky and
+   * stored with the "double-check" marker (`Finding.restored`, fix round 3).
+   */
+  memoryDoubleCheck: number;
 }
 
 /**
@@ -264,6 +315,9 @@ export const FALLBACK_REASON =
 export const DELETION_ONLY_DETAIL =
   "Only deleted lines: Rocky reviews new-side lines, so this file was not reviewed. Read the deletion by hand.";
 
+/** The review's instructions when the file has project memory to apply (P8-2). */
+const REVIEW_WITH_MEMORY = joinInstructions([REVIEW_INSTRUCTIONS, REVIEW_MEMORY_INSTRUCTIONS]);
+
 const REVIEWED_LEVELS: ReadonlySet<TriagedFile["level"]> = new Set(["critical", "important"]);
 const LEVEL_RANK: Readonly<Record<TriagedFile["level"], number>> = {
   critical: 3,
@@ -326,6 +380,22 @@ const flowsOutline = (flows: FlowsAnswer["flows"]) =>
     participants: flow.participants.map((participant) => participant.node),
     messages: flow.messages.map(({ id, from, to, label, kind }) => ({ id, from, to, label, kind })),
   }));
+
+/** A cited finding as the document's checks see it: the handles are not part of a finding. */
+const withoutCitations = (
+  finding: ReviewFinding & { readonly memory: readonly string[] },
+): ReviewFinding => {
+  const copy: Record<string, unknown> = { ...finding };
+  delete copy["memory"];
+  return copy as ReviewFinding;
+};
+
+/** A suppressed finding as a draft: the entry handle is not part of a finding. */
+const withoutEntry = (finding: SuppressedFinding): ReviewFinding => {
+  const copy: Record<string, unknown> = { ...finding };
+  delete copy["entry"];
+  return copy as ReviewFinding;
+};
 
 const DOCUMENT_PARTS: readonly DocumentPart[] = ["graph", "flows", "walkthrough", "briefing"];
 
@@ -404,6 +474,21 @@ interface UnitOutcome extends UnreviewedRisk {
   /** Fixed, pipeline-written text only. */
   readonly detail?: string;
   readonly unit?: FileUnit;
+  /**
+   * Project memory the unit cited, as stored entry ids (P8-2): per finding (same order as
+   * `findings`) and applied without a finding.
+   */
+  readonly memory?: UnitMemory;
+  /**
+   * Per finding (same order): the covered dismissal the pipeline restored it against on a risky
+   * file, for the document's double-check marker (fix round 3); undefined for the others.
+   */
+  readonly restored?: readonly (RestoredByRisk | undefined)[];
+}
+
+interface UnitMemory {
+  readonly findings: readonly (readonly string[])[];
+  readonly applied: readonly string[];
 }
 
 /** Keeps the PR estimate within the document's cap: per-file minutes are scaled down to fit. */
@@ -425,6 +510,9 @@ const run = async (
 ): Promise<AnalysisOutcome> => {
   const { llm } = deps;
   const signal = request.signal;
+  const memory = usableMemory(request.memory);
+  stats.memoryEntries = memory.entries.length;
+  stats.memoryDropped = memory.dropped;
   if (request.diffTruncated) throw new Failed("diff_truncated");
   const parsed = parseUnifiedDiff(request.diff);
   if (!parsed.ok) throw new Failed(parsed.code);
@@ -489,13 +577,156 @@ const run = async (
     request.previous !== undefined && FileUnits.safeParse(request.previous.units).success
       ? request.previous
       : undefined;
+  /**
+   * One file's review. Without memory it is the review it always was; with memory (P8-2) the
+   * entries go in their own untrusted part, the instructions gain the memory paragraph (a
+   * literal), and the answer cites handles, resolved here against this call's selection: a
+   * handle the call was not given is dropped and counted, never stored.
+   */
+  const reviewFile = async (
+    parts: readonly LlmUntrustedText[],
+    selection: readonly SelectedMemory[],
+    check: (findings: readonly ReviewFinding[]) => ReturnType<typeof checkReview>,
+    unitSignal: AbortSignal,
+    /**
+     * Why no suppression is honoured on this file (critical triage or a rule floor), or
+     * undefined when a covering dismissal may keep a finding out.
+     */
+    risk: RestoredBecause | undefined,
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly value: {
+          findings: ReviewFinding[];
+          memory: UnitMemory;
+          restored: (RestoredByRisk | undefined)[];
+        };
+      }
+    | { readonly ok: false; readonly reason: UnitFailure }
+  > => {
+    if (selection.length === 0) {
+      const plain = await completeWithRepair(
+        llm,
+        {
+          role: "review",
+          instructions: REVIEW_INSTRUCTIONS,
+          untrusted: parts,
+          output: REVIEW_OUTPUT,
+          maxOutputTokens: MAX_OUTPUT_TOKENS.review,
+          check: (answer) => check(answer.findings),
+        },
+        observe("review"),
+        unitSignal,
+      );
+      return plain.ok
+        ? {
+            ok: true,
+            value: {
+              findings: plain.value.findings,
+              memory: { findings: plain.value.findings.map(() => []), applied: [] },
+              restored: plain.value.findings.map(() => undefined),
+            },
+          }
+        : plain;
+    }
+    stats.memoryReviews++;
+    // Suppressed findings are checked like drafts: one that is restored must be a valid one.
+    const asSuppressed = (lines: UnitCheck): UnitCheck =>
+      lines === "unrepairable"
+        ? lines
+        : lines.map((line) => line.replace(/^findings(?=[[:])/u, "suppressed"));
+    const cited = await completeWithRepair(
+      llm,
+      {
+        role: "review",
+        instructions: REVIEW_WITH_MEMORY,
+        untrusted: [...parts, memoryPart(selection)],
+        output: REVIEW_MEMORY_OUTPUT,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.review,
+        check: (answer) => {
+          const drafts = check(answer.findings.map(withoutCitations));
+          const suppressed = asSuppressed(check(answer.suppressed.map(withoutEntry)));
+          if (drafts === "unrepairable" || suppressed === "unrepairable") return "unrepairable";
+          return [...drafts, ...suppressed].slice(0, MAX_REPAIR_ISSUES);
+        },
+      },
+      observe("review"),
+      unitSignal,
+    );
+    if (!cited.ok) return cited;
+    const resolve = (handles: readonly string[]) => {
+      // Only conventions and decisions back a finding; a dismissal cited on a raised finding
+      // says nothing about it (fix round, S1).
+      const backing = handles.filter(
+        (handle) => entryOfHandle(selection, handle)?.kind !== "dismissal",
+      );
+      const { ids, stripped } = resolveHandles(selection, backing);
+      stats.memoryStripped += stripped + handles.length - backing.length;
+      return ids;
+    };
+    const findings = cited.value.findings.map(withoutCitations);
+    const memoryFindings = cited.value.findings.map((finding) => resolve(finding.memory));
+    const restored: (RestoredByRisk | undefined)[] = findings.map(() => undefined);
+    const applied: string[] = [];
+    // A suppression stands only when the entry it names is a dismissal this call was given and
+    // covers the finding's severity (never a critical one): anything else is raised as a draft,
+    // so neither an invented handle nor a misread entry can make a finding disappear (fix round,
+    // M2/S1, ADR 0037). The severity is the model's own label, so on a file triage or the rules
+    // call risky (triage never sees memory) no suppression stands at all (fix round 2, S2); a
+    // suppression a dismissal did cover is then restored with the double-check marker, so the
+    // reviewer sees what the team dismissed and why Rocky shows it anyway (fix round 3). Other
+    // restorations (an invented handle, a convention, a severity above the cap) get no marker:
+    // the team did not dismiss those.
+    const raised = (item: SuppressedFinding) =>
+      findings.some(
+        (f) =>
+          f.title === item.title &&
+          f.range.start === item.range.start &&
+          f.range.end === item.range.end,
+      );
+    for (const item of cited.value.suppressed) {
+      const entry = entryOfHandle(selection, item.entry);
+      const covered = entry !== undefined && coversSeverity(entry, item.severity);
+      if (risk === undefined && covered) {
+        stats.memorySuppressed++;
+        if (!applied.includes(entry.id)) applied.push(entry.id);
+        continue;
+      }
+      if (entry === undefined || entry.kind !== "dismissal") stats.memoryStripped++;
+      stats.memoryRestored++;
+      const marker =
+        covered && risk !== undefined && restoredDismissalOf(entry, risk) !== undefined
+          ? { entryId: entry.id, because: risk }
+          : undefined;
+      // Already raised as a draft (the same title and lines): one copy is enough.
+      if (raised(item)) continue;
+      findings.push(withoutEntry(item));
+      memoryFindings.push([]);
+      restored.push(marker);
+      if (marker !== undefined) stats.memoryDoubleCheck++;
+    }
+    return {
+      ok: true,
+      value: { findings, memory: { findings: memoryFindings, applied }, restored },
+    };
+  };
+
+  /** Entries some file's review was given (or a reused unit was keyed on). */
+  const offeredMemory = new Set<string>();
   const analyseFile = async (
     item: (typeof work)[number],
     unitSignal: AbortSignal,
   ): Promise<UnitOutcome> => {
     const { file, floor } = item;
     const fileFacts = facts(file);
-    const key = unitKey(deps.sha256Hex, salt, file);
+    const selection = selectMemory(memory.entries, file.path);
+    for (const { entry } of selection) offeredMemory.add(entry.id);
+    const key = unitKey(deps.sha256Hex, salt, file, memoryKeyOf(selection));
+    const triageKey = unitKey(deps.sha256Hex, salt, file);
+    const keys = { key, ...(triageKey === key ? {} : { triageKey }) };
+    /** Ids of this file's selection only: a citation outside it is never kept. */
+    const offered = new Set(selection.map(({ entry }) => entry.id));
+    const keep = (ids: readonly string[]) => ids.filter((id) => offered.has(id));
     const fileParts: LlmUntrustedText[] = [
       { label: "file_path", text: file.path },
       { label: "file_status", text: file.status },
@@ -507,30 +738,46 @@ const run = async (
     if (reused !== undefined && instructionLeaks(reused, fileParts).length === 0) {
       stats.reused++;
       const triage = applyFloor(reused.triage, floor);
+      const applied = keep(reused.memory.applied);
       return {
         path: file.path,
         triage,
         findings: reused.findings,
         reviewed: REVIEWED_LEVELS.has(triage.level) && hasNewSide(file),
         ruleFloor: floor,
-        unit: { path: file.path, key, reviewMinutes: reused.triage.reviewMinutes },
+        unit: {
+          path: file.path,
+          ...keys,
+          reviewMinutes: reused.triage.reviewMinutes,
+          ...(applied.length === 0 ? {} : { memoryApplied: applied }),
+        },
+        memory: { findings: reused.memory.findings.map(keep), applied },
+        restored: reused.restored.map((mark) =>
+          mark !== undefined && offered.has(mark.entryId) ? mark : undefined,
+        ),
       };
     }
     const context = { provenance: base, file: fileFacts, newFileLines: file.newFileLines };
     stats.analysed++;
-    const triaged = await completeWithRepair(
-      llm,
-      {
-        role: "triage",
-        instructions: TRIAGE_INSTRUCTIONS,
-        untrusted: fileParts,
-        output: TRIAGE_OUTPUT,
-        maxOutputTokens: MAX_OUTPUT_TOKENS.triage,
-        check: (answer) => checkTriage(context, answer),
-      },
-      observe("triage"),
-      unitSignal,
-    );
+    // Only the memory changed: the triage stands, the review runs again (fix round, S2).
+    const kept = reusableTriage(previous, fileFacts, triageKey);
+    const keepTriage = kept !== undefined && instructionLeaks(kept, fileParts).length === 0;
+    if (keepTriage) stats.triageReused++;
+    const triaged = keepTriage
+      ? { ok: true as const, value: kept }
+      : await completeWithRepair(
+          llm,
+          {
+            role: "triage",
+            instructions: TRIAGE_INSTRUCTIONS,
+            untrusted: fileParts,
+            output: TRIAGE_OUTPUT,
+            maxOutputTokens: MAX_OUTPUT_TOKENS.triage,
+            check: (answer) => checkTriage(context, answer),
+          },
+          observe("triage"),
+          unitSignal,
+        );
     if (!triaged.ok) {
       return {
         path: file.path,
@@ -541,7 +788,7 @@ const run = async (
     }
     const triage = applyFloor({ ...triaged.value, path: file.path }, floor);
     // The unit keeps the model's minutes; the document's may be scaled to fit (Fix E).
-    const unit = { path: file.path, key, reviewMinutes: triaged.value.reviewMinutes };
+    const unit = { path: file.path, ...keys, reviewMinutes: triaged.value.reviewMinutes };
     if (!REVIEWED_LEVELS.has(triage.level)) {
       return { path: file.path, triage, findings: [], unit };
     }
@@ -563,18 +810,16 @@ const run = async (
       return { path: file.path, triage, findings: [], unit };
     }
     stats.reviewed++;
-    const reviewed = await completeWithRepair(
-      llm,
-      {
-        role: "review",
-        instructions: REVIEW_INSTRUCTIONS,
-        untrusted: fileParts.filter((part) => part.label !== "file_status"),
-        output: REVIEW_OUTPUT,
-        maxOutputTokens: MAX_OUTPUT_TOKENS.review,
-        check: (answer) => checkReview(context, triage, answer.findings),
-      },
-      observe("review"),
+    const reviewed = await reviewFile(
+      fileParts.filter((part) => part.label !== "file_status"),
+      selection,
+      (findings) => checkReview(context, triage, findings),
       unitSignal,
+      triage.level === "critical"
+        ? "critical_file"
+        : floor === undefined
+          ? undefined
+          : "rule_floor",
     );
     if (!reviewed.ok) {
       // A file that should have been reviewed and was not must not look reviewed and clean, and
@@ -587,13 +832,16 @@ const run = async (
         level: triage.level,
       };
     }
+    const { applied } = reviewed.value.memory;
     return {
       path: file.path,
       triage,
       findings: reviewed.value.findings,
       reviewed: true,
       ruleFloor: floor,
-      unit,
+      unit: applied.length === 0 ? unit : { ...unit, memoryApplied: [...applied] },
+      memory: reviewed.value.memory,
+      restored: reviewed.value.restored,
     };
   };
   const outcomes = await mapBounded(
@@ -605,7 +853,13 @@ const run = async (
 
   const order = new Map(files.map((file, index) => [file.path, index] as const));
   const triaged: TriagedFile[] = [];
-  const raw: { finding: ReviewFinding; path: string; seq: number }[] = [];
+  const raw: {
+    finding: ReviewFinding;
+    path: string;
+    seq: number;
+    memory: readonly string[];
+    restored: RestoredByRisk | undefined;
+  }[] = [];
   const units: FileUnit[] = [];
   for (const outcome of outcomes) {
     if (outcome.unanalysed !== undefined) {
@@ -619,8 +873,14 @@ const run = async (
     }
     if (outcome.triage !== undefined) triaged.push(outcome.triage);
     if (outcome.unit !== undefined) units.push(outcome.unit);
-    for (const finding of outcome.findings)
-      raw.push({ finding, path: outcome.path, seq: raw.length });
+    for (const [index, finding] of outcome.findings.entries())
+      raw.push({
+        finding,
+        path: outcome.path,
+        seq: raw.length,
+        memory: outcome.memory?.findings[index] ?? [],
+        restored: outcome.restored?.[index],
+      });
   }
   const byFileOrder = (a: { path: string }, b: { path: string }) =>
     (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0);
@@ -647,12 +907,52 @@ const run = async (
       a.finding.range.start - b.finding.range.start ||
       a.seq - b.seq,
   );
-  const findings: Finding[] = raw.map(({ finding, path }, index) => ({
-    ...finding,
-    id: `F${index + 1}`,
-    path,
-    memory: [],
-  }));
+  // Project memory cited anywhere (P8-2): each finding's refs first (in finding order), then the
+  // entries reviews applied without a finding (in file order). The document requires every
+  // finding's ref in `briefing.memoryApplied`, quoted identically: both are built here, from the
+  // stored entries, never from model text.
+  const entryById = new Map(memory.entries.map((entry) => [entry.id, entry] as const));
+  const appliedIds: string[] = [];
+  const cite = (id: string): boolean => {
+    if (!entryById.has(id)) return false;
+    if (!appliedIds.includes(id) && appliedIds.length < limits.MAX_MEMORY_APPLIED)
+      appliedIds.push(id);
+    return appliedIds.includes(id);
+  };
+  const refsOf = (ids: readonly string[]) =>
+    ids
+      .slice(0, limits.MAX_MEMORY_REFS_PER_FINDING)
+      .filter(cite)
+      .flatMap((id) => {
+        const entry = entryById.get(id);
+        return entry === undefined ? [] : [memoryRefOf(entry)];
+      });
+  /** The double-check marker, from the stored entry (never model text); none if it is gone. */
+  const restoredOf = (mark: RestoredByRisk | undefined) => {
+    const entry = mark === undefined ? undefined : entryById.get(mark.entryId);
+    return entry === undefined || mark === undefined
+      ? undefined
+      : restoredDismissalOf(entry, mark.because);
+  };
+  const findings: Finding[] = raw.map(({ finding, path, memory: cited, restored }, index) => {
+    const marker = restoredOf(restored);
+    return {
+      ...finding,
+      id: `F${index + 1}`,
+      path,
+      memory: refsOf(cited),
+      ...(marker === undefined ? {} : { restored: marker }),
+    };
+  });
+  for (const outcome of [...outcomes].sort(byFileOrder))
+    for (const id of outcome.memory?.applied ?? []) cite(id);
+  const memoryApplied = appliedIds.flatMap((id) => {
+    const entry = entryById.get(id);
+    return entry === undefined ? [] : [memoryRefOf(entry)];
+  });
+  stats.memoryCited = memoryApplied.length;
+  /** A briefing no other part's check can trip over, with the memory the findings cite. */
+  const stub: Briefing = { ...STUB_BRIEFING, memoryApplied };
   stats.findings = findings.length;
   const triageFiles = fitMinutes(triaged.sort(byFileOrder));
 
@@ -678,6 +978,7 @@ const run = async (
         // The lowest minor the document needs, so older readers keep reading (H4-5, S7).
         schemaVersion: requiredSchemaVersion({
           briefing,
+          findings,
           provenance: { graphUnavailable, ...sections },
         }),
         provenance: {
@@ -720,7 +1021,7 @@ const run = async (
 
   // Units were checked one by one (fresh) or not at all (reused): check them together before
   // spending a call on the change map or the briefing. A failure here is not a model's to fix.
-  const together = assemble(STUB_BRIEFING, undefined, undefined);
+  const together = assemble(stub, undefined, undefined);
   if (!together.ok) throw new Failed("document_invalid");
 
   // --- Change map ----------------------------------------------------------------------------
@@ -794,7 +1095,7 @@ const run = async (
           maxOutputTokens: MAX_OUTPUT_TOKENS.graph,
           // Checked as it will be stored: with stray references and ranges already dropped.
           check: (answer) =>
-            checkPart("graph", STUB_BRIEFING, stripGraphRefs(answer, spans).answer, undefined),
+            checkPart("graph", stub, stripGraphRefs(answer, spans).answer, undefined),
         },
         observe("graph"),
         signal,
@@ -860,12 +1161,7 @@ const run = async (
           const kept = stripFlowRefs(answer, ids, mappedSpans);
           // The document takes an empty list; an answer with nothing left is not worth storing.
           if (kept.answer.flows.length === 0) return ["flows: too_small"];
-          const checked = checkPart(
-            "flows",
-            STUB_BRIEFING,
-            over(kept.answer.flows, undefined),
-            undefined,
-          );
+          const checked = checkPart("flows", stub, over(kept.answer.flows, undefined), undefined);
           // Issues sit on the stripped list; the model repairs its own answer (SF2).
           return checked === "unrepairable" ? checked : rebaseFlowIssues(checked, kept.index);
         },
@@ -900,7 +1196,7 @@ const run = async (
           const kept = stripWalkthroughRefs(answer, ids);
           const checked = checkPart(
             "walkthrough",
-            STUB_BRIEFING,
+            stub,
             over(flows ?? [], toWalkthrough(kept.answer)),
             undefined,
           );
@@ -952,7 +1248,7 @@ const run = async (
     estimatedReviewMinutes: minutes,
     reviewPath: answer.reviewPath,
     checkedOk: answer.checkedOk,
-    memoryApplied: [],
+    memoryApplied,
   });
   const briefed = await completeWithRepair(
     llm,
@@ -1021,7 +1317,7 @@ const run = async (
             why: `Triaged ${file.level} (score ${file.score}).`,
           })),
         checkedOk: [],
-        memoryApplied: [],
+        memoryApplied,
       };
 
   // --- Final validation: the whole document, as it will be stored ----------------------------
@@ -1037,10 +1333,31 @@ const run = async (
     { label: "pr_title", text: request.pullRequest.title },
     ...files.map((file) => ({ label: "diff", text: `${file.path}\n${file.patch}` })),
   ];
+  // Project memory (fix round, M1): the review calls were allowed to quote the entries they were
+  // given, so this check allows the same; and the `MemoryRef`s the pipeline built from stored
+  // entries are not model text at all. Entries that each passed `usableMemory` but together read
+  // as a share of the prompt must not fail the analysis: they are left out of the model text and
+  // checked on their own for a canary, the one thing no allowance covers.
+  for (const entry of memory.entries)
+    if (offeredMemory.has(entry.id)) content.push({ label: "memory", text: entry.text });
+  const refs = [
+    ...final.value.briefing.memoryApplied,
+    ...final.value.findings.flatMap((finding) => [
+      ...finding.memory,
+      ...(finding.restored === undefined ? [] : [finding.restored.entry]),
+    ]),
+  ];
+  if (refs.some((ref) => containsPromptCanaryFragment(ref.text)))
+    throw new Failed("document_invalid");
   const modelText = {
-    briefing: final.value.briefing,
+    briefing: { ...final.value.briefing, memoryApplied: [] },
     triage: final.value.triage,
-    findings: final.value.findings,
+    // The double-check marker is pipeline-built too (its path and text are the stored entry's).
+    findings: final.value.findings.map((finding) => {
+      const copy: Record<string, unknown> = { ...finding, memory: [] };
+      delete copy["restored"];
+      return copy;
+    }),
     graph: final.value.graph,
   };
   if (instructionLeaks(modelText, content).length > 0) throw new Failed("document_invalid");
@@ -1094,6 +1411,15 @@ const newStats = (): AnalysisStats => ({
   flowsStripped: 0,
   walkthroughStripped: 0,
   usageByStage: perStage(() => ({ inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheWrite: 0 })),
+  memoryEntries: 0,
+  memoryDropped: 0,
+  memoryReviews: 0,
+  memoryCited: 0,
+  memoryStripped: 0,
+  triageReused: 0,
+  memorySuppressed: 0,
+  memoryRestored: 0,
+  memoryDoubleCheck: 0,
 });
 
 const CLASS_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;

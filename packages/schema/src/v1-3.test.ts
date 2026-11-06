@@ -32,11 +32,11 @@ const withoutFlows = (doc: ReturnType<typeof pr847>) => {
  */
 
 describe("schema 1.3: version policy", () => {
-  it("is 1.3.0 and still reads 1.0 to 1.2 documents; 1.4 is the newest minor read", () => {
+  it("is 1.3.0 and still reads 1.0 to 1.2 documents; 1.5 is the newest minor read", () => {
     expect(MAP_SECTIONS_SCHEMA_VERSION).toBe("1.3.0");
     for (const version of ["1.0.0", "1.1.3", "1.2.0", "1.3.0"])
       expect(isSupportedVersion(version), version).toBe(true);
-    for (const version of ["1.5.0", "1.10.0", "1.30.0", "2.0.0"])
+    for (const version of ["1.6.0", "1.10.0", "1.30.0", "2.0.0"])
       expect(isSupportedVersion(version), version).toBe(false);
     for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
       const doc = pr847();

@@ -23,11 +23,14 @@ import {
   INJECTION_FIXTURES,
   type InjectionFixture,
 } from "../injection/inject.js";
+import { pinTriage, type TriagePin } from "../memory/pin.js";
+import { runMemoryEval, type MemoryStep } from "../memory/run.js";
 import { scoreFindings } from "../score.js";
 import { SEEDED_PRS, type SeededPr } from "../seeded/index.js";
 import { injectionResult, injectionTotals } from "./injection.js";
 import { createMeter } from "./meter.js";
 import {
+  MemoryEvalReport,
   PROMPT_HASH,
   REPORT_FORMAT,
   REPORT_VERSION,
@@ -44,7 +47,9 @@ export type EvalSubject =
       readonly kind: "injection";
       readonly fixture: InjectionFixture;
       readonly case: InjectionCase;
-    };
+    }
+  /** One of the project-memory eval's three analyses (P8-2). */
+  | { readonly kind: "memory"; readonly step: MemoryStep };
 
 export interface RunOptions {
   readonly kind: "fake" | "live";
@@ -53,6 +58,10 @@ export interface RunOptions {
   readonly rolesFor: (subject: EvalSubject) => LlmRoles;
   readonly maxTokens: number;
   readonly injection: boolean;
+  /** Run the project-memory eval (P8-2) after the seeded PRs and the corpus. */
+  readonly memory?: boolean;
+  /** How many times the memory eval's three analyses run (default 1; a live rate, P8-2). */
+  readonly memoryTrials?: number;
   /** Seeded PR ids to run (all when absent). */
   readonly only?: readonly string[];
   readonly clock: Clock;
@@ -107,11 +116,16 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
   });
   const createdAt = options.clock.now().toISOString();
-  const analyse = async (subject: EvalSubject, request: AnalysisRequest) => {
+  const analyse = async (
+    subject: EvalSubject,
+    request: AnalysisRequest,
+    /** An eval-harness wrapper over the roles (the memory eval's triage pin); identity otherwise. */
+    wrap: (roles: LlmRoles) => LlmRoles = (roles) => roles,
+  ) => {
     if (meter.capped()) return "capped" as const;
     try {
       const outcome = await analyzePullRequest(request, {
-        llm: meter.wrap(options.rolesFor(subject)),
+        llm: meter.wrap(wrap(options.rolesFor(subject))),
         clock: options.clock,
         sha256Hex,
         generator: { name: "rocky-evals", version: PIPELINE_VERSION },
@@ -164,6 +178,28 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     injection = { cases, total: injectionTotals(cases) };
   }
 
+  let memory: EvalReport["memory"] = null;
+  if (options.memory === true) {
+    const result = await runMemoryEval(
+      async (step, request, { pinTriage: level }) => {
+        const subject = { kind: "memory", step } as const;
+        if (level === null) return { outcome: await analyse(subject, request) };
+        let pin: TriagePin | undefined;
+        const outcome = await analyse(subject, request, (roles) => {
+          pin = pinTriage(roles, level);
+          return pin.roles;
+        });
+        return { outcome, answered: pin?.answered };
+      },
+      { trials: options.memoryTrials ?? 1 },
+    );
+    // Parsed into the report's own shape: codes, levels, counts and seeded ids only.
+    memory = MemoryEvalReport.parse(result);
+    options.onProgress?.(
+      `memory: ${result.status}, ${result.pass ? "pass" : "FAIL"} (${result.passes}/${result.trials.length} trials)`,
+    );
+  }
+
   return {
     format: REPORT_FORMAT,
     version: REPORT_VERSION,
@@ -176,11 +212,13 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     options: {
       maxTokens: options.maxTokens,
       injection: options.injection,
+      memory: options.memory === true,
       only: options.only === undefined ? null : [...options.only],
     },
     usage: meter.usage(),
     prs,
     total: totalsOf(prs),
     injection,
+    memory,
   };
 };

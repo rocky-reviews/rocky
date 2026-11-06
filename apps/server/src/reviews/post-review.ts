@@ -10,6 +10,7 @@ import type { KeyWrapper } from "@rocky-reviews/crypto";
 import {
   beginReviewSubmission,
   finishReviewSubmission,
+  learnFromReviewSubmission,
   loadReviewPlan,
   recordedReviewIds,
   resolveRepositoryForAccess,
@@ -34,6 +35,11 @@ import { readMemberCredential } from "../member-token.js";
  *   forge call with the person's token, and one transaction that records the answer. A lost
  *   answer leaves the attempt `posting`; the next attempt after `postingTimeoutMs` reconciles
  *   it from the person's own reviews on the forge, so nothing is ever posted twice on a guess.
+ *
+ * Once the forge took a review (answered, or found by reconciliation), the review's decisions
+ * become project memory for the repository (P8-2, `learnFromReviewSubmission`), in a transaction
+ * of its own: memory is derived data, so a failure there is logged as a count-free code and
+ * never changes the answer about the review.
  *
  * No other code path reaches `ReviewPoster`: the worker never constructs one, and the
  * installation-token `Forge` has no posting method. Logs carry ids, counts and fixed codes.
@@ -231,7 +237,24 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
       return "pending";
     }
     log("info", found === undefined ? "reconciled_lost" : "reconciled_posted", fields);
+    if (found !== undefined) await learn(actor, submission.submissionId);
     return found === undefined ? "failed" : "posted";
+  };
+
+  /** P8-2: learn from a posted review. Best effort; logs counts and fixed codes only. */
+  const learn = async (actor: ReviewActor, submissionId: string): Promise<void> => {
+    const fields = { orgId: actor.orgId, submissionId };
+    try {
+      const learned = await db.withOrg(actor.orgId, (tx) =>
+        learnFromReviewSubmission(tx, submissionId),
+      );
+      if (learned.outcome === "learned") {
+        const { created, superseded, repeated, skipped } = learned;
+        log("info", "memory_learned", { ...fields, created, superseded, repeated, skipped });
+      } else log("info", `memory_${learned.outcome}`, fields);
+    } catch {
+      log("warn", "memory_learn_failed", fields);
+    }
   };
 
   const finish = (
@@ -367,6 +390,7 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
     });
     if (finished === null) log("warn", "finish_not_applied", counts);
     log("info", "posted", { ...counts, reviewId: answer.review.id });
+    if (finished !== null) await learn(actor, submissionId);
     return { outcome: "posted", submissionId, reviewId: answer.review.id, repeated: false };
   };
 

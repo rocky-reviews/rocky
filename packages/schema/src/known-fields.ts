@@ -33,7 +33,11 @@ export const applyKnownFields = (modelOutput: unknown, facts: KnownFacts): unkno
   if (!isRecord(modelOutput)) return modelOutput;
   const result: Record<string, unknown> = { ...modelOutput };
   result.provenance = structuredClone(facts);
-  result.schemaVersion = requiredSchemaVersion({ briefing: result.briefing, provenance: facts });
+  result.schemaVersion = requiredSchemaVersion({
+    briefing: result.briefing,
+    findings: result.findings,
+    provenance: facts,
+  });
   if (facts.graphUnavailable !== undefined) delete result.graph;
   // The sections drawn by their own calls (schema 1.3, H4-7) follow the same rule: when the
   // pipeline recorded that one failed, whatever the model returned for it is dropped.

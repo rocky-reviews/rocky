@@ -130,8 +130,11 @@ const activeRole = async (tx: TenantTx, memberId: string): Promise<string | null
   return rows[0]?.role ?? null;
 };
 
-/** Serialises creates per repository (the cap below is a count then an insert). */
-const lockRepoMemory = (tx: TenantTx, repoId: string) =>
+/**
+ * Serialises creates per repository (the cap below is a count then an insert); learning takes it
+ * for its whole run (P8-2 fix round, S4).
+ */
+export const lockRepoMemory = (tx: TenantTx, repoId: string) =>
   tx.query("select pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))", [
     `rocky.memory:${tx.orgId}:${repoId}`,
   ]);
@@ -303,6 +306,11 @@ export type SupersedeMemoryEntryResult =
  * Marks `entryId` as replaced by `byEntryId` (both current entries of the same repository of
  * this org), with both rows locked, for an actor who holds `memory.edit` here. The old entry stays as history and leaves the default
  * listing. Audited `memory.superseded` with ids only.
+ *
+ * `origin: "learned"` (P8-2): learning replaces an older learned entry with a newer one about
+ * the same pattern, in the name of the reviewer whose posted review taught it. Like a learned
+ * create, it needs an active member, not `memory.edit`, and both rows must be learned entries
+ * (`not_permitted` otherwise): learning never replaces what a person wrote.
  */
 export const supersedeMemoryEntry = async (
   tx: TenantTx,
@@ -310,18 +318,25 @@ export const supersedeMemoryEntry = async (
     readonly actorMemberId: string;
     readonly entryId: string;
     readonly byEntryId: string;
+    readonly origin?: "member" | "learned";
   },
 ): Promise<SupersedeMemoryEntryResult> => {
+  const learned = input.origin === "learned";
   const actor = uuid(input.actorMemberId, "actor id");
   const entryId = uuid(input.entryId, "entry id");
   const byEntryId = uuid(input.byEntryId, "entry id");
   if (entryId === byEntryId) return "self";
   const role = await activeRole(tx, actor);
   if (role === null) return "not_a_member";
-  if (!can(role, "memory.edit")) return "not_permitted";
+  if (!learned && !can(role, "memory.edit")) return "not_permitted";
   // Both rows locked in id order (no deadlock between two concurrent supersedes).
-  const { rows } = await tx.query<{ id: string; repo_id: string; superseded_by: string | null }>(
-    `select id, repo_id, superseded_by from memory_entries
+  const { rows } = await tx.query<{
+    id: string;
+    repo_id: string;
+    superseded_by: string | null;
+    origin: string;
+  }>(
+    `select id, repo_id, superseded_by, origin from memory_entries
       where org_id = $1 and id = any($2::uuid[]) order by id for update`,
     [tx.orgId, [entryId, byEntryId]],
   );
@@ -329,6 +344,8 @@ export const supersedeMemoryEntry = async (
   const target = rows.find((r) => r.id === byEntryId);
   if (source === undefined || target === undefined) return "not_found";
   if (source.repo_id !== target.repo_id) return "different_repo";
+  if (learned && (source.origin !== "learned" || target.origin !== "learned"))
+    return "not_permitted";
   if (source.superseded_by !== null || target.superseded_by !== null) return "already_superseded";
   await tx.query(
     `update memory_entries set superseded_by = $3, updated_at = now()

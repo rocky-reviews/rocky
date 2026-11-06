@@ -20,7 +20,8 @@ import {
   type TriagedFile,
 } from "@rocky-reviews/schema";
 import type { DiffFile } from "./diff.js";
-import type { ReviewFinding } from "./outputs.js";
+import type { RestoredByRisk } from "./memory.js";
+import { MAX_MEMORY_PER_FILE, type ReviewFinding } from "./outputs.js";
 
 /**
  * Bump when instructions, output contracts, rules or anything else that shapes a unit's answer
@@ -38,6 +39,18 @@ export const FileUnit = z.strictObject({
    * round 1, Fix E): a reused unit must not be scaled twice.
    */
   reviewMinutes: z.int().min(0).max(limits.MAX_REVIEW_MINUTES),
+  /**
+   * Project-memory entries (stored ids) the file's review applied without a finding to carry
+   * them (P8-2): the model left a finding out because of them. Findings carry their own refs in
+   * the document. Absent when none: units stored before P8-2 read as before.
+   */
+  memoryApplied: z.array(z.uuid()).max(MAX_MEMORY_PER_FILE).optional(),
+  /**
+   * The key without project memory, when the review had some (P8-2 fix round, S2): triage never
+   * sees memory, so a unit whose entries changed keeps its triage and only the review runs again.
+   * Absent when it equals `key`.
+   */
+  triageKey: z.string().regex(SHA256_HEX).optional(),
 });
 export type FileUnit = z.output<typeof FileUnit>;
 
@@ -52,7 +65,17 @@ export interface PreviousAnalysis {
 
 export type Sha256Hex = (text: string) => string;
 
-export const unitKey = (sha256Hex: Sha256Hex, salt: string, file: DiffFile): string => {
+/**
+ * `memory` (P8-2, `memoryKeyOf`): the project-memory entries the file's review is given. A new,
+ * changed or retired entry for the file re-analyses it, so a dismissal learned after the last
+ * push applies to the next one. Without memory the key is the one it always was.
+ */
+export const unitKey = (
+  sha256Hex: Sha256Hex,
+  salt: string,
+  file: DiffFile,
+  memory?: string,
+): string => {
   const key = sha256Hex(
     JSON.stringify([
       PIPELINE_VERSION,
@@ -61,6 +84,7 @@ export const unitKey = (sha256Hex: Sha256Hex, salt: string, file: DiffFile): str
       file.previousPath ?? null,
       file.status,
       file.patch,
+      ...(memory === undefined ? [] : [memory]),
     ]),
   );
   if (!SHA256_HEX.test(key)) throw new TypeError("sha256Hex must return lower-case hex");
@@ -70,6 +94,20 @@ export const unitKey = (sha256Hex: Sha256Hex, salt: string, file: DiffFile): str
 export interface ReusedUnit {
   readonly triage: TriagedFile;
   readonly findings: readonly ReviewFinding[];
+  /**
+   * The memory each reused finding cited (stored ids, same order as `findings`) and the entries
+   * the unit applied without a finding (P8-2). The key covers the entries the review was given,
+   * so these are still entries of this file's selection; the pipeline checks that again.
+   */
+  readonly memory: {
+    readonly findings: readonly (readonly string[])[];
+    readonly applied: readonly string[];
+  };
+  /**
+   * Per finding (same order): the dismissal the pipeline restored it against on a risky file, as
+   * the stored id and why (`Finding.restored`, schema 1.5); undefined for the others.
+   */
+  readonly restored: readonly (RestoredByRisk | undefined)[];
 }
 
 const sameFacts = (a: ChangedFile, b: ChangedFile): boolean =>
@@ -91,9 +129,9 @@ export const reusableUnit = (
   if (document.provenance.unanalysed.some((file) => file.path === facts.path)) return undefined;
   const triage = document.triage.files.find((file) => file.path === facts.path);
   if (triage === undefined) return undefined;
-  const findings = document.findings
-    .filter((finding) => finding.path === facts.path)
-    // Ids are per document and memory references belong to the briefing that quoted them.
+  const own = document.findings.filter((finding) => finding.path === facts.path);
+  const findings = own
+    // Ids are per document and memory references are rebuilt from the current entries.
     .map((finding): ReviewFinding => ({
       severity: finding.severity,
       confidence: finding.confidence,
@@ -103,5 +141,41 @@ export const reusableUnit = (
       ...(finding.suggestion === undefined ? {} : { suggestion: finding.suggestion }),
       agentPrompt: finding.agentPrompt,
     }));
-  return { triage: { ...triage, reviewMinutes: unit.reviewMinutes }, findings };
+  return {
+    triage: { ...triage, reviewMinutes: unit.reviewMinutes },
+    findings,
+    memory: {
+      findings: own.map((finding) => finding.memory.map((ref) => ref.entryId)),
+      applied: unit.memoryApplied ?? [],
+    },
+    restored: own.map((finding) =>
+      finding.restored === undefined
+        ? undefined
+        : { entryId: finding.restored.entry.entryId, because: finding.restored.shownBecause },
+    ),
+  };
+};
+
+/**
+ * The previous analysis's triage of this file, when only the review must run again: the unit's
+ * key without memory (`triageKey`, or `key` for a unit analysed without memory) matches and the
+ * file's facts are the same (P8-2 fix round, S2).
+ */
+export const reusableTriage = (
+  previous: PreviousAnalysis | undefined,
+  facts: ChangedFile,
+  triageKey: string,
+): TriagedFile | undefined => {
+  if (previous === undefined) return undefined;
+  const { document, units } = previous;
+  const unit = units.find(
+    (candidate) =>
+      candidate.path === facts.path && (candidate.triageKey ?? candidate.key) === triageKey,
+  );
+  if (unit === undefined) return undefined;
+  const before = document.provenance.files.find((file) => file.path === facts.path);
+  if (before === undefined || !sameFacts(before, facts)) return undefined;
+  if (document.provenance.unanalysed.some((file) => file.path === facts.path)) return undefined;
+  const triage = document.triage.files.find((file) => file.path === facts.path);
+  return triage === undefined ? undefined : { ...triage, reviewMinutes: unit.reviewMinutes };
 };

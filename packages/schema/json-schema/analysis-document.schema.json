@@ -450,6 +450,75 @@
             ],
             "type": "object"
           },
+          "restored": {
+            "additionalProperties": false,
+            "description": "Set by the pipeline when a dismissal covered this finding but the file is one where no suppression stands: the reviewer should double-check it.",
+            "properties": {
+              "dismissedAs": {
+                "description": "The dismissal's reason.",
+                "enum": [
+                  "not_an_issue",
+                  "intentional",
+                  "not_worth_it",
+                  "handled_elsewhere"
+                ],
+                "type": "string"
+              },
+              "entry": {
+                "additionalProperties": false,
+                "description": "The dismissal entry the model applied, quoted from the stored entry.",
+                "properties": {
+                  "entryId": {
+                    "description": "Id of the project-memory entry.",
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+                    "type": "string"
+                  },
+                  "source": {
+                    "description": "Where it came from, e.g. 'decision · PR #612'.",
+                    "maxLength": 120,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "The entry as quoted to the reviewer.",
+                    "maxLength": 300,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "entryId",
+                  "text",
+                  "source"
+                ],
+                "type": "object"
+              },
+              "path": {
+                "description": "Where the team took that dismissal (the entry's evidence path).",
+                "maxLength": 1024,
+                "minLength": 1,
+                "pattern": "^(?![A-Za-z]:)(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+(?:\\/(?!\\.\\.?(?:\\/|$))[^/\\\\\\u0000-\\u001F\\u007F]+)*$",
+                "type": "string"
+              },
+              "shownBecause": {
+                "description": "Why it is shown anyway: the file is triaged critical, or always gets a full review.",
+                "enum": [
+                  "critical_file",
+                  "rule_floor"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "entry",
+              "path",
+              "dismissedAs",
+              "shownBecause"
+            ],
+            "type": "object"
+          },
           "severity": {
             "enum": [
               "critical",
@@ -1856,8 +1925,8 @@
       "type": "object"
     },
     "schemaVersion": {
-      "description": "Contract version the document targets. Current: 1.4.0.",
-      "pattern": "^1\\.(0|1|2|3|4)\\.\\d+$",
+      "description": "Contract version the document targets. Current: 1.5.0.",
+      "pattern": "^1\\.(0|1|2|3|4|5)\\.\\d+$",
       "type": "string"
     },
     "triage": {
@@ -2029,5 +2098,5 @@
   ],
   "title": "Rocky Reviews analysis document",
   "type": "object",
-  "version": "1.4.0"
+  "version": "1.5.0"
 }

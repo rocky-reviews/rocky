@@ -44,11 +44,11 @@ PR) is marked "AI couldn't analyse this" instead of showing anything the model s
 
 | Section         | Written by          | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | **Rocky**           | The lowest minor whose contract the document uses (`requiredSchemaVersion`): `"1.4.0"` when `briefing.tldr` is present, else `"1.3.0"` when `flowsUnavailable` or `walkthroughUnavailable` is present, else `"1.2.0"` when `graphUnavailable.reason` is `no-logic`, else `"1.1.0"`. Patch and minor versions add optional fields or widen an enum; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                                                                               |
+| `schemaVersion` | **Rocky**           | The lowest minor whose contract the document uses (`requiredSchemaVersion`): `"1.5.0"` when a finding carries `restored`, else `"1.4.0"` when `briefing.tldr` is present, else `"1.3.0"` when `flowsUnavailable` or `walkthroughUnavailable` is present, else `"1.2.0"` when `graphUnavailable.reason` is `no-logic`, else `"1.1.0"`. Patch and minor versions add optional fields or widen an enum; a reader accepts its own and older minors of its major; a major may remove fields.                                                                                             |
 | `provenance`    | **Rocky, from git** | Repo owner/name, PR number, base and head SHAs (full), the list of changed files with additions, deletions and hunk ranges, the files the pipeline could not analyse (with a reason), why the change map is missing (when it is), timestamp, which model did what.                                                                                                                                                                                                                                                                                                                  |
 | `briefing`      | model               | TL;DR (2–4 one-sentence bullets; schema 1.4) or, in older documents and Rocky's fallback briefing, a summary paragraph; risk verdict (level + reason), estimated review minutes for the PR, suggested review path (files + why), "checked, looks fine" list, memory used.                                                                                                                                                                                                                                                                                                           |
 | `triage`        | model               | Per changed file: score 0–100, level, estimated review minutes, reason, what changed, why this level, flags under specific lines (`look` / `question` / `ok`). Noise files + summary.                                                                                                                                                                                                                                                                                                                                                                                               |
-| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt.                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `findings`      | model               | Draft comments: severity, confidence, file + line range, title, markdown body, optional suggested replacement lines, memory references, agent prompt; `restored` (schema 1.5) is **Rocky's**: the dismissal a model applied on a file where no suppression stands, so the draft is shown for a double-check.                                                                                                                                                                                                                                                                        |
 | `graph`         | model (optional)    | The change map: lanes, nodes, edges, flows with message sequences and payload samples, drill-down views, a 2–12 step walkthrough. Rocky's pipeline asks for lanes, nodes and edges in one call (H4-5), then the flows (without payloads) and the walkthrough (steps focused on nodes and edges) in two more (H4-7); views stay empty. Absent when the graph role failed or there was nothing to map; `provenance.graphUnavailable` then says why; a failed flows or walkthrough call leaves that section out and `provenance.flowsUnavailable` / `walkthroughUnavailable` says why. |
 
 The `provenance` section is the **known facts**. `applyKnownFields(modelOutput, facts)` writes
@@ -261,7 +261,7 @@ count or a hunk range. Every other section is then checked against those facts.
 | `SUGGESTION_RANGE_OUTSIDE_FILE`                    | With content available, the range exists in the file.                                                                                                                                                                                                                                           |
 | `SUGGESTION_NOOP`                                  | With content available, the replacement differs from the original lines.                                                                                                                                                                                                                        |
 | `LIMIT_EXCEEDED`                                   | The view tree holds at most 64 views and nests at most 4 deep; at most 2 000 flags; the JSON text is at most 4 MiB (totals the shape cannot bound).                                                                                                                                             |
-| `UNSUPPORTED_SCHEMA_VERSION`                       | Only `1.0.x` to `1.4.x` is read (the version policy above).                                                                                                                                                                                                                                     |
+| `UNSUPPORTED_SCHEMA_VERSION`                       | Only `1.0.x` to `1.5.x` is read (the version policy above).                                                                                                                                                                                                                                     |
 | `INVALID_JSON`                                     | `parseAnalysisDocumentJson` was given text that is not JSON.                                                                                                                                                                                                                                    |
 | `TOO_DEEP` / `SHARED_REFERENCE` / `INTERNAL_ERROR` | The parser never throws; input nested over 64 levels is `TOO_DEEP`; any object reached twice (a cycle or a shared subtree, i.e. not `JSON.parse` output) is `SHARED_REFERENCE`, both with the path and found in one linear pass; an unexpected error is `INTERNAL_ERROR` without echoing input. |
 
@@ -350,6 +350,23 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 - **`BriefingFields`** is exported: the briefing without its summary-or-TL;DR rule, for a
   producer that projects it (Zod refuses `.pick()` on a refined object).
 
+## Schema 1.5 (P8-2 fix round 3, ADR 0037 §4)
+
+- **Version policy:** the reader accepts `1.0.x` to `1.5.x` (`^1\.(0|1|2|3|4|5)\.\d+$`); a
+  newer minor is still refused. A document is stamped `1.5.0` only when one of its findings
+  carries `restored`, so a 1.4 reader keeps reading every other document. **Deploy the readers
+  (server and web) before the worker** that writes 1.5 documents.
+- **`findings[].restored`** (`RestoredDismissal`, optional, written by the pipeline only): a
+  project-memory dismissal covered the finding (the model put it in `suppressed`), but the file
+  is one where no suppression stands (triaged critical, or a rule floor), so Rocky raised it as a
+  draft anyway and says so. `entry` is the dismissal as a `MemoryRef` (id, text, source, from the
+  stored entry), `path` the repository path the team took the dismissal on, `dismissedAs` its
+  reason (`not_an_issue`, `intentional`, `not_worth_it`, `handled_elsewhere`) and `shownBecause`
+  why the finding is shown (`critical_file`, `rule_floor`). It is not a memory reference: the
+  entry argued against the finding, so it appears neither in the finding's `memory` nor in
+  `briefing.memoryApplied`. The review answer's own schema (`ReviewFinding`) has no such field: a
+  model answer that carries it is invalid output. The fixture's F3 carries one.
+
 ## How this is tested
 
 - 300+ unit tests, one per rule, each asserting the code **and** the JSON path; both review
@@ -379,7 +396,8 @@ registry to point at. Ids are compared case-insensitively because anchors often 
 The open questions from the first draft, with the decision taken at the H2 gate and why. The
 schema version stayed `1.0.0` at H2: no producer had consumed the contract yet, and H2 was the
 gate that fixed it. P4-4 moved it to `1.1.0` (above); H4-5 added `1.2.0` (the `no-logic`
-reason), H4-7 `1.3.0` (the two map-section reasons) and H4-8 `1.4.0` (the briefing's TL;DR),
+reason), H4-7 `1.3.0` (the two map-section reasons), H4-8 `1.4.0` (the briefing's TL;DR) and
+P8-2 `1.5.0` (`findings[].restored`),
 each stamped only on documents that use it so a 1.1 reader keeps reading every other one.
 
 NFD handling (above) was never a question: the facts keep git's spelling, collisions under NFC

@@ -19,11 +19,22 @@ export const PR847_SUMMARY =
   "Adds **email invitations to orgs**. An admin creates an invite, a background job emails a 7-day link, and the invitee accepts it to join the org with the invited role.";
 
 /**
- * pr-847 as a document written before 1.4: the summary paragraph instead of the TL;DR, so it
- * needs nothing newer than 1.1. For tests about the other version stamps.
+ * pr-847 as a 1.4 document: without the restored finding that schema 1.5 (P8-2) added to F3,
+ * which the 1.5 stamp follows (`v1-5.test.ts`).
+ */
+export const pr847v14 = (): AnalysisDocumentInput => {
+  const doc = pr847();
+  for (const finding of doc.findings) delete finding.restored;
+  doc.schemaVersion = "1.4.0";
+  return doc;
+};
+
+/**
+ * pr-847 as a document written before 1.4: the summary paragraph instead of the TL;DR (and no
+ * 1.5 field), so it needs nothing newer than 1.1. For tests about the other version stamps.
  */
 export const pr847WithSummary = (): AnalysisDocumentInput => {
-  const doc = pr847();
+  const doc = pr847v14();
   delete doc.briefing.tldr;
   doc.briefing.summary = PR847_SUMMARY;
   doc.schemaVersion = "1.1.0";

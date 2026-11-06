@@ -198,6 +198,12 @@ export {
   type CreateMemoryEntryResult,
   type SupersedeMemoryEntryResult,
 } from "./memory.js";
+export {
+  learnFromReviewSubmission,
+  loadAnalysisMemory,
+  MemoryLearningError,
+  type LearnFromReviewResult,
+} from "./memory-learning.js";
 export { listInboxRows, loadInboxRows, memberLogin, type InboxRow } from "./review-inbox.js";
 export {
   loadPullRequestDiffTarget,

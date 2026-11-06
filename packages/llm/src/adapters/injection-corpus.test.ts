@@ -1,4 +1,11 @@
-import { rockyInstructions, systemPrompt, type ProviderCompletionCall } from "@rocky-reviews/core";
+import {
+  MEMORY_CANARY_MARKER,
+  memoryPart,
+  rockyInstructions,
+  selectMemory,
+  systemPrompt,
+  type ProviderCompletionCall,
+} from "@rocky-reviews/core";
 import { INJECTION_CORPUS } from "@rocky-reviews/evals";
 import { describe, expect, it } from "vitest";
 import { envSecrets } from "../registry.js";
@@ -75,5 +82,75 @@ describe.each(INJECTION_CORPUS)("corpus case $id on the wire", (c) => {
     expect(messages[0]!.content).not.toContain(c.trigger);
     expect(messages[1]!.content).not.toMatch(CHAT_TOKEN);
     checkParts(messages[1]!.content, c.payload);
+  });
+});
+
+/**
+ * P8-2: project memory is a stored, untrusted channel back into the review prompt. Every corpus
+ * payload, planted as an entry's text and path (skipping the pipeline's own re-check, which
+ * would drop many of them), goes through both request builders as the memory part: it stays in
+ * one delimited user part, never in the system text, and its chat-template tokens are broken.
+ */
+const memoryCall = (payload: string): ProviderCompletionCall<Verdict> => ({
+  ...call("Retry helper"),
+  untrusted: [
+    { label: "file_path", text: "src/jobs/retry.ts" },
+    { label: "diff", text: "+const RETRIES = 3;" },
+    memoryPart(
+      selectMemory(
+        [
+          {
+            id: "00000000-0000-4000-8000-000000000001",
+            kind: "convention",
+            origin: "learned",
+            reason: null,
+            severity: null,
+            text: payload,
+            path: "src/jobs/retry.ts",
+            source: "convention · PR #1",
+            confidence: 60,
+          },
+        ],
+        "src/jobs/retry.ts",
+      ),
+    ),
+  ],
+});
+
+describe.each(INJECTION_CORPUS)("corpus case $id as a memory entry on the wire", (c) => {
+  it("Anthropic: the entry stays in the delimited memory part, never in the system text", async () => {
+    const fake = fakeFetch(sse("end-turn.sse"));
+    const provider = providerAdapters({ fetch: fake.fetch })["anthropic"]!(
+      { kind: "anthropic", apiKeyEnv: "ROCKY_TEST_ANTHROPIC_KEY" },
+      envSecrets({ ROCKY_TEST_ANTHROPIC_KEY: TEST_KEY }),
+    );
+    await provider.completeStructured!(memoryCall(c.payload));
+    const body = fake.requests[0]!.body;
+    const system = body["system"] as { text: string }[];
+    expect(system.map((block) => block.text)).toEqual([SYSTEM]);
+    const messages = body["messages"] as { role: string; content: { text: string }[] }[];
+    const parts = messages[0]!.content.map((block) => block.text);
+    const memory = parts.find((part) => part.includes('label="memory"'));
+    expect(memory).toBeDefined();
+    expect(memory).toContain(MEMORY_CANARY_MARKER);
+    const id = /<pr_content id="([0-9a-f]{24})" label="memory">/.exec(memory!)?.[1];
+    expect(id).toBeDefined();
+    expect(memory!.endsWith(`</pr_content id="${id!}">`)).toBe(true);
+    expect(memory!.split(`</pr_content id="${id!}">`)).toHaveLength(2);
+    for (const part of parts.filter((p) => p !== memory)) expect(part).not.toContain(c.trigger);
+  });
+
+  it("OpenAI-compatible: the entry's chat-template tokens are broken, and the system text is core's", async () => {
+    const fake = fakeFetch(json("openai-compatible/chat-stop.json"));
+    const provider = providerAdapters({ fetch: fake.fetch })["openai-compatible"]!(
+      { kind: "openai-compatible", baseUrl: "http://ollama:11434/v1/" },
+      envSecrets({}),
+    );
+    await provider.completeStructured!(memoryCall(c.payload));
+    const messages = fake.requests[0]!.body["messages"] as { role: string; content: string }[];
+    expect(messages.map((m) => m.role)).toEqual(["system", "user"]);
+    expect(messages[0]!.content.startsWith(`${SYSTEM}\n\nOutput JSON schema:`)).toBe(true);
+    expect(messages[0]!.content).not.toContain(c.trigger);
+    expect(messages[1]!.content).not.toMatch(CHAT_TOKEN);
   });
 });

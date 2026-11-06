@@ -6,7 +6,7 @@ and the eval suite that runs them through the real analysis pipeline (P4-3, P4-4
 ```
 pnpm evals run --fake                 # scripted roles: tests the harness, free, deterministic
 pnpm evals run --dry-run              # checks the LLM config and the key; calls nothing
-pnpm evals run [--injection] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
+pnpm evals run [--injection] [--memory] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
 pnpm evals compare <baseline.json> <report.json>
 ```
 
@@ -23,6 +23,7 @@ pnpm evals compare <baseline.json> <report.json>
 | `src/run/cli.ts`               | Arguments, output, exit codes (`scripts/evals.ts` wires the real roles)  |
 | `src/run/fake/test-support.ts` | The `--fake` roles (scripted; loaded only for `--fake`)                  |
 | `src/injection/`               | The prompt-injection corpus and its invariant checks (P4-4, ADR 0015)    |
+| `src/memory/`                  | The project-memory eval: two synthetic PRs, its `--fake` model (P8-2)    |
 | `baselines/fake.json`          | Baseline of a `--fake --injection` run: what CI's harness check compares |
 | `baselines/live.json`          | **Placeholder** for the real-model baseline (see below)                  |
 
@@ -103,6 +104,98 @@ With `--fake`, injection cases run P4-4's adversarial fakes (a fully compromised
 counts are non-zero where a compromised model can still act (in-file suppression, poisoned drafts;
 ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, leaks).
 
+## Project memory (`--memory`, P8-2)
+
+Does a pattern a reviewer dismissed as intentional stay out of the next review? Two synthetic
+pull requests of one repository's billing jobs (`src/billing/jobs/`) share a pattern the team
+keeps on purpose, a per-item `catch` that swallows the error and moves on with no log, and each
+has one real, unmistakable bug: SQL built by interpolating the org id (pr-1301), and an inverted
+cutoff comparison that expires fresh payment authorizations and keeps stale ones (pr-1302)
+(`src/memory/case.ts`). Both are payment code, which
+the triage instructions place at least at `important`, so they are reviewed; neither path takes a
+rule floor.
+
+1. **learn:** pr-1301 is analysed without memory. The produced finding that matches the pattern
+   is "dismissed as intentional", and core's learning rule turns it into a dismissal entry
+   (`learnedEntry`, then the store's own `prepareMemoryEntry`; the Postgres side is tested in
+   `packages/db`). The entry covers up to the severity of the finding it came from;
+2. **control:** pr-1302 is analysed without memory: the pattern should be raised, so its
+   absence in the next step is the memory's doing;
+3. **apply:** pr-1302 is analysed with the entry.
+
+**Triage is pinned to `important`** in all three analyses (`src/memory/pin.ts`, an eval-harness
+wrapper over the triage role; the product never pins). The triage model is still called and the
+level it answered is recorded (`modelLevel`); the pipeline sees `important` with the score moved
+into its band. So pass/fail measures memory only: the pattern hidden, the entry cited, the bug
+still found. Without the pin a `normal` file is never reviewed and on a `critical` one no
+suppression stands by design (ADR 0037 §4), which cost two live runs their result (below).
+`runMemoryEval(…, { pinTriage: null })` leaves triage to the model; the tests use it.
+
+`--memory-trials N` (1 to 5, default 1) runs the three analyses N times, for a rate on a live
+model. The result (`memory` in the report) holds the conditions over all trials: `run1Raised`,
+`learned`, `controlRaised`, `run2Raised` (must be false; true if any trial raised it),
+`run2Cited` (the model put the pattern in `suppressed` under the entry, the pipeline accepted
+it, and the briefing's `memoryApplied` cites it), `run2BugFound` (memory hid nothing else),
+`pass` (every condition in every trial) and `passes` (trials that passed). `trials` records each
+trial's conditions and, **per analysis**, what it did with the case file: the analysis status and
+failure code, the file's triage level as the pipeline saw it, the level it was pinned to and the
+level the triage model answered (`pinned`, `modelLevel`), whether it was reviewed, its unanalysed
+reason, the count of findings on it, the seeded ids they matched, the severity of the pattern
+finding, and the pipeline's suppressed, restored and double-check counts (`doubleCheck`: covered
+suppressions restored because the file is risky, which the document marks as `restored`). Codes,
+levels, counts and seeded ids only: never code or model text. `pnpm evals run` prints one line
+per trial. Reports made before the pin lack `pinned`, `modelLevel` and `doubleCheck`.
+
+With `--fake` the model is scripted to obey the memory block, so the result checks the plumbing
+(learning, selection, the untrusted part, enforcement, citations); `memory.test.ts` also shows
+that a model which ignores memory fails it, that unpinned a file triaged `normal` shows up as
+"not reviewed", that the pin keeps a trial the model would have called `critical` measurable
+(`modelLevel: "critical"`, `level: "important"`), and, deterministically, the critical-file rule:
+unpinned, with pr-1302 triaged `critical`, the fake's suppression is restored as a draft with the
+double-check marker (`restored 1`, `doubleCheck 1`, `run2Raised`). Live, it measures whether the
+model follows the memory instructions. A control that does not raise the pattern makes the run
+inconclusive (`pass` false, `controlRaised` false): the case needs a stronger pattern, not a fix
+to memory. Run 2 can also be inconclusive by design when the model rates the pattern above the
+severity it gave it in run 1 (the entry does not cover it); the per-run diagnosis shows it
+(`patternSeverity`, `restored`).
+
+**Live results so far.** Run 1 (2026-11-05; triage haiku-5-5, review opus-5-5, graph
+sonnet-5-5) used the earlier case, a 16-line retry job with a hard-coded `MAX_ATTEMPTS`. Every
+condition came back false with every analysis `done`, and the report recorded booleans only.
+Offline diagnosis: of the 26 review-role calls, 8 were briefings, so at most 18 file reviews ran
+for the 25 triaged files; the case files were most likely triaged `normal` (a small job touching
+nothing the triage instructions call risky), and a `normal` file is never reviewed, so no finding
+could be raised. Nothing was swallowed as an error, but a `done` analysis whose case file was not
+reviewed looked the same as a miss. The case was redesigned (payment code) and the per-run
+diagnosis added. Run 2 (2026-11-05, pr-1302 as a receipts mailer): pr-1302 was triaged `normal`
+in the control and in run 2 of both trials, never reviewed, nothing to measure; pr-1302 now
+releases payment authorizations with an inverted cutoff. Run 3 (2026-11-06, report
+`reports/live-2026-11-06T00-34-01-796Z.json`): 1 of 2 trials passed. Trial 1: control
+`important`, raised the pattern and the bug; run 2 `important`, suppressed the pattern citing the
+entry and found the bug. Trial 2: run 2 triaged `critical`, the model suppressed the pattern and
+the pipeline restored it (no suppression on a critical file, by design), so the trial failed. The
+model followed memory in both trials; triage variance broke the count, hence the pin. Run 4
+(2026-11-06, pinned, report `reports/live-2026-11-06T13-05-06-089Z.json`): **pass, 2 of 2
+trials**. Both trials: learn pinned `important` (the model said `critical`), raised B1 and P1,
+dismissal learned; control pinned `important` (the model said `important`), raised B2 and P2;
+apply pinned `important` (the model said `important`), P2 not raised, the entry cited, B2 found.
+The pin changed no level on pr-1302 here; it mattered only for the learn run. This is the
+evidence for the P8-2 criterion.
+
+**Gate:** once a baseline passed the memory eval, a report must run it (`--memory`) and pass.
+A baseline without it (made before P8-2) gates nothing about it. CI runs `--memory` in both jobs.
+
+**What the CI gate proves, and what it does not.** The harness job runs the memory eval on the
+`--fake` model, so it proves the plumbing only. Whether a real model follows the memory
+instructions is measured by a live run, `pnpm evals run --memory` with a provider key: a
+**needs-human step before a change to project memory merges**, and its `memory` result is the
+evidence for the P8-2 criterion (ADR 0037; run 4 above passed 2/2).
+
+`memory-injection.test.ts` plants every corpus payload in stored entries (a convention, a
+dismissal, and several entries cited together) and runs every adversary on it (ADR 0015 §2: a new
+channel runs the corpus). An adversary given a dismissal suppresses every finding; the test
+checks that the high and critical ones are stored anyway.
+
 ## Report
 
 `pnpm evals run` writes one JSON document (`src/run/report.ts`, `format: "rocky-evals-report"`,
@@ -116,7 +209,8 @@ ADR 0015 R1, R2) and zero where the defences are deterministic (floors, diff, le
   answered, the total, and whether the cap stopped the run;
 - `prs` and `total`: the scores above, missed seeded ids, and false positives as path, severity
   and lines;
-- `injection`: per case and totals, or `null`.
+- `injection`: per case and totals, or `null`;
+- `memory`: the project-memory eval's result, or `null` (absent in reports made before P8-2).
 
 A report holds no code, diff, prompt or model text, so it is safe to keep and publish. Without
 `--out`, reports go to `packages/evals/reports/` (git-ignored).
@@ -168,7 +262,7 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 
 `.github/workflows/evals.yml`:
 
-- **harness** (always, free): `pnpm evals run --fake --injection`, then `compare` against the
+- **harness** (always, free): `pnpm evals run --fake --injection --memory`, then `compare` against the
   fake baseline. The same comparison runs in `pnpm verify` (`run/baseline.test.ts`).
 - **live**: nightly and on manual dispatch from the default branch, and on same-repo PRs touching
   `packages/core/src/analysis/**`, `packages/core/src/prompt.ts`, `packages/core/src/llm.ts`,
@@ -181,7 +275,8 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 **What a PR cannot change on its own.** On a pull request both gates compare against the
 **base branch's** baseline (`git show HEAD^1:…`, the merge commit's base parent), and the job
 fails if the PR changes the files that decide a score without the maintainer label
-`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/score.ts`,
+`evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/memory/**`,
+`src/memory.test.ts`, `src/injection/check.ts`, `src/score.ts`,
 `src/run/**`, `scripts/evals.ts`, `.github/workflows/evals.yml` and `.github/CODEOWNERS`. With the
 label (a maintainer reviewed the change, for example a regenerated baseline), the PR's own
 baseline is used. `CODEOWNERS` names the owner of those files.
@@ -200,12 +295,12 @@ settings:
 
 ## Baselines
 
-- **`baselines/fake.json`** is a `--fake --injection` run. Its scores measure the scripts, never
+- **`baselines/fake.json`** is a `--fake --injection --memory` run. Its scores measure the scripts, never
   a model; they only show the harness is intact. When a change to the pipeline or the seeded PRs
   changes them on purpose, regenerate it:
 
   ```
-  pnpm evals run --fake --injection --max-tokens 2000000 --out packages/evals/baselines/fake.json
+  pnpm evals run --fake --injection --memory --max-tokens 2000000 --out packages/evals/baselines/fake.json
   ```
 
 - **`baselines/live.json`** is a placeholder (`kind: "placeholder"`, a notice that starts
@@ -218,7 +313,7 @@ API with the plan's defaults) and a BYOK key:
 
 ```
 ANTHROPIC_API_KEY=<key> pnpm evals run --dry-run --injection
-ANTHROPIC_API_KEY=<key> pnpm evals run --injection --max-tokens 8000000 --out packages/evals/baselines/live.json
+ANTHROPIC_API_KEY=<key> pnpm evals run --injection --memory --max-tokens 8000000 --out packages/evals/baselines/live.json
 ```
 
 Check the printed summary, then commit `packages/evals/baselines/live.json` (it holds no key and

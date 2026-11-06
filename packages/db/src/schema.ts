@@ -250,6 +250,10 @@ export const memoryEntries = pgTable("memory_entries", {
   confidence: integer("confidence").notNull(),
   /** The dismissal reason code, exactly for `dismissal` entries. */
   reason: text("reason"),
+  /** For a learned dismissal: the dismissed finding's severity, the highest it covers (0018). */
+  severity: text("severity", { enum: ["critical", "high", "medium", "low"] }),
+  /** The reviewer's role when the entry was learned (0018); null for member-written entries. */
+  learnerRole: text("learner_role", { enum: ["owner", "admin", "member"] }),
   createdBy: uuid("created_by"),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   supersededBy: uuid("superseded_by"),

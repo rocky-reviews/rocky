@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { BASE_SCHEMA_VERSION, limits, SCHEMA_VERSION } from "@rocky-reviews/schema";
+import { BASE_SCHEMA_VERSION, limits, TLDR_SCHEMA_VERSION } from "@rocky-reviews/schema";
 import { describe, expect, it } from "vitest";
 import { LlmCallError, type LlmCompletionRole } from "../llm.js";
 import {
@@ -1252,7 +1252,7 @@ describe("H4-8 the briefing is a short TL;DR", () => {
     expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
     expect(document.briefing.summary).toBeUndefined();
     expect(document.provenance.briefingUnavailable).toBeUndefined();
-    expect(document.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
   });
 
   it.each([
@@ -1645,7 +1645,7 @@ describe("H4-5 the change map shows logic only", () => {
     // The AI briefing's TL;DR is a 1.4 field (H4-8), so every AI-briefed document is 1.4.0.
     const drawn = done((await analyze(script(), { diff: mixed.join("\n") })).outcome);
     expect(drawn.document.briefing.tldr).toEqual(BRIEFING.tldr);
-    expect(drawn.document.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(drawn.document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
     // Rocky's fallback briefing has the summary paragraph only: the map decides the stamp.
     const fallback = (call: ScriptedCall): ScriptedAnswer | undefined =>
       briefingCall(call) ? { status: "refused" } : undefined;
@@ -1976,7 +1976,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
     expect(document.graph?.views).toEqual([]);
     expect(document.provenance.flowsUnavailable).toBeUndefined();
     expect(document.provenance.walkthroughUnavailable).toBeUndefined();
-    expect(document.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
     expect(stats).toMatchObject({
       graph: "drawn",
       flows: "drawn",
@@ -2064,7 +2064,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       expect(document.triage.files).toHaveLength(4);
       expect(document.briefing.tldr).toEqual(BRIEFING.tldr);
       // The AI briefing's TL;DR makes the document 1.4 (H4-8); the 1.3 stamp alone is v1-3.test.ts.
-      expect(document.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
       expect(stats.flows).toBe(reason);
       expect(stats.walkthrough).toBe("drawn");
       // A call that throws never reaches the observer (nor metering's result), as for the graph.
@@ -2091,7 +2091,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
       expect(document.provenance.walkthroughUnavailable).toEqual({ reason });
       expect(document.graph?.flows).toHaveLength(1);
       expect(document.provenance.flowsUnavailable).toBeUndefined();
-      expect(document.schemaVersion).toBe(SCHEMA_VERSION);
+      expect(document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
       expect(stats.walkthrough).toBe(reason);
       expect(stats.flows).toBe("drawn");
     },
@@ -2273,7 +2273,7 @@ describe("H4-7 the map's flows and walkthrough are their own calls", () => {
     });
     expect(done(docsOnly.outcome).document.provenance.flowsUnavailable).toBeUndefined();
     // The TL;DR makes it 1.4 (H4-8); the no-logic stamp on its own is checked in S7 above.
-    expect(done(docsOnly.outcome).document.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(done(docsOnly.outcome).document.schemaVersion).toBe(TLDR_SCHEMA_VERSION);
 
     const lines = Array.from({ length: 1_500 }, (_, i) => `const line${i} = "${"x".repeat(100)}";`);
     const tooLarge = await analyze(mapped(), {
