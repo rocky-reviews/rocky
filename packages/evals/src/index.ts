@@ -66,4 +66,8 @@ export {
   type ParseOptions,
   type ReportModels,
 } from "./run/report.js";
-export { runEvals, type EvalSubject, type RunOptions } from "./run/runner.js";
+export { runEvals, type AskEmbedding, type EvalSubject, type RunOptions } from "./run/runner.js";
+export { ASK_QUESTIONS, type AskQuestion, type AskTarget } from "./ask/questions.js";
+export { ASK_REPO, ASK_REPO_PROVENANCE } from "./ask/repo.js";
+export { ASK_MIN_VALID_RATE, scoreAsk, scoreQuestion, type AskScore } from "./ask/score.js";
+export { runAskEval, type AskEvalOptions, type AskEvalResult } from "./ask/run.js";

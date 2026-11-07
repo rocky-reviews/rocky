@@ -6,26 +6,27 @@ and the eval suite that runs them through the real analysis pipeline (P4-3, P4-4
 ```
 pnpm evals run --fake                 # scripted roles: tests the harness, free, deterministic
 pnpm evals run --dry-run              # checks the LLM config and the key; calls nothing
-pnpm evals run [--injection] [--memory] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
+pnpm evals run [--injection] [--memory] [--ask] [--max-tokens N] [--only pr-847,pr-912] [--out report.json]
 pnpm evals compare <baseline.json> <report.json>
 ```
 
 ## Layout
 
-| Path                           | What                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------ |
-| `src/seeded/`                  | The seeded PRs: diffs, expected findings, provenance, `--fake` answers   |
-| `src/score.ts`                 | Matching rules and scores (`scoreFindings`)                              |
-| `src/run/runner.ts`            | Runs every seeded PR (and the injection corpus) through the pipeline     |
-| `src/run/meter.ts`             | Tokens per role, the `--max-tokens` cap, retries of retryable failures   |
-| `src/run/report.ts`            | The versioned report format, validated on read                           |
-| `src/run/compare.ts`           | The gate                                                                 |
-| `src/run/cli.ts`               | Arguments, output, exit codes (`scripts/evals.ts` wires the real roles)  |
-| `src/run/fake/test-support.ts` | The `--fake` roles (scripted; loaded only for `--fake`)                  |
-| `src/injection/`               | The prompt-injection corpus and its invariant checks (P4-4, ADR 0015)    |
-| `src/memory/`                  | The project-memory eval: two synthetic PRs, its `--fake` model (P8-2)    |
-| `baselines/fake.json`          | Baseline of a `--fake --injection` run: what CI's harness check compares |
-| `baselines/live.json`          | **Placeholder** for the real-model baseline (see below)                  |
+| Path                           | What                                                                    |
+| ------------------------------ | ----------------------------------------------------------------------- |
+| `src/seeded/`                  | The seeded PRs: diffs, expected findings, provenance, `--fake` answers  |
+| `src/score.ts`                 | Matching rules and scores (`scoreFindings`)                             |
+| `src/run/runner.ts`            | Runs every seeded PR (and the injection corpus) through the pipeline    |
+| `src/run/meter.ts`             | Tokens per role, the `--max-tokens` cap, retries of retryable failures  |
+| `src/run/report.ts`            | The versioned report format, validated on read                          |
+| `src/run/compare.ts`           | The gate                                                                |
+| `src/run/cli.ts`               | Arguments, output, exit codes (`scripts/evals.ts` wires the real roles) |
+| `src/run/fake/test-support.ts` | The `--fake` roles (scripted; loaded only for `--fake`)                 |
+| `src/injection/`               | The prompt-injection corpus and its invariant checks (P4-4, ADR 0015)   |
+| `src/memory/`                  | The project-memory eval: two synthetic PRs, its `--fake` model (P8-2)   |
+| `src/ask/`                     | The Ask eval: a synthetic repository, questions, scorer, fake (P9-2)    |
+| `baselines/fake.json`          | Baseline of a `--fake` run with every eval: what CI's harness compares  |
+| `baselines/live.json`          | **Placeholder** for the real-model baseline (see below)                 |
 
 ## Seeded PRs
 
@@ -201,6 +202,53 @@ dismissal, and several entries cited together) and runs every adversary on it (A
 channel runs the corpus). An adversary given a dismissal suppresses every finding; the test
 checks that the high and critical ones are stored anyway.
 
+## Ask (`--ask`, P9-2)
+
+Does Ask answer with citations that point at code the model was actually shown? (P9-2's
+criterion: eval questions answered with valid citations ≥ 90%.)
+
+- **Repository** (`src/ask/repo.ts`): seven small TypeScript files (sessions, passwords,
+  billing, a payment webhook, a retry helper, tenancy, routes). Synthetic, written for Rocky.
+  It is indexed as production indexes: tree-sitter chunks from `@rocky-reviews/indexer`, each
+  embedded as `path + chunk` with the embed role (19 chunks).
+- **Questions** (`src/ask/questions.ts`): 12, one with a code selection (as `/` sends it), each
+  with the line ranges that answer it.
+- **Run** (`src/ask/run.ts`): every question through core's `answerQuestion`, the production
+  flow, with in-memory ports: cosine search over the chunks' vectors and a reader that returns
+  the hit's lines. The `ask` role answers through the meter, so the token cap applies.
+- **Scorer** (`src/ask/score.ts`): a question counts when the model answered, at least one
+  citation points into an excerpt it was shown, and **none** points anywhere else (core's
+  `checkCitations` decides; production drops an invalid citation, the eval also fails the
+  question for it). No good answer, a refusal, a call error or the cap counts against.
+  Reported beside it: citation-level validity and target hits (a valid citation overlapping
+  the answering lines), which measure retrieval and the model, not the guard.
+
+**Gate:** a report that ran `--ask` must reach `ASK_MIN_VALID_RATE` = 90% of questions; once a
+baseline passed it, a report must run it. The report holds ids, codes and counts only.
+
+**`--fake`** uses `src/ask/fake.ts`: a bag-of-words embedder (identifiers split at their humps)
+and a model that answers from the excerpt sharing most words with the question and cites the
+range it was shown. It proves the plumbing and the guard (12 of 12; target hits 7 of 12 measure
+the fake's crude retrieval), never a model. `ask.test.ts` also runs a model that cites outside
+what it was shown (every question fails) and one that adds a bad citation to good ones (fails).
+
+**Live: a maintainer step** (CI's live job does not run it: it needs an embedding provider and
+its key). With the same `ROCKY_LLM_*` variables the server reads, including the embed role:
+
+```
+ROCKY_LLM_EMBED_PROVIDER=openai ROCKY_LLM_EMBED_MODEL=text-embedding-3-small \
+ROCKY_LLM_EMBED_DIMENSIONS=1024 OPENAI_API_KEY=<key> ANTHROPIC_API_KEY=<key> \
+  pnpm evals run --ask --only pr-912 --dry-run
+# then the same without --dry-run, with --out
+```
+
+`--only pr-912` keeps the seeded part to one small PR; the Ask part always runs every question.
+**Token estimate** for the Ask part: about 12 calls of ~1,500 input tokens (instructions, the
+question and up to 8 excerpts of this small repository) and up to ~500 output tokens, so roughly
+18,000 input and 6,000 output tokens on the `ask` role, plus ~2,000 embedding tokens (the index
+and 12 queries). The `--fake` run's own estimate is 12,301 input tokens. Check `ask:` in the
+summary: `pass`, and the rate against the floor, are the evidence for the P9-2 criterion.
+
 ## Report
 
 `pnpm evals run` writes one JSON document (`src/run/report.ts`, `format: "rocky-evals-report"`,
@@ -267,10 +315,11 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 
 `.github/workflows/evals.yml`:
 
-- **harness** (always, free): `pnpm evals run --fake --injection --memory`, then `compare` against the
+- **harness** (always, free): `pnpm evals run --fake --injection --memory --ask`, then `compare` against the
   fake baseline. The same comparison runs in `pnpm verify` (`run/baseline.test.ts`).
 - **live**: nightly and on manual dispatch from the default branch, and on same-repo PRs touching
   `packages/core/src/analysis/**`, `packages/core/src/prompt.ts`, `packages/core/src/llm.ts`,
+  `packages/core/src/ask.ts`, `packages/indexer/src/**`,
   `packages/llm/**`, `packages/schema/src/**`, `packages/evals/**`, `scripts/evals.ts`,
   `.env.example`, the workflow or `CODEOWNERS`. Fork PRs never reach it. Nightly adds
   `--injection`. Caps come from the repository variables `ROCKY_EVALS_MAX_TOKENS` (PRs, default
@@ -281,7 +330,7 @@ and not gated. A placeholder baseline cannot gate anything: `compare` exits 3.
 **base branch's** baseline (`git show HEAD^1:…`, the merge commit's base parent), and the job
 fails if the PR changes the files that decide a score without the maintainer label
 `evals-baseline-change`: `packages/evals/baselines/**`, `src/seeded/**`, `src/memory/**`,
-`src/memory.test.ts`, `src/injection/check.ts`, `src/score.ts`,
+`src/memory.test.ts`, `src/ask/**`, `src/ask.test.ts`, `src/injection/check.ts`, `src/score.ts`,
 `src/run/**`, `scripts/evals.ts`, `.github/workflows/evals.yml` and `.github/CODEOWNERS`. With the
 label (a maintainer reviewed the change, for example a regenerated baseline), the PR's own
 baseline is used. `CODEOWNERS` names the owner of those files.
@@ -300,12 +349,12 @@ settings:
 
 ## Baselines
 
-- **`baselines/fake.json`** is a `--fake --injection --memory` run. Its scores measure the scripts, never
+- **`baselines/fake.json`** is a `--fake --injection --memory --ask` run. Its scores measure the scripts, never
   a model; they only show the harness is intact. When a change to the pipeline or the seeded PRs
   changes them on purpose, regenerate it:
 
   ```
-  pnpm evals run --fake --injection --memory --max-tokens 2000000 --out packages/evals/baselines/fake.json
+  pnpm evals run --fake --injection --memory --ask --max-tokens 2000000 --out packages/evals/baselines/fake.json
   ```
 
 - **`baselines/live.json`** is a placeholder (`kind: "placeholder"`, a notice that starts

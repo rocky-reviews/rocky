@@ -83,7 +83,15 @@ describe("runEvals (P4-7) on the scripted roles", () => {
       options: { maxTokens: 10_000_000, injection: false, only: null },
     });
     expect(report.promptHash).toBe(PROMPT_HASH);
-    expect(Object.keys(report.models).sort()).toEqual(["graph", "review", "triage"]);
+    expect(Object.keys(report.models).sort()).toEqual([
+      "ask",
+      "embed",
+      "graph",
+      "review",
+      "triage",
+    ]);
+    expect(report.ask).toBeNull();
+    expect(report.options.ask).toBe(false);
     for (const role of ["triage", "review", "graph"] as const) {
       expect(report.usage.byRole[role]!.calls).toBeGreaterThan(0);
       expect(report.usage.byRole[role]!.inputTokens).toBeGreaterThan(0);
@@ -91,6 +99,26 @@ describe("runEvals (P4-7) on the scripted roles", () => {
     }
     expect(report.usage.capped).toBe(false);
     expect(report.injection).toBeNull();
+  });
+
+  it("--ask runs the Ask eval on the ask role, metered, and reports counts only (P9-2)", async () => {
+    const target = fakeTarget();
+    const report = await fakeRun({ only: ["pr-912"], ask: target.ask });
+    expect(parseReport(JSON.parse(JSON.stringify(report))).ok).toBe(true);
+    expect(report.options.ask).toBe(true);
+    expect(report.ask).toMatchObject({ status: "done", pass: true, invalidCitations: 0 });
+    expect(report.usage.byRole["ask"]!.calls).toBe(report.ask!.questions);
+    // No question, code or model text reaches the report.
+    const text = JSON.stringify(report.ask);
+    expect(text).not.toMatch(/timingSafeEqual|scrypt|answers this|Who calls/);
+  });
+
+  it("--ask under the token cap is marked capped", async () => {
+    const target = fakeTarget();
+    const report = await fakeRun({ only: ["pr-912"], ask: target.ask, maxTokens: 1 });
+    expect(report.usage.capped).toBe(true);
+    expect(report.ask?.status).toBe("capped");
+    expect(parseReport(JSON.parse(JSON.stringify(report))).ok).toBe(true);
   });
 
   it("--only runs the named PRs", async () => {

@@ -245,6 +245,9 @@ importers:
       '@rocky-reviews/core':
         specifier: workspace:*
         version: link:../core
+      '@rocky-reviews/indexer':
+        specifier: workspace:*
+        version: link:../indexer
       '@rocky-reviews/schema':
         specifier: workspace:*
         version: link:../schema

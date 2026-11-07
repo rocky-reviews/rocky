@@ -189,6 +189,40 @@ export const MemoryEvalReport = z.strictObject({
 });
 export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;
 
+/**
+ * The Ask eval (P9-2, `src/ask/`): questions about a synthetic repository, answered through
+ * core's `answerQuestion` over an in-memory index. Gated on `validRate` (answered with valid
+ * citations only) ≥ 90%. Ids, codes and counts only: no question, code or model text. Absent
+ * from reports made before P9-2 and from runs without `--ask`.
+ */
+export const AskEvalReport = z.strictObject({
+  status: z.enum(["done", "capped"]),
+  questions: count,
+  answered: count,
+  validlyCited: count,
+  validRate: rate,
+  validCitations: count,
+  invalidCitations: count,
+  citationValidity: rate,
+  targetHits: count,
+  chunks: count,
+  embeddingTokens: count,
+  pass: z.boolean(),
+  results: z.array(
+    z.strictObject({
+      id: z.string().regex(/^q[0-9]{2}-[a-z0-9-]{1,40}$/),
+      status: z.enum(["answer", "no_answer", "failed", "capped"]),
+      reason: Code.nullable(),
+      validCitations: count,
+      invalidCitations: count,
+      excerpts: count,
+      validlyCited: z.boolean(),
+      targetHit: z.boolean(),
+    }),
+  ),
+});
+export type AskEvalReport = z.infer<typeof AskEvalReport>;
+
 export const EvalReport = z
   .strictObject({
     format: z.literal(REPORT_FORMAT),
@@ -205,6 +239,8 @@ export const EvalReport = z
       injection: z.boolean(),
       /** `--memory` (P8-2); absent in reports made before it. */
       memory: z.boolean().optional(),
+      /** `--ask` (P9-2); absent in reports made before it. */
+      ask: z.boolean().optional(),
       only: z.array(z.string()).nullable(),
     }),
     usage: UsageReport,
@@ -214,6 +250,7 @@ export const EvalReport = z
       .strictObject({ cases: z.array(InjectionResult), total: InjectionTotals })
       .nullable(),
     memory: MemoryEvalReport.nullable().optional(),
+    ask: AskEvalReport.nullable().optional(),
   })
   .refine((report) => (report.kind === "placeholder") === (report.notice === PLACEHOLDER_NOTICE), {
     message: "a placeholder carries PLACEHOLDER_NOTICE, and only a placeholder does",
@@ -236,7 +273,8 @@ export const EvalReport = z
     const anyCapped =
       report.prs.some((pr) => pr.status === "capped") ||
       (report.injection?.cases ?? []).some((c) => c.status === "capped") ||
-      report.memory?.status === "capped";
+      report.memory?.status === "capped" ||
+      report.ask?.status === "capped";
     if (anyCapped !== report.usage.capped)
       issue(["usage", "capped"], "capped must be set exactly when a PR or case was capped");
   });

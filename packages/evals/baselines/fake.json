@@ -3,9 +3,9 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-06T15:08:33.437Z",
+  "createdAt": "2026-11-07T14:59:13.232Z",
   "pipelineVersion": "p8-2b.1",
-  "promptHash": "ad209ea4b12178ac034d52bcef8d7442b577d666cc792a5964e4c965732e1337",
+  "promptHash": "eb03d89a49dc27918112dd5a834e1121ed8c2cd7a6145970e7a101045ea82ddd",
   "models": {
     "triage": {
       "provider": "scripted",
@@ -21,12 +21,23 @@
       "provider": "scripted",
       "model": "scripted-graph",
       "effort": null
+    },
+    "ask": {
+      "provider": "scripted",
+      "model": "scripted-ask",
+      "effort": null
+    },
+    "embed": {
+      "provider": "fake",
+      "model": "lexical-256",
+      "effort": null
     }
   },
   "options": {
     "maxTokens": 2000000,
     "injection": true,
     "memory": true,
+    "ask": true,
     "only": null
   },
   "usage": {
@@ -54,9 +65,17 @@
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-graph"]
+      },
+      "ask": {
+        "calls": 12,
+        "inputTokens": 12301,
+        "outputTokens": 421,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 0,
+        "models": ["scripted-ask"]
       }
     },
-    "totalTokens": 1001853,
+    "totalTokens": 1014575,
     "capped": false
   },
   "prs": [
@@ -1525,6 +1544,142 @@
             "hiddenOnCritical": 0
           }
         }
+      }
+    ]
+  },
+  "ask": {
+    "status": "done",
+    "questions": 12,
+    "answered": 12,
+    "validlyCited": 12,
+    "validRate": 1,
+    "validCitations": 12,
+    "invalidCitations": 0,
+    "citationValidity": 1,
+    "targetHits": 7,
+    "chunks": 19,
+    "embeddingTokens": 1743,
+    "pass": true,
+    "results": [
+      {
+        "id": "q01-hash",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q02-session-ttl",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q03-webhook-signature",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": false
+      },
+      {
+        "id": "q04-retry",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q05-discount",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q06-signed-in-routes",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q07-tenancy",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": false
+      },
+      {
+        "id": "q08-revoke",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q09-selection-timing",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": true
+      },
+      {
+        "id": "q10-rounding",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": false
+      },
+      {
+        "id": "q11-replay",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": false
+      },
+      {
+        "id": "q12-callers",
+        "status": "answer",
+        "reason": null,
+        "validCitations": 1,
+        "invalidCitations": 0,
+        "excerpts": 8,
+        "validlyCited": true,
+        "targetHit": false
       }
     ]
   }
