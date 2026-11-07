@@ -87,7 +87,7 @@ compared every state side by side and checked these ticks: [`parity-audit.md`](p
 - [x] P6-4 · "To decide · by severity" list, then "Decided", item → jumps to the draft (H4-14: "To decide", the open file's drafts first under "This file", then "Other files", each by severity; one plain list on the briefing or when only one group has drafts; the "✦ draft" badge is gone and the severity shows as the card's pill, a little larger — [keys-draft-focus-1440-light](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-light.png), [drafts-panel-1440-dark](../../apps/web/e2e/__screenshots__/drafts-panel-1440-dark.png), `ReviewPanel.test.tsx` "H4-14: …", `keyboard.e2e.spec.ts` "H4-14: To decide lists this file's drafts first…") — [drafts-panel-1024-light](../../apps/web/e2e/__screenshots__/drafts-panel-1024-light.png); the jump opens the file and focuses the draft, closing the drawer below 1180 px (`drafts.e2e.spec.ts`); defect 2 (clipped badge) fixed
 - [x] P6-4 · "Rocky will remember n dismissals" note (P8-2) — [drafts-panel-end-1440-dark](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-dark.png), drawer [drafts-panel-end-375-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-375-light.png); worded "Rocky keeps the reason for n dismissals…" until P8 learns from them (Intentional differences)
 - [x] P6-4 · "Your own comments" list → jumps to the line — [drafts-panel-end-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-end-1440-light.png); own comments are now kept on the server too
-- [ ] P9-2 · Ask tab: empty-state hint, suggested questions, chat bubbles, "Reading the code…" typing state, answers with clickable `file:line` citations, Enter to send
+- [x] P9-2 · Ask tab: empty-state hint, suggested questions, chat bubbles, "Reading the code…" typing state, answers with clickable `file:line` citations, Enter to send — [ask-ready-1440-light](../../apps/web/e2e/__screenshots__/ask-ready-1440-light.png), [ask-answer-1440-light](../../apps/web/e2e/__screenshots__/ask-answer-1440-light.png), [ask-answers-1440-dark](../../apps/web/e2e/__screenshots__/ask-answers-1440-dark.png), [ask-answering-1024-light](../../apps/web/e2e/__screenshots__/ask-answering-1024-light.png), [ask-no-answer-1440-dark](../../apps/web/e2e/__screenshots__/ask-no-answer-1440-dark.png), [ask-error-375-light](../../apps/web/e2e/__screenshots__/ask-error-375-light.png), [ask-not-indexed-1024-dark](../../apps/web/e2e/__screenshots__/ask-not-indexed-1024-dark.png), [ask-indexing-375-dark](../../apps/web/e2e/__screenshots__/ask-indexing-375-dark.png); `ask.e2e.spec.ts` "Enter asks; the answer links each cited range at the indexed commit", "the Ask button and a suggestion ask too"
 - [x] P6-5 · Shortcut strip at the bottom of the Review tab — [drafts-panel-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-1440-light.png), [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png); "/ ask" joins it with Ask (P9-2), "? all shortcuts" added; says when single-key shortcuts are off; H4-14: reads "j/k previous & next file" and "u/i previous & next AI draft", a/e/d only while the focused draft is on screen ([drafts-panel-1440-light](../../apps/web/e2e/__screenshots__/drafts-panel-1440-light.png), [keys-draft-focus-1440-dark](../../apps/web/e2e/__screenshots__/keys-draft-focus-1440-dark.png))
 
 ## Finish review modal (P6-6)
@@ -116,7 +116,7 @@ All in `keyboard.e2e.spec.ts` "a full review with the keyboard only" unless note
 - [x] v toggle viewed
 - [x] H4-14 · 1–4 pick a dismiss reason while the reasons are shown (not in the POC), each reason with its key — [drafts-dismiss-1440-light](../../apps/web/e2e/__screenshots__/drafts-dismiss-1440-light.png), [drafts-dismiss-1024-dark](../../apps/web/e2e/__screenshots__/drafts-dismiss-1024-dark.png), "H4-14: 1–4 pick a dismiss reason…"
 - [x] H4-14 · ↑/↓ scroll the open file (not in the POC): with nothing focused they scroll the main column; a file picked in the sidebar with the mouse takes focus, so they scroll it natively; a focused diff line keeps moving the active line — "H4-14: ↑/↓ scroll the open file"
-- [ ] / open Ask, pre-filled with selected code — the key is bound and shows "Ask is not available yet." until Ask (P9-2) exists
+- [x] / open Ask, pre-filled with selected code (P9-2: the selection is attached as a removable chip, not pasted into the box) — [ask-selection-1440-light](../../apps/web/e2e/__screenshots__/ask-selection-1440-light.png), [ask-selection-375-dark](../../apps/web/e2e/__screenshots__/ask-selection-375-dark.png); `ask.e2e.spec.ts` "attaches the selection and focuses the box at 375/1024/1440 px", `keyboard.e2e.spec.ts`
 - [x] b back to briefing
 - [x] H4-12 · t change tree (not in the POC), listed in the dialog as "Change tree: what changed where"; typing t in a text field types it — `keymap.test.ts`, `change-tree.e2e.spec.ts` "t opens the tree…", "t types in a comment box…", [keys-help-1440-light](../../apps/web/e2e/__screenshots__/keys-help-1440-light.png)
 - [x] m toggle light/dark
@@ -279,11 +279,20 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   `--ai`; colour functions are not allowed outside the tokens) with the cyan left bar kept, and
   "Send to agent" has a cyan border. The dismissal note says Rocky keeps the reason rather than "will remember", since
   project memory (P8) does not learn yet. Drafts are hidden on a diff newer than the analysis,
-  like the AI flags. The POC's Ask tab is not drawn until P9-2. While a draft is edited, Save /
+  like the AI flags. While a draft is edited, Save /
   Cancel and the "⌘↵ / Ctrl+Enter to save · Esc to cancel" hint sit under the textarea, above the
   suggested change (POC: below it), next to the field they act on (P6-9 audit A12). Pending
   comments are signed with the reviewer's login (P6-9).
-- **Not yet in the shell:** the right panel's Ask tab comes with P9-2.
+- **Ask (P9-2, ADR 0041).** The right panel's tabs are an ARIA tablist ("Review · n", "✦ Ask"),
+  both panes stay mounted so a draft or a chat is not lost on switching. The POC's Ask answered
+  from canned text; the app shows every state the server can be in: checking the index, not
+  indexed, indexing, off, a failed check (Try again), "Reading the code…", an answer, "no good
+  answer" (with the model's note) and errors (Try again). Citations open the file at the
+  indexed commit on GitHub in a new tab (the POC's links went nowhere): the index is of the
+  default branch, so the cited lines are often not in the PR's diff. `/` attaches the selected
+  code as a chip the reviewer can remove (the POC pasted it into the box, where it ate the
+  question's 2 000 characters). The suggested questions are generic (the POC's named F1). The
+  answer bubble is `--panel-2` with the cyan left bar of AI text (POC: a plain panel).
 - **Finish review (P6-6).** The list shows each comment's Markdown source in a box (the POC
   listed titles only): what GitHub receives is what the person reads. Approve is suggested but
   not pre-selected (the POC pre-selected it). The count pill on the button is `--on-you` on
@@ -297,9 +306,9 @@ table shows the parent folders a name needs to be unique (`auth/invitations.ts`,
   its files behind "Show files" (the verdict and Submit are in view on open down to 375 × 667).
 - **Shortcuts (P6-5).** "? Shortcuts" stays in the top bar below 760 px as "?" (the POC hid it),
   so the dialog and its switch can be reached at every width. The dialog adds a "Single-key
-  shortcuts" switch (WCAG 2.1.4) and a "?" row; "Ask" reads "(not available yet)" until P9-2. The
+  shortcuts" switch (WCAG 2.1.4) and a "?" row. The
   `.kbd-on` hint border is `currentColor` (the POC used a 40% `color-mix`, not allowed outside the
-  tokens). The strip leaves out "/ ask" until Ask exists and ends with "? all shortcuts". j from
+  tokens). The strip lists "/ ask" (P9-2) and ends with "? all shortcuts". j from
   the first file goes back to the briefing (the POC stayed on the file). Shortcuts are off while
   a drawer or dialog is open.
 - **Change tree (H4-12, not in the POC).** Built from the approved mockup's option A with the

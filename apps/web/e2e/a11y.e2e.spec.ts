@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./test.js";
 import type { ReviewApi } from "./review-api.js";
+import { ask as askQuestion, openAsk, selectDiffRows, showAskTab } from "./ask-support.js";
 import { seriousViolations } from "./axe.js";
 import { openBriefing, STATE_PULLS } from "./briefing-support.js";
 import { openFile } from "./diff-support.js";
@@ -196,6 +197,34 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
     await page.goto("/inbox");
     await page.getByRole("alert").waitFor();
     await check(page, found, "inbox, repository access unavailable");
+  },
+
+  // P9-2: the Ask tab in every index and answer state, and with selected code attached.
+  "PR page: the Ask tab and its states": async (page, found) => {
+    for (const scenario of ["not-indexed", "indexing", "off", "index-error"]) {
+      await openAsk(page, scenario);
+      await showAskTab(page);
+      await page.locator(".ask-banner").waitFor();
+      await check(page, found, `ask, ${scenario}`);
+    }
+    for (const [scenario, state] of [
+      ["ready", "answer"],
+      ["no-answer", "no good answer"],
+      ["error", "error"],
+      ["slow", "reading the code"],
+    ] as const) {
+      await openAsk(page, scenario);
+      await showAskTab(page);
+      await askQuestion(page, "Who calls acceptInvitation?");
+      await page.locator(".chat-a").first().waitFor();
+      if (scenario !== "slow") await page.locator(".chat-a:not(.typing)").first().waitFor();
+      await check(page, found, `ask, ${state}`);
+    }
+    await openAsk(page);
+    await selectDiffRows(page, "src/auth/invitations.ts");
+    await page.keyboard.press("/");
+    await page.locator(".ask-selection").waitFor();
+    await check(page, found, "ask, selected code attached");
   },
 
   // H4-3: the file view on a real PR with the diff from the server, and every state the diff
