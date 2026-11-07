@@ -120,6 +120,9 @@ Task log for the project plan. Agents append a row when a task is merged.
   org's cascade; the slot is for an external vector store, which there is none of.
 - The repository's `enabled = false` fails a run (`repository_disabled`) but does not purge an
   index already built; a purge on disable is a product decision for P9-2.
+- OpenAI answers an exhausted credit balance with 429 `insufficient_quota`, which the adapters map
+  to `rate_limited` (retryable): an index or analysis run then retries until its attempts run out
+  instead of failing at once with a clear code. Map `insufficient_quota` to a non-retryable kind.
 
 ### P8-4 follow-ups
 
