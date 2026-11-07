@@ -3,7 +3,7 @@
   "version": 1,
   "kind": "fake",
   "notice": null,
-  "createdAt": "2026-11-07T14:59:13.232Z",
+  "createdAt": "2026-11-07T15:38:16.464Z",
   "pipelineVersion": "p8-2b.1",
   "promptHash": "eb03d89a49dc27918112dd5a834e1121ed8c2cd7a6145970e7a101045ea82ddd",
   "models": {
@@ -68,14 +68,14 @@
       },
       "ask": {
         "calls": 12,
-        "inputTokens": 12301,
-        "outputTokens": 421,
+        "inputTokens": 7779,
+        "outputTokens": 422,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
         "models": ["scripted-ask"]
       }
     },
-    "totalTokens": 1014575,
+    "totalTokens": 1010054,
     "capped": false
   },
   "prs": [
@@ -1549,16 +1549,19 @@
   },
   "ask": {
     "status": "done",
+    "gate": "guard",
     "questions": 12,
     "answered": 12,
     "validlyCited": 12,
     "validRate": 1,
+    "onTarget": 6,
+    "onTargetRate": 0.5,
     "validCitations": 12,
     "invalidCitations": 0,
     "citationValidity": 1,
-    "targetHits": 7,
-    "chunks": 19,
-    "embeddingTokens": 1743,
+    "targetHits": 6,
+    "chunks": 23,
+    "embeddingTokens": 2200,
     "pass": true,
     "results": [
       {
@@ -1567,7 +1570,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1577,7 +1580,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1587,7 +1590,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": false
       },
@@ -1597,7 +1600,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1607,7 +1610,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1617,9 +1620,9 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
-        "targetHit": true
+        "targetHit": false
       },
       {
         "id": "q07-tenancy",
@@ -1627,7 +1630,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": false
       },
@@ -1637,7 +1640,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1647,7 +1650,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": true
       },
@@ -1657,7 +1660,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": false
       },
@@ -1667,7 +1670,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": false
       },
@@ -1677,7 +1680,7 @@
         "reason": null,
         "validCitations": 1,
         "invalidCitations": 0,
-        "excerpts": 8,
+        "excerpts": 4,
         "validlyCited": true,
         "targetHit": false
       }

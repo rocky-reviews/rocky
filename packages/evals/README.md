@@ -204,33 +204,40 @@ checks that the high and critical ones are stored anyway.
 
 ## Ask (`--ask`, P9-2)
 
-Does Ask answer with citations that point at code the model was actually shown? (P9-2's
-criterion: eval questions answered with valid citations ≥ 90%.)
+Does Ask answer with citations that point at the code that answers the question, and only at
+code the model was actually shown? (P9-2's criterion: eval questions answered with valid
+citations ≥ 90%.)
 
-- **Repository** (`src/ask/repo.ts`): seven small TypeScript files (sessions, passwords,
-  billing, a payment webhook, a retry helper, tenancy, routes). Synthetic, written for Rocky.
-  It is indexed as production indexes: tree-sitter chunks from `@rocky-reviews/indexer`, each
-  embedded as `path + chunk` with the embed role (19 chunks).
+- **Repository** (`src/ask/repo.ts`): eleven small TypeScript files (sessions, passwords,
+  billing, a payment webhook, a retry helper, tenancy, routes, and four filler files that share
+  the questions' words without answering them). Synthetic, written for Rocky. It is indexed as
+  production indexes: tree-sitter chunks from `@rocky-reviews/indexer`, each embedded as
+  `path + chunk` with the embed role (23 chunks).
 - **Questions** (`src/ask/questions.ts`): 12, one with a code selection (as `/` sends it), each
-  with the line ranges that answer it.
+  with the line ranges that answer it (its targets).
 - **Run** (`src/ask/run.ts`): every question through core's `answerQuestion`, the production
   flow, with in-memory ports: cosine search over the chunks' vectors and a reader that returns
-  the hit's lines. The `ask` role answers through the meter, so the token cap applies.
-- **Scorer** (`src/ask/score.ts`): a question counts when the model answered, at least one
-  citation points into an excerpt it was shown, and **none** points anywhere else (core's
-  `checkCitations` decides; production drops an invalid citation, the eval also fails the
-  question for it). No good answer, a refusal, a call error or the cap counts against.
-  Reported beside it: citation-level validity and target hits (a valid citation overlapping
-  the answering lines), which measure retrieval and the model, not the guard.
+  the hit's lines. The eval shows `ASK_EVAL_K` = 4 excerpts per question (production shows 8),
+  so the search has to find the answer rather than show most of the repository. The `ask` role
+  answers through the meter, so the token cap applies.
+- **Scorer** (`src/ask/score.ts`). **Valid**, for the criterion, means **on target**: the model
+  answered, every citation points inside lines it was shown (core's `checkCitations`; production
+  drops an invalid citation, the eval fails the question for it), and at least one citation
+  overlaps one of the question's target ranges. The weaker **guard** count drops the last
+  condition: inside what was shown, but not necessarily the answering code. No good answer, a
+  refusal, a call error or the cap counts against both. Citation-level validity is reported too.
 
-**Gate:** a report that ran `--ask` must reach `ASK_MIN_VALID_RATE` = 90% of questions; once a
-baseline passed it, a report must run it. The report holds ids, codes and counts only.
+**Gate** (`ASK_MIN_VALID_RATE` = 90% of questions): a **live** report must reach it on target
+(and so also on the guard); `compare` holds a live report to the on-target gate whatever the
+report says. A **fake** report is gated on the guard only (below). Once a baseline passed the Ask
+eval, a report must run it. The report holds ids, codes and counts only.
 
 **`--fake`** uses `src/ask/fake.ts`: a bag-of-words embedder (identifiers split at their humps)
 and a model that answers from the excerpt sharing most words with the question and cites the
-range it was shown. It proves the plumbing and the guard (12 of 12; target hits 7 of 12 measure
-the fake's crude retrieval), never a model. `ask.test.ts` also runs a model that cites outside
-what it was shown (every question fails) and one that adds a bad citation to good ones (fails).
+range it was shown. It proves the plumbing and the guard (12 of 12 validly cited), never a model
+or retrieval: its on-target count (6 of 12) measures the crude bag of words and is reported, not
+gated. `ask.test.ts` also runs a model that cites outside what it was shown (every question
+fails) and one that adds a bad citation to good ones (fails).
 
 **Live: a maintainer step** (CI's live job does not run it: it needs an embedding provider and
 its key). With the same `ROCKY_LLM_*` variables the server reads, including the embed role:
@@ -243,11 +250,12 @@ ROCKY_LLM_EMBED_DIMENSIONS=1024 OPENAI_API_KEY=<key> ANTHROPIC_API_KEY=<key> \
 ```
 
 `--only pr-912` keeps the seeded part to one small PR; the Ask part always runs every question.
-**Token estimate** for the Ask part: about 12 calls of ~1,500 input tokens (instructions, the
-question and up to 8 excerpts of this small repository) and up to ~500 output tokens, so roughly
-18,000 input and 6,000 output tokens on the `ask` role, plus ~2,000 embedding tokens (the index
-and 12 queries). The `--fake` run's own estimate is 12,301 input tokens. Check `ask:` in the
-summary: `pass`, and the rate against the floor, are the evidence for the P9-2 criterion.
+**Token estimate** for the Ask part: about 12 calls of ~1,000 input tokens (instructions, the
+question and 4 excerpts) and up to ~500 output tokens (the cap is 6,000 with thinking), so
+roughly 12,000 input and 6,000 output tokens on the `ask` role, plus ~2,500 embedding tokens
+(the index and 12 queries). The `--fake` run's own estimate is 7,779 input tokens. Check `ask:`
+in the summary: `pass` under `gate on_target`, and the on-target rate against the floor, are the
+evidence for the P9-2 criterion.
 
 ## Report
 

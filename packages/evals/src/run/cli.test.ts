@@ -97,12 +97,12 @@ describe("pnpm evals run", () => {
     expect(await evalsCli(args, t.io, deps())).toBe(0);
     expect(written(t.written, "r.json").ask?.pass).toBe(true);
     expect(t.text()).toMatch(
-      /ask: done, pass; 12 of 12 answered with valid citations \(100\.0%, floor 90\.0%\)/,
+      /ask: done, pass \(gate guard, floor 90\.0%\); 12 of 12 answered with valid citations \(100\.0%\), [0-9]+ of them on target/,
     );
     const dry = io();
     expect(await evalsCli(["run", "--fake", "--dry-run", "--ask"], dry.io, deps())).toBe(0);
     expect(dry.text()).toContain(
-      "ask: 12 questions on a 7-file repository, embedded with fake/lexical-256",
+      "ask: 12 questions on a repository of 11 files, 4 excerpts each, gate guard, embedded with fake/lexical-256",
     );
   });
 

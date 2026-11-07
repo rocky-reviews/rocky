@@ -1,18 +1,25 @@
 /**
- * The Ask eval's scorer (P9-2). P9-2's criterion is "eval questions answered with valid
- * citations ≥ 90%". A question counts as answered with valid citations when the model answered,
- * at least one of its citations points into an excerpt it was shown, and none points anywhere
- * else (core's `checkCitations` decides; an invalid citation is dropped in production, but here
- * it still fails the question). "No good answer", a failure or a capped call counts against.
+ * The Ask eval's scorer (P9-2, ADR 0041 §8). P9-2's criterion is "eval questions answered with
+ * valid citations ≥ 90%". Two definitions of a question that counts, both reported:
  *
- * Beside the gate: citation-level validity, and target hits (a valid citation overlapping the
- * code that answers the question), which measure retrieval and the model, not the guard.
- * Results hold ids, codes and counts only: no question, code or model text.
+ * - **guard** (`validlyCited`): the model answered, at least one citation points into lines it
+ *   was shown, and none points anywhere else (core's `checkCitations` decides; production drops
+ *   an invalid citation, the eval also fails the question for it). This measures the guard and
+ *   the model's discipline, not whether it found the answer.
+ * - **on target** (`onTarget`): validly cited, and at least one valid citation overlaps a range
+ *   that answers the question (`questions.ts`). This is "valid" for the criterion: a citation
+ *   that is inside what was shown but beside the point is not a valid answer to the question.
+ *
+ * The gate is `on_target` for a live run (both rates ≥ 90%) and `guard` for the scripted fake,
+ * whose bag-of-words retrieval measures nothing about a model. No good answer, a refusal, a
+ * call error or the cap counts against. Results hold ids, codes and counts only.
  */
 import type { AskTarget } from "./questions.js";
 
-/** The gate (README "Ask"). */
+/** The floor (README "Ask"). */
 export const ASK_MIN_VALID_RATE = 0.9;
+
+export type AskGate = "guard" | "on_target";
 
 export type AskQuestionStatus = "answer" | "no_answer" | "failed" | "capped";
 
@@ -43,11 +50,16 @@ export interface AskQuestionScore {
 }
 
 export interface AskScore {
+  readonly gate: AskGate;
   readonly questions: number;
   readonly answered: number;
   readonly validlyCited: number;
-  /** validlyCited / questions (the gated rate; 0 when there are no questions). */
+  /** validlyCited / questions (0 when there are no questions). */
   readonly validRate: number;
+  /** Validly cited and on target. */
+  readonly onTarget: number;
+  /** onTarget / questions (0 when there are no questions). */
+  readonly onTargetRate: number;
   readonly validCitations: number;
   readonly invalidCitations: number;
   /** valid / (valid + invalid) citations; 1 when none was given. */
@@ -74,18 +86,39 @@ export const scoreQuestion = (
   targetHit: result.valid.some((c) => targets.some((t) => overlaps(c, t))),
 });
 
-export const scoreAsk = (results: readonly AskQuestionScore[]): AskScore => {
+/** Float noise only: 9 of 10 is exactly the floor. */
+export const meetsFloor = (rate: number): boolean => rate >= ASK_MIN_VALID_RATE - 1e-9;
+
+/** Whether rates pass `gate` (also used by the comparison, which recomputes it). */
+export const askPasses = (
+  gate: AskGate,
+  rates: { readonly questions: number; readonly validRate: number; readonly onTargetRate: number },
+): boolean =>
+  rates.questions > 0 &&
+  meetsFloor(rates.validRate) &&
+  (gate === "guard" || meetsFloor(rates.onTargetRate));
+
+export const scoreAsk = (results: readonly AskQuestionScore[], gate: AskGate): AskScore => {
   const count = (f: (r: AskQuestionScore) => boolean) => results.filter(f).length;
   const sum = (f: (r: AskQuestionScore) => number) => results.reduce((n, r) => n + f(r), 0);
   const validlyCited = count((r) => r.validlyCited);
+  const onTarget = count((r) => r.validlyCited && r.targetHit);
   const validCitations = sum((r) => r.validCitations);
   const invalidCitations = sum((r) => r.invalidCitations);
-  const validRate = results.length === 0 ? 0 : validlyCited / results.length;
+  const of = (n: number) => (results.length === 0 ? 0 : n / results.length);
+  const rates = {
+    questions: results.length,
+    validRate: of(validlyCited),
+    onTargetRate: of(onTarget),
+  };
   return {
+    gate,
     questions: results.length,
     answered: count((r) => r.status === "answer"),
     validlyCited,
-    validRate,
+    validRate: rates.validRate,
+    onTarget,
+    onTargetRate: rates.onTargetRate,
     validCitations,
     invalidCitations,
     citationValidity:
@@ -93,8 +126,7 @@ export const scoreAsk = (results: readonly AskQuestionScore[]): AskScore => {
         ? 1
         : validCitations / (validCitations + invalidCitations),
     targetHits: count((r) => r.targetHit),
-    // Float noise only: 9 of 10 is exactly the floor.
-    pass: results.length > 0 && validRate >= ASK_MIN_VALID_RATE - 1e-9,
+    pass: askPasses(gate, rates),
     results: [...results],
   };
 };

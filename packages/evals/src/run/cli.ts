@@ -22,6 +22,7 @@ import { parseReport, type EvalReport, type ReportModels } from "./report.js";
 import { runEvals, type AskEmbedding, type EvalSubject } from "./runner.js";
 import { ASK_QUESTIONS } from "../ask/questions.js";
 import { ASK_REPO } from "../ask/repo.js";
+import { ASK_EVAL_K } from "../ask/run.js";
 import { ASK_MIN_VALID_RATE } from "../ask/score.js";
 
 /** Default spend cap: the seeded PRs fit well inside it; `--injection` needs a higher one. */
@@ -127,7 +128,7 @@ const summary = (report: EvalReport): string => {
     const a = report.ask;
     lines.push(
       "",
-      `ask: ${a.status}, ${a.pass ? "pass" : "FAIL"}; ${a.validlyCited} of ${a.questions} answered with valid citations (${pct(a.validRate).trim()}, floor ${pct(ASK_MIN_VALID_RATE).trim()}); citations ${a.validCitations} valid, ${a.invalidCitations} invalid; on target ${a.targetHits}; ${a.chunks} chunks, ${a.embeddingTokens} embedding tokens`,
+      `ask: ${a.status}, ${a.pass ? "pass" : "FAIL"} (gate ${a.gate}, floor ${pct(ASK_MIN_VALID_RATE).trim()}); ${a.validlyCited} of ${a.questions} answered with valid citations (${pct(a.validRate).trim()}), ${a.onTarget} of them on target (${pct(a.onTargetRate).trim()}); citations ${a.validCitations} valid, ${a.invalidCitations} invalid; ${a.chunks} chunks, ${a.embeddingTokens} embedding tokens`,
     );
   }
   return `${lines.join("\n")}\n`;
@@ -225,7 +226,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         `seeded PRs: ${prs.map((pr) => `${pr.id} (${pr.expected.length} seeded)`).join(", ")}`,
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
         `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply), triage pinned to important` : "off"}`,
-        `ask: ${ask === undefined ? "off" : `${ASK_QUESTIONS.length} questions on a ${Object.keys(ASK_REPO).length}-file repository, embedded with ${ask.space.provider}/${ask.space.model} (${ask.space.dimensions})`}`,
+        `ask: ${ask === undefined ? "off" : `${ASK_QUESTIONS.length} questions on a repository of ${Object.keys(ASK_REPO).length} files, ${ASK_EVAL_K} excerpts each, gate ${kind === "live" ? "on_target" : "guard"}, embedded with ${ask.space.provider}/${ask.space.model} (${ask.space.dimensions})`}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),

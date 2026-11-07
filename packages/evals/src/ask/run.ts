@@ -18,7 +18,13 @@ import {
 import { createTreeSitterChunker, prepareFile } from "@rocky-reviews/indexer";
 import { ASK_QUESTIONS, type AskQuestion } from "./questions.js";
 import { ASK_REPO, askRepoText } from "./repo.js";
-import { scoreAsk, scoreQuestion, type AskRunResult, type AskScore } from "./score.js";
+import {
+  scoreAsk,
+  scoreQuestion,
+  type AskGate,
+  type AskRunResult,
+  type AskScore,
+} from "./score.js";
 
 export interface AskEvalOptions {
   /** The roles, metered by the caller; the `ask` role answers. */
@@ -28,8 +34,18 @@ export interface AskEvalOptions {
   /** The caller's token cap stopped the run. */
   readonly capped: () => boolean;
   readonly questions?: readonly AskQuestion[];
+  /** What passes (`score.ts`): `on_target` for a live run, `guard` for the scripted fake. */
+  readonly gate: AskGate;
+  /** Excerpts per question (default `ASK_EVAL_K`). */
+  readonly k?: number;
   readonly onProgress?: (line: string) => void;
 }
+
+/**
+ * Excerpts shown per question in the eval: fewer than production's 8, so that with this small
+ * repository the search has to find the answer rather than show most of the code.
+ */
+export const ASK_EVAL_K = 4;
 
 export interface AskEvalResult extends AskScore {
   readonly status: "done" | "capped";
@@ -105,7 +121,7 @@ export const runAskEval = async (options: AskEvalOptions): Promise<AskEvalResult
       chunks
         .map((chunk) => ({ chunk, score: cosine(vector, chunk.vector) }))
         .sort((a, b) => b.score - a.score)
-        .slice(0, k)
+        .slice(0, Math.min(k, options.k ?? ASK_EVAL_K))
         .map(({ chunk }) => ({
           path: chunk.path,
           startLine: chunk.startLine,
@@ -180,7 +196,7 @@ export const runAskEval = async (options: AskEvalOptions): Promise<AskEvalResult
       `ask ${scored.id}: ${scored.status}${scored.reason === null ? "" : ` (${scored.reason})`}, ${scored.validCitations} valid, ${scored.invalidCitations} invalid${scored.targetHit ? ", on target" : ""}`,
     );
   }
-  const score = scoreAsk(results);
+  const score = scoreAsk(results, options.gate);
   return {
     ...score,
     status: results.some((r) => r.status === "capped") ? "capped" : "done",

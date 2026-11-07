@@ -221,6 +221,8 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
       embedding: options.ask.client,
       space: options.ask.space,
       capped: () => meter.capped(),
+      // A live run must cite the answering code; the fake proves the guard only (score.ts).
+      gate: options.kind === "live" ? "on_target" : "guard",
       ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
     });
     // Parsed into the report's own shape: ids, codes and counts only.

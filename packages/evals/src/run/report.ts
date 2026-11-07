@@ -191,16 +191,21 @@ export type MemoryEvalReport = z.infer<typeof MemoryEvalReport>;
 
 /**
  * The Ask eval (P9-2, `src/ask/`): questions about a synthetic repository, answered through
- * core's `answerQuestion` over an in-memory index. Gated on `validRate` (answered with valid
- * citations only) ≥ 90%. Ids, codes and counts only: no question, code or model text. Absent
- * from reports made before P9-2 and from runs without `--ask`.
+ * core's `answerQuestion` over an in-memory index. Gated at 90% (`src/ask/score.ts`): a live
+ * report on `onTargetRate` and `validRate`, a fake one on `validRate`. Ids, codes and counts
+ * only: no question, code or model text. Absent from reports made before P9-2 and from runs
+ * without `--ask`.
  */
 export const AskEvalReport = z.strictObject({
   status: z.enum(["done", "capped"]),
+  /** `on_target` (live: validly cited and on a target range) or `guard` (fake: validly cited). */
+  gate: z.enum(["guard", "on_target"]),
   questions: count,
   answered: count,
   validlyCited: count,
   validRate: rate,
+  onTarget: count,
+  onTargetRate: rate,
   validCitations: count,
   invalidCitations: count,
   citationValidity: rate,

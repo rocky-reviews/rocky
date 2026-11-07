@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { askFakeScript, LEXICAL_SPACE, lexicalEmbedder, words } from "./ask/fake.js";
 import { ASK_QUESTIONS } from "./ask/questions.js";
 import { ASK_REPO, ASK_REPO_PROVENANCE, askRepoText } from "./ask/repo.js";
-import { askRepoChunks, runAskEval } from "./ask/run.js";
+import { ASK_EVAL_K, askRepoChunks, runAskEval } from "./ask/run.js";
 import { ASK_MIN_VALID_RATE, scoreAsk, scoreQuestion, type AskRunResult } from "./ask/score.js";
 
 /**
@@ -21,6 +21,7 @@ const run = (script: Script, extra: Partial<Parameters<typeof runAskEval>[0]> = 
     embedding: lexicalEmbedder(),
     space: LEXICAL_SPACE,
     capped: () => false,
+    gate: "guard",
     ...extra,
   });
 
@@ -104,12 +105,44 @@ describe("the scorer", () => {
         Array.from({ length: total }, (_, i) =>
           scoreQuestion(result({ dropped: i < good ? 0 : 1 }), targets),
         ),
+        "guard",
       );
     expect(of(9, 10)).toMatchObject({ validlyCited: 9, validRate: 0.9, pass: true });
     expect(of(8, 10)).toMatchObject({ validRate: 0.8, pass: false });
     expect(of(10, 10).citationValidity).toBe(1);
     expect(of(8, 10).citationValidity).toBeCloseTo(10 / 12);
-    expect(scoreAsk([])).toMatchObject({ validRate: 0, pass: false, citationValidity: 1 });
+    expect(scoreAsk([], "guard")).toMatchObject({ validRate: 0, pass: false, citationValidity: 1 });
+  });
+
+  it("on_target (live) also needs 90% of questions validly cited on a target range", () => {
+    // 10 questions, all validly cited; `onTarget` of them cite the answering lines.
+    const of = (onTarget: number, gate: "guard" | "on_target") =>
+      scoreAsk(
+        Array.from({ length: 10 }, (_, i) =>
+          scoreQuestion(
+            result({
+              valid: [{ path: "a.ts", start: i < onTarget ? 5 : 20, end: i < onTarget ? 6 : 21 }],
+            }),
+            targets,
+          ),
+        ),
+        gate,
+      );
+    expect(of(9, "on_target")).toMatchObject({
+      validRate: 1,
+      onTarget: 9,
+      onTargetRate: 0.9,
+      pass: true,
+    });
+    expect(of(8, "on_target")).toMatchObject({ validRate: 1, onTargetRate: 0.8, pass: false });
+    // The guard gate does not look at targets.
+    expect(of(0, "guard")).toMatchObject({ onTargetRate: 0, pass: true });
+    // On target but with an invalid citation too does not count.
+    const mixed = scoreAsk(
+      [scoreQuestion(result({ valid: [{ path: "a.ts", start: 5, end: 5 }], dropped: 1 }), targets)],
+      "on_target",
+    );
+    expect(mixed).toMatchObject({ targetHits: 1, onTarget: 0, pass: false });
   });
 });
 
@@ -123,8 +156,9 @@ describe("the run", () => {
       invalidCitations: 0,
       pass: true,
     });
+    expect(result.gate).toBe("guard");
     // Target hits measure the bag-of-words fake here, not a model: reported, not gated.
-    expect(result.targetHits / result.questions).toBeGreaterThanOrEqual(0.5);
+    expect(result.onTargetRate).toBeGreaterThanOrEqual(0.5);
     expect(result.embeddingTokens).toBeGreaterThan(0);
     expect(result.chunks).toBeGreaterThan(0);
   });
@@ -136,7 +170,13 @@ describe("the run", () => {
       embedding: lexicalEmbedder(),
       space: LEXICAL_SPACE,
       capped: () => false,
+      gate: "guard",
     });
+    // The eval shows ASK_EVAL_K excerpts, fewer than production's 8 (retrieval must choose).
+    for (const call of calls)
+      expect(call.labels.filter((l) => l === ASK_LABELS.code).length).toBeLessThanOrEqual(
+        ASK_EVAL_K,
+      );
     const withSelection = calls.find((c) => c.part(ASK_LABELS.selection) !== undefined);
     expect(withSelection?.part(ASK_LABELS.question)).toBe(
       "Is this comparison safe against timing attacks?",
