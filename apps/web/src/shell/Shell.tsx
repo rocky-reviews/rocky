@@ -11,9 +11,14 @@
  * H4-12: the change tree, a modal in the same way, opened from the sidebar's Tree button (also in
  * the Files drawer, which stays open behind it), `t` or the briefing's "View as tree"; a file
  * clicked in it opens like a sidebar click and focus moves to the main column.
+ * P9-2: the right panel's Ask tab (ADR 0041). `/` opens it with the code selected in the diff
+ * (read as the key is pressed), opening the panel's drawer below its breakpoint, and focuses
+ * the question box.
  */
 import type { Finding } from "@rocky-reviews/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AskSelection, AskSource } from "../ask/ask-data.js";
+import { diffSelection } from "../ask/selection.js";
 import { focusMain } from "../briefing/focus.js";
 import {
   previewOutcome,
@@ -29,7 +34,7 @@ import { ChangeTreeDialog } from "../change-tree/ChangeTreeDialog.js";
 import { myReviewOf, pendingCount } from "../finish/finish-model.js";
 import { fetchSession } from "../session.js";
 import { MainContent } from "./MainArea.js";
-import { RightPanelContent } from "./RightPanel.js";
+import { type PanelTab, RightPanelContent } from "./RightPanel.js";
 import { ToastProvider, useToast } from "./Toast.js";
 import { type Selection, SidebarContent } from "./Sidebar.js";
 import { type Drawer, TopBar } from "./TopBar.js";
@@ -63,6 +68,8 @@ type Props = {
   review: ReviewSource;
   /** Where Finish review reads the exact list and posts it (P6-6). */
   posting: ReviewPostingSource;
+  /** Where Ask's questions go (P9-2). */
+  ask: AskSource;
 };
 
 export const Shell = (props: Props) => (
@@ -72,11 +79,6 @@ export const Shell = (props: Props) => (
 );
 
 const NO_FINDINGS: readonly Finding[] = [];
-
-/** P6-5: the entry point a later task fills (Ask: P9-2). */
-export const NOT_YET = {
-  ask: "Ask is not available yet.",
-} as const;
 
 /**
  * P6-9: the sidebar without a file list says why, and only promises files while a run can
@@ -95,7 +97,7 @@ export const submittedToast = (login: string | null): string =>
 
 const storage = (): Storage => window.localStorage;
 
-const ShellLayout = ({ data, now, review, posting }: Props) => {
+const ShellLayout = ({ data, now, review, posting, ask }: Props) => {
   const { mode, toggle } = useTheme();
   const toast = useToast();
   const [selection, setSelection] = useState<Selection>({ kind: "briefing" });
@@ -258,6 +260,16 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
   }, [tree]);
   const modal = overlay !== null || help || finish || tree;
 
+  // P9-2: the right panel's tab, the code attached to the next question, and `/`'s focus request.
+  const [panelTab, setPanelTab] = useState<PanelTab>("review");
+  const [askSelection, setAskSelection] = useState<AskSelection | null>(null);
+  const [askFocus, setAskFocus] = useState(0);
+  const clearAskSelection = useCallback(() => setAskSelection(null), []);
+  const pullRef = useMemo(
+    () => ({ owner: data.pull.owner, repo: data.pull.repo, number: data.pull.number }),
+    [data.pull.owner, data.pull.repo, data.pull.number],
+  );
+
   // Focus moves into an opened drawer, and on close back to its toggle, or to the region
   // itself when a wider window now shows it in place (the toggle is hidden then).
   const returnFocus = useRef<string | null>(null);
@@ -368,7 +380,14 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                 onToggleMode={toggle}
                 onHelp={keyboard.openHelp}
                 onTree={openTree}
-                onAsk={() => toast(NOT_YET.ask)}
+                onAsk={() => {
+                  // Read before anything moves the focus (and with it, maybe, the selection).
+                  const selected = diffSelection();
+                  if (selected !== null) setAskSelection(selected);
+                  setPanelTab("ask");
+                  if (panelHidden) setDrawer("panel");
+                  setAskFocus((n) => n + 1);
+                }}
                 onFinish={openFinish}
               />
               <div className="app">
@@ -459,6 +478,15 @@ const ShellLayout = ({ data, now, review, posting }: Props) => {
                     <RightPanelContent
                       current={selection.kind === "file" ? selection.path : null}
                       files={order}
+                      tab={panelTab}
+                      onTab={setPanelTab}
+                      ask={{
+                        source: ask,
+                        pull: pullRef,
+                        selection: askSelection,
+                        onClearSelection: clearAskSelection,
+                        focusRequest: askFocus,
+                      }}
                     />
                   </aside>
                 </div>

@@ -167,9 +167,13 @@ test("a full review with the keyboard only", async ({ page, reviewApi }) => {
   await press(page, "m");
   await expect(page.locator("html")).toHaveAttribute("data-mode", mode ?? "");
 
-  // / is the Ask entry point (Ask is P9).
+  // / opens Ask (P9-2) with the focus in its question box; Esc leaves the box.
   await press(page, "/");
-  await expect(toast(page)).toHaveText("Ask is not available yet.");
+  await expect(page.getByRole("tab", { name: "Ask" })).toHaveAttribute("aria-selected", "true");
+  const question = page.getByRole("textbox", { name: "Your question" });
+  await expect(question).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(question).not.toBeFocused();
 
   // Every decision reached the drafts API (the test's store, not the page).
   expect(reviewApi.decision("F1").state).toBe("accepted");
@@ -546,6 +550,7 @@ test("H4-14: n and p do nothing now; the help and the strip read j/k and u/i", a
     "j/k previous & next file",
     "u/i previous & next AI draft",
     "v viewed",
+    "/ ask",
     "? all shortcuts",
   ]);
   await press(page, "?");

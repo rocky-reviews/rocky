@@ -10,9 +10,12 @@ import "./keyboard/keyboard.css";
 import "./finish/finish.css";
 import "./change-tree/change-tree.css";
 import "./memory/memory.css";
+import "./ask/ask.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
+import type { AskSource } from "./ask/ask-data.js";
+import { createHttpAskSource } from "./ask/ask-http-source.js";
 import type { DiffDataSource } from "./data/diff-data.js";
 import { createHttpDiffSource } from "./data/diff-http-source.js";
 import { createHttpPostingSource } from "./data/posting-http-source.js";
@@ -58,6 +61,7 @@ const renderPull = (
   pull: PullRef,
   source: ShellDataSource,
   diffSource: DiffDataSource,
+  ask: AskSource,
   preloadDiff = false,
 ) => {
   // P6-4: drafts and own comments are kept by the server (ADR 0027), keyed by the analysis id.
@@ -77,6 +81,7 @@ const renderPull = (
           pull={pull}
           review={review}
           posting={posting}
+          ask={ask}
           returnTo={window.location.pathname}
         />
       </DiffProvider>
@@ -108,21 +113,32 @@ if (page.kind === "home") {
   // The fixture PRs (development and tests only): pr-847 (P6-1), the briefing's states
   // (`?pr=`, P6-2), the 5,000-line diff (`?fixture=large-diff`, P6-3) and a later push
   // (`?diff=newer-push`, P6-5).
+  // P9-2: Ask's states behind `?ask=` (ask-fixture-source.ts).
   void Promise.all([
     import("./data/fixture-source.js"),
     import("./data/diff-fixture-source.js"),
-  ]).then(([{ createFixtureSource }, diff]) =>
+    import("./ask/ask-fixture-source.js"),
+  ]).then(([{ createFixtureSource }, diff, askFixture]) =>
     renderPull(
       root,
       diff.fixturePullFromSearch(page.search),
       createFixtureSource(),
       diff.createFixtureDiffSource({ newerPush: diff.newerPushFromSearch(page.search) }),
+      askFixture.createFixtureAskSource(askFixture.askScenarioFromSearch(page.search)),
     ),
   );
 } else if (page.kind === "pull" && page.source === "server") {
   // H4-3: the diff comes from the server too, read from GitHub. H4-16: as soon as the briefing
   // is shown, not when the first file is opened (a cold read takes seconds).
-  renderPull(root, page.ref, createHttpShellSource(), createHttpDiffSource(), true);
+  // P9-2: Ask through the server (ADR 0041).
+  renderPull(
+    root,
+    page.ref,
+    createHttpShellSource(),
+    createHttpDiffSource(),
+    createHttpAskSource(),
+    true,
+  );
 } else {
   createRoot(root).render(
     <StrictMode>

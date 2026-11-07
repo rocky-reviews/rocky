@@ -246,7 +246,7 @@ export const HELP_ROWS: readonly { keys: readonly string[]; label: string; singl
     single: true,
   },
   { keys: ["v"], label: "Toggle viewed on the current file", single: true },
-  { keys: ["/"], label: "Ask about the PR (not available yet)", single: true },
+  { keys: ["/"], label: "Ask about the PR (with the code selected in the diff)", single: true },
   { keys: ["b"], label: "Back to the briefing", single: true },
   { keys: ["t"], label: "Change tree: what changed where", single: true },
   { keys: ["m"], label: "Toggle light / dark", single: true },

@@ -16,6 +16,7 @@ const ITEMS: readonly Item[] = [
   { keys: ["e"], label: "edit", draft: true },
   { keys: ["d"], label: "dismiss", draft: true },
   { keys: ["v"], label: "viewed" },
+  { keys: ["/"], label: "ask" },
   { keys: ["?"], label: "all shortcuts" },
 ];
 

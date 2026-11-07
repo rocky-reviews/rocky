@@ -4,13 +4,20 @@ import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { memoryReviewSource } from "../drafts/testing.js";
 import { memoryPostingSource } from "../finish/testing.js";
+import { createFixtureAskSource } from "../ask/ask-fixture-source.js";
 import { Shell, sidebarPlaceholder } from "./Shell.js";
 
 const NOW = Date.parse("2026-10-25T12:12:00.000Z");
 const data = parseShellData(await createFixtureSource().load(DEFAULT_PULL));
 const render = (d: ShellData = data): string =>
   renderToStaticMarkup(
-    <Shell data={d} now={NOW} review={memoryReviewSource([])} posting={memoryPostingSource()} />,
+    <Shell
+      data={d}
+      now={NOW}
+      review={memoryReviewSource([])}
+      posting={memoryPostingSource()}
+      ask={createFixtureAskSource()}
+    />,
   );
 
 /** Text content without tags, whitespace collapsed. */
@@ -277,7 +284,7 @@ describe("keyboard shortcuts (P6-5)", () => {
     const panel = html.split('id="review-panel"')[1] ?? "";
     expect(text(panel.split('class="shortcut-strip"')[1] ?? "")).toContain(
       // H4-14: no a/e/d while no draft is focused on screen.
-      "j / k previous & next file u / i previous & next AI draft v viewed ? all shortcuts",
+      "j / k previous & next file u / i previous & next AI draft v viewed / ask ? all shortcuts",
     );
   });
 

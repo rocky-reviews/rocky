@@ -5,6 +5,7 @@ import { createFixtureSource, DEFAULT_PULL } from "../data/fixture-source.js";
 import { parseShellData, type ShellData } from "../data/shell-data.js";
 import { memoryReviewSource } from "../drafts/testing.js";
 import { memoryPostingSource } from "../finish/testing.js";
+import { createFixtureAskSource } from "../ask/ask-fixture-source.js";
 import { Shell } from "../shell/Shell.js";
 import { BriefingView } from "./Briefing.js";
 import { BRIEFING_FIXTURE_PULLS, type BriefingFixture } from "./fixtures.js";
@@ -481,6 +482,7 @@ describe("in the shell", () => {
         now={0}
         review={memoryReviewSource([])}
         posting={memoryPostingSource()}
+        ask={createFixtureAskSource()}
       />,
     );
     const side = html.slice(html.indexOf('<nav id="sidebar"'), html.indexOf("</nav>"));
@@ -496,6 +498,7 @@ describe("in the shell", () => {
         now={Date.now()}
         review={memoryReviewSource([])}
         posting={memoryPostingSource()}
+        ask={createFixtureAskSource()}
       />,
     );
     const mainColumn = html.slice(html.indexOf('<main id="main"'), html.indexOf("</main>"));
