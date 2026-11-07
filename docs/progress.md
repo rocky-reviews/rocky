@@ -95,9 +95,25 @@ Task log for the project plan. Agents append a row when a task is merged.
 - **HNSW write cost.** Maintaining the HNSW index is most of a full index's database time
   (`pnpm index:bench --without-hnsw`). If writes become the bottleneck, build approximate search
   only for repositories past the exact-search size.
-- **Reuse by text hash.** A chunk's vector is reused when its text is unchanged even if its file
-  moved; the path prefix the vector was made with is then the old one. Re-embed on rename if
-  search quality shows it matters.
+- ~~Reuse by text hash~~: fixed in the review fix round (reuse is keyed by the sha256 of the
+  embedded input, path included; a rename re-embeds).
+- Review nits (fix round):
+  - Voyage has a per-request token cap: batch by estimated tokens as well as by count (check the
+    limit in Voyage's docs).
+  - Archive mode ignores `.gitattributes` `export-ignore`/`export-subst`: fall back to blob reads
+    for planned paths the archive did not yield.
+  - A `not_found` blob or a missing archive entry leaves the stored row stale until the next run.
+  - `finishCodeIndex` `over_limit` ignores `generation`, so a push that arrived meanwhile is not
+    requeued.
+  - ~~`writeIndexedFiles` accepts all-zero vectors~~: refused now, as for a query.
+  - Search tests: add a second repository of the same org, and prove the HNSW iterative-scan
+    path ran in approximate mode. pgvector ≥ 0.8 is required (now in ADR 0040 §3).
+  - The planted-marker dump covers 4 tables: widen it to every table (`embeddings.source_ref`,
+    `audit_events`, `webhook_deliveries` included).
+  - `MAX_ARCHIVE_BYTES` (8 GiB) is loose: derive the cap from the repository size, which the
+    truncated-run gate now reads.
+  - ~~`reconcilePush` session close without a catch~~: `.catch(() => undefined)` added.
+  - ~~Grammar WASM integrity~~: one line in ADR 0040 §4 (exact pins, lockfile sha512).
 - **Memory embeddings** (P8) are still not written; when they are, they use the same column,
   width and space rule (ADR 0040 §2–§3).
 - **`OrgErasers.embeddings`** stays `nothingStoredYet`: vectors live in Postgres and go with the

@@ -5,6 +5,7 @@ import {
   chunkFromSyntax,
   classifyContent,
   classifyPath,
+  embeddingInput,
   fallbackChunks,
   type CodeChunkDraft,
   type IndexSkipReason,
@@ -118,9 +119,9 @@ export const createTreeSitterChunker = async (
 export const gitBlobSha = (bytes: Uint8Array): string =>
   createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
 
-/** A chunk ready to store: its draft plus the sha256 of its text (hex). */
+/** A chunk ready to store: its draft plus the sha256 of its embedded input (hex). */
 export interface PreparedChunk extends CodeChunkDraft {
-  readonly contentSha256: string;
+  readonly inputSha256: string;
 }
 
 export type PreparedFile =
@@ -165,7 +166,8 @@ export const prepareFile = async (
     language: byPath.language,
     chunks: drafts.map((draft) => ({
       ...draft,
-      contentSha256: createHash("sha256").update(draft.text).digest("hex"),
+      // The hash of exactly what is embedded: reuse never carries a vector made for another path.
+      inputSha256: createHash("sha256").update(embeddingInput(path, draft)).digest("hex"),
     })),
   };
 };

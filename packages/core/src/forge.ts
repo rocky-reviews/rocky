@@ -459,6 +459,12 @@ export interface CodeSession {
   readonly repository: ForgeRepository;
   /** The commit a branch points at now; `null` when the forge says there is no such branch. */
   branchHead(branch: string): Promise<string | null>;
+  /**
+   * The repository's size as the forge reports it, in KiB (GitHub's `size`: the repository's
+   * stored size, history included); `null` when the forge reports none. Bounds an index's
+   * estimate when the tree listing is cut short.
+   */
+  repositorySizeKb(): Promise<number | null>;
   /** Every regular file of a commit with its blob id and size; `null` when there is no commit. */
   readTree(commitSha: string): Promise<ForgeTree | null>;
   /** One blob's bytes, up to `maxBytes`. */

@@ -342,7 +342,7 @@ export const codeFiles = pgTable("code_files", {
   indexedAt: timestamp("indexed_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** A chunk of an indexed file (P9-1): its line range and the sha256 of its text. */
+/** A chunk of an indexed file (P9-1): its line range and the sha256 of its embedded input. */
 export const codeChunks = pgTable("code_chunks", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: orgIdColumn(),
@@ -352,7 +352,8 @@ export const codeChunks = pgTable("code_chunks", {
   startLine: integer("start_line").notNull(),
   endLine: integer("end_line").notNull(),
   kind: text("kind").notNull(),
-  contentSha256: bytea("content_sha256").notNull(),
+  /** sha256 of the embedded input (path, newline, text); the text is not stored. */
+  inputSha256: bytea("input_sha256").notNull(),
 });
 
 /** Append-only (trigger in migration 0004). Identifiers only, never code/diffs/tokens/emails. */

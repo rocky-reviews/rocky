@@ -85,6 +85,6 @@ export const reconcilePush = async (
     });
     return { outcome: "index_queued", completed: true };
   } finally {
-    await session.close();
+    await session.close().catch(() => undefined);
   }
 };

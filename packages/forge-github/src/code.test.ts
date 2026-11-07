@@ -77,6 +77,19 @@ describe("code sessions: contents read only, one repository, revoked on close", 
     await expect(session.branchHead("main")).rejects.toThrow(/closed/);
   });
 
+  it("reports the repository's size in KiB, or null when GitHub gives none (P9-1 fix round)", async () => {
+    const { github, forge } = setup();
+    const session = await openCode(forge);
+    expect(await session.repositorySizeKb()).toBe(1);
+    github.putCode(77, HEAD, FILES, { branch: "main", sizeKb: 123_456 });
+    expect(await session.repositorySizeKb()).toBe(123_456);
+    github.putCode(77, HEAD, FILES, { branch: "main", sizeKb: null });
+    expect(await session.repositorySizeKb()).toBeNull();
+    github.failRoute("repository", 502);
+    await expect(session.repositorySizeKb()).rejects.toThrow(ForgeReadError);
+    await session.close();
+  });
+
   it("is null when the repository is not the installation's", async () => {
     const { forge } = setup();
     expect(await forge.openCode({ installationId: 4242, repositoryId: 999 })).toBeNull();

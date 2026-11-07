@@ -123,13 +123,13 @@ describe("tree-sitter chunks per language (real grammars, exact versions)", () =
     });
   });
 
-  it("hashes each chunk's text and drops a leading byte-order mark", async () => {
+  it("hashes each chunk's embedded input (path and text) and drops a leading byte-order mark", async () => {
     const prepared = await prepareFile(chunker, "src/a.ts", bytes("﻿export const a = 1;\n"));
     if (prepared.kind !== "chunks") throw new Error("expected chunks");
     const [chunk] = prepared.chunks;
     expect(chunk?.text).toBe("export const a = 1;");
-    expect(chunk?.contentSha256).toBe(
-      createHash("sha256").update("export const a = 1;").digest("hex"),
+    expect(chunk?.inputSha256).toBe(
+      createHash("sha256").update("src/a.ts\nexport const a = 1;").digest("hex"),
     );
     expect(prepared.language).toBe("typescript");
   });

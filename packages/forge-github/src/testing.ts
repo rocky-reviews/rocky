@@ -430,7 +430,12 @@ export interface FakeGitHubApi {
     repositoryId: number,
     commitSha: string,
     files: Readonly<Record<string, string | Uint8Array>>,
-    options?: { readonly branch?: string; readonly truncated?: boolean },
+    options?: {
+      readonly branch?: string;
+      readonly truncated?: boolean;
+      /** The repository's `size` in KiB (default: the files' bytes); null leaves it out. */
+      readonly sizeKb?: number | null;
+    },
   ): void;
   /** Archive downloads from the codeload host: whether each one carried an authorization header. */
   readonly archiveRequests: { authorized: boolean }[];
@@ -557,6 +562,7 @@ export const fakeGitHubApi = (options: {
   const diffs = new Map<string, string | Uint8Array | "too_large" | "missing">();
   const commits = new Map<string, { files: Map<string, Uint8Array>; truncated: boolean }>();
   const branches = new Map<string, string>();
+  const repositorySizes = new Map<number, number | null>();
   const blobs = new Map<string, Uint8Array>();
   const tickets = new Map<string, { repositoryId: number; commitSha: string; top: string }>();
   const archiveRequests: { authorized: boolean }[] = [];
@@ -954,6 +960,19 @@ export const fakeGitHubApi = (options: {
         target === undefined ? undefined : permissions.get(`${target.id}:${entry.repo.id}`);
       if (role === undefined) return json(404, githubFixture("get-installation.not-found"));
       return new Response(null, { status: 204 });
+    }
+    m = REPOSITORY_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("repository");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const size = repositorySizes.get(entry.repo.id) ?? null;
+      return json(200, {
+        ...githubFixture("get-repository"),
+        ...repositoryJson(entry.repo),
+        ...(size === null ? {} : { size }),
+      });
     }
     m = REF_ROUTE.exec(path);
     if (method === "GET" && m !== null) {
@@ -1367,6 +1386,11 @@ export const fakeGitHubApi = (options: {
       if (codeOptions.branch !== undefined) {
         branches.set(`${repositoryId}:${codeOptions.branch}`, commitSha);
       }
+      const bytes = [...map.values()].reduce((n, b) => n + b.byteLength, 0);
+      repositorySizes.set(
+        repositoryId,
+        codeOptions.sizeKb === undefined ? Math.ceil(bytes / 1024) : codeOptions.sizeKb,
+      );
     },
     putDiff: (repositoryId, revision, diff) => {
       diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);

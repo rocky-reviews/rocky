@@ -237,7 +237,7 @@ export const seedOrg = async (
           startLine: 1,
           endLine: 12,
           kind: "function_declaration",
-          contentSha256: Buffer.alloc(32, 4),
+          inputSha256: Buffer.alloc(32, 4),
         })
         .returning({ id: schema.codeChunks.id }),
     );

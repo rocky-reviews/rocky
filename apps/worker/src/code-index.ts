@@ -1,4 +1,5 @@
 import {
+  CHARS_PER_TOKEN,
   classifyPath,
   embeddingInput,
   embeddingTokens,
@@ -126,6 +127,14 @@ class OverLimit extends Error {
     super("index: over the token limit");
   }
 }
+
+/**
+ * Tokens a whole repository would cost to embed, from the size the forge reports (KiB). The
+ * forge's size counts the stored repository (compressed, with history), so this is a rough upper
+ * bound for source and a rough figure for anything else; it only gates a truncated full run.
+ */
+export const sizeTokens = (sizeKb: number): number =>
+  Math.min(Math.ceil((sizeKb * 1024) / CHARS_PER_TOKEN), 2_147_483_647);
 
 const SAFE_CODE = /^(?:[0-9A-Z]{5}|[a-z][a-z0-9_]{0,63})$/;
 
@@ -268,7 +277,18 @@ export const runCodeIndex = async (
           : fromArchive(code, head, plan.fetch);
       removals = () => plan.remove;
     } else {
-      // The listing is incomplete: one archive is the listing, compared by blob id as it streams.
+      // The listing is incomplete, so the plan cannot estimate. A full run (nothing stored, or
+      // another space) is bounded by the repository's size before anything is downloaded: over
+      // the limit, or of unknown size, it waits for a person. An incremental run embeds only what
+      // changed, and stays bounded by the running cap.
+      if (counts.fullRun && target.approvedTokens === null) {
+        const sizeKb = await code.repositorySizeKb();
+        const estimatedTokens = sizeKb === null ? limit + 1 : sizeTokens(sizeKb);
+        if (estimatedTokens > limit) {
+          return await finish({ kind: "over_limit", estimatedTokens, limitTokens: limit });
+        }
+      }
+      // One archive is the listing, compared by blob id as it streams.
       const seen = new Set<string>();
       files = fromFullArchive(code, head, stored, seen);
       removals = () => stored.map((f) => f.path).filter((path) => !seen.has(path));
@@ -302,7 +322,7 @@ export const runCodeIndex = async (
         else if (result.chunks.length === 0) writes.push(skipped(file, "empty"));
         else prepared.push({ file, language: result.language, chunks: result.chunks });
       }
-      const hashes = [...new Set(prepared.flatMap((p) => p.chunks.map((c) => c.contentSha256)))];
+      const hashes = [...new Set(prepared.flatMap((p) => p.chunks.map((c) => c.inputSha256)))];
       // A batch can hold more hashes than one lookup takes (64 files × 500 chunks).
       const known = new Map<string, number[]>();
       for (let i = 0; i < hashes.length; i += CODE_INDEX_MAX_HASHES) {
@@ -312,12 +332,12 @@ export const runCodeIndex = async (
         );
         for (const [hash, vector] of found) known.set(hash, vector);
       }
-      // Chunks to embed, once per distinct text hash in the batch.
+      // Chunks to embed, once per distinct input (path and text) in the batch.
       const toEmbed = new Map<string, string>();
       for (const p of prepared) {
         for (const draft of p.chunks) {
-          if (!known.has(draft.contentSha256) && !toEmbed.has(draft.contentSha256)) {
-            toEmbed.set(draft.contentSha256, embeddingInput(p.file.path, draft));
+          if (!known.has(draft.inputSha256) && !toEmbed.has(draft.inputSha256)) {
+            toEmbed.set(draft.inputSha256, embeddingInput(p.file.path, draft));
           }
         }
       }
@@ -354,14 +374,14 @@ export const runCodeIndex = async (
           language: p.language,
           status: "indexed",
           chunks: p.chunks.map((draft, ordinal) => {
-            const vector = known.get(draft.contentSha256);
+            const vector = known.get(draft.inputSha256);
             if (vector === undefined) throw new Error("index: vector missing");
             return {
               ordinal,
               startLine: draft.startLine,
               endLine: draft.endLine,
               kind: draft.kind,
-              contentSha256: draft.contentSha256,
+              inputSha256: draft.inputSha256,
               vector,
             };
           }),

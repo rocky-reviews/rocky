@@ -92,7 +92,8 @@ HNSW index and drop rows), then every distance. That covers most repositories (a
 has about 7 000 chunks) and gives exact answers in milliseconds. Above it, the HNSW index with
 pgvector's iterative scan (`hnsw.iterative_scan = strict_order`, `ef_search = 200`) keeps
 scanning in distance order until `k` rows pass the tenant filter, and falls back to the exact
-plan if it still comes back short.
+plan if it still comes back short. Iterative scans need pgvector 0.8 or later (the dev and test
+image pins 0.8.7); an older pgvector refuses the setting.
 
 **What the index costs writes.** `pnpm index:bench --without-hnsw` measures it: on the synthetic
 100k-line repository, maintaining the HNSW index is most of the database time of a full index
@@ -112,6 +113,9 @@ children, and merges the glue between them (imports, constants) into small chunk
 fall back to line windows cut at blank lines. Each chunk is embedded as its path, a newline and
 its text, so the path's words count.
 
+The grammars run from the `.wasm` files inside their npm packages; their integrity rests on the
+exact version pins and the lockfile's sha512 for each package (no other checksum is kept).
+
 Skipped by path before anything is fetched: vendored directories, generated directories and
 names (lockfiles, minified bundles, `*.pb.go`, …), unknown extensions, files over 512 KiB, unsafe
 paths. Skipped by content after fetching: binary (NUL bytes or invalid UTF-8), generated markers
@@ -122,7 +126,7 @@ they are not fetched again until they change. At most 500 chunks per file.
 
 `code_indexes` (one row per repository: status, the commit and space it holds, the job's lease),
 `code_files` (path, blob id, language, indexed or skipped) and `code_chunks` (line range, node
-kind, sha256 of the text), all with `org_id`, RLS (FORCE) and composite foreign keys with
+kind, sha256 of the embedded input), all with `org_id`, RLS (FORCE) and composite foreign keys with
 cascades; `embeddings.code_chunk_id` links a vector to its chunk. Everything is written and read
 inside `withOrg`, and every query filters by org and repository as well.
 
@@ -130,8 +134,10 @@ inside `withOrg`, and every query filters by org and repository as well.
 (diffs are kept as size and sha256 only, ADR 0010), and code is the most sensitive content a
 tenant has. A reader (P9-2) re-fetches the lines of a hit by its blob id on a short-lived,
 repository-scoped token; the blob id makes that read exact even after the branch moved. The
-sha256 lets an unchanged chunk keep its vector (a renamed file, or a changed file whose other
-functions did not change, costs nothing to embed). Vectors are derived from code, so they are
+sha256 is of exactly what was embedded (the path, a newline, the text), so an unchanged chunk
+keeps its vector (a changed file whose other functions did not change costs only the changed
+ones) and a vector is never reused for another path: a renamed file's chunks, and identical
+chunks in two files, are each embedded with their own path, so search never shows a stale path. Vectors are derived from code, so they are
 tenant data and are erased with the org (cascade).
 
 ### 6. Keeping it current: the push event, the tree diff, and the queue
@@ -151,7 +157,7 @@ are removed with their chunks and vectors. A first index is the same plan with n
 Up to 200 files are read blob by blob; more come from one archive download (`tarball`), streamed
 and filtered without being written to disk, the redirect followed without the token. A truncated
 tree listing (very large repositories) is replaced by the archive, compared by blob id as it
-streams. The token is minted per run, scoped to the one repository with `contents: read` only,
+streams; on a full run it is first bounded by the repository's size (§7). The token is minted per run, scoped to the one repository with `contents: read` only,
 and revoked at the end.
 
 The queue mirrors the analysis queue (ADR 0017): `worker.claim_code_indexes` (SECURITY DEFINER,
@@ -168,7 +174,12 @@ per-org sink, so `llm_usage` gets a row per call with role `embed`, the provider
 the space, and the reported token count. Like an analysis's per-PR limit, a run has a token
 limit (`ROCKY_INDEX_TOKEN_LIMIT`, default 5 000 000): the plan's estimate (from blob sizes) is
 checked before anything is fetched, and over it the row waits as `over_limit` with the estimate
-until a person approves it ("Index anyway", `approveCodeIndex`, audited). While running, the
+until a person approves it ("Index anyway", `approveCodeIndex`, audited). When GitHub truncates
+the tree listing there is no plan to estimate from, so a full run (nothing stored, or another
+space) is estimated from the repository's size (`GET /repos/{owner}/{repo}`, `size` in KiB, at
+`CHARS_PER_TOKEN`) before the archive is downloaded; over the limit, or with no size reported,
+it waits as `over_limit` unless approved. A truncated incremental run embeds only what changed
+and is bounded by the running cap. While running, the
 real spend may pass the limit by a quarter (the estimate is from sizes) before the run stops as
 `over_limit`. A push re-index is a small fraction of a full one.
 
@@ -189,9 +200,13 @@ the logs, and that no path is logged.
 | 800 ms per embedding call (128 inputs), 200 ms per forge read | 78 s       | 2.4 s                                 |
 | no latency, HNSW index dropped (`--without-hnsw`)             | 3.6 s      | 0.1 s                                 |
 
-Chunking alone: 6 651 chunks in 0.3 s (about 330 000 lines a second). The targets (a full index
-of a 100k-line repository under 10 minutes, a push re-index under 30 s) hold with a wide margin
-at these latencies. The live timing (a real repository, GitHub and a real provider) is a
+Chunking alone: 6 651 chunks in 0.3 s (about 330 000 lines a second). A push also waits in two
+queues before its run starts: at worst the inbox poll (2 s) and the index lane's tick (10 s,
+`DEFAULT_INTERVALS` in `apps/worker/src/jobs.ts`), 12 s in all, so the push figures above are
+12.5 s and 14.4 s from webhook to index. The benchmark adds that wait and exits non-zero when the
+full index takes over 600 s or the push re-index (with the wait) over 30 s. The targets (a full
+index of a 100k-line repository under 10 minutes, a push re-index under 30 s) hold at these
+latencies. The live timing (a real repository, GitHub and a real provider) is a
 maintainer's step: [runbook](../runbooks/index-live-timing.md).
 
 ## Consequences

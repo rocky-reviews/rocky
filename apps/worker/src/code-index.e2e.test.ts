@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   embeddingInput,
+  LlmCallError,
   type CodeReader,
   type EmbeddingSpace,
   type Forge,
@@ -51,7 +52,7 @@ import { buildApp } from "@rocky-reviews/server/app";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createAppCheck, type AppCheck } from "./app-check.js";
-import { runCodeIndex, type CodeIndexDeps } from "./code-index.js";
+import { runCodeIndex, sizeTokens, type CodeIndexDeps } from "./code-index.js";
 import { drainInstallationEvents, drainRepositoryEvents } from "./inbox.js";
 
 /**
@@ -468,7 +469,7 @@ describe("the index lane's edges", () => {
     expect(spaces.rows).toEqual([{ model: "deterministic-other" }]);
   });
 
-  it("a repository the installation lost is a failed run, and the token is revoked", async () => {
+  it("a repository the installation lost is a failed run (no token is minted)", async () => {
     const t = await tenant();
     github.putCode(t.repositoryId, HEAD_1, FILES_1, { branch: "main" });
     await push(t, HEAD_1);
@@ -478,5 +479,145 @@ describe("the index lane's edges", () => {
       outcome: "failed",
       errorCode: "repository_inaccessible",
     });
+  });
+
+  it("GitHub failing after the mint is retried later, and the token is revoked", async () => {
+    const t = await tenant();
+    github.putCode(t.repositoryId, HEAD_1, FILES_1, { branch: "main" });
+    await push(t, HEAD_1);
+    const c = await claim(t);
+    const revoked = github.tokens.revoked;
+    github.failRoute("tree", 502);
+    expect(await runCodeIndex(deps(), c)).toMatchObject({
+      outcome: "retry",
+      errorCode: "forge_http_502",
+    });
+    expect(github.tokens.revoked).toBe(revoked + 1);
+  });
+
+  it("the embedding provider failing is retried later, and the token is revoked", async () => {
+    const t = await tenant();
+    github.putCode(t.repositoryId, HEAD_1, FILES_1, { branch: "main" });
+    await push(t, HEAD_1);
+    const c = await claim(t);
+    const revoked = github.tokens.revoked;
+    const failing: LlmRoles = {
+      completion: () => {
+        throw new Error("indexing makes no completion");
+      },
+      embedding: () => ({
+        embed: () => Promise.reject(new LlmCallError("server_error")),
+      }),
+    };
+    expect(await runCodeIndex(deps({ llm: failing }), c)).toMatchObject({
+      outcome: "retry",
+      errorCode: "llm_server_error",
+      chunksWritten: 0,
+    });
+    expect(github.tokens.revoked).toBe(revoked + 1);
+  });
+
+  it("a truncated listing on a full run is bounded by the repository's size before any download", async () => {
+    const t = await tenant();
+    // 10 000 KiB is about 3.4M tokens at 3 characters a token (CHARS_PER_TOKEN): over a 1M limit.
+    github.putCode(t.repositoryId, HEAD_1, FILES_1, {
+      branch: "main",
+      truncated: true,
+      sizeKb: 10_000,
+    });
+    await push(t, HEAD_1);
+    const archives = github.archiveRequests.length;
+    const calls = embedder.calls;
+    expect(await runCodeIndex(deps(), await claim(t))).toMatchObject({
+      outcome: "over_limit",
+      chunksEmbedded: 0,
+    });
+    expect(github.archiveRequests.length).toBe(archives);
+    expect(embedder.calls).toBe(calls);
+    const repoId = await repoIdOf(t);
+    expect(await workerDb.withOrg(t.orgId, (tx) => codeIndexState(tx, repoId))).toMatchObject({
+      status: "over_limit",
+      estimatedTokens: sizeTokens(10_000),
+      limitTokens: 1_000_000,
+    });
+    // Approved, it runs from the archive.
+    await workerDb.withOrg(t.orgId, (tx) =>
+      approveCodeIndex(tx, repoId, { type: "system", id: "e2e" }),
+    );
+    expect(await runCodeIndex(deps(), await claim(t))).toMatchObject({
+      outcome: "done",
+      fullRun: true,
+    });
+    expect(github.archiveRequests.length).toBe(archives + 1);
+  });
+
+  it("a truncated listing of unknown size waits for a person on a full run", async () => {
+    const t = await tenant();
+    github.putCode(t.repositoryId, HEAD_1, FILES_1, {
+      branch: "main",
+      truncated: true,
+      sizeKb: null,
+    });
+    await push(t, HEAD_1);
+    const archives = github.archiveRequests.length;
+    expect(await runCodeIndex(deps(), await claim(t))).toMatchObject({ outcome: "over_limit" });
+    expect(github.archiveRequests.length).toBe(archives);
+  });
+});
+
+describe("vector reuse is keyed by the exact embedded input (path and text)", () => {
+  it("a renamed file's chunks are embedded again, under the new path", async () => {
+    const t = await tenant();
+    github.putCode(t.repositoryId, HEAD_1, { "src/a.ts": A_TS }, { branch: "main" });
+    await push(t, HEAD_1);
+    const first = await runCodeIndex(deps(), await claim(t));
+    expect(first.outcome).toBe("done");
+    github.putCode(t.repositoryId, HEAD_2, { "src/renamed.ts": A_TS }, { branch: "main" });
+    await push(t, HEAD_2);
+    const second = await runCodeIndex(deps(), await claim(t));
+    expect(second).toMatchObject({
+      outcome: "done",
+      chunksReused: 0,
+      chunksEmbedded: first.chunksEmbedded,
+      filesRemoved: 1,
+    });
+    // The stored vector is the one made for the new path.
+    const prepared = await prepareFile(chunker, "src/renamed.ts", new TextEncoder().encode(A_TS));
+    if (prepared.kind !== "chunks") throw new Error("expected chunks");
+    const chunk = prepared.chunks[0]!;
+    const query = await embedder.embed({ inputs: [embeddingInput("src/renamed.ts", chunk)] });
+    const repoId = await repoIdOf(t);
+    const [hit] = await workerDb.withOrg(t.orgId, (tx) =>
+      searchCodeChunks(tx, { repoId, space, vector: query.vectors[0]!, k: 1 }),
+    );
+    expect(hit).toMatchObject({ path: "src/renamed.ts", startLine: chunk.startLine });
+    expect(hit!.score).toBeCloseTo(1, 5);
+  });
+
+  it("identical chunks in two files each get the vector of their own path", async () => {
+    const t = await tenant();
+    github.putCode(
+      t.repositoryId,
+      HEAD_1,
+      { "src/x.py": B_PY, "src/y.py": B_PY },
+      { branch: "main" },
+    );
+    await push(t, HEAD_1);
+    const run = await runCodeIndex(deps(), await claim(t));
+    expect(run).toMatchObject({ outcome: "done", chunksReused: 0 });
+    expect(run.chunksEmbedded).toBe(run.chunksWritten);
+    const repoId = await repoIdOf(t);
+    for (const path of ["src/x.py", "src/y.py"]) {
+      const prepared = await prepareFile(chunker, path, new TextEncoder().encode(B_PY));
+      if (prepared.kind !== "chunks") throw new Error("expected chunks");
+      const query = await embedder.embed({
+        inputs: [embeddingInput(path, prepared.chunks[0]!)],
+      });
+      const [hit] = await workerDb.withOrg(t.orgId, (tx) =>
+        searchCodeChunks(tx, { repoId, space, vector: query.vectors[0]!, k: 1 }),
+      );
+      expect(hit?.path).toBe(path);
+      expect(hit!.score).toBeCloseTo(1, 5);
+    }
   });
 });

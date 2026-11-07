@@ -513,45 +513,46 @@ export const storedIndexFiles = async (
 };
 
 /**
- * Vectors already stored in `space` for chunks of this repository with these content hashes
- * (hex sha256), keyed by hash: an unchanged function in a changed file is not embedded again.
+ * Vectors already stored in `space` for chunks of this repository with these input hashes
+ * (hex sha256 of path and text), keyed by hash: an unchanged function in a changed file is not
+ * embedded again; the same text under another path is (its input differs).
  */
 export const reusableVectors = async (
   tx: TenantTx,
   repoId: string,
   space: EmbeddingSpace,
-  contentHashes: readonly string[],
+  inputHashes: readonly string[],
 ): Promise<Map<string, number[]>> => {
   checkId(repoId, "repository id");
   checkSpace(space);
-  if (!Array.isArray(contentHashes) || contentHashes.length > CODE_INDEX_MAX_HASHES) {
-    invalid("content hashes");
+  if (!Array.isArray(inputHashes) || inputHashes.length > CODE_INDEX_MAX_HASHES) {
+    invalid("input hashes");
   }
-  for (const h of contentHashes) if (typeof h !== "string" || !SHA256_HEX.test(h)) invalid("hash");
+  for (const h of inputHashes) if (typeof h !== "string" || !SHA256_HEX.test(h)) invalid("hash");
   const out = new Map<string, number[]>();
-  if (contentHashes.length === 0) return out;
+  if (inputHashes.length === 0) return out;
   const { rows } = await tx.query<{ hash: string; vector: string }>(
-    `select distinct on (c.content_sha256) encode(c.content_sha256, 'hex') as hash,
+    `select distinct on (c.input_sha256) encode(c.input_sha256, 'hex') as hash,
             e.embedding::text as vector
        from code_chunks c
        join embeddings e on e.org_id = c.org_id and e.code_chunk_id = c.id
       where c.org_id = $1 and c.repo_id = $2
-        and c.content_sha256 = any (select decode(h, 'hex') from unnest($3::text[]) as h)
+        and c.input_sha256 = any (select decode(h, 'hex') from unnest($3::text[]) as h)
         and e.provider = $4 and e.model = $5 and e.dimensions = $6`,
-    [tx.orgId, repoId, [...new Set(contentHashes)], space.provider, space.model, space.dimensions],
+    [tx.orgId, repoId, [...new Set(inputHashes)], space.provider, space.model, space.dimensions],
   );
   for (const row of rows) out.set(row.hash, parseVector(row.vector, space.dimensions));
   return out;
 };
 
-/** One chunk to store: where it is, the hash of its text, and its vector in the run's space. */
+/** One chunk to store: where it is, the hash of its embedded input, and its vector in the run's space. */
 export interface IndexedChunkWrite {
   readonly ordinal: number;
   readonly startLine: number;
   readonly endLine: number;
   readonly kind: string;
-  /** Hex sha256 of the chunk's text. */
-  readonly contentSha256: string;
+  /** Hex sha256 of the embedded input: the path, a newline, the chunk's text. */
+  readonly inputSha256: string;
   /** Exactly the space's `dimensions` wide. */
   readonly vector: readonly number[];
 }
@@ -593,8 +594,8 @@ const checkFile = (file: IndexedFileWrite): void => {
     checkCount(chunk.endLine, "end line");
     if (chunk.startLine < 1 || chunk.endLine < chunk.startLine) invalid("line range");
     if (typeof chunk.kind !== "string" || !KIND.test(chunk.kind)) invalid("kind");
-    if (typeof chunk.contentSha256 !== "string" || !SHA256_HEX.test(chunk.contentSha256)) {
-      invalid("content hash");
+    if (typeof chunk.inputSha256 !== "string" || !SHA256_HEX.test(chunk.inputSha256)) {
+      invalid("input hash");
     }
   });
 };
@@ -623,8 +624,13 @@ export const writeIndexedFiles = async (
   }
   if (chunkTotal > CODE_INDEX_MAX_WRITE_CHUNKS) invalid("chunks");
   // Vectors are checked before anything is written.
+  // An all-zero vector has no direction (cosine distance NaN): refused, as a query vector is.
   const vectors = files.flatMap((f) =>
-    f.chunks.map((c) => vectorLiteral(toIndexVector(c.vector, space.dimensions))),
+    f.chunks.map((c) => {
+      const padded = toIndexVector(c.vector, space.dimensions);
+      if (!padded.some((v) => v !== 0)) invalid("vector");
+      return vectorLiteral(padded);
+    }),
   );
   const held = await holdRepoLease(tx, lease, repoId);
   if (!isSameSpace(space, held)) invalid("embedding space");
@@ -668,7 +674,7 @@ export const writeIndexedFiles = async (
       starts.push(chunk.startLine);
       ends.push(chunk.endLine);
       kinds.push(chunk.kind);
-      hashes.push(chunk.contentSha256);
+      hashes.push(chunk.inputSha256);
     }
   }
   // `with ordinality` keeps the input order, so the n-th vector belongs to the n-th chunk.
@@ -679,7 +685,7 @@ export const writeIndexedFiles = async (
          with ordinality as c (file_id, ordinal, start_line, end_line, kind, hash, vector, n)
      ), chunks as (
        insert into code_chunks (repo_id, file_id, ordinal, start_line, end_line, kind,
-                                content_sha256)
+                                input_sha256)
        select $1, file_id, ordinal, start_line, end_line, kind, decode(hash, 'hex') from input
        returning id, file_id, ordinal
      )

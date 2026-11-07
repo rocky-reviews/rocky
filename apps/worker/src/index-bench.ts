@@ -23,6 +23,7 @@ import {
 import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
+import { DEFAULT_INTERVALS } from "./jobs.js";
 import { runCodeIndex, type CodeIndexRunReport } from "./code-index.js";
 
 /**
@@ -40,6 +41,9 @@ import { runCodeIndex, type CodeIndexRunReport } from "./code-index.js";
  *
  * `--without-hnsw` drops the approximate index first: the difference is what maintaining it
  * costs the writes (ADR 0040 §3).
+ *
+ * Exits non-zero when the full index takes over 600 s or the push re-index, plus the worst wait
+ * in the inbox and index queues (2 s + 10 s), over 30 s.
  *
  * The live timing (a real repository, a real provider) is a maintainer's step: see
  * docs/runbooks/index-live-timing.md.
@@ -75,6 +79,9 @@ const EMBED_BATCH = int("embed-batch", 1, 2048);
 const DIMENSIONS = int("dimensions", 1, 1024);
 const FORGE_LATENCY_MS = int("forge-latency-ms", 0, 60_000);
 const PUSH_FILES = int("push-files", 1, 10_000);
+/** The P9-1 criteria; the push figure includes the worst wait in the two queues. */
+const FULL_INDEX_MAX_SECONDS = 600;
+const PUSH_REINDEX_MAX_SECONDS = 30;
 
 // --- A synthetic repository ------------------------------------------------------------------
 
@@ -199,6 +206,7 @@ const memoryForge = (
     const session: CodeSession = {
       repository: { id: 1, fullName: "bench/repo", private: true, defaultBranch: "main" },
       branchHead: async () => (await delay(FORGE_LATENCY_MS), head()),
+      repositorySizeKb: () => Promise.resolve(null),
       readTree: async (sha): Promise<ForgeTree | null> => {
         await delay(FORGE_LATENCY_MS);
         const files = commits.get(sha);
@@ -382,10 +390,32 @@ const main = async (): Promise<void> => {
       embedSeconds: seconds(spent.embedMs),
       ...incremental.report,
     });
+
+    // The criteria (P9-1): a full index under 10 minutes, a push re-index under 30 s. A push
+    // also waits in two queues before its run starts: the inbox poll and the index lane's tick
+    // (DEFAULT_INTERVALS, jobs.ts), counted here at their worst.
+    const queueSeconds = (DEFAULT_INTERVALS.inboxMs + DEFAULT_INTERVALS.indexMs) / 1000;
+    const pushSeconds = seconds(incremental.ms) + queueSeconds;
+    const fullOk = full.report.outcome === "done" && full.ms / 1000 <= FULL_INDEX_MAX_SECONDS;
+    const pushOk = incremental.report.outcome === "done" && pushSeconds <= PUSH_REINDEX_MAX_SECONDS;
+    out("criteria", {
+      fullIndexSeconds: seconds(full.ms),
+      fullIndexMaxSeconds: FULL_INDEX_MAX_SECONDS,
+      fullIndexPass: fullOk,
+      pushReindexSeconds: seconds(incremental.ms),
+      worstQueueSeconds: queueSeconds,
+      pushWithQueueSeconds: Math.round(pushSeconds * 1000) / 1000,
+      pushReindexMaxSeconds: PUSH_REINDEX_MAX_SECONDS,
+      pushReindexPass: pushOk,
+    });
+    passed = fullOk && pushOk;
   } finally {
     await db.close();
     await pgs.stop();
   }
 };
 
+let passed = false;
 await main();
+// Non-zero when a criterion is missed, so the benchmark can gate a change.
+process.exitCode = passed ? 0 : 1;

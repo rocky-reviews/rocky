@@ -5,7 +5,7 @@
 --   2. code_indexes: one row per repository, the index's state and its job (queued, running under
 --      a lease, done, failed, over_limit), the commit and the embedding space it holds.
 --   3. code_files and code_chunks: what was indexed, from which blob, cut where. No code text:
---      paths, blob ids, line ranges, node kinds and a sha256 per chunk (ADR 0040 §5).
+--      paths, blob ids, line ranges, node kinds and a sha256 per chunk's embedded input (ADR 0040 §5).
 --   4. embeddings: the vector column settled at vector(1024) with the space stored on every row
 --      (provider, model, dimensions), a link to a code chunk, and one HNSW index (ADR 0040 §3).
 --      Nothing wrote embeddings before P9-1 (P8 never did); any row left is derived data and is
@@ -125,8 +125,10 @@ CREATE TABLE code_chunks (
   start_line      integer     NOT NULL CHECK (start_line >= 1),
   end_line        integer     NOT NULL,
   kind            text        NOT NULL CHECK (kind ~ '^[a-z][a-z0-9_]{0,63}$'),
-  -- sha256 of the chunk's text: an unchanged chunk keeps its vector; the text is not stored.
-  content_sha256  bytea       NOT NULL CHECK (octet_length(content_sha256) = 32),
+  -- sha256 of exactly what was embedded (the path, a newline, the chunk's text): a chunk whose
+  -- input is unchanged keeps its vector; a renamed file's chunks are embedded again. The text is
+  -- not stored.
+  input_sha256    bytea       NOT NULL CHECK (octet_length(input_sha256) = 32),
   CONSTRAINT code_chunks_org_id_id_unique UNIQUE (org_id, id),
   CONSTRAINT code_chunks_file_ordinal_unique UNIQUE (org_id, file_id, ordinal),
   CONSTRAINT code_chunks_lines CHECK (end_line >= start_line),
@@ -135,7 +137,7 @@ CREATE TABLE code_chunks (
 );
 
 CREATE INDEX code_chunks_org_file_idx ON code_chunks (org_id, file_id);
-CREATE INDEX code_chunks_org_repo_hash_idx ON code_chunks (org_id, repo_id, content_sha256);
+CREATE INDEX code_chunks_org_repo_hash_idx ON code_chunks (org_id, repo_id, input_sha256);
 
 -- --- 4. embeddings ----------------------------------------------------------------------------------
 

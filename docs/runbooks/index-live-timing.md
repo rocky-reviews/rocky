@@ -17,7 +17,10 @@ pnpm index:bench --without-hnsw                           # what the HNSW index 
 Needs Docker (a throwaway Postgres container with the real migrations). Prints one JSON line per
 stage: `repository`, `chunking`, `full_index`, `push_reindex`, with seconds, counts and the time
 spent in the database and in embedding calls. Options: `--loc`, `--lines-per-file`,
-`--embed-batch`, `--dimensions`, `--push-files`.
+`--embed-batch`, `--dimensions`, `--push-files`. A last `criteria` line holds the pass or fail
+of each target, and the command exits non-zero when one is missed: the full index over 600 s, or
+the push re-index over 30 s once the worst queue wait is added (the inbox poll, 2 s, plus the
+index lane's tick, 10 s).
 
 ## Live
 
@@ -32,6 +35,8 @@ spent in the database and in embedding calls. Options: `--loc`, `--lines-per-fil
 4. `pnpm dev`, then push a commit to the repository's default branch. The worker logs
    `code index run finished` with `fullRun: true`, the counts and `spentTokens`. The run's
    duration is the time between the `index started` and `code index run finished` lines.
+   For the push figure, measure from the push itself: it includes up to 12 s of queue wait
+   (inbox poll and index tick) before `index started`.
 5. Push a second commit that changes a few files. The next `code index run finished` line has
    `fullRun: false`, `filesWritten` equal to the changed files and most chunks reused.
 6. Check the spend: `select role, provider, model, count(*), sum(input_tokens) from llm_usage

@@ -84,7 +84,7 @@ const file = (path: string, vectors: number[][], blob = "a"): IndexedFileWrite =
     startLine: ordinal * 10 + 1,
     endLine: ordinal * 10 + 9,
     kind: "function_declaration",
-    contentSha256: hash(path.length * 100 + ordinal),
+    inputSha256: hash(path.length * 100 + ordinal),
     vector,
   })),
 });
@@ -243,7 +243,7 @@ describe("a run: lease-checked writes, vectors per space, removal", () => {
   it("reuses a stored vector by the chunk's content hash, within the same space only", async () => {
     const claim = await claimOne(A);
     const written = file("src/a.ts", [[0.5, 0.5, 0.5, 0.5]]);
-    const contentHash = written.chunks[0]!.contentSha256;
+    const contentHash = written.chunks[0]!.inputSha256;
     await app.withOrg(A.orgId, async (tx) => {
       await beginCodeIndexRun(tx, claim, SPACE);
       await writeIndexedFiles(tx, claim, A.repoId, SPACE, [written]);
@@ -262,6 +262,16 @@ describe("a run: lease-checked writes, vectors per space, removal", () => {
       (await app.withOrg(B.orgId, (tx) => reusableVectors(tx, A.repoId, SPACE, [contentHash])))
         .size,
     ).toBe(0);
+  });
+
+  it("refuses an all-zero vector (it has no direction)", async () => {
+    const claim = await claimOne(A);
+    await app.withOrg(A.orgId, (tx) => beginCodeIndexRun(tx, claim, SPACE));
+    await expect(
+      app.withOrg(A.orgId, (tx) =>
+        writeIndexedFiles(tx, claim, A.repoId, SPACE, [file("src/a.ts", [[0, 0, 0, 0]])]),
+      ),
+    ).rejects.toThrow(/invalid vector/);
   });
 
   it("refuses writes once the lease is lost", async () => {

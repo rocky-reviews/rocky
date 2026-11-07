@@ -179,6 +179,7 @@ const TooLarge = z.object({
     .refine((e) => e.some((x) => x.code === "too_large")),
 });
 
+const RepositorySizeJson = z.object({ id: ForgeId, size: Count.optional() });
 const RefJson = z.object({ object: z.object({ sha: Sha, type: z.literal("commit") }) });
 const TreeJson = z.object({
   sha: Sha,
@@ -662,6 +663,16 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge & CodeRead
       return parsed.data.object.sha;
     };
 
+    const repositorySizeKb = async (): Promise<number | null> => {
+      const answer = await exchange("GET", base, await credential(), MAX_TOKEN_RESPONSE_BYTES);
+      if (answer.status !== 200) throw new ForgeReadError("http_status", answer.status);
+      const parsed = RepositorySizeJson.safeParse(json(answer));
+      if (!parsed.success || parsed.data.id !== repository.id) {
+        throw new ForgeReadError("invalid_response");
+      }
+      return parsed.data.size ?? null;
+    };
+
     const readTree = async (commitSha: string): Promise<ForgeTree | null> => {
       checkSha(commitSha, "readTree");
       const answer = await exchange(
@@ -796,6 +807,7 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge & CodeRead
     return {
       repository,
       branchHead,
+      repositorySizeKb,
       readTree,
       readBlob,
       readArchive,
