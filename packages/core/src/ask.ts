@@ -43,8 +43,13 @@ export const ASK_LIMITS = Object.freeze({
   maxLineChars: 500,
   maxCitations: 8,
   maxAnswerChars: limits.MAX_BODY_LENGTH,
-  /** Thinking counts against it (ADR 0012 N9), as for the pipeline's calls. */
-  maxOutputTokens: 16_000,
+  /**
+   * Thinking counts against it (ADR 0012 N9). Sized for a 4 000-character answer (about 1 000
+   * tokens) and eight citations with room for adaptive thinking (a `truncated` answer is
+   * `answer_failed`; the live eval shows it), and no more: it bounds a call's cost until
+   * P9-3's budget.
+   */
+  maxOutputTokens: 6_000,
 });
 
 export const ASK_LABELS = Object.freeze({
@@ -194,10 +199,12 @@ export const excerptOf = (source: AskExcerptSource): AskExcerpt | undefined => {
   const shown: string[] = [];
   let size = 0;
   for (const [i, raw] of lines.entries()) {
-    const line = `${startLine + i}| ${SAFE_LINE(raw)}`;
-    if (shown.length > 0 && size + line.length + 1 > ASK_LIMITS.maxExcerptChars) break;
-    shown.push(line);
-    size += line.length + 1;
+    const code = SAFE_LINE(raw);
+    // The budget is for the code, as the index cut it: the `N| ` prefixes are not counted, so a
+    // chunk at the index's size is shown whole.
+    if (shown.length > 0 && size + code.length + 1 > ASK_LIMITS.maxExcerptChars) break;
+    shown.push(`${startLine + i}| ${code}`);
+    size += code.length + 1;
   }
   const shownEnd = startLine + shown.length - 1;
   return {

@@ -12,6 +12,7 @@ import {
   type RepositoryAccessCheck,
 } from "@rocky-reviews/core";
 import {
+  codeIndexState,
   loadAskTarget,
   searchCodeChunks,
   type CodeIndexState,
@@ -322,6 +323,12 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
           return json(reply, 503, { error: "ask_unavailable" });
         }
         let found = 0;
+        // Whether the index was still settled at `indexedSha` when the search ran: decided again
+        // after the search, in its transaction, not from the state read before the embed call (a
+        // push may start a run meanwhile). A run is marked queued or running before it writes a
+        // chunk, so a search that returned a chunk of a newer blob is followed by a read that no
+        // longer sees `done` at this commit; the hits are then checked against the commit's tree.
+        let settled = false;
         try {
           const outcome = await answerQuestion(
             llm,
@@ -329,9 +336,17 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
               embedding,
               space: ask.space,
               search: async (vector, k): Promise<readonly CodeSearchHit[]> => {
-                const hits = await db.withOrg(me.orgId, (tx) =>
-                  searchCodeChunks(tx, { repoId: row.repoId, space: ask.space, vector, k }),
-                );
+                const hits = await db.withOrg(me.orgId, async (tx) => {
+                  const nearest = await searchCodeChunks(tx, {
+                    repoId: row.repoId,
+                    space: ask.space,
+                    vector,
+                    k,
+                  });
+                  const now = await codeIndexState(tx, row.repoId);
+                  settled = now?.status === "done" && now.indexedSha === index.indexedSha;
+                  return nearest;
+                });
                 found = hits.length;
                 return hits;
               },
@@ -341,7 +356,7 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
                     installationId,
                     repositoryId: row.forgeRepoId,
                     indexedSha: index.indexedSha,
-                    verifyAtCommit: row.index?.status !== "done",
+                    verifyAtCommit: !settled,
                   },
                   hits.map((hit) => ({
                     path: hit.path,

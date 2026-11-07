@@ -116,10 +116,13 @@ let script: Script;
 let calls: ReturnType<typeof scriptedRoles>["calls"] = [];
 let embedVector: number[] = [1, 0, 0, 0];
 let embedded: string[] = [];
+/** Runs while the question is being embedded (between the route's state read and its search). */
+let onEmbed: (() => Promise<void>) | undefined;
 
 const embedding: EmbeddingRoleClient = {
   embed: async (request) => {
     embedded.push(...request.inputs);
+    await onEmbed?.();
     return {
       vectors: request.inputs.map(() => embedVector),
       model: SPACE.model,
@@ -358,6 +361,7 @@ beforeEach(async () => {
   accessAsked = [];
   embedded = [];
   embedVector = [1, 0, 0, 0];
+  onEmbed = undefined;
   accessAnswer = { allowed: true, cached: false, expiresAt: new Date(Date.now() + 60_000) };
   script = () => answer([{ path: "src/auth/invite.ts", start: 4, end: 6 }], "It is `accept`.");
   freshGitHub();
@@ -494,6 +498,27 @@ describe("POST /api/repos/:owner/:repo/pulls/:number/ask: an answer with citatio
     expect(githubCalls(from)).toContain(`GET repos/acme/rocky-app/git/trees/${COMMIT}`);
     const view = await get(dana);
     expect(view.json()).toEqual({ index: { status: "ready", indexedSha: COMMIT, updating: true } });
+  });
+
+  it("a push that starts a run while the question is embedded makes the search check the tree", async () => {
+    await indexRepository();
+    // Settled at COMMIT when the route reads the state; a push queues a run during the embed
+    // call, before the search. GitHub's COMMIT holds another invite.ts than the index.
+    onEmbed = async () => {
+      await db.withOrg(A.orgId, (tx) => enqueueCodeIndex(tx, repoA, NEXT_COMMIT));
+    };
+    github.putCode(FORGE_REPO, COMMIT, {
+      "src/auth/invite.ts": `${INVITE}\n// changed`,
+      "src/other.ts": OTHER,
+    });
+    script = (call) => {
+      expect(call.labels).toEqual(["question", "code"]);
+      return answer([{ path: "src/other.ts", start: 2, end: 3 }]);
+    };
+    const from = github.requests.length;
+    const res = await post(dana, { question: "q" });
+    expect(res.json()).toMatchObject({ status: "answered", indexedSha: COMMIT });
+    expect(githubCalls(from)).toContain(`GET repos/acme/rocky-app/git/trees/${COMMIT}`);
   });
 
   it("says no_context, without asking a model, when GitHub no longer has the indexed blobs", async () => {

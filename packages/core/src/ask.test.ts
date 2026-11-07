@@ -140,6 +140,19 @@ describe("excerpts and parts", () => {
     expect(excerpt!.part.text).toContain(`lines: 1-${excerpt!.shownEnd}`);
   });
 
+  it("budgets the code, not the line-number prefixes: a chunk at the index's size is shown whole", () => {
+    // 150 lines of 39 characters plus newlines: 6 000 characters, the index's largest chunk.
+    const lines = Array.from({ length: 150 }, () => "x".repeat(39));
+    const excerpt = excerptOf({ path: "max.ts", startLine: 1, endLine: 150, lines });
+    expect(lines.join("\n").length + 1).toBe(ASK_LIMITS.maxExcerptChars);
+    expect(excerpt!.shownEnd).toBe(150);
+  });
+
+  it("bounds the answer's output tokens for a 4 000-character answer", () => {
+    expect(ASK_LIMITS.maxOutputTokens).toBeGreaterThanOrEqual(4_000);
+    expect(ASK_LIMITS.maxOutputTokens).toBeLessThanOrEqual(6_000);
+  });
+
   it("cuts a very long line and marks it; strips a carriage return", () => {
     const excerpt = excerptOf({
       path: "a.ts",
