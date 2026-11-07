@@ -53,10 +53,16 @@ for that one repository with `contents: read` only; each distinct blob is read o
 session is closed, and the token revoked, in `finally`. When the index is not settled at its
 commit (a run is under way or failed part-way), the commit's tree is read first and a hit whose
 path does not hold that blob at the indexed commit is dropped, so an excerpt is always the file
-at the indexed head, which is where its link points. Code is never logged, stored or cached.
+at the indexed head, which is where its link points. Whether it is settled is read again in the
+search's own transaction, after the search: a push can start a run while the question is being
+embedded, and a run is marked queued or running before it writes a chunk, so a search that
+returned a newer blob's chunk always leads to the tree check. Code is never logged, stored or
+cached.
 
-Each excerpt is shown as `path`, `lines: a-b`, then numbered lines, cut to 6 000 characters
-(lines over 500 characters are cut and marked). The range actually shown is recorded per
+Each excerpt is shown as `path`, `lines: a-b`, then numbered lines, cut at 6 000 characters of
+code (the index's chunk size; the `N| ` prefixes are not counted, so a whole chunk fits; lines
+over 500 characters are cut and marked). The answer's output is capped at 6 000 tokens, thinking
+included: enough for a 4 000-character answer and eight citations. The range actually shown is recorded per
 excerpt.
 
 ### 4. A citation is valid only inside what the model was shown
@@ -108,12 +114,23 @@ is P9-3's, with the rest of metering.
 
 ### 8. The eval
 
-`packages/evals/src/ask/` (README "Ask"): a synthetic seven-file repository indexed with the
-production chunker, 12 questions (one with a selection) with the ranges that answer them, and a
-scorer. A question counts only when it is answered with at least one valid citation and no
-invalid one; the gate is 90% of questions (`ASK_MIN_VALID_RATE`), and it holds once a baseline
-passed it. `--fake` runs a bag-of-words embedder and a model that cites what it was shown (CI);
-the live run is a maintainer step with a token estimate, as the memory eval's.
+`packages/evals/src/ask/` (README "Ask"): a synthetic eleven-file repository (four files are
+filler that shares the questions' words) indexed with the production chunker, 12 questions (one
+with a selection) with the ranges that answer them, and a scorer. Each question is shown 4
+excerpts (production: 8), so retrieval has to find the answer.
+
+**What "valid citation" means for the criterion.** A question is answered with valid citations
+when the model answered, **every** citation lies inside lines it was shown (§4), and **at least
+one** overlaps a range that answers the question (on target). Inside-what-was-shown alone (the
+"guard" count) proves the guard and the model's discipline, not that the answer points at the
+right code, so it is not enough for the criterion.
+
+The gate is 90% of questions (`ASK_MIN_VALID_RATE`). A live report is held to it on target (the
+comparison recomputes it from the counts; a live report cannot claim the weaker gate). The
+`--fake` run (CI) is held to it on the guard only: its bag-of-words embedder and a model that
+cites the excerpt sharing most words measure the plumbing and the guard, not retrieval or a
+model. Once a baseline passed the eval, a report must run it. The live run is a maintainer step
+with a token estimate, as the memory eval's.
 
 ### 9. Not in this task (P9-3)
 

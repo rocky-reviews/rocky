@@ -61,9 +61,10 @@
 .ask-index-note code {
   font-family: var(--font-mono);
 }
+/* Rocky's own state, not AI text: a neutral bar (cyan is for what the AI wrote). */
 .ask-banner {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--ai);
+  border-left: 3px solid var(--muted);
   border-radius: var(--radius-md);
   background: var(--panel-2);
   padding: var(--space-2) var(--space-3);
@@ -71,6 +72,17 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--space-2);
+}
+.ask-index-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Where `/` puts focus while Ask cannot take a question (it then reads the state out). */
+.ask-index-state:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
 }
 .ask-banner p {
   margin: 0;
@@ -128,8 +140,9 @@
   color: var(--muted);
   font-style: italic;
 }
+/* A failure is Rocky's message, not the model's: neutral, and no severity colour. */
 .chat-a.ask-error {
-  border-left-color: var(--high);
+  border-left-color: var(--muted);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -203,6 +216,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 8px 10px;
+}
+.chat-box .btn-primary:disabled {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  filter: none;
 }
 .chat-box textarea:disabled {
   background: var(--panel-2);

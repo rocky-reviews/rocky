@@ -3,9 +3,11 @@
  * like the other fixture sources). It answers like the server would, as raw answers that go
  * through the same checks, so every state of the panel can be shown and screenshotted:
  *
- *   ?ask=ready (default) | not-indexed | indexing | off | index-error | no-answer | error | slow
+ *   ?ask=ready (default) | not-indexed | indexing | indexing-then-ready | off | index-error |
+ *        no-answer | error | slow
  *
- * `slow` never answers a question (the "Reading the code…" state). The answers are the POC's
+ * `slow` never answers a question (the "Reading the code…" state); `indexing-then-ready` is
+ * indexing on the first check and ready from the next (the poll). The answers are the POC's
  * mocked ones (design-poc/index.html, ANSWERS), with citations in the server's shape.
  */
 import type { AskSource, RawAnswer } from "./ask-data.js";
@@ -14,6 +16,7 @@ export const ASK_SCENARIOS = [
   "ready",
   "not-indexed",
   "indexing",
+  "indexing-then-ready",
   "off",
   "index-error",
   "no-answer",
@@ -77,46 +80,49 @@ const later = <T>(ms: number, value: T, signal?: AbortSignal): Promise<T> =>
     });
   });
 
-export const createFixtureAskSource = (scenario: AskScenario = "ready"): AskSource => ({
-  index: async (_pull, { signal } = {}) => {
-    const index =
-      scenario === "not-indexed"
-        ? { status: "not_indexed" }
-        : scenario === "indexing"
-          ? { status: "indexing" }
-          : scenario === "off"
-            ? { status: "off" }
-            : { status: "ready", indexedSha: FIXTURE_INDEXED_SHA, updating: false };
-    if (scenario === "index-error")
-      return later(50, { status: 502, body: { error: "internal" } }, signal);
-    return later(50, { status: 200, body: { index } }, signal);
-  },
-  ask: async (_pull, question, { signal } = {}): Promise<RawAnswer> => {
-    if (scenario === "slow") return new Promise<RawAnswer>(() => undefined);
-    if (scenario === "error")
-      return later(
-        300,
-        { status: 502, body: { error: "model_unavailable", retryable: true } },
-        signal,
-      );
-    if (scenario === "no-answer")
-      return later(
-        300,
-        {
-          status: 200,
-          body: {
-            status: "no_answer",
-            reason: "model",
-            note: "The indexed code does not show where invitations are sent; the mailer is not in the excerpts Rocky found.",
+export const createFixtureAskSource = (scenario: AskScenario = "ready"): AskSource => {
+  let checks = 0;
+  return {
+    index: async (_pull, { signal } = {}) => {
+      const index =
+        scenario === "not-indexed"
+          ? { status: "not_indexed" }
+          : scenario === "indexing" || (scenario === "indexing-then-ready" && checks++ === 0)
+            ? { status: "indexing" }
+            : scenario === "off"
+              ? { status: "off" }
+              : { status: "ready", indexedSha: FIXTURE_INDEXED_SHA, updating: false };
+      if (scenario === "index-error")
+        return later(50, { status: 502, body: { error: "internal" } }, signal);
+      return later(50, { status: 200, body: { index } }, signal);
+    },
+    ask: async (_pull, question, { signal } = {}): Promise<RawAnswer> => {
+      if (scenario === "slow") return new Promise<RawAnswer>(() => undefined);
+      if (scenario === "error")
+        return later(
+          300,
+          { status: 502, body: { error: "model_unavailable", retryable: true } },
+          signal,
+        );
+      if (scenario === "no-answer")
+        return later(
+          300,
+          {
+            status: 200,
+            body: {
+              status: "no_answer",
+              reason: "model",
+              note: "The indexed code does not show where invitations are sent; the mailer is not in the excerpts Rocky found.",
+            },
           },
-        },
+          signal,
+        );
+      const hit = ANSWERS.find((a) => a.match.test(question.question))?.body ?? FALLBACK;
+      return later(
+        300,
+        { status: 200, body: { status: "answered", indexedSha: FIXTURE_INDEXED_SHA, ...hit } },
         signal,
       );
-    const hit = ANSWERS.find((a) => a.match.test(question.question))?.body ?? FALLBACK;
-    return later(
-      300,
-      { status: 200, body: { status: "answered", indexedSha: FIXTURE_INDEXED_SHA, ...hit } },
-      signal,
-    );
-  },
-});
+    },
+  };
+};

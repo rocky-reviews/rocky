@@ -89,6 +89,70 @@ test.describe("/ with code selected in the diff", () => {
   });
 });
 
+test.describe("review round fixes", () => {
+  test("a suggested question takes the selected code with it and clears the chip", async ({
+    page,
+  }) => {
+    await openAsk(page);
+    const { start, end } = await selectDiffRows(page, "src/auth/invitations.ts");
+    await page.keyboard.press("/");
+    await expect(page.locator("form .ask-selection")).toBeVisible();
+    await page.getByRole("button", { name: "Who calls the changed code?" }).click();
+    await expect(page.locator("form .ask-selection")).toHaveCount(0);
+    await expect(page.locator(".chat-q .ask-selection")).toContainText(
+      `src/auth/invitations.ts:${start}–${end}`,
+    );
+  });
+
+  test("Try again is off while another question is answered, and never loses the question", async ({
+    page,
+  }) => {
+    await openAsk(page, "error");
+    await showAskTab(page);
+    await ask(page, "First question?");
+    const first = page.locator(".chat-turn").first();
+    await expect(first.locator(".ask-error")).toBeVisible();
+    await ask(page, "Second question?");
+    // The second is being answered: the first's retry would not be sent, so it is off.
+    await expect(page.locator(".chat-a.typing")).toBeVisible();
+    await expect(first.getByRole("button", { name: "Try again" })).toBeDisabled();
+    await expect(page.locator(".chat-a.typing")).toHaveCount(0);
+    await first.getByRole("button", { name: "Try again" }).click();
+    // Both questions are still on screen; the first is asked again, last.
+    await expect(page.locator(".chat-q bdi")).toHaveText(["Second question?", "First question?"]);
+  });
+
+  test("/ before the index can answer focuses its state, and focus never jumps later", async ({
+    page,
+  }) => {
+    await page.clock.install({ time: new Date("2026-10-25T12:12:00.000Z") });
+    await page.goto("/?fixture=pr-847&ask=indexing-then-ready");
+    await page.locator("header.topbar").waitFor();
+    await page.clock.runFor(1_000);
+    await page.locator("body").focus();
+    await page.keyboard.press("/");
+    await page.clock.runFor(200);
+    const state = page.locator(".ask-index-state");
+    await expect(state).toContainText("Indexing");
+    await expect(state).toBeFocused();
+    await expect(questionBox(page)).toBeDisabled();
+    // The poll finds the index ready: the box takes questions, and focus stays where it was.
+    await page.clock.runFor(21_000);
+    await expect(questionBox(page)).toBeEnabled();
+    await expect(questionBox(page)).not.toBeFocused();
+    await expect(state).toBeFocused();
+  });
+
+  test("/ while Ask is not indexed reads the state out instead of doing nothing", async ({
+    page,
+  }) => {
+    await openAsk(page, "not-indexed");
+    await page.keyboard.press("/");
+    await expect(page.locator(".ask-index-state")).toBeFocused();
+    await expect(page.locator(".ask-index-state")).toContainText("Not indexed yet");
+  });
+});
+
 test.describe("every state says what it is", () => {
   const states: [string, RegExp][] = [
     ["not-indexed", /Not indexed yet/],

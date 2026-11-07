@@ -115,7 +115,16 @@ const SelectionChip = ({
   </span>
 );
 
-const Reply = ({ reply, onRetry }: { reply: AskReply | "pending"; onRetry: () => void }) => {
+const Reply = ({
+  reply,
+  retryDisabled,
+  onRetry,
+}: {
+  reply: AskReply | "pending";
+  /** Another question is being answered: a retry would not be sent. */
+  retryDisabled: boolean;
+  onRetry: () => void;
+}) => {
   if (reply === "pending")
     return (
       <div className="chat-a typing" role="status">
@@ -160,7 +169,12 @@ const Reply = ({ reply, onRetry }: { reply: AskReply | "pending"; onRetry: () =>
           {reply.problem !== "signed_out" &&
             reply.problem !== "not_found" &&
             reply.problem !== "invalid_question" && (
-              <button type="button" className="btn btn-sm btn-ghost" onClick={onRetry}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={retryDisabled}
+                onClick={onRetry}
+              >
                 Try again
               </button>
             )}
@@ -250,6 +264,7 @@ export const AskPanelContent = ({
   const [turns, setTurns] = useState<readonly Turn[]>([]);
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
+  const note = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const nextId = useRef(1);
   const inFlight = useRef<AbortController | null>(null);
@@ -300,18 +315,22 @@ export const AskPanelContent = ({
 
   useEffect(() => () => inFlight.current?.abort(), []);
 
-  // `/`: focus the box once the panel (or its drawer) has settled and the box takes questions
-  // (on the first `/`, the index is still being checked).
+  // `/`: once the panel (or its drawer) has settled and the index's state is known, focus the
+  // box if it takes questions, or else the index's state, which is then read out (`/` is never
+  // silent). The request is used up either way: an index that becomes ready later (the poll)
+  // never pulls focus into the box on its own.
   const ready = indexState.kind === "known" && indexState.index.status === "ready";
+  const settledIndex = indexState.kind === "known" || indexState.kind === "problem";
   const focusDone = useRef(0);
   useEffect(() => {
-    if (focusRequest === focusDone.current || !ready) return;
+    if (focusRequest === focusDone.current || !settledIndex) return;
     focusDone.current = focusRequest;
+    const target = ready ? box : note;
     const frame = window.requestAnimationFrame(() =>
-      window.setTimeout(() => box.current?.focus(), 0),
+      window.setTimeout(() => target.current?.focus(), 0),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [focusRequest, ready]);
+  }, [focusRequest, ready, settledIndex]);
 
   // New turns scroll into view (POC: the panel scrolls to the bottom).
   useEffect(() => {
@@ -321,9 +340,10 @@ export const AskPanelContent = ({
 
   const pending = turns.some((t) => t.reply === "pending");
 
-  const send = (question: string, attached: AskSelection | null) => {
+  /** Asks; false (and nothing changes) when no question can be sent now. */
+  const send = (question: string, attached: AskSelection | null): boolean => {
     const text = question.trim();
-    if (text === "" || text.length > MAX_QUESTION_CHARS || !ready || pending) return;
+    if (text === "" || text.length > MAX_QUESTION_CHARS || !ready || pending) return false;
     const id = nextId.current++;
     setTurns((all) => [...all, { id, question: text, selection: attached, reply: "pending" }]);
     const abort = new AbortController();
@@ -346,14 +366,24 @@ export const AskPanelContent = ({
         (answer) => settle(parseAskReply(pull, answer)),
         () => settle({ kind: "error", problem: "failed" }),
       );
+    return true;
   };
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (draft.trim() === "" || !ready || pending) return;
-    send(draft, selection);
+    if (!send(draft, selection)) return;
     setDraft("");
     onClearSelection();
+  };
+
+  /** A suggested question takes the selected code with it, as a typed one does. */
+  const suggest = (question: string) => {
+    if (send(question, selection)) onClearSelection();
+  };
+
+  /** The failed turn gives way to the new one only once that one is sent. */
+  const retry = (turn: Turn) => {
+    if (send(turn.question, turn.selection)) setTurns((all) => all.filter((t) => t !== turn));
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -375,19 +405,23 @@ export const AskPanelContent = ({
   return (
     <>
       <div className="panel-body ask-body" ref={body}>
-        <IndexNote state={indexState} onRetry={() => check()} />
-        {turns.length === 0 && ready && (
-          <p className="ask-hint">
-            Ask about this PR. Answers come from the repository’s indexed code, with links to the
-            lines they rest on. Select code in the diff and press <kbd>/</kbd> to ask about it.
-          </p>
-        )}
-        {indexedSha !== null && (
-          <p className="ask-index-note">
-            Code indexed at <code>{indexedSha.slice(0, 7)}</code>
-            {updating ? ", a newer push is being indexed." : "."}
-          </p>
-        )}
+        {/* Focused by `/` while Ask cannot take a question, so its state is read out. It is never
+            empty, so focus stays on it when the index becomes ready meanwhile. */}
+        <div className="ask-index-state" ref={note} tabIndex={-1}>
+          <IndexNote state={indexState} onRetry={() => check()} />
+          {turns.length === 0 && ready && (
+            <p className="ask-hint">
+              Ask about this PR. Answers come from the repository’s indexed code, with links to the
+              lines they rest on. Select code in the diff and press <kbd>/</kbd> to ask about it.
+            </p>
+          )}
+          {indexedSha !== null && (
+            <p className="ask-index-note">
+              Code indexed at <code>{indexedSha.slice(0, 7)}</code>
+              {updating ? ", a newer push is being indexed." : "."}
+            </p>
+          )}
+        </div>
         {turns.length > 0 && (
           <ol className="chat" aria-label="Questions and answers">
             {turns.map((turn) => (
@@ -397,13 +431,7 @@ export const AskPanelContent = ({
                   <bdi>{turn.question}</bdi>
                   {turn.selection !== null && <SelectionChip selection={turn.selection} />}
                 </div>
-                <Reply
-                  reply={turn.reply}
-                  onRetry={() => {
-                    setTurns((all) => all.filter((t) => t.id !== turn.id));
-                    send(turn.question, turn.selection);
-                  }}
-                />
+                <Reply reply={turn.reply} retryDisabled={pending} onRetry={() => retry(turn)} />
               </li>
             ))}
           </ol>
@@ -413,7 +441,7 @@ export const AskPanelContent = ({
         {ready && (
           <div className="suggest" aria-label="Suggested questions" role="group">
             {SUGGESTED_QUESTIONS.map((q) => (
-              <button key={q} type="button" disabled={pending} onClick={() => send(q, selection)}>
+              <button key={q} type="button" disabled={pending} onClick={() => suggest(q)}>
                 {q}
               </button>
             ))}
