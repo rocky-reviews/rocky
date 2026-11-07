@@ -59,6 +59,19 @@ They follow the OpenAI response shapes that Ollama and vLLM implement.
 | `error-400-context.json`   | `context_length_exceeded`                                                  |
 | `error-401.json`           | `invalid_api_key`                                                          |
 
+## `openai/` and `voyage/`: hosted embeddings (P9-1, ADR 0040)
+
+Documentation-shaped like the rest: the response shapes OpenAI's and Voyage AI's embeddings
+APIs document, with synthetic vectors. Served to `src/adapters/embedding-providers.contract.test.ts`
+and the key hygiene test; no test calls either API.
+
+| File                     | What it is                                                            |
+| ------------------------ | --------------------------------------------------------------------- |
+| `openai/embeddings.json` | Two 4-dimensional vectors out of `index` order, `usage.prompt_tokens` |
+| `openai/error-429.json`  | A rate-limit error body                                               |
+| `voyage/embeddings.json` | Two 4-dimensional vectors, `usage.total_tokens`                       |
+| `voyage/error-401.json`  | An invalid-key error body                                             |
+
 ## Recording real responses
 
 The P4-2 criterion asks for recorded responses; until these files are replaced it is only partly

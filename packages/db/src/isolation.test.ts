@@ -68,6 +68,8 @@ const ALLOWED_WORKER_SECURITY_DEFINER = [
   "retention.orgs_due_for_deletion",
   // The analysis queue's claim (P4-6, migration 0012, ADR 0017): cross-tenant, worker only.
   "worker.claim_analyses",
+  // The repository index's claim (P9-1, migration 0022, ADR 0040): cross-tenant, worker only.
+  "worker.claim_code_indexes",
   "worker.claim_webhook_deliveries",
   "worker.complete_webhook_delivery",
   "worker.fail_webhook_delivery",
@@ -101,6 +103,11 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.analyses": DML,
   "public.audit_events": ["INSERT", "SELECT"],
   "public.audit_events_id_seq": [],
+  // The repository index (P9-1, migration 0022): derived data, the worker writes it through
+  // rocky_app inside withOrg; the server reads it (search, P9-2).
+  "public.code_chunks": DML,
+  "public.code_files": DML,
+  "public.code_indexes": DML,
   "public.comments_pending": DML,
   "public.embeddings": DML,
   "public.findings_state": DML,
@@ -188,6 +195,31 @@ const ANALYSES_COLUMN_PRIVILEGES = [
   "rocky_lifecycle:UPDATE:lease_id",
   "rocky_lifecycle:UPDATE:lease_until",
   "rocky_lifecycle:UPDATE:status",
+];
+
+/**
+ * The index claim (P9-1, migration 0022) reads and updates exactly the queue columns of
+ * `code_indexes`, as rocky_lifecycle; never the commit, the space or the run's counts.
+ */
+const CODE_INDEXES_COLUMN_PRIVILEGES = [
+  "rocky_lifecycle:SELECT:attempts",
+  "rocky_lifecycle:SELECT:available_at",
+  "rocky_lifecycle:SELECT:error_code",
+  "rocky_lifecycle:SELECT:generation",
+  "rocky_lifecycle:SELECT:id",
+  "rocky_lifecycle:SELECT:lease_id",
+  "rocky_lifecycle:SELECT:lease_until",
+  "rocky_lifecycle:SELECT:org_id",
+  "rocky_lifecycle:SELECT:status",
+  "rocky_lifecycle:UPDATE:attempts",
+  "rocky_lifecycle:UPDATE:available_at",
+  "rocky_lifecycle:UPDATE:claimed_at",
+  "rocky_lifecycle:UPDATE:completed_at",
+  "rocky_lifecycle:UPDATE:error_code",
+  "rocky_lifecycle:UPDATE:lease_id",
+  "rocky_lifecycle:UPDATE:lease_until",
+  "rocky_lifecycle:UPDATE:status",
+  "rocky_lifecycle:UPDATE:updated_at",
 ];
 
 /**
@@ -331,6 +363,9 @@ describe("every table in the database", () => {
       "review_submission_items",
       "memory_entries",
       "embeddings",
+      "code_indexes",
+      "code_files",
+      "code_chunks",
       "audit_events",
       "llm_usage",
       "jobs",
@@ -771,9 +806,9 @@ describe("memory decay (P8-4, migration 0019, ADR 0038 D1, D5)", () => {
     // Superseded recently: inside the history window, so only the retire rule can remove it.
     history = await plant(old, new Date(NOW.getTime() - 10 * DAY), idleHead);
     const embedding = await superuser.query<{ id: string }>(
-      `insert into embeddings (org_id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
-       values ($1, $2, $3, 'memory', $4, 'test-embed', $5::vector) returning id`,
-      [b.orgId, b.repoId, idleHead, idleHead, `[${Array(1536).fill(0).join(",")}]`],
+      `insert into embeddings (org_id, repo_id, memory_entry_id, source_kind, source_ref, provider, model, dimensions, embedding)
+       values ($1, $2, $3, 'memory', $4, 'openai-compatible', 'test-embed', 1024, $5::vector) returning id`,
+      [b.orgId, b.repoId, idleHead, idleHead, `[${Array(1024).fill(0).join(",")}]`],
     );
     idleEmbedding = embedding.rows[0]!.id;
   });
@@ -821,14 +856,14 @@ describe("memory decay (P8-4, migration 0019, ADR 0038 D1, D5)", () => {
     // Put A's fixture embedding back for the later per-table checks.
     await db.withOrg(a.orgId, (tx) =>
       tx.query(
-        `insert into embeddings (id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
-         values ($1, $2, $3, 'memory', $4, 'test-embed', $5::vector)`,
+        `insert into embeddings (id, repo_id, memory_entry_id, source_kind, source_ref, provider, model, dimensions, embedding)
+         values ($1, $2, $3, 'memory', $4, 'openai-compatible', 'test-embed', 1024, $5::vector)`,
         [
           a.embeddingId,
           a.repoId,
           a.memoryEntryId,
           a.memoryEntryId,
-          `[${Array(1536).fill(0).join(",")}]`,
+          `[${Array(1024).fill(0).join(",")}]`,
         ],
       ),
     );
@@ -1117,7 +1152,15 @@ describe("other catalog objects (review #8)", () => {
       expect(r.pub, `${r.name} granted to PUBLIC`).toEqual([]);
       // The matrix above is the whole story: no column-level grants widen or narrow it, except
       // the orgs and analyses UPDATE columns pinned exactly below.
-      if (!["public.orgs", "public.analyses", "app.sessions", "app.users"].includes(r.name)) {
+      if (
+        ![
+          "public.orgs",
+          "public.analyses",
+          "public.code_indexes",
+          "app.sessions",
+          "app.users",
+        ].includes(r.name)
+      ) {
         expect(r.column_acls, `${r.name} column ACLs`).toBe("0");
       }
     }
@@ -1133,6 +1176,7 @@ describe("other catalog objects (review #8)", () => {
       ).rows.map((r) => r.g);
     expect(await columnGrants("public.orgs")).toEqual(ORGS_COLUMN_PRIVILEGES);
     expect(await columnGrants("public.analyses")).toEqual(ANALYSES_COLUMN_PRIVILEGES);
+    expect(await columnGrants("public.code_indexes")).toEqual(CODE_INDEXES_COLUMN_PRIVILEGES);
     expect(await columnGrants("app.sessions")).toEqual(SESSIONS_COLUMN_PRIVILEGES);
     expect(await columnGrants("app.users")).toEqual(USERS_COLUMN_PRIVILEGES);
   });

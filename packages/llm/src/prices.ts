@@ -54,7 +54,11 @@ export interface PriceTable {
   readonly version: string;
   /** The first instant (UTC) this version applies to. */
   readonly effectiveFrom: string;
-  readonly providers: Readonly<Record<ProviderKind, ProviderPrices>>;
+  /**
+   * A provider missing from a version has no price in it (the hosted embedding providers, P9-1,
+   * arrived after 2026-10-27 and have no verified price yet: their rows are `no_price`).
+   */
+  readonly providers: Readonly<Partial<Record<ProviderKind, ProviderPrices>>>;
 }
 
 const DECIMAL = /^(\d{1,6})(?:\.(\d{1,6}))?$/;

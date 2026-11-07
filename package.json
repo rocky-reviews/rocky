@@ -33,6 +33,7 @@
     "db:migrate": "node scripts/ensure-env.mjs && tsx --env-file=.env scripts/migrate.ts",
     "evals": "tsx scripts/evals.ts",
     "mirror:rebuild": "node scripts/ensure-env.mjs && pnpm --filter @rocky-reviews/worker mirror:rebuild",
+    "index:bench": "pnpm --filter @rocky-reviews/worker index:bench",
     "rocky": "tsx --env-file-if-exists=.env apps/worker/src/rocky.ts"
   },
   "simple-git-hooks": {

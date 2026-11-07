@@ -48,7 +48,27 @@ export interface WorkerConfig {
   readonly llm: LlmConfig;
   /** The analysis queue lane (P4-6, ADR 0017). */
   readonly analysis: AnalysisConfig;
+  /** The repository index (P9-1, ADR 0040). */
+  readonly index: IndexConfig;
 }
+
+export interface IndexConfig {
+  /**
+   * `ROCKY_INDEX_AUTO=on`: pushes to a default branch queue an index run and the lane claims
+   * them. Off by default; on needs the embed role (`ROCKY_LLM_EMBED_*`), or the worker refuses
+   * to start.
+   */
+  readonly auto: boolean;
+  /** Tokens one run may embed before it waits for "Index anyway" (`ROCKY_INDEX_TOKEN_LIMIT`). */
+  readonly tokenLimit: number;
+}
+
+/**
+ * A 100k-line repository is about 1M tokens to embed in full (4 characters a token), so the
+ * default lets a first index of a repository up to a few times that through and stops anything
+ * much larger for a person to approve; a push re-index is far below it.
+ */
+export const DEFAULT_INDEX_TOKEN_LIMIT = 5_000_000;
 
 export interface AnalysisConfig {
   /**
@@ -75,6 +95,7 @@ const ANALYSIS_BOUNDS = {
   ROCKY_ANALYSIS_TOKEN_LIMIT: [1_000, 10_000_000],
   ROCKY_ANALYSIS_CONCURRENCY: [1, 32],
   ROCKY_ANALYSIS_ORG_CONCURRENCY: [1, 32],
+  ROCKY_INDEX_TOKEN_LIMIT: [10_000, 500_000_000],
 } as const;
 
 const boundedInteger = (env: Env, name: keyof typeof ANALYSIS_BOUNDS, fallback: number): number => {
@@ -110,6 +131,20 @@ export const analysisConfigFromEnv = (env: Env): AnalysisConfig => ({
     DEFAULT_ANALYSIS_CONFIG.orgConcurrency,
   ),
 });
+
+/** `ROCKY_INDEX_*` (P9-1). Indexing on without an embedding model is refused, not ignored. */
+export const indexConfigFromEnv = (env: Env, llm: LlmConfig): IndexConfig => {
+  const auto = onOff(env, "ROCKY_INDEX_AUTO", false);
+  if (auto && llm.roles.embed === null) {
+    throw new ConfigError(
+      "ROCKY_INDEX_AUTO=on needs an embedding model: set ROCKY_LLM_EMBED_PROVIDER (and its key)",
+    );
+  }
+  return {
+    auto,
+    tokenLimit: boundedInteger(env, "ROCKY_INDEX_TOKEN_LIMIT", DEFAULT_INDEX_TOKEN_LIMIT),
+  };
+};
 
 export const githubAppFromEnv = (env: Env): GitHubAppConfig | undefined => {
   const appId = nonEmpty(env, "GITHUB_APP_ID");
@@ -166,6 +201,7 @@ export const workerConfigFromEnv = (env: Env): WorkerConfig => {
     githubApp: githubAppFromEnv(env),
     llm,
     analysis: analysisConfigFromEnv(env),
+    index: indexConfigFromEnv(env, llm),
   };
 };
 

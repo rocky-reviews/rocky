@@ -1,4 +1,5 @@
 import {
+  INDEX_VECTOR_DIMENSIONS,
   LLM_COMPLETION_ROLES,
   LLM_EFFORTS,
   isLlmEffort,
@@ -56,8 +57,28 @@ export interface OpenAiCompatibleSettings {
   /** Optional: local servers often need no key. */
   readonly apiKeyEnv?: string;
 }
+/** OpenAI's hosted API, for embeddings (P9-1). The key always travels, so https only. */
+export interface OpenAiSettings {
+  readonly kind: "openai";
+  readonly apiKeyEnv: string;
+  /** Omitted: `https://api.openai.com/v1`. */
+  readonly baseUrl?: string;
+}
+/** Voyage AI's hosted API, for embeddings (P9-1). */
+export interface VoyageSettings {
+  readonly kind: "voyage";
+  readonly apiKeyEnv: string;
+  /** Omitted: `https://api.voyageai.com/v1`. */
+  readonly baseUrl?: string;
+}
 export type ProviderSettings =
-  AnthropicSettings | BedrockSettings | VertexSettings | FoundrySettings | OpenAiCompatibleSettings;
+  | AnthropicSettings
+  | BedrockSettings
+  | VertexSettings
+  | FoundrySettings
+  | OpenAiCompatibleSettings
+  | OpenAiSettings
+  | VoyageSettings;
 export type ProviderSettingsOf<K extends ProviderKind> = Extract<ProviderSettings, { kind: K }>;
 export type ProviderSettingsByKind = { readonly [K in ProviderKind]?: ProviderSettingsOf<K> };
 
@@ -127,7 +148,8 @@ const PLATFORM_MODEL_SHAPES: Partial<Record<ProviderKind, { pattern: RegExp; mes
 };
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const SAFE_KEY = /^[a-z][A-Za-z0-9]{0,23}(?:-[a-z0-9]{1,16})?$/;
-export const MAX_EMBEDDING_DIMENSIONS = 16_000;
+/** Every embedding space is stored at the index width (ADR 0040 §3), so no wider one is accepted. */
+export const MAX_EMBEDDING_DIMENSIONS = INDEX_VECTOR_DIMENSIONS;
 
 const isBlank = (value: string) => value.trim() === "";
 
@@ -180,6 +202,20 @@ const providerSettings = z.discriminatedUnion("kind", [
       .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
       .optional(),
     fallbacks: z.enum(["on", "off"], { error: "must be on or off" }).optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("openai"),
+    apiKeyEnv: keyEnvName,
+    baseUrl: baseUrl
+      .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
+      .optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("voyage"),
+    apiKeyEnv: keyEnvName,
+    baseUrl: baseUrl
+      .refine((raw) => !isPlainHttp(raw), { error: "must be an https URL" })
+      .optional(),
   }),
   z.strictObject({ kind: z.literal("bedrock"), region }),
   z.strictObject({ kind: z.literal("vertex"), projectId: resourceName, region }),
@@ -320,8 +356,16 @@ const semanticIssues = (input: unknown): LlmConfigIssue[] => {
   walk(providers, "providers");
   walk(roles, "roles");
 
-  const checkModel = (path: string, kind: ProviderKind, model: string): boolean => {
-    const catalogue = PROVIDER_CAPABILITIES[kind].models;
+  const checkModel = (
+    path: string,
+    kind: ProviderKind,
+    model: string,
+    capability: "completions" | "embeddings",
+  ): boolean => {
+    const catalogue =
+      capability === "embeddings"
+        ? PROVIDER_CAPABILITIES[kind].embeddingModels
+        : PROVIDER_CAPABILITIES[kind].models;
     if (isBlank(model)) {
       issues.push({ path: `${path}.model`, message: "must not be blank" });
       return false;
@@ -372,7 +416,25 @@ const semanticIssues = (input: unknown): LlmConfigIssue[] => {
       issues.push({ path: `${path}.platformModel`, message: shape.message });
     }
     const model = role["model"];
-    if (typeof model !== "string" || !checkModel(path, kind, model)) return;
+    if (typeof model !== "string" || !checkModel(path, kind, model, capability)) return;
+    if (capability === "embeddings") {
+      const width = role["dimensions"];
+      const known = PROVIDER_CAPABILITIES[kind].embeddingModels?.get(model);
+      if (known === undefined || typeof width !== "number" || !Number.isInteger(width)) return;
+      const widths = known.widths?.filter((w) => w <= MAX_EMBEDDING_DIMENSIONS);
+      if (widths !== undefined && !widths.includes(width)) {
+        issues.push({
+          path: `${path}.dimensions`,
+          message: `model ${model} supports ${widths.join(", ")}`,
+        });
+      } else if (width > known.maxDimensions) {
+        issues.push({
+          path: `${path}.dimensions`,
+          message: `model ${model} supports at most ${known.maxDimensions}`,
+        });
+      }
+      return;
+    }
     const effort = role["effort"];
     if (!isLlmEffort(effort)) return;
     const supported = effortsFor(kind, model);

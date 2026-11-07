@@ -50,6 +50,10 @@ the app's and the user's permissions, so P3-5/P3-6 need nothing more here.
 | `ping`         | automatic  | Sent once when the hook is created; answered `pong`.                                                                                                                                                                                                                        |
 | others         | no         | `installation_repositories`, `pull_request_review*`, `check_run`, `push` etc. are not decoded by P3-2; subscribing would only cost an HMAC per delivery. P3-3/P3-4 re-read state from GitHub (ADR 0007 §4) rather than relying on more events. Adding one is an ADR change. |
 
+> **Amended:** P7-2 subscribes to `organization` (ADR 0024) and P9-1 to `push` (pushes to a
+> default branch re-index the repository, [ADR 0040](0040-repository-index-and-embedding-spaces.md)
+> §6; `contents: read` was already granted).
+
 ### 3. The rest of the manifest
 
 Pinned exactly (`app-manifest.test.ts` "is pinned exactly…"):

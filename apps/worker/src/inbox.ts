@@ -3,11 +3,13 @@ import {
   isInstallationEvent,
   isOrgMemberEvent,
   isPullRequestEvent,
+  isRepositoryPushEvent,
   type Clock,
   type ForgeEvent,
   type InstallationEvent,
   type OrgMemberEvent,
   type PullRequestEvent,
+  type RepositoryPushEvent,
 } from "@rocky-reviews/core";
 import {
   decodeClaimedDelivery,
@@ -39,6 +41,7 @@ import {
   reconcilePullRequest,
   type PullRequestDeps,
 } from "./pull-requests.js";
+import { PUSH_ROW_BUDGET_SECONDS, reconcilePush, type PushDeps } from "./repository-events.js";
 
 /**
  * Drains installation events from the webhook inbox (P3-3, ADR 0009). Claims a batch of this
@@ -142,7 +145,7 @@ const resultOf = (result: "retry" | "parked" | "stale"): RowResult =>
 
 /** One lane of the inbox and what to do with its rows. */
 interface Lane<E extends ForgeEvent> {
-  readonly name: "installation" | "pull_request" | "org_member";
+  readonly name: "installation" | "pull_request" | "org_member" | "repository";
   /** Worst-case time for one row (the lease budget). */
   readonly rowBudgetSeconds: number;
   readonly accepts: (event: ForgeEvent) => event is E;
@@ -313,4 +316,17 @@ export const drainOrgMemberEvents = (
     handle: (row, event) => reconcileOrgMember(deps, row, event),
     ids: (event) => ({ installationId: event.installationId }),
     label: "org member",
+  });
+
+export interface PushInboxDeps extends DrainDeps, PushDeps {}
+
+/** Push events (P9-1, ADR 0040): a default branch moved, so the repository's index catches up. */
+export const drainRepositoryEvents = (deps: PushInboxDeps): Promise<DrainReport> =>
+  drainLane<RepositoryPushEvent>(deps, {
+    name: "repository",
+    rowBudgetSeconds: PUSH_ROW_BUDGET_SECONDS,
+    accepts: isRepositoryPushEvent,
+    handle: (row, event) => reconcilePush(deps, row, event),
+    ids: (event) => ({ installationId: event.installationId, repositoryId: event.repositoryId }),
+    label: "push",
   });

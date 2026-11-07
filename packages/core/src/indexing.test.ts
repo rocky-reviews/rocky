@@ -1,0 +1,386 @@
+import { describe, expect, it } from "vitest";
+import {
+  chunkFromSyntax,
+  classifyContent,
+  classifyPath,
+  embeddingInput,
+  fallbackChunks,
+  INDEX_LIMITS,
+  INDEX_VECTOR_DIMENSIONS,
+  IndexInputError,
+  isSameSpace,
+  planIndexRun,
+  toIndexVector,
+  type CodeChunkDraft,
+  type SyntaxNodeView,
+} from "./indexing.js";
+
+/** A syntax node stand-in: rows are 0-based, `endRow` is the last row with content. */
+const node = (
+  type: string,
+  startRow: number,
+  endRow: number,
+  children: SyntaxNodeView[] = [],
+): SyntaxNodeView => ({ type, startRow, endRow, namedChildren: () => children });
+
+const linesOf = (count: number, line = (i: number) => `line ${i}`): string =>
+  Array.from({ length: count }, (_, i) => line(i)).join("\n");
+
+const ranges = (chunks: readonly CodeChunkDraft[]) =>
+  chunks.map((c) => [c.startLine, c.endLine, c.kind] as const);
+
+describe("classifyPath: what is never fetched", () => {
+  it("parses the supported languages and falls back for known text", () => {
+    expect(classifyPath("src/app.ts", 10)).toEqual({ kind: "parse", language: "typescript" });
+    expect(classifyPath("src/App.tsx", 10)).toEqual({ kind: "parse", language: "tsx" });
+    expect(classifyPath("web/x.mjs", 10)).toEqual({ kind: "parse", language: "javascript" });
+    expect(classifyPath("web/x.jsx", 10)).toEqual({ kind: "parse", language: "javascript" });
+    expect(classifyPath("tool/run.py", 10)).toEqual({ kind: "parse", language: "python" });
+    expect(classifyPath("cmd/main.go", 10)).toEqual({ kind: "parse", language: "go" });
+    expect(classifyPath("src/lib.rs", 10)).toEqual({ kind: "parse", language: "rust" });
+    expect(classifyPath("src/A.java", 10)).toEqual({ kind: "parse", language: "java" });
+    expect(classifyPath("README.md", 10)).toEqual({ kind: "text", language: "markdown" });
+    expect(classifyPath("db/0001.up.sql", 10)).toEqual({ kind: "text", language: "sql" });
+    expect(classifyPath("deploy/Dockerfile", 10)).toEqual({ kind: "text", language: "dockerfile" });
+    expect(classifyPath("lib/x.rb", 10)).toEqual({ kind: "text", language: "ruby" });
+  });
+
+  it("skips vendored and build directories at any depth", () => {
+    for (const path of [
+      "node_modules/react/index.js",
+      "packages/web/node_modules/x/y.ts",
+      "vendor/github.com/x/y.go",
+      "third_party/z.py",
+      "dist/app.js",
+      "target/debug/build.rs",
+      ".git/config",
+      "a/__pycache__/m.py",
+      ".venv/lib/x.py",
+    ]) {
+      expect(classifyPath(path, 10), path).toEqual({ kind: "skip", reason: "vendored" });
+    }
+  });
+
+  it("skips lockfiles, minified bundles, source maps and generated code by name", () => {
+    for (const path of [
+      "pnpm-lock.yaml",
+      "web/package-lock.json",
+      "Cargo.lock",
+      "go.sum",
+      "static/app.min.js",
+      "static/app.js.map",
+      "api/user.pb.go",
+      "py/user_pb2.py",
+      "src/schema.generated.ts",
+      "test/__snapshots__/a.test.ts.snap",
+    ]) {
+      expect(classifyPath(path, 10), path).toEqual({ kind: "skip", reason: "generated" });
+    }
+  });
+
+  it("skips unknown extensions, files over the size cap, empty files and bad paths", () => {
+    expect(classifyPath("logo.png", 10)).toEqual({ kind: "skip", reason: "unsupported" });
+    expect(classifyPath("data.csv", 10)).toEqual({ kind: "skip", reason: "unsupported" });
+    expect(classifyPath("src/big.ts", INDEX_LIMITS.maxFileBytes + 1)).toEqual({
+      kind: "skip",
+      reason: "too_large",
+    });
+    expect(classifyPath("src/a.ts", INDEX_LIMITS.maxFileBytes)).toEqual({
+      kind: "parse",
+      language: "typescript",
+    });
+    expect(classifyPath("src/empty.ts", 0)).toEqual({ kind: "skip", reason: "empty" });
+    for (const bad of ["", "/abs.ts", "a/../b.ts", "a//b.ts", "a/./b.ts", "a\u0000.ts", "x\n.ts"]) {
+      expect(classifyPath(bad, 10), JSON.stringify(bad)).toEqual({
+        kind: "skip",
+        reason: "invalid_path",
+      });
+    }
+    expect(classifyPath(`${"d/".repeat(600)}a.ts`, 10)).toEqual({
+      kind: "skip",
+      reason: "invalid_path",
+    });
+    expect(classifyPath("a.ts", -1)).toEqual({ kind: "skip", reason: "invalid_path" });
+  });
+});
+
+describe("classifyContent: what is fetched and then skipped", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+
+  it("accepts ordinary source", () => {
+    const text = "export const a = 1;\n";
+    expect(classifyContent(bytes(text), text)).toEqual({ kind: "index" });
+  });
+
+  it("refuses binary content: NUL bytes, or text that is not UTF-8", () => {
+    expect(classifyContent(new Uint8Array([65, 0, 66]), "A\u0000B")).toEqual({
+      kind: "skip",
+      reason: "binary",
+    });
+    expect(classifyContent(new Uint8Array([0xff, 0xfe]), undefined)).toEqual({
+      kind: "skip",
+      reason: "binary",
+    });
+  });
+
+  it("refuses generated files by their header and minified files by their line lengths", () => {
+    for (const header of [
+      "// Code generated by protoc-gen-go. DO NOT EDIT.\npackage x\n",
+      "/* @generated */\nexport {}\n",
+      "# This file is autogenerated by the build\nx = 1\n",
+    ]) {
+      expect(classifyContent(bytes(header), header)).toEqual({ kind: "skip", reason: "generated" });
+    }
+    const minified = `var a=${"1+".repeat(4000)}1;`;
+    expect(classifyContent(bytes(minified), minified)).toEqual({
+      kind: "skip",
+      reason: "generated",
+    });
+    // A marker deep in an ordinary file is not a header.
+    const late = `${linesOf(30)}\n// @generated by nobody\n`;
+    expect(classifyContent(bytes(late), late)).toEqual({ kind: "index" });
+  });
+
+  it("refuses whitespace-only content", () => {
+    expect(classifyContent(bytes(" \n\n\t\n"), " \n\n\t\n")).toEqual({
+      kind: "skip",
+      reason: "empty",
+    });
+  });
+});
+
+describe("chunkFromSyntax: function- and class-level chunks", () => {
+  it("makes one chunk per top-level unit and folds small glue into the next unit", () => {
+    const text = [
+      'import { a } from "a";', // 0
+      "", // 1
+      "// Adds one.", // 2
+      "export function inc(x: number) {", // 3
+      "  const y = x + 1;", // 4
+      "  return y;", // 5
+      "}", // 6
+      "", // 7
+      "class Box {", // 8
+      "  value = 1;", // 9
+      "  get() {", // 10
+      "    return this.value;", // 11
+      "  }", // 12
+      "}", // 13
+    ].join("\n");
+    const root = node("program", 0, 13, [
+      node("import_statement", 0, 0),
+      node("comment", 2, 2),
+      node("export_statement", 3, 6, [node("function_declaration", 3, 6)]),
+      node("class_declaration", 8, 13, [
+        node("class_body", 8, 13, [node("public_field_definition", 9, 9)]),
+      ]),
+    ]);
+    const chunks = chunkFromSyntax("typescript", root, text);
+    expect(ranges(chunks)).toEqual([
+      [1, 7, "export_statement"],
+      [9, 14, "class_declaration"],
+    ]);
+    expect(chunks[0]?.text.startsWith('import { a } from "a";')).toBe(true);
+    expect(chunks[1]?.text).toBe(text.split("\n").slice(8).join("\n"));
+  });
+
+  it("splits a class that is too large into its methods, keeping the header with the first", () => {
+    const methodLines = 60;
+    const lines = ["class Big {"];
+    const methods: SyntaxNodeView[] = [];
+    for (let m = 0; m < 4; m++) {
+      const start = lines.length;
+      lines.push(
+        `  m${m}() {`,
+        ...Array.from({ length: methodLines - 2 }, () => "    x();"),
+        "  }",
+      );
+      methods.push(node("method_definition", start, lines.length - 1));
+    }
+    lines.push("}");
+    const end = lines.length - 1;
+    const root = node("program", 0, end, [
+      node("class_declaration", 0, end, [node("class_body", 0, end, methods)]),
+    ]);
+    const chunks = chunkFromSyntax("typescript", root, lines.join("\n"));
+    expect(chunks.map((c) => c.kind)).toEqual([
+      "method_definition",
+      "method_definition",
+      "method_definition",
+      "method_definition",
+    ]);
+    // Every line of the file is in exactly one chunk.
+    expect(chunks[0]?.startLine).toBe(1);
+    expect(chunks.at(-1)?.endLine).toBe(end + 1);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i]?.startLine).toBe((chunks[i - 1]?.endLine ?? 0) + 1);
+    }
+  });
+
+  it("cuts a single unit that is too large into windows that respect the caps", () => {
+    const count = INDEX_LIMITS.maxChunkLines * 2 + 10;
+    const text = linesOf(count, (i) => (i % 20 === 19 ? "" : `  step(${i});`));
+    const root = node("module", 0, count - 1, [node("function_definition", 0, count - 1)]);
+    const chunks = chunkFromSyntax("python", root, text);
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    for (const c of chunks) {
+      expect(c.endLine - c.startLine + 1).toBeLessThanOrEqual(INDEX_LIMITS.maxChunkLines);
+      expect(c.text.length).toBeLessThanOrEqual(INDEX_LIMITS.maxChunkChars);
+      expect(c.kind).toBe("function_definition");
+    }
+  });
+
+  it("windows the glue of a file without units, and drops blank edges", () => {
+    const text = `\n\n${linesOf(10)}\n\n`;
+    const root = node("source_file", 0, 13, [node("expression_statement", 2, 11)]);
+    expect(ranges(chunkFromSyntax("go", root, text))).toEqual([[3, 12, "block"]]);
+  });
+
+  it("caps the chunks of one file", () => {
+    const units = Array.from({ length: INDEX_LIMITS.maxChunksPerFile + 50 }, (_, i) =>
+      node("function_item", i * 6, i * 6 + 5),
+    );
+    const end = units.length * 6 - 1;
+    const text = linesOf(end + 1);
+    const chunks = chunkFromSyntax("rust", node("source_file", 0, end, units), text);
+    expect(chunks).toHaveLength(INDEX_LIMITS.maxChunksPerFile);
+  });
+
+  it("knows the unit types of every parsed language", () => {
+    const cases: [Parameters<typeof chunkFromSyntax>[0], string][] = [
+      ["javascript", "function_declaration"],
+      ["tsx", "interface_declaration"],
+      ["python", "class_definition"],
+      ["python", "decorated_definition"],
+      ["go", "method_declaration"],
+      ["rust", "impl_item"],
+      ["java", "constructor_declaration"],
+    ];
+    for (const [language, type] of cases) {
+      const text = linesOf(12);
+      const root = node("root", 0, 11, [node("x", 0, 1), node(type, 2, 11)]);
+      expect(
+        chunkFromSyntax(language, root, text).map((c) => c.kind),
+        type,
+      ).toEqual([type]);
+    }
+  });
+});
+
+describe("fallbackChunks: line windows for every other text file", () => {
+  it("prefers to cut at a blank line and never exceeds the caps", () => {
+    const text = linesOf(400, (i) => (i % 50 === 49 ? "" : `row ${i}`));
+    const chunks = fallbackChunks(text);
+    for (const c of chunks) {
+      expect(c.kind).toBe("window");
+      expect(c.endLine - c.startLine + 1).toBeLessThanOrEqual(INDEX_LIMITS.maxChunkLines);
+    }
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
+    // Cuts land just before a blank line (rows 49, 99, ... are blank).
+    expect(chunks[0]!.endLine % 50).toBe(49);
+  });
+
+  it("cuts by characters when lines are long, and truncates a single huge line's text", () => {
+    const text = linesOf(100, () => "x".repeat(200));
+    for (const c of fallbackChunks(text)) {
+      expect(c.text.length).toBeLessThanOrEqual(INDEX_LIMITS.maxChunkChars);
+    }
+    const one = fallbackChunks("y".repeat(INDEX_LIMITS.maxChunkChars * 2));
+    expect(ranges(one)).toEqual([[1, 1, "window"]]);
+    expect(one[0]?.text).toHaveLength(INDEX_LIMITS.maxChunkChars);
+  });
+
+  it("handles CRLF and an empty file", () => {
+    expect(ranges(fallbackChunks("a\r\nb\r\n"))).toEqual([[1, 2, "window"]]);
+    expect(fallbackChunks("a\r\nb")[0]?.text).toBe("a\nb");
+    expect(fallbackChunks("")).toEqual([]);
+  });
+});
+
+describe("embeddingInput", () => {
+  it("prefixes the path so retrieval can match on it", () => {
+    expect(embeddingInput("src/a.ts", { startLine: 1, endLine: 2, kind: "x", text: "a" })).toBe(
+      "src/a.ts\na",
+    );
+  });
+});
+
+describe("toIndexVector: one indexed width for every embedding space", () => {
+  it("zero-pads a narrower vector to the indexed width, keeping cosine similarity", () => {
+    const v = [0.6, 0.8];
+    const padded = toIndexVector(v, 2);
+    expect(padded).toHaveLength(INDEX_VECTOR_DIMENSIONS);
+    expect(padded.slice(0, 2)).toEqual(v);
+    expect(padded.slice(2).every((x) => x === 0)).toBe(true);
+    const w = toIndexVector([0.8, 0.6], 2);
+    const dot = padded.reduce((sum, x, i) => sum + x * (w[i] ?? 0), 0);
+    expect(dot).toBeCloseTo(0.96, 10);
+  });
+
+  it("refuses a vector of the wrong width, a non-finite value or a space wider than the index", () => {
+    expect(() => toIndexVector([1, 2, 3], 2)).toThrow(IndexInputError);
+    expect(() => toIndexVector([1, Number.NaN], 2)).toThrow(IndexInputError);
+    expect(() => toIndexVector([1, Number.POSITIVE_INFINITY], 2)).toThrow(IndexInputError);
+    expect(() => toIndexVector(Array(1025).fill(0), 1025)).toThrow(IndexInputError);
+    expect(() => toIndexVector([], 0)).toThrow(IndexInputError);
+  });
+
+  it("compares embedding spaces by provider, model and dimensions", () => {
+    const a = { provider: "openai", model: "text-embedding-3-small", dimensions: 1024 };
+    expect(isSameSpace(a, { ...a })).toBe(true);
+    expect(isSameSpace(a, { ...a, dimensions: 512 })).toBe(false);
+    expect(isSameSpace(a, { ...a, model: "text-embedding-3-large" })).toBe(false);
+    expect(isSameSpace(a, { ...a, provider: "openai-compatible" })).toBe(false);
+    expect(isSameSpace(a, null)).toBe(false);
+  });
+});
+
+describe("planIndexRun: only what changed is fetched", () => {
+  const sha = (c: string) => c.repeat(40);
+
+  it("fetches new and changed files, removes gone and newly ineligible ones, keeps the rest", () => {
+    const plan = planIndexRun(
+      [
+        { path: "src/a.ts", blobSha: sha("a"), size: 300 },
+        { path: "src/b.ts", blobSha: sha("c"), size: 30 },
+        { path: "src/new.py", blobSha: sha("d"), size: 90 },
+        { path: "node_modules/x/index.js", blobSha: sha("e"), size: 10 },
+        { path: "src/huge.ts", blobSha: sha("f"), size: INDEX_LIMITS.maxFileBytes + 1 },
+      ],
+      [
+        { path: "src/a.ts", blobSha: sha("a") },
+        { path: "src/b.ts", blobSha: sha("b") },
+        { path: "src/gone.ts", blobSha: sha("9") },
+        { path: "src/huge.ts", blobSha: sha("8") },
+      ],
+    );
+    expect(plan.fetch.map((f) => f.path)).toEqual(["src/b.ts", "src/new.py"]);
+    expect(plan.remove).toEqual(["src/gone.ts", "src/huge.ts"]);
+    expect(plan.unchanged).toBe(1);
+    expect(plan.skipped).toEqual({ vendored: 1, too_large: 1 });
+    // ceil(30 / 3) + ceil(90 / 3), plus the path prefix of at least one chunk each.
+    expect(plan.estimatedTokens).toBeGreaterThanOrEqual(40);
+    expect(plan.estimatedTokens).toBeLessThan(60);
+  });
+
+  it("treats a rename as a removal and an addition", () => {
+    const plan = planIndexRun(
+      [{ path: "src/renamed.ts", blobSha: sha("a"), size: 10 }],
+      [{ path: "src/old.ts", blobSha: sha("a") }],
+    );
+    expect(plan.fetch.map((f) => f.path)).toEqual(["src/renamed.ts"]);
+    expect(plan.remove).toEqual(["src/old.ts"]);
+  });
+
+  it("refuses duplicate tree paths (a forged or broken listing)", () => {
+    expect(() =>
+      planIndexRun(
+        [
+          { path: "a.ts", blobSha: sha("a"), size: 1 },
+          { path: "a.ts", blobSha: sha("b"), size: 1 },
+        ],
+        [],
+      ),
+    ).toThrow(IndexInputError);
+  });
+});

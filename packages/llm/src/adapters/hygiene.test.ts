@@ -33,10 +33,16 @@ const SECRET_ENV = {
   ROCKY_TEST_ANTHROPIC_KEY: TEST_KEY,
   ROCKY_TEST_FOUNDRY_KEY: TEST_KEY,
   ROCKY_TEST_VLLM_KEY: TEST_KEY,
+  ROCKY_TEST_OPENAI_KEY: TEST_KEY,
+  ROCKY_TEST_VOYAGE_KEY: TEST_KEY,
 };
 const PR_SECRET_TEXT = "+ const internalToken = loadFromVault('payments-prod')";
 
-const SETTINGS: Readonly<Record<ProviderKind, ProviderSettings>> = {
+/** Providers with completions; the embedding-only ones (P9-1) have their own block below. */
+type CompletionKind = Exclude<ProviderKind, "openai" | "voyage">;
+type EmbeddingOnlyKind = Extract<ProviderKind, "openai" | "voyage">;
+
+const SETTINGS: Readonly<Record<CompletionKind, ProviderSettings>> = {
   anthropic: { kind: "anthropic", apiKeyEnv: "ROCKY_TEST_ANTHROPIC_KEY" },
   bedrock: { kind: "bedrock", region: "eu-west-1" },
   vertex: { kind: "vertex", projectId: "acme-ai", region: "global" },
@@ -47,7 +53,16 @@ const SETTINGS: Readonly<Record<ProviderKind, ProviderSettings>> = {
     apiKeyEnv: "ROCKY_TEST_VLLM_KEY",
   },
 };
-const MODELS: Readonly<Record<ProviderKind, string>> = {
+const EMBEDDING_SETTINGS: Readonly<Record<EmbeddingOnlyKind, ProviderSettings>> = {
+  openai: { kind: "openai", apiKeyEnv: "ROCKY_TEST_OPENAI_KEY" },
+  voyage: { kind: "voyage", apiKeyEnv: "ROCKY_TEST_VOYAGE_KEY" },
+};
+const EMBEDDING_MODELS: Readonly<Record<EmbeddingOnlyKind, string>> = {
+  openai: "text-embedding-3-small",
+  voyage: "voyage-code-3",
+};
+
+const MODELS: Readonly<Record<CompletionKind, string>> = {
   anthropic: "claude-opus-5-5",
   bedrock: "claude-opus-5-5",
   vertex: "claude-opus-5-5",
@@ -87,10 +102,14 @@ const build = (kind: ProviderKind, responses: FakeResponse[]): LlmProvider => {
     settings: ProviderSettings,
     secrets: ReturnType<typeof envSecrets>,
   ) => LlmProvider;
-  return factory(SETTINGS[kind], envSecrets(SECRET_ENV));
+  const settings =
+    kind in SETTINGS
+      ? SETTINGS[kind as CompletionKind]
+      : EMBEDDING_SETTINGS[kind as EmbeddingOnlyKind];
+  return factory(settings, envSecrets(SECRET_ENV));
 };
 
-const call = (kind: ProviderKind): ProviderCompletionCall<Verdict> => ({
+const call = (kind: CompletionKind): ProviderCompletionCall<Verdict> => ({
   role: "review",
   model: MODELS[kind],
   platformModel: undefined,
@@ -134,7 +153,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const okResponse = (kind: ProviderKind): FakeResponse =>
+const okResponse = (kind: CompletionKind): FakeResponse =>
   kind === "openai-compatible"
     ? {
         body: fixture("openai-compatible/chat-stop.json"),
@@ -142,7 +161,46 @@ const okResponse = (kind: ProviderKind): FakeResponse =>
       }
     : sse("end-turn.sse");
 
-describe.each(Object.keys(SETTINGS) as ProviderKind[])("key hygiene: %s", (kind) => {
+describe.each(Object.keys(EMBEDDING_SETTINGS) as EmbeddingOnlyKind[])(
+  "key hygiene: %s embeddings",
+  (kind) => {
+    it("keeps the key and the embedded code out of results, errors, logs and the adapter", async () => {
+      const provider = build(kind, [
+        {
+          body: fixture(`${kind}/embeddings.json`),
+          headers: { "content-type": "application/json" },
+        },
+        echoingError(401),
+        echoingError(500),
+        echoingError(429),
+      ]);
+      assertClean(inspect(provider, { depth: 10, showHidden: true }), "adapter inspect");
+      const embedCall = {
+        inputs: [PR_SECRET_TEXT, PR_SECRET_TEXT],
+        model: EMBEDDING_MODELS[kind],
+        dimensions: 4,
+      };
+      const result = await provider.embed!(embedCall);
+      assertClean(JSON.stringify(result), "result");
+      for (const expected of ["auth", "server_error", "rate_limited"]) {
+        try {
+          await provider.embed!(embedCall);
+          expect.unreachable();
+        } catch (error) {
+          expect((error as { kind: string }).kind).toBe(expected);
+          assertClean(describeError(error), `error ${expected}`);
+        }
+      }
+      expect(consoleCalls).toEqual([]);
+      assertClean(
+        inspect(provider, { depth: 10, showHidden: true }),
+        "adapter inspect after calls",
+      );
+    });
+  },
+);
+
+describe.each(Object.keys(SETTINGS) as CompletionKind[])("key hygiene: %s", (kind) => {
   it("keeps the key and PR content out of results, errors, logs and the adapter object", async () => {
     const provider = build(kind, [
       okResponse(kind),

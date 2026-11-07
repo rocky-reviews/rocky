@@ -17,12 +17,15 @@ export interface SeededOrg {
   reviewSubmissionItemId: string;
   memoryEntryId: string;
   embeddingId: string;
+  codeIndexId: string;
+  codeFileId: string;
+  codeChunkId: string;
   jobId: string;
   auditEventId: number;
   llmUsageId: number;
 }
 
-export const EMBEDDING_DIMENSIONS = 1536;
+export const EMBEDDING_DIMENSIONS = schema.EMBEDDING_DIMENSIONS;
 
 /** A minimal, valid analysis document stand-in; the real shape is validated in packages/schema. */
 const DOCUMENT = { version: "test", findings: [] };
@@ -188,10 +191,55 @@ export const seedOrg = async (
           memoryEntryId: memory.id,
           sourceKind: "memory",
           sourceRef: memory.id,
+          provider: "openai-compatible",
           model: "test-embed",
+          dimensions: EMBEDDING_DIMENSIONS,
           embedding: Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0),
         })
         .returning({ id: schema.embeddings.id }),
+    );
+    // The repository index (P9-1): one row each; the chunk's vector is not seeded, so the
+    // `embeddings` table keeps exactly one fixture row per org (the memory entry's).
+    const codeIndex = first(
+      await tx
+        .insert(schema.codeIndexes)
+        .values({
+          repoId: repo.id,
+          status: "done",
+          indexedSha: "a".repeat(40),
+          embeddingProvider: "openai-compatible",
+          embeddingModel: "test-embed",
+          embeddingDimensions: EMBEDDING_DIMENSIONS,
+          completedAt: createdAt,
+        })
+        .returning({ id: schema.codeIndexes.id }),
+    );
+    const codeFile = first(
+      await tx
+        .insert(schema.codeFiles)
+        .values({
+          repoId: repo.id,
+          path: "src/invite.ts",
+          blobSha: "c".repeat(40),
+          language: "typescript",
+          status: "indexed",
+          chunkCount: 1,
+        })
+        .returning({ id: schema.codeFiles.id }),
+    );
+    const codeChunk = first(
+      await tx
+        .insert(schema.codeChunks)
+        .values({
+          repoId: repo.id,
+          fileId: codeFile.id,
+          ordinal: 0,
+          startLine: 1,
+          endLine: 12,
+          kind: "function_declaration",
+          inputSha256: Buffer.alloc(32, 4),
+        })
+        .returning({ id: schema.codeChunks.id }),
     );
     const job = first(
       await tx
@@ -255,6 +303,9 @@ export const seedOrg = async (
       reviewSubmissionItemId: submissionItem.id,
       memoryEntryId: memory.id,
       embeddingId: embedding.id,
+      codeIndexId: codeIndex.id,
+      codeFileId: codeFile.id,
+      codeChunkId: codeChunk.id,
       jobId: job.id,
       auditEventId: audit.id,
       llmUsageId: usage.id,

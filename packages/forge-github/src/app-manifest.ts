@@ -25,9 +25,16 @@ export const GITHUB_APP_PERMISSIONS: Readonly<Record<string, "read" | "write">> 
  * Subscribed webhook events. `installation` is delivered to every app without subscribing; the
  * receiver (P3-2) decodes only `installation`, `pull_request`, `organization` and `ping`.
  * `organization` (P7-2, ADR 0024; needs the Members permission above) tells Rocky when someone
- * leaves the organization, so their token and live sessions go at once.
+ * leaves the organization, so their token and live sessions go at once. `push` (P9-1, ADR 0040;
+ * needs only the Contents: read permission above) tells Rocky the default branch moved, so the
+ * repository index re-reads the changed files. Existing installations must accept the new
+ * subscription in the app's settings before push deliveries arrive.
  */
-export const GITHUB_APP_EVENTS: readonly string[] = Object.freeze(["pull_request", "organization"]);
+export const GITHUB_APP_EVENTS: readonly string[] = Object.freeze([
+  "pull_request",
+  "organization",
+  "push",
+]);
 
 const DESCRIPTION =
   "Rocky Reviews (self-hosted): AI does the reading, a human makes the call. Only a person posts reviews.";

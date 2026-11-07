@@ -14,19 +14,30 @@ export {
   type LlmConfigIssue,
   type LlmRoleConfigs,
   type OpenAiCompatibleSettings,
+  type OpenAiSettings,
+  type VoyageSettings,
   type PathLabel,
   type ProviderSettings,
   type ProviderSettingsByKind,
   type ProviderSettingsOf,
   type VertexSettings,
 } from "./config.js";
-export { DEFAULT_PROVIDER, DEFAULT_ROLE_TARGETS, llmConfigFromEnv } from "./env.js";
+export {
+  DEFAULT_EMBED_PROVIDER,
+  DEFAULT_EMBED_TARGETS,
+  DEFAULT_PROVIDER,
+  DEFAULT_ROLE_TARGETS,
+  llmConfigFromEnv,
+} from "./env.js";
 export {
   BEDROCK_MODELS,
   CLAUDE_MODELS,
   effortsFor,
   isProviderKind,
+  OPENAI_EMBEDDING_MODELS,
   PROVIDER_CAPABILITIES,
+  VOYAGE_EMBEDDING_MODELS,
+  type EmbeddingModelCapabilities,
   PROVIDER_KINDS,
   type ModelCapabilities,
   type ProviderCapabilities,

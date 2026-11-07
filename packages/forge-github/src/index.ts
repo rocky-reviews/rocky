@@ -44,7 +44,11 @@ export {
   type GitHubInstallationReaderOptions,
 } from "./installations.js";
 export {
+  ARCHIVE_TIMEOUT_MS,
+  CODE_TOKEN_PERMISSIONS,
   COLLABORATOR_TOKEN_PERMISSIONS,
+  MAX_ARCHIVE_BYTES,
+  MAX_TREE_BYTES,
   createGitHubForge,
   DIFF_READ_TIMEOUT_MS,
   isRepositoryFullName,

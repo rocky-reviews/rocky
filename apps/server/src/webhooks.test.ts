@@ -8,6 +8,7 @@ import {
   installationPayload,
   PLANTED,
   pullRequestPayload,
+  pushPayload,
   signedDelivery,
   TEST_WEBHOOK_SECRET,
   type SignedDelivery,
@@ -141,7 +142,9 @@ describe("POST /webhooks/github: decoding", () => {
     const { app, inbox } = setup();
     for (const d of [
       signedDelivery("issues", { action: "opened" }),
-      signedDelivery("push", { ref: "refs/heads/main" }),
+      // P9-1: pushes are decoded, but only to the default branch and not deletions.
+      signedDelivery("push", pushPayload({ ref: "refs/heads/feature" })),
+      signedDelivery("push", pushPayload({ deleted: true })),
       signedDelivery("pull_request", pullRequestPayload("labeled")),
       signedDelivery("installation", installationPayload("suspend")),
     ]) {

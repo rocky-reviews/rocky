@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Rate limit reached for text-embedding-3-small. Please try again in 20ms.",
+    "type": "requests",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}
