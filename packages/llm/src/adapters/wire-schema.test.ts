@@ -1,5 +1,6 @@
 import { jsonSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/json-schema";
 import {
+  ASK_OUTPUT,
   isLlmCallError,
   REVIEW_MEMORY_OUTPUT,
   rockyInstructions,
@@ -90,6 +91,24 @@ describe("every role's output schema goes through the SDK's structured-output tr
       walk(sent, template.output.name);
       expect(seen).toEqual([]);
     }
+  });
+});
+
+describe("the Ask answer (P9-2)", () => {
+  it("compiles through the SDK's transform as an enforced output, every object closed", () => {
+    expect(ASK_OUTPUT.mode).toBe("structured");
+    const sent = jsonSchemaOutputFormat(ASK_OUTPUT.jsonSchema as never).schema;
+    expect(optionalCount(sent)).toBe(0);
+    const open: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (Array.isArray(node)) return node.forEach((entry, i) => walk(entry, `${path}[${i}]`));
+      if (typeof node !== "object" || node === null) return;
+      const schema = node as Record<string, unknown>;
+      if (schema["type"] === "object" && schema["additionalProperties"] !== false) open.push(path);
+      for (const [key, value] of Object.entries(schema)) walk(value, `${path}/${key}`);
+    };
+    walk(sent, "rocky_ask");
+    expect(open).toEqual([]);
   });
 });
 

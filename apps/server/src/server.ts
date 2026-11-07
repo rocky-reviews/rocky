@@ -8,14 +8,17 @@ import {
   createGitHubUserAccessReader,
   createGitHubWebhookIngress,
 } from "@rocky-reviews/forge-github";
+import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp, type ReviewPostingDeps } from "./app.js";
+import type { AskDeps } from "./ask/routes.js";
 import type { AuthDeps } from "./auth/routes.js";
 import {
+  askConfigFromEnv,
   authFromEnv,
   ConfigError,
   githubAppAuthFromEnv,
@@ -158,6 +161,7 @@ export const startServer = async (
   const rateLimits = createRateLimits({ rules: rateLimitRulesFromEnv(env), trustProxy });
   const appId = githubAppIdFromEnv(env);
   const appAuth = githubAppAuthFromEnv(env);
+  const askConfig = askConfigFromEnv(env);
   const webDir = env["ROCKY_WEB_DIR"];
   const web: WebApp | undefined =
     webDir === undefined || webDir === "" ? undefined : loadWebApp(webDir);
@@ -213,6 +217,7 @@ export const startServer = async (
   let reviewPosting: ReviewPostingDeps | undefined;
   let repositoryAccess: RepositoryAccessCheck | undefined;
   let pullRequestDiffs: PullRequestDiffReader | undefined;
+  let ask: AskDeps | undefined;
   if (authSetup.enabled && keys !== undefined) {
     const { config } = authSetup;
     const db = createDb({ pool });
@@ -252,6 +257,19 @@ export const startServer = async (
       // H4-3 (ADR 0034): the PR page's diff, read from GitHub on a read-only token for that one
       // repository (the mirror's session), after the access check above, cached for a minute.
       pullRequestDiffs = createPullRequestDiffReader({ forge, clock });
+      // P9-2 (ADR 0041): Ask, when an embedding model is configured; the code it shows is read
+      // from GitHub per question on a read-only token for that one repository.
+      if (askConfig.enabled) {
+        ask = {
+          llm: createLlmRoles(askConfig.llm, providerAdapters(), envSecrets(env)),
+          space: askConfig.space,
+          usageTargets: usageTargetsFor(askConfig.llm),
+          forge,
+          log,
+        };
+      } else {
+        log.info("ROCKY_LLM_EMBED_PROVIDER is not set: Ask is off");
+      }
     }
     // A const, so the closure below keeps the narrowing.
     const access = repositoryAccess;
@@ -298,6 +316,7 @@ export const startServer = async (
     ...(reviewPosting === undefined ? {} : { reviewPosting }),
     ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
     ...(pullRequestDiffs === undefined ? {} : { pullRequestDiffs }),
+    ...(ask === undefined ? {} : { ask }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.

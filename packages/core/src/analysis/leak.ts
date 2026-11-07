@@ -27,6 +27,7 @@ import {
   UNTRUSTED_PREAMBLE,
 } from "../prompt.js";
 import {
+  ASK_INSTRUCTIONS,
   BRIEFING_INSTRUCTIONS,
   FLOWS_INSTRUCTIONS,
   GRAPH_INSTRUCTIONS,
@@ -59,6 +60,7 @@ export const PROMPT_TEXTS: readonly string[] = Object.freeze([
     WALKTHROUGH_INSTRUCTIONS,
     BRIEFING_INSTRUCTIONS,
     REPAIR_INSTRUCTIONS,
+    ASK_INSTRUCTIONS,
   ].map((instructions) => instructions.text),
 ]);
 

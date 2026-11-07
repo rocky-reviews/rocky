@@ -54,6 +54,8 @@ export {
   searchCodeChunks,
   storedIndexFiles,
   writeIndexedFiles,
+  loadAskTarget,
+  type AskTarget,
   type ClaimedCodeIndex,
   type CodeIndexClaimOptions,
   type CodeIndexLease,

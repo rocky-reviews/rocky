@@ -7,6 +7,7 @@ import { registerCsrfGuard } from "./auth/csrf.js";
 import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/policy.js";
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { registerAskRoutes, type AskDeps } from "./ask/routes.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
 import type { PullRequestDiffReader } from "./pulls/diff-reader.js";
@@ -72,6 +73,11 @@ export interface AppDeps {
    * and `repositoryAccess`; the diff route answers 503 without either.
    */
   pullRequestDiffs?: PullRequestDiffReader;
+  /**
+   * Ask about the PR (P9-2, ADR 0041): the LLM roles, the embedding space and the app's code
+   * reader. Needs login and `repositoryAccess`; without it the routes say Ask is off.
+   */
+  ask?: AskDeps;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -174,6 +180,12 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.pullRequestDiffs === undefined ? {} : { diffs: deps.pullRequestDiffs }),
+    });
+    // P9-2: Ask about the PR, answered from the repository's index.
+    registerAskRoutes(app, {
+      db: deps.auth.db,
+      ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+      ...(deps.ask === undefined ? {} : { ask: deps.ask }),
     });
     // P8-3: a repository's project memory (view, edit, delete, switch off, export).
     registerMemoryRoutes(app, {

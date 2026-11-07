@@ -185,6 +185,12 @@ const EXPECTED: Readonly<Record<string, Row>> = {
   // H4-3: the PR's diff, same names and checks (the reader is a stub here: no GitHub).
   "GET /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
   "HEAD /api/repos/:owner/:repo/pulls/:number/diff": review("GET", true),
+  // P9-2 (ADR 0041): Ask, every member who reviews the PR (the P3-6 check runs inside; from org B
+  // the same names find nothing). The seeded repository has no index, so a question is answered
+  // 409 not_indexed and nothing is asked.
+  "GET /api/repos/:owner/:repo/pulls/:number/ask": review("GET", true),
+  "HEAD /api/repos/:owner/:repo/pulls/:number/ask": review("GET", true),
+  "POST /api/repos/:owner/:repo/pulls/:number/ask": review("other", true),
   // P8-3 (ADR 0039): a repository's memory and its export, read by every member who reviews it
   // (the P3-6 check runs inside; from org B the same names find nothing). Changing it needs
   // memory.edit (admins and owners); an entry id nobody has is not found for them.
@@ -299,6 +305,25 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
     // P6-7: the bulk approval port (P3-5's poster will fill it); the matrix only needs it present.
     pullRequestApprover: { approve: async () => "approved" },
     reviewPosting: { poster: UNREACHABLE_POSTER, keys: KEYS },
+    // P9-2: Ask; the matrix only needs it present (no index exists, so nothing is asked or read).
+    ask: {
+      llm: {
+        completion: () => {
+          throw new Error("the matrix must not ask");
+        },
+        embedding: () => undefined,
+      },
+      space: { provider: "openai", model: "text-embedding-3-small", dimensions: 4 },
+      usageTargets: {
+        triage: { provider: "anthropic", model: "claude-haiku-5-5" },
+        review: { provider: "anthropic", model: "claude-opus-5-5" },
+        graph: { provider: "anthropic", model: "claude-sonnet-5-5" },
+        ask: { provider: "anthropic", model: "claude-sonnet-5-5" },
+        embed: { provider: "openai", model: "text-embedding-3-small" },
+      },
+      forge: { openCode: () => Promise.reject(new Error("the matrix must not read code")) },
+      log,
+    },
     // H4-3: the diff reader; the matrix only needs it present (it reads nothing from GitHub).
     pullRequestDiffs: {
       read: async () => ({
@@ -468,7 +493,9 @@ const requestFor = (key: string) => {
                         ? { kind: "convention", text: "x" }
                         : path === "/api/repos/:owner/:repo/memory/entries/:entryId/disabled"
                           ? { disabled: true }
-                          : undefined;
+                          : path === "/api/repos/:owner/:repo/pulls/:number/ask"
+                            ? { question: "Who calls this?" }
+                            : undefined;
   return { method, url, body };
 };
 
@@ -562,6 +589,8 @@ describe("route-permission matrix (P7-2 acceptance criterion)", () => {
       "DELETE /api/analyses/:analysisId/comments/:commentId": "drafts.own",
       "GET /api/repos/:owner/:repo/pulls/:number": "pull_requests.review",
       "GET /api/repos/:owner/:repo/pulls/:number/diff": "pull_requests.review",
+      "GET /api/repos/:owner/:repo/pulls/:number/ask": "ask",
+      "POST /api/repos/:owner/:repo/pulls/:number/ask": "ask",
     });
   });
 
