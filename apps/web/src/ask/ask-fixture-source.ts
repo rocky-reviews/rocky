@@ -32,12 +32,6 @@ export const askScenarioFromSearch = (search: string): AskScenario => {
 /** The commit the fixture index holds. */
 export const FIXTURE_INDEXED_SHA = "5e0c8a9d27f14b6e93a1c4d8f0b2e7a6c3d9f141";
 
-export const FIXTURE_SUGGESTED = [
-  "Who calls acceptInvitation?",
-  "Is this covered by tests?",
-  "What does an attacker need to exploit F1?",
-] as const;
-
 const ANSWERS: readonly { match: RegExp; body: Record<string, unknown> }[] = [
   {
     match: /who calls|callers?/i,

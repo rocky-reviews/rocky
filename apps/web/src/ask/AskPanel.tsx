@@ -277,13 +277,14 @@ export const AskPanelContent = ({
     [source, pull],
   );
 
-  // The index is checked once the tab is first shown.
+  // The index is checked once, when the tab is first shown. (Not cancelled by a re-render: the
+  // check itself moves the state on, which must not drop its own answer.)
+  const checkStarted = useRef(false);
   useEffect(() => {
-    if (!active || indexState.kind !== "idle") return;
-    const abort = new AbortController();
-    check(abort.signal);
-    return () => abort.abort();
-  }, [active, indexState.kind, check]);
+    if (!active || checkStarted.current) return;
+    checkStarted.current = true;
+    check();
+  }, [active, check]);
 
   // A first index is on its way: ask again now and then, while the tab is shown.
   const indexing = indexState.kind === "known" && indexState.index.status === "indexing";
@@ -299,14 +300,18 @@ export const AskPanelContent = ({
 
   useEffect(() => () => inFlight.current?.abort(), []);
 
-  // `/`: focus the box once the panel (or its drawer) has settled.
+  // `/`: focus the box once the panel (or its drawer) has settled and the box takes questions
+  // (on the first `/`, the index is still being checked).
+  const ready = indexState.kind === "known" && indexState.index.status === "ready";
+  const focusDone = useRef(0);
   useEffect(() => {
-    if (focusRequest === 0) return;
+    if (focusRequest === focusDone.current || !ready) return;
+    focusDone.current = focusRequest;
     const frame = window.requestAnimationFrame(() =>
       window.setTimeout(() => box.current?.focus(), 0),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [focusRequest]);
+  }, [focusRequest, ready]);
 
   // New turns scroll into view (POC: the panel scrolls to the bottom).
   useEffect(() => {
@@ -314,7 +319,6 @@ export const AskPanelContent = ({
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
-  const ready = indexState.kind === "known" && indexState.index.status === "ready";
   const pending = turns.some((t) => t.reply === "pending");
 
   const send = (question: string, attached: AskSelection | null) => {
