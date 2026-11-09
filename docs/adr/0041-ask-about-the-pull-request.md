@@ -105,12 +105,10 @@ gone sooner has the org erasure; a per-repository purge can be added if a custom
 
 ### 7. Rate limit and metering
 
-The per-member `ask` limit of ADR 0025 (20 per minute) is applied before any work; P9-3 tunes it
-and adds a per-org budget. Every call goes through `meterRoles` (ADR 0016) with the PR's org,
-repository and pull request ids. The server's database role cannot insert into `llm_usage` (only
-the worker can, P4-5's grants), so the server's records go to a log sink (`ask_usage`: role, model,
-token counts and ids only) for now; writing them to `llm_usage` (a grant or a worker hand-off)
-is P9-3's, with the rest of metering.
+Superseded by [ADR 0042](0042-ask-safety.md) §3–4 (P9-3): the member's `ask` limit is 10 per
+minute, the org has `ask.org` (60 per minute) and `ask.org.day` (600 per day), all consumed before
+anything is read, and every call writes `llm_usage` from the server's own login with the
+repository and pull request (migration 0023). The `ask_usage` log sink of this task is gone.
 
 ### 8. The eval
 
@@ -134,9 +132,11 @@ with a token estimate, as the memory eval's.
 
 ### 9. Not in this task (P9-3)
 
-The prompt-injection corpus on the ask channel, the tuned rate limit and per-org budget, and
-metering into `llm_usage`. Nothing here needs undoing for them: the inputs are already untrusted
-parts, the output already has no effect, and the logs already carry no content.
+Done in [ADR 0042](0042-ask-safety.md): the prompt-injection corpus on the ask channel (every
+case in the excerpts, the question and the selection; `--ask-injection`), the tuned rate limit
+and per-org budget, and metering into `llm_usage`. Nothing here needed undoing: the inputs were
+already untrusted parts, the output already had no effect, and the logs already carried no
+content.
 
 ## Consequences
 

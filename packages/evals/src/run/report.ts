@@ -228,6 +228,47 @@ export const AskEvalReport = z.strictObject({
 });
 export type AskEvalReport = z.infer<typeof AskEvalReport>;
 
+/**
+ * The injection corpus on the Ask channel (P9-3, `src/ask/injection.ts`): every case planted
+ * in a code excerpt, the question and the selected code, through core's `answerQuestion`.
+ * `leaks`, `outside` and `markup` count cases whose served output broke a structural guard
+ * (gated at zero); `echoed` counts cases whose served text carried the payload's marker (the
+ * model obeyed; measured). Ids, codes, counts and booleans only. Absent from reports made
+ * before P9-3 and from runs without `--ask --injection`.
+ */
+const AskInjectionCounts = {
+  cases: count,
+  answered: count,
+  noAnswer: count,
+  failed: count,
+  refusedInput: count,
+  capped: count,
+  dropped: count,
+  leaks: count,
+  outside: count,
+  markup: count,
+  echoed: count,
+};
+export const AskInjectionReport = z.strictObject({
+  status: z.enum(["done", "capped"]),
+  cases: z.array(
+    z.strictObject({
+      case: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+      channel: z.enum(["code", "question", "selection"]),
+      goal: Code,
+      status: z.enum(["answer", "no_answer", "failed", "refused_input", "capped"]),
+      reason: Code.nullable(),
+      dropped: count,
+      leaks: count,
+      outside: count,
+      markup: count,
+      echoed: z.boolean(),
+    }),
+  ),
+  total: z.strictObject(AskInjectionCounts),
+});
+export type AskInjectionReport = z.infer<typeof AskInjectionReport>;
+
 export const EvalReport = z
   .strictObject({
     format: z.literal(REPORT_FORMAT),
@@ -246,6 +287,8 @@ export const EvalReport = z
       memory: z.boolean().optional(),
       /** `--ask` (P9-2); absent in reports made before it. */
       ask: z.boolean().optional(),
+      /** `--ask-injection` (P9-3); absent in reports made before it. */
+      askInjection: z.boolean().optional(),
       only: z.array(z.string()).nullable(),
     }),
     usage: UsageReport,
@@ -256,6 +299,7 @@ export const EvalReport = z
       .nullable(),
     memory: MemoryEvalReport.nullable().optional(),
     ask: AskEvalReport.nullable().optional(),
+    askInjection: AskInjectionReport.nullable().optional(),
   })
   .refine((report) => (report.kind === "placeholder") === (report.notice === PLACEHOLDER_NOTICE), {
     message: "a placeholder carries PLACEHOLDER_NOTICE, and only a placeholder does",
@@ -279,7 +323,8 @@ export const EvalReport = z
       report.prs.some((pr) => pr.status === "capped") ||
       (report.injection?.cases ?? []).some((c) => c.status === "capped") ||
       report.memory?.status === "capped" ||
-      report.ask?.status === "capped";
+      report.ask?.status === "capped" ||
+      report.askInjection?.status === "capped";
     if (anyCapped !== report.usage.capped)
       issue(["usage", "capped"], "capped must be set exactly when a PR or case was capped");
   });

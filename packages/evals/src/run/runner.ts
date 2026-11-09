@@ -17,6 +17,7 @@ import {
   type EmbeddingSpace,
   type LlmRoles,
 } from "@rocky-reviews/core";
+import { runAskInjection, type AskInjectionChannel } from "../ask/injection.js";
 import { runAskEval } from "../ask/run.js";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import { INJECTION_CORPUS, type InjectionCase } from "../injection/corpus.js";
@@ -34,6 +35,7 @@ import { injectionResult, injectionTotals } from "./injection.js";
 import { createMeter } from "./meter.js";
 import {
   AskEvalReport,
+  AskInjectionReport,
   MemoryEvalReport,
   PROMPT_HASH,
   REPORT_FORMAT,
@@ -55,7 +57,13 @@ export type EvalSubject =
   /** One of the project-memory eval's three analyses (P8-2). */
   | { readonly kind: "memory"; readonly step: MemoryStep }
   /** The Ask eval's questions (P9-2). */
-  | { readonly kind: "ask" };
+  | { readonly kind: "ask" }
+  /** One corpus case planted in one of Ask's inputs (P9-3, `--ask --injection`). */
+  | {
+      readonly kind: "ask_injection";
+      readonly case: InjectionCase;
+      readonly channel: AskInjectionChannel;
+    };
 
 /** What the Ask eval embeds with (P9-2): the index and the questions share one space. */
 export interface AskEmbedding {
@@ -74,8 +82,15 @@ export interface RunOptions {
   readonly memory?: boolean;
   /** How many times the memory eval's three analyses run (default 1; a live rate, P8-2). */
   readonly memoryTrials?: number;
-  /** Run the Ask eval (P9-2) last, embedding with this. */
+  /**
+   * Run the Ask eval (P9-2) last, embedding with this.
+   */
   readonly ask?: AskEmbedding;
+  /**
+   * Run the injection corpus on the Ask channel (P9-3, `--ask-injection`): the `ask` role only,
+   * on fixed excerpts; no embedding is spent and no embedding provider is needed.
+   */
+  readonly askInjection?: boolean;
   /** Seeded PR ids to run (all when absent). */
   readonly only?: readonly string[];
   readonly clock: Clock;
@@ -232,6 +247,22 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     );
   }
 
+  let askInjection: EvalReport["askInjection"] = null;
+  if (options.askInjection === true) {
+    const result = await runAskInjection({
+      rolesFor: (c, channel) =>
+        meter.wrap(options.rolesFor({ kind: "ask_injection", case: c, channel })),
+      capped: () => meter.capped(),
+      ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+    });
+    // Parsed into the report's own shape: ids, codes, counts and booleans only.
+    askInjection = AskInjectionReport.parse(result);
+    const t = result.total;
+    options.onProgress?.(
+      `ask injection: ${t.cases} cases; leaks ${t.leaks}, outside ${t.outside}, markup ${t.markup}, echoed ${t.echoed}, failed ${t.failed}`,
+    );
+  }
+
   return {
     format: REPORT_FORMAT,
     version: REPORT_VERSION,
@@ -246,6 +277,7 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
       injection: options.injection,
       memory: options.memory === true,
       ask: options.ask !== undefined,
+      askInjection: options.askInjection === true,
       only: options.only === undefined ? null : [...options.only],
     },
     usage: meter.usage(),
@@ -254,5 +286,6 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     injection,
     memory,
     ask,
+    askInjection,
   };
 };

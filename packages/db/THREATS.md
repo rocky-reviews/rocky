@@ -14,7 +14,11 @@ migration 0010, `analyses.ts`) are A2, A5, A6 and A12 in
 static web host, rate limits on login, callback, logout and webhooks, forwarded-header
 spoofing) are H1–H22 in [ADR 0025](../../docs/adr/0025-security-headers-and-rate-limits.md); the
 only database rows among them are H12 (`login_attempts` growth from unauthenticated login
-starts, now bounded per client address) and H19 (no shared rate-limit store yet).
+starts, now bounded per client address) and H19 (no shared rate-limit store yet). Ask safety
+(P9-3: migration 0023, the server's column-scoped INSERT on `llm_usage`, its `repo_id` and
+`pull_request_id` links, the Ask limits) is Q1–Q14 in
+[ADR 0042](../../docs/adr/0042-ask-safety.md); its database rows are Q10–Q13 (`usage.test.ts`
+"the server's own usage (Ask)", `isolation.test.ts` matrix and policies).
 
 Companion to [ADR 0003 tenancy](../../docs/adr/0003-tenancy.md) and
 [ADR 0005 migrations and roles](../../docs/adr/0005-migrations-and-roles.md). Each row names the

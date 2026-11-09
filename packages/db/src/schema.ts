@@ -378,6 +378,8 @@ export const llmUsage = pgTable("llm_usage", {
   id: identity(),
   orgId: orgIdColumn(),
   analysisId: uuid("analysis_id"),
+  repoId: uuid("repo_id"),
+  pullRequestId: uuid("pull_request_id"),
   callId: uuid("call_id").notNull(),
   attempt: smallint("attempt").notNull(),
   role: text("role", { enum: ["triage", "review", "graph", "ask", "embed"] }).notNull(),

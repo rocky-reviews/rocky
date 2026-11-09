@@ -5,6 +5,7 @@ import {
   lineLabel,
   parseAskIndex,
   parseAskReply,
+  retryAfterFromHeader,
   type RawAnswer,
 } from "./ask-data.js";
 import { createFixtureAskSource, FIXTURE_INDEXED_SHA } from "./ask-fixture-source.js";
@@ -171,6 +172,71 @@ describe("parseAskReply", () => {
       });
   });
 
+  it("P9-3: a 429 says whose limit it was, and how long to wait only when that is sane", () => {
+    const limited = (body: unknown, retryAfterSeconds?: number) =>
+      parseAskReply(
+        PULL,
+        retryAfterSeconds === undefined
+          ? { status: 429, body }
+          : { status: 429, body, retryAfterSeconds },
+      );
+    expect(limited({ error: "rate_limited", limit: "member" }, 42)).toEqual({
+      kind: "error",
+      problem: "rate_limited",
+      retryAfterSeconds: 42,
+    });
+    expect(limited({ error: "rate_limited", limit: "org" }, 1800)).toEqual({
+      kind: "error",
+      problem: "org_rate_limited",
+      retryAfterSeconds: 1800,
+    });
+    // An older server, or another route: no `limit` means the member's own.
+    expect(limited({ error: "rate_limited" })).toEqual({ kind: "error", problem: "rate_limited" });
+    expect(limited(undefined)).toEqual({ kind: "error", problem: "rate_limited" });
+    for (const limit of ["ORG", "organisation", 1, null, ["org"]])
+      expect(limited({ error: "rate_limited", limit }), JSON.stringify(limit)).toEqual({
+        kind: "error",
+        problem: "rate_limited",
+      });
+    // The wait is shown only as a whole number of seconds from one to a day.
+    expect(limited({ limit: "org" }, 1)).toHaveProperty("retryAfterSeconds", 1);
+    expect(limited({ limit: "org" }, 86_400)).toHaveProperty("retryAfterSeconds", 86_400);
+    for (const bad of [0, -5, 1.5, 86_401, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(limited({ limit: "org" }, bad), `${bad}`).toEqual({
+        kind: "error",
+        problem: "org_rate_limited",
+      });
+    // Only a limit carries a wait, whatever the source read.
+    expect(
+      parseAskReply(PULL, {
+        status: 502,
+        body: { error: "model_unavailable" },
+        retryAfterSeconds: 5,
+      }),
+    ).toEqual({ kind: "error", problem: "model_unavailable" });
+  });
+
+  it("P9-3: reads a retry-after header's seconds, never its HTTP-date form", () => {
+    expect(retryAfterFromHeader("42")).toBe(42);
+    expect(retryAfterFromHeader("1")).toBe(1);
+    expect(retryAfterFromHeader("86400")).toBe(86_400);
+    for (const value of [
+      null,
+      "",
+      "0",
+      "86401",
+      "100000",
+      "-1",
+      "+42",
+      "4e1",
+      "1.5",
+      " 42",
+      "42s",
+      "Wed, 21 Oct 2026 07:28:00 GMT",
+    ])
+      expect(retryAfterFromHeader(value), JSON.stringify(value)).toBeUndefined();
+  });
+
   it("refuses a malformed answer", () => {
     for (const body of [
       null,
@@ -235,5 +301,16 @@ describe("the fixture source", () => {
       );
       expect(r.kind).toBe(kind);
     }
+  });
+
+  it("P9-3: has a scenario for each limit, with its wait", async () => {
+    for (const [scenario, problem, retryAfterSeconds] of [
+      ["rate-limited", "rate_limited", 42],
+      ["org-rate-limited", "org_rate_limited", 1800],
+    ] as const)
+      expect(
+        parseAskReply(PULL, await createFixtureAskSource(scenario).ask(PULL, { question: "q" })),
+        scenario,
+      ).toEqual({ kind: "error", problem, retryAfterSeconds });
   });
 });

@@ -67,6 +67,9 @@ export interface MeteringOptions {
   readonly targets: LlmUsageTargets;
   readonly log: Logger;
   readonly analysisId?: string;
+  /** The repository (and pull request) the calls are for: Ask, the index run (P9-3). */
+  readonly repoId?: string;
+  readonly pullRequestId?: string;
   readonly clock?: Clock;
   readonly callId?: () => string;
   /** Tries per write (default 3). */
@@ -197,6 +200,8 @@ export const meterRoles = (roles: LlmRoles, options: MeteringOptions): MeteredRo
       provider: safeProvider,
       model,
       ...(options.analysisId === undefined ? {} : { analysisId: options.analysisId }),
+      ...(options.repoId === undefined ? {} : { repoId: options.repoId }),
+      ...(options.pullRequestId === undefined ? {} : { pullRequestId: options.pullRequestId }),
       outcome: attempt.outcome,
       ...(attempt.errorKind === undefined ? {} : { errorKind: attempt.errorKind }),
       usageStatus,
@@ -249,6 +254,8 @@ export const meterRoles = (roles: LlmRoles, options: MeteringOptions): MeteredRo
           errorCode: "llm_usage_unrecorded",
           ...(sqlstate === undefined ? {} : { sqlstate }),
           analysisId: record.analysisId,
+          repoId: record.repoId,
+          pullRequestId: record.pullRequestId,
           callId: record.callId,
           attempt: record.attempt,
           role: record.role,

@@ -458,6 +458,46 @@ describe("what a usage row says", () => {
     }
   });
 
+  it("stamps the repository and pull request it was given on every record (P9-3: Ask)", async () => {
+    const { roles: completions } = scripted({ ask: [ok("claude-sonnet-5-5", usage(100, 10))] });
+    const roles: LlmRoles = {
+      completion: completions.completion,
+      embedding: () => ({
+        embed: () =>
+          Promise.resolve({
+            vectors: [[0.1]],
+            model: "text-embedding-3-small",
+            usage: { inputTokens: 7 },
+            provider: "openai",
+          }),
+      }),
+    };
+    const { sink, rows } = memorySink();
+    const metered = meterRoles(roles, {
+      sink,
+      targets: { ...TARGETS, embed: { provider: "openai", model: "text-embedding-3-small" } },
+      log: capture().log,
+      repoId: "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f",
+      pullRequestId: "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a",
+    });
+    await call(metered, "ask");
+    await metered.embedding()!.embed({ inputs: ["q"], purpose: "query" });
+    expect(rows.map((r) => [r.role, r.analysisId, r.repoId, r.pullRequestId])).toEqual([
+      [
+        "ask",
+        undefined,
+        "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f",
+        "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a",
+      ],
+      [
+        "embed",
+        undefined,
+        "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f",
+        "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a",
+      ],
+    ]);
+  });
+
   it("records no price when no price table is in effect", async () => {
     const { roles } = scripted({ graph: [ok("claude-sonnet-5-5", usage(100, 10))] });
     const { sink, rows } = memorySink();

@@ -4,11 +4,13 @@
  * through the same checks, so every state of the panel can be shown and screenshotted:
  *
  *   ?ask=ready (default) | not-indexed | indexing | indexing-then-ready | off | index-error |
- *        no-answer | error | slow
+ *        no-answer | error | rate-limited | org-rate-limited | slow
  *
  * `slow` never answers a question (the "Reading the code…" state); `indexing-then-ready` is
- * indexing on the first check and ready from the next (the poll). The answers are the POC's
- * mocked ones (design-poc/index.html, ANSWERS), with citations in the server's shape.
+ * indexing on the first check and ready from the next (the poll); `rate-limited` and
+ * `org-rate-limited` (P9-3) answer every question with a 429 for the member's own limit (42 s)
+ * and the org's budget (30 min). The answers are the POC's mocked ones (design-poc/index.html,
+ * ANSWERS), with citations in the server's shape.
  */
 import type { AskSource, RawAnswer } from "./ask-data.js";
 
@@ -21,6 +23,8 @@ export const ASK_SCENARIOS = [
   "index-error",
   "no-answer",
   "error",
+  "rate-limited",
+  "org-rate-limited",
   "slow",
 ] as const;
 export type AskScenario = (typeof ASK_SCENARIOS)[number];
@@ -102,6 +106,18 @@ export const createFixtureAskSource = (scenario: AskScenario = "ready"): AskSour
         return later(
           300,
           { status: 502, body: { error: "model_unavailable", retryable: true } },
+          signal,
+        );
+      if (scenario === "rate-limited")
+        return later(
+          300,
+          { status: 429, body: { error: "rate_limited", limit: "member" }, retryAfterSeconds: 42 },
+          signal,
+        );
+      if (scenario === "org-rate-limited")
+        return later(
+          300,
+          { status: 429, body: { error: "rate_limited", limit: "org" }, retryAfterSeconds: 1800 },
           signal,
         );
       if (scenario === "no-answer")
