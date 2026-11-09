@@ -11,6 +11,9 @@ decisions, hosting costs): reference task IDs only.
 1. Find the task in the plan (§5). Note its label: 🔴 RISKY or 🟢 NORMAL.
    - 🔴 tasks are implemented by the `risky-implementer` agent (Fable 5.1) and must get an
      independent `reviewer` pass plus `/security-review` before merge.
+   - If Fable 5.1 is unavailable (usage limit), run `risky-implementer` on Opus 5.5 without
+     asking, and add an extra `reviewer` round focused on the security boundary (secrets,
+     privileges, tenancy, fail-closed paths). Say so in the PR.
    - 🟢 tasks are implemented by the `implementer` agent (Opus 5.5) and get a `reviewer` pass.
 2. Branch `task/<ID>-<slug>`. Write failing tests for the acceptance criteria first.
 3. Implement. Keep changes inside the task's scope; note follow-ups in `docs/progress.md`.
