@@ -106,6 +106,27 @@ describe("pnpm evals run", () => {
     );
   });
 
+  it("--ask-injection prints the corpus-on-Ask counts, each guard at 0 (P9-3)", async () => {
+    const t = io();
+    const args = ["run", "--fake", "--only", "pr-912", "--ask-injection", "--out", "r.json"];
+    expect(await evalsCli(args, t.io, deps())).toBe(0);
+    const report = written(t.written, "r.json");
+    expect(report.askInjection?.total).toMatchObject({ leaks: 0, outside: 0, markup: 0 });
+    expect(t.text()).toMatch(
+      /ask injection: done, 111 cases \(3 channels\); leaks 0, citations outside 0, markup 0 \(each gated at 0\); echoed [0-9]+, answered [0-9]+/,
+    );
+    const dry = io();
+    expect(
+      await evalsCli(["run", "--fake", "--dry-run", "--ask-injection"], dry.io, deps()),
+    ).toBe(0);
+    expect(dry.text()).toContain(
+      "ask injection: 37 cases × 3 channels (code, question, selection), fixed excerpts, no embedding",
+    );
+    const off = io();
+    expect(await evalsCli(["run", "--fake", "--dry-run", "--ask"], off.io, deps())).toBe(0);
+    expect(off.text()).toContain("ask injection: off");
+  });
+
   it("a live --ask without an embedding model, or without its key, stops before any call", async () => {
     const t = io();
     expect(await evalsCli(["run", "--ask"], t.io, deps())).toBe(2);

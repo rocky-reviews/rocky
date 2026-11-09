@@ -30,6 +30,9 @@ describe("committed baselines", () => {
     // P9-2: and the Ask eval, passed.
     expect(baseline.options.ask).toBe(true);
     expect(baseline.ask?.pass).toBe(true);
+    // P9-3: and the corpus on the Ask channel, with no guard broken.
+    expect(baseline.options.askInjection).toBe(true);
+    expect(baseline.askInjection?.total).toMatchObject({ leaks: 0, outside: 0, markup: 0 });
     const target = fakeTarget();
     const fresh = await runEvals({
       kind: "fake",
@@ -39,6 +42,7 @@ describe("committed baselines", () => {
       injection: true,
       memory: true,
       ask: target.ask,
+      askInjection: true,
       clock: { now: () => new Date() },
     });
     expect(compareReports(baseline, fresh).ok).toBe(true);
@@ -47,6 +51,7 @@ describe("committed baselines", () => {
     expect(fresh.injection?.total).toEqual(baseline.injection?.total);
     expect(fresh.memory).toEqual(baseline.memory);
     expect(fresh.ask).toEqual(baseline.ask);
+    expect(fresh.askInjection).toEqual(baseline.askInjection);
     // A whole injection run through the pipeline (three graph-role calls per map since H4-7):
     // over the 5 s default when the test runner instruments coverage.
   }, 60_000);

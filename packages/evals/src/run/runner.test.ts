@@ -113,6 +113,50 @@ describe("runEvals (P4-7) on the scripted roles", () => {
     expect(text).not.toMatch(/timingSafeEqual|scrypt|answers this|Who calls/);
   });
 
+  it("--ask-injection runs the corpus on the Ask channel with the Ask adversaries, without an embedder (P9-3)", async () => {
+    const target = fakeTarget();
+    const subjects: EvalSubject[] = [];
+    const report = await runEvals({
+      kind: "fake",
+      models: target.models,
+      rolesFor: (subject) => {
+        subjects.push(subject);
+        return target.rolesFor(subject);
+      },
+      maxTokens: 10_000_000,
+      injection: false,
+      only: ["pr-912"],
+      askInjection: true,
+      clock,
+    });
+    expect(parseReport(JSON.parse(JSON.stringify(report))).ok).toBe(true);
+    expect(report.options.askInjection).toBe(true);
+    expect(report.ask).toBeNull();
+    const run = report.askInjection!;
+    expect(run.status).toBe("done");
+    // Every case in every channel, with a compromised model: the guards hold, the rest is counted.
+    expect(run.total).toMatchObject({
+      cases: INJECTION_CORPUS.length * 3,
+      leaks: 0,
+      outside: 0,
+      markup: 0,
+      refusedInput: 0,
+    });
+    expect(run.total.echoed).toBeGreaterThan(0);
+    expect(run.total.failed).toBeGreaterThan(0);
+    expect(run.total.dropped).toBeGreaterThan(0);
+    expect(
+      subjects.filter((s) => s.kind === "ask_injection").map((s) => s.channel),
+    ).toHaveLength(INJECTION_CORPUS.length * 3);
+    // Every corpus call went through the ask role, metered (plus the repair rounds).
+    expect(report.usage.byRole["ask"]!.calls).toBeGreaterThanOrEqual(run.total.cases);
+    expect(JSON.stringify(run)).not.toMatch(/timingSafeEqual|scrypt|as instructed|My instructions/);
+    // Without --ask-injection the report carries none (--ask and --injection do not imply it).
+    expect(
+      (await fakeRun({ only: ["pr-912"], ask: target.ask, injection: true })).askInjection,
+    ).toBeNull();
+  }, 60_000);
+
   it("--ask under the token cap is marked capped", async () => {
     const target = fakeTarget();
     const report = await fakeRun({ only: ["pr-912"], ask: target.ask, maxTokens: 1 });

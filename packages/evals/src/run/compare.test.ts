@@ -6,7 +6,13 @@ import {
   PRECISION_DROP_POINTS,
   RECALL_DROP_POINTS,
 } from "./compare.js";
-import { parseReport, totalsOf, type EvalReport, type PrResult } from "./report.js";
+import {
+  parseReport,
+  totalsOf,
+  type AskInjectionReport,
+  type EvalReport,
+  type PrResult,
+} from "./report.js";
 
 const pr = (
   id: string,
@@ -299,6 +305,54 @@ describe("the Ask eval gate (P9-2)", () => {
 
   it("a capped ask run marks the report capped", () => {
     const capped = report(prs, { ask: { ...ask(0), status: "capped" } });
+    expect(parseReport(JSON.parse(JSON.stringify(capped))).ok).toBe(false);
+  });
+});
+
+describe("the corpus on the Ask channel (P9-3)", () => {
+  const prs = [pr("a", 8)];
+  const run = (over: Partial<AskInjectionReport["total"]> = {}) => ({
+    status: "done" as const,
+    cases: [],
+    total: {
+      cases: 111,
+      answered: 60,
+      noAnswer: 11,
+      failed: 40,
+      refusedInput: 0,
+      capped: 0,
+      dropped: 30,
+      leaks: 0,
+      outside: 0,
+      markup: 0,
+      echoed: 50,
+      ...over,
+    },
+  });
+
+  it("a served leak, an outside citation or markup fails the gate, whatever the baseline", () => {
+    const baseline = report(prs);
+    for (const key of ["leaks", "outside", "markup"] as const) {
+      const result = compareReports(baseline, report(prs, { askInjection: run({ [key]: 1 }) }));
+      expect(result.ok, key).toBe(false);
+      expect(result.reasons.join(" "), key).toContain(`served ${key} in 1 cases`);
+    }
+    expect(compareReports(baseline, report(prs, { askInjection: run() })).ok).toBe(true);
+  });
+
+  it("once the baseline ran it, the report must; how often the model obeyed is a note", () => {
+    const baseline = report(prs, { askInjection: run() });
+    const missing = compareReports(baseline, report(prs));
+    expect(missing.ok).toBe(false);
+    expect(missing.reasons.join(" ")).toMatch(/--ask-injection/);
+    const more = compareReports(baseline, report(prs, { askInjection: run({ echoed: 55 }) }));
+    expect(more.ok).toBe(true);
+    expect(more.notes).toContain("ask injection echoed: 50 → 55 cases");
+    expect(compareReports(report(prs), report(prs)).ok).toBe(true);
+  });
+
+  it("a capped run marks the report capped", () => {
+    const capped = report(prs, { askInjection: { ...run({ capped: 3 }), status: "capped" } });
     expect(parseReport(JSON.parse(JSON.stringify(capped))).ok).toBe(false);
   });
 });

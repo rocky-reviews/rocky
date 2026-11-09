@@ -2,7 +2,7 @@
  * `pnpm evals` (P4-7). The entry point (`scripts/evals.ts`) wires the real LLM roles in; this
  * module owns arguments, output and exit codes, and is tested with injected I/O.
  *
- *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--max-tokens N] [--only id,…] [--out path]
+ *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--ask-injection] [--max-tokens N] [--only id,…] [--out path]
  *   pnpm evals compare <baseline.json> <report.json>
  *
  * Exit codes: 0 ok; 1 gate failed (compare) or the token cap stopped the run (run); 2 usage,
@@ -20,6 +20,7 @@ import { SEEDED_PRS } from "../seeded/index.js";
 import { compareReports, PlaceholderBaselineError } from "./compare.js";
 import { parseReport, type EvalReport, type ReportModels } from "./report.js";
 import { runEvals, type AskEmbedding, type EvalSubject } from "./runner.js";
+import { ASK_INJECTION_CHANNELS } from "../ask/injection.js";
 import { ASK_QUESTIONS } from "../ask/questions.js";
 import { ASK_REPO } from "../ask/repo.js";
 import { ASK_EVAL_K } from "../ask/run.js";
@@ -67,7 +68,7 @@ export interface CliDeps {
 
 const USAGE = [
   "usage:",
-  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--max-tokens N] [--only pr-847,…] [--out report.json]",
+  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--ask-injection] [--max-tokens N] [--only pr-847,…] [--out report.json]",
   "  pnpm evals compare <baseline.json> <report.json>",
   "",
 ].join("\n");
@@ -131,6 +132,13 @@ const summary = (report: EvalReport): string => {
       `ask: ${a.status}, ${a.pass ? "pass" : "FAIL"} (gate ${a.gate}, floor ${pct(ASK_MIN_VALID_RATE).trim()}); ${a.validlyCited} of ${a.questions} answered with valid citations (${pct(a.validRate).trim()}), ${a.onTarget} of them on target (${pct(a.onTargetRate).trim()}); citations ${a.validCitations} valid, ${a.invalidCitations} invalid; ${a.chunks} chunks, ${a.embeddingTokens} embedding tokens`,
     );
   }
+  if (report.askInjection !== null && report.askInjection !== undefined) {
+    const t = report.askInjection.total;
+    lines.push(
+      "",
+      `ask injection: ${report.askInjection.status}, ${t.cases} cases (${ASK_INJECTION_CHANNELS.length} channels); leaks ${t.leaks}, citations outside ${t.outside}, markup ${t.markup} (each gated at 0); echoed ${t.echoed}, answered ${t.answered}, no answer ${t.noAnswer}, failed ${t.failed}, refused input ${t.refusedInput}; ${t.dropped} citations dropped`,
+    );
+  }
   return `${lines.join("\n")}\n`;
 };
 
@@ -146,6 +154,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
       memory: { type: "boolean", default: false },
       "memory-trials": { type: "string" },
       ask: { type: "boolean", default: false },
+      "ask-injection": { type: "boolean", default: false },
       "max-tokens": { type: "string" },
       only: { type: "string" },
       out: { type: "string" },
@@ -227,6 +236,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
         `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply), triage pinned to important` : "off"}`,
         `ask: ${ask === undefined ? "off" : `${ASK_QUESTIONS.length} questions on a repository of ${Object.keys(ASK_REPO).length} files, ${ASK_EVAL_K} excerpts each, gate ${kind === "live" ? "on_target" : "guard"}, embedded with ${ask.space.provider}/${ask.space.model} (${ask.space.dimensions})`}`,
+        `ask injection: ${values["ask-injection"] ? `${INJECTION_CORPUS.length} cases × ${ASK_INJECTION_CHANNELS.length} channels (${ASK_INJECTION_CHANNELS.join(", ")}), fixed excerpts, no embedding` : "off"}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),
@@ -240,6 +250,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
     rolesFor,
     maxTokens,
     injection: values.injection,
+    askInjection: values["ask-injection"],
     memory: values.memory,
     memoryTrials,
     ...(ask === undefined ? {} : { ask }),
