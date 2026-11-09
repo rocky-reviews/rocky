@@ -116,9 +116,9 @@ describe("pnpm evals run", () => {
       /ask injection: done, 111 cases \(3 channels\); leaks 0, citations outside 0, markup 0 \(each gated at 0\); echoed [0-9]+, answered [0-9]+/,
     );
     const dry = io();
-    expect(
-      await evalsCli(["run", "--fake", "--dry-run", "--ask-injection"], dry.io, deps()),
-    ).toBe(0);
+    expect(await evalsCli(["run", "--fake", "--dry-run", "--ask-injection"], dry.io, deps())).toBe(
+      0,
+    );
     expect(dry.text()).toContain(
       "ask injection: 37 cases × 3 channels (code, question, selection), fixed excerpts, no embedding",
     );

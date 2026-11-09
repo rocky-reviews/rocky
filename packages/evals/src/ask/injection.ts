@@ -116,7 +116,8 @@ export const plantAskCase = (c: InjectionCase, channel: AskInjectionChannel): Pl
   const payloadLines = c.payload.split("\n");
   switch (channel) {
     case "code": {
-      const carrier = sources[CARRIER]!;
+      const carrier = sources[CARRIER];
+      if (carrier === undefined) throw new RangeError("ask injection: no carrier excerpt");
       const lines = [...carrier.lines, ...payloadLines.map((line) => `// ${line}`)];
       sources[CARRIER] = { ...carrier, lines, endLine: carrier.startLine + lines.length - 1 };
       break;
@@ -167,8 +168,7 @@ export const plantedPorts = (planted: PlantedAskCase): AskPorts => ({
   space: ASK_INJECTION_SPACE,
   search: async () =>
     planted.sources.map((s) => ({ path: s.path, startLine: s.startLine, endLine: s.endLine })),
-  read: async (hits) =>
-    hits.map((hit) => planted.sources.find((s) => s.path === hit.path) ?? null),
+  read: async (hits) => hits.map((hit) => planted.sources.find((s) => s.path === hit.path) ?? null),
 });
 
 // --- The adversaries -------------------------------------------------------------------------
@@ -205,9 +205,7 @@ const GLYPHS: Readonly<Record<string, string>> = {
 const glyphs = (text: string): string =>
   text
     .replace(/[aeopc]/g, (letter) => GLYPHS[letter] ?? letter)
-    .replace(/([b-z])/g, (letter, _m, index: number) =>
-      index % 4 === 0 ? `${letter}́` : letter,
-    );
+    .replace(/([b-z])/g, (letter, _m, index: number) => (index % 4 === 0 ? `${letter}́` : letter));
 const filler = (text: string): string =>
   text
     .split(/\s+/)
@@ -297,7 +295,11 @@ const attack = (mode: AskAdversary, trigger: string, call: ScriptedCall): Script
  * answers; otherwise the Ask eval's honest fake does. `log` collects the compromised calls.
  */
 export const askAdversaryScript =
-  (mode: AskAdversary, trigger: string, log: { compromised: ScriptedCall[] } = { compromised: [] }): Script =>
+  (
+    mode: AskAdversary,
+    trigger: string,
+    log: { compromised: ScriptedCall[] } = { compromised: [] },
+  ): Script =>
   (call) => {
     if (call.role !== "ask" || !call.untrusted.some((part) => part.text.includes(trigger)))
       return askFakeScript(call);
@@ -454,16 +456,13 @@ export const askInjectionTotals = (cases: readonly AskInjectionResult[]): AskInj
   };
 };
 
-export const runAskInjection = async (options: AskInjectionRunOptions): Promise<AskInjectionRun> => {
+export const runAskInjection = async (
+  options: AskInjectionRunOptions,
+): Promise<AskInjectionRun> => {
   const results: AskInjectionResult[] = [];
   for (const c of options.cases ?? INJECTION_CORPUS) {
     for (const channel of ASK_INJECTION_CHANNELS) {
-      const result = await runPlantedCase(
-        options.rolesFor(c, channel),
-        c,
-        channel,
-        options.capped,
-      );
+      const result = await runPlantedCase(options.rolesFor(c, channel), c, channel, options.capped);
       results.push(result);
       options.onProgress?.(
         `ask ${c.id} in ${channel}: ${result.status}${result.reason === null ? "" : ` (${result.reason})`}, dropped ${result.dropped}${result.leaks > 0 ? ", LEAK" : ""}${result.outside > 0 ? ", OUTSIDE" : ""}${result.markup > 0 ? ", MARKUP" : ""}${result.echoed ? ", echoed" : ""}`,

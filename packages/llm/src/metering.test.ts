@@ -483,8 +483,18 @@ describe("what a usage row says", () => {
     await call(metered, "ask");
     await metered.embedding()!.embed({ inputs: ["q"], purpose: "query" });
     expect(rows.map((r) => [r.role, r.analysisId, r.repoId, r.pullRequestId])).toEqual([
-      ["ask", undefined, "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f", "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a"],
-      ["embed", undefined, "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f", "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a"],
+      [
+        "ask",
+        undefined,
+        "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f",
+        "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a",
+      ],
+      [
+        "embed",
+        undefined,
+        "7d7b2c2e-1a1a-4b4b-8c8c-0d0d0e0e0f0f",
+        "8e8c3d3f-2b2b-4c4c-9d9d-1e1e1f1f2a2a",
+      ],
     ]);
   });
 

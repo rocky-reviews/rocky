@@ -753,7 +753,9 @@ describe("POST …/ask: refusals", () => {
       error: "model_unavailable",
       retryable: true,
     });
-    expect((await usageRows()).map((r) => [r.role, r.outcome, r.usage_status, r.input_tokens])).toEqual([
+    expect(
+      (await usageRows()).map((r) => [r.role, r.outcome, r.usage_status, r.input_tokens]),
+    ).toEqual([
       ["embed", "ok", "reported", 7],
       ["ask", "error", "partial", 90],
     ]);

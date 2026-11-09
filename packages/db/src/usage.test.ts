@@ -206,14 +206,18 @@ describe("recordLlmUsage", () => {
  * about and never an analysis. Everything else the server could not do before, it still cannot.
  */
 describe("the server's own usage (Ask)", () => {
-  const ask = (overrides: Partial<LlmUsageRecord> = {}) =>
-    record({
-      role: "ask",
-      model: "claude-sonnet-5-5",
+  /** An ask record for A's repository and pull request; an `undefined` override drops the field. */
+  const ask = (overrides: { [K in keyof LlmUsageRecord]?: LlmUsageRecord[K] | undefined } = {}) => {
+    const merged = {
+      ...record({ role: "ask", model: "claude-sonnet-5-5" }),
       repoId: A.repoId,
       pullRequestId: A.pullRequestId,
       ...overrides,
-    });
+    };
+    return Object.fromEntries(
+      Object.entries(merged).filter(([, value]) => value !== undefined),
+    ) as unknown as LlmUsageRecord;
+  };
 
   it("writes ask and embed records with their repository and pull request, as the server login", async () => {
     const question = ask();

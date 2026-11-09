@@ -63,15 +63,15 @@ const scriptFor = (subject: EvalSubject): Script =>
       ? // P9-3: the Ask adversary for the case's goal (a fully compromised model).
         askAdversaryScript(ASK_ADVERSARY_FOR_GOAL[subject.case.goal], subject.case.trigger)
       : subject.kind === "seeded"
-      ? subject.pr.fake
-      : subject.kind === "memory"
-        ? memoryFakeScript(subject.step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2)
-        : adversaryScript(
-            ADVERSARY_FOR_GOAL[subject.case.goal],
-            subject.case.trigger,
-            { compromised: [] },
-            subject.fixture,
-          );
+        ? subject.pr.fake
+        : subject.kind === "memory"
+          ? memoryFakeScript(subject.step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2)
+          : adversaryScript(
+              ADVERSARY_FOR_GOAL[subject.case.goal],
+              subject.case.trigger,
+              { compromised: [] },
+              subject.fixture,
+            );
 
 /** P9-2: the Ask eval embeds with a bag of words (`ask/fake.ts`). */
 const FAKE_ASK: AskEmbedding = { client: lexicalEmbedder(), space: LEXICAL_SPACE };

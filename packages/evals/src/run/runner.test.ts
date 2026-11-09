@@ -145,9 +145,9 @@ describe("runEvals (P4-7) on the scripted roles", () => {
     expect(run.total.echoed).toBeGreaterThan(0);
     expect(run.total.failed).toBeGreaterThan(0);
     expect(run.total.dropped).toBeGreaterThan(0);
-    expect(
-      subjects.filter((s) => s.kind === "ask_injection").map((s) => s.channel),
-    ).toHaveLength(INJECTION_CORPUS.length * 3);
+    expect(subjects.filter((s) => s.kind === "ask_injection").map((s) => s.channel)).toHaveLength(
+      INJECTION_CORPUS.length * 3,
+    );
     // Every corpus call went through the ask role, metered (plus the repair rounds).
     expect(report.usage.byRole["ask"]!.calls).toBeGreaterThanOrEqual(run.total.cases);
     expect(JSON.stringify(run)).not.toMatch(/timingSafeEqual|scrypt|as instructed|My instructions/);

@@ -126,7 +126,9 @@ number in flight):
 | `auth.session`         | session for POSTs (CSRF-proven), else client address | 300 / 1 min | the session API (`/api/session`, `/api/session/active-org`)                       |
 | `webhook.ip`           | client address + own/other app claim                 | 600 / 1 min | checked in `onRequest` before the precheck and the body; spent only by rejections |
 | `webhook.installation` | `<forge>:<installation>`                             | 600 / 1 min | checked after the signature holds; spent only when the inbox queued the delivery  |
-| `ask`                  | member id                                            | 20 / 1 min  | P9: `app.rateLimits.consume(request, reply, "ask", memberId)`                     |
+| `ask`                  | member id                                            | 10 / 1 min  | P9-3 (ADR 0042 §3): `POST …/pulls/:number/ask`, before the body is read           |
+| `ask.org`              | org id                                               | 60 / 1 min  | P9-3: the same route, after the member's limit; the 429 says `limit: "org"`       |
+| `ask.org.day`          | org id                                               | 600 / 1 day | P9-3: the same route, after `ask.org`                                             |
 | `diff`                 | member id                                            | 10 / 1 min  | H4-3 (ADR 0034): `GET …/pulls/:number/diff`, every request                        |
 | `diff.org`             | org id                                               | 15 / 1 min  | H4-3: the same route, spent only by reads that go to GitHub (`beforeForge`)       |
 
@@ -152,7 +154,9 @@ number in flight):
   not spend the installation's budget. Ask (P9) does not exist yet; `buildApp` decorates `app.rateLimits` and the
   scope and its default are defined, tested on a test-only route (`rate-limit.test.ts`).
 - **Answer:** `429`, `Retry-After: <seconds>`, `Cache-Control: no-store`,
-  `{"error":"rate_limited"}`. A store failure answers `503 {"error":"unavailable"}` (fail closed).
+  `{"error":"rate_limited"}`; a route may add fixed words to the body (Ask: `limit: "member"` or
+  `"org"`, P9-3), never over the error. A store failure answers `503 {"error":"unavailable"}`
+  (fail closed).
 - **Overrides:** `ROCKY_RATE_LIMIT_<SCOPE>=<max>/<seconds>` (`ROCKY_RATE_LIMIT_AUTH_LOGIN=30/600`).
   Malformed values and unknown names refuse to boot; a limit cannot be turned off.
 - **Keys never in clear:** the key is HMAC-SHA256'd under a per-process random secret before it

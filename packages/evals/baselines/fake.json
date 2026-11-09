@@ -49,9 +49,7 @@
         "outputTokens": 36725,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
-        "models": [
-          "scripted-triage"
-        ]
+        "models": ["scripted-triage"]
       },
       "review": {
         "calls": 396,
@@ -59,9 +57,7 @@
         "outputTokens": 59374,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
-        "models": [
-          "scripted-review"
-        ]
+        "models": ["scripted-review"]
       },
       "graph": {
         "calls": 288,
@@ -69,9 +65,7 @@
         "outputTokens": 21885,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
-        "models": [
-          "scripted-graph"
-        ]
+        "models": ["scripted-graph"]
       },
       "ask": {
         "calls": 153,
@@ -79,9 +73,7 @@
         "outputTokens": 12522,
         "cacheReadInputTokens": 0,
         "cacheWriteInputTokens": 0,
-        "models": [
-          "scripted-ask"
-        ]
+        "models": ["scripted-ask"]
       }
     },
     "totalTokens": 1166809,
@@ -101,10 +93,7 @@
       "criticalProduced": 1,
       "criticalFalsePositives": 0,
       "criticalFalsePositiveRate": 0,
-      "missed": [
-        "F9",
-        "F10"
-      ],
+      "missed": ["F9", "F10"],
       "falsePositives": []
     },
     {
@@ -136,10 +125,7 @@
       "criticalProduced": 1,
       "criticalFalsePositives": 0,
       "criticalFalsePositiveRate": 0,
-      "missed": [
-        "R1",
-        "R6"
-      ],
+      "missed": ["R1", "R6"],
       "falsePositives": [
         {
           "path": "src/auth/passwordReset.ts",
@@ -164,10 +150,7 @@
       "criticalProduced": 3,
       "criticalFalsePositives": 1,
       "criticalFalsePositiveRate": 0.3333333333333333,
-      "missed": [
-        "I3",
-        "I5"
-      ],
+      "missed": ["I3", "I5"],
       "falsePositives": [
         {
           "path": "src/api/routes/invoices.ts",
@@ -192,10 +175,7 @@
       "criticalProduced": 0,
       "criticalFalsePositives": 0,
       "criticalFalsePositiveRate": 0,
-      "missed": [
-        "W3",
-        "W6"
-      ],
+      "missed": ["W3", "W6"],
       "falsePositives": [
         {
           "path": "src/webhooks/deliver.ts",
@@ -1522,10 +1502,7 @@
             "reviewed": true,
             "unanalysed": null,
             "findings": 2,
-            "matched": [
-              "B1",
-              "P1"
-            ],
+            "matched": ["B1", "P1"],
             "patternSeverity": "medium",
             "suppressed": 0,
             "restored": 0,
@@ -1542,10 +1519,7 @@
             "reviewed": true,
             "unanalysed": null,
             "findings": 2,
-            "matched": [
-              "B2",
-              "P2"
-            ],
+            "matched": ["B2", "P2"],
             "patternSeverity": "medium",
             "suppressed": 0,
             "restored": 0,
@@ -1562,9 +1536,7 @@
             "reviewed": true,
             "unanalysed": null,
             "findings": 1,
-            "matched": [
-              "B2"
-            ],
+            "matched": ["B2"],
             "patternSeverity": null,
             "suppressed": 1,
             "restored": 0,

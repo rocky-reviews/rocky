@@ -1,5 +1,4 @@
 import {
-
   ASK_LABELS,
   MEMORY_CANARY_MARKER,
   memoryPart,
@@ -176,7 +175,10 @@ const askCall = (payload: string): ProviderCompletionCall<Verdict> => ({
       label: ASK_LABELS.selection,
       text: `path: src/auth/password.ts\nlines: 15-21 (new side of the diff)\n${payload}`,
     },
-    { label: ASK_LABELS.code, text: `path: src/auth/password.ts\nlines: 1-2\n1| // ${payload}\n2| x` },
+    {
+      label: ASK_LABELS.code,
+      text: `path: src/auth/password.ts\nlines: 1-2\n1| // ${payload}\n2| x`,
+    },
   ],
   output: verdictSchema,
   maxOutputTokens: 6000,
@@ -203,7 +205,9 @@ describe.each(INJECTION_CORPUS)("corpus case $id in Ask's inputs on the wire", (
     const parts = messages[0]!.content.map((block) => block.text);
     expect(parts).toHaveLength(4);
     for (const part of parts.slice(0, 3)) {
-      const id = /<pr_content id="([0-9a-f]{24})" label="(question|selection|code)">/.exec(part)?.[1];
+      const id = /<pr_content id="([0-9a-f]{24})" label="(question|selection|code)">/.exec(
+        part,
+      )?.[1];
       expect(id).toBeDefined();
       expect(c.payload).not.toContain(id!);
       expect(part.endsWith(`</pr_content id="${id!}">`)).toBe(true);
