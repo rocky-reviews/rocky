@@ -2,7 +2,36 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { rsaPrivateKeyPem, testAppKeys } from "@rocky-reviews/forge-github/testing";
-import { ConfigError, githubAppAuthFromEnv, isProduction, webhookSecretFromEnv } from "./config.js";
+import {
+  askConfigFromEnv,
+  ConfigError,
+  githubAppAuthFromEnv,
+  isProduction,
+  webhookSecretFromEnv,
+} from "./config.js";
+
+describe("askConfigFromEnv (P9-2)", () => {
+  it("is off until an embedding model is configured", () => {
+    expect(askConfigFromEnv({})).toEqual({ enabled: false });
+    expect(askConfigFromEnv({ ROCKY_LLM_EMBED_PROVIDER: "" })).toEqual({ enabled: false });
+  });
+
+  it("is on with the embed role's space and the ask role from ROCKY_LLM_*", () => {
+    const config = askConfigFromEnv({ ROCKY_LLM_EMBED_PROVIDER: "openai" });
+    expect(config.enabled).toBe(true);
+    if (!config.enabled) return;
+    expect(config.space.provider).toBe("openai");
+    expect(config.space.model).toBe("text-embedding-3-small");
+    expect(config.space.dimensions).toBeLessThanOrEqual(1024);
+    expect(config.llm.roles.ask.provider).toBe("anthropic");
+  });
+
+  it("refuses an invalid configuration at boot, naming the variable only", () => {
+    const env = { ROCKY_LLM_EMBED_PROVIDER: "openai", ROCKY_LLM_EMBED_DIMENSIONS: "4096" };
+    expect(() => askConfigFromEnv(env)).toThrow(ConfigError);
+    expect(() => askConfigFromEnv(env)).toThrow(/ROCKY_LLM_EMBED_DIMENSIONS/);
+  });
+});
 
 const GOOD = "0123456789abcdef0123456789abcdef0123456789abcdef";
 

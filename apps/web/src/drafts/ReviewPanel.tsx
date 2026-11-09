@@ -3,7 +3,7 @@
  * the tally (to decide / your comments / dismissed), the drafts to decide (H4-14: the open file's
  * first, by severity, then the other files' by severity; i/u walk them in this order), then the
  * decided ones, the note about dismissals, and the reviewer's own comments. Every item jumps to
- * its draft (or line) in the diff. Ask (P9-2) gets its own tab later.
+ * its draft (or line) in the diff. Ask (P9-2) is the panel's other tab.
  *
  * P8-2b: findings project memory hid are listed under "Hidden by memory", collapsed, each item
  * opening its file on the hidden list; they are not drafts and count in no tally.
@@ -69,11 +69,23 @@ type Props = {
   current?: string | null;
   /** The sidebar's file order (k/j's), which the other files' drafts follow. */
   files?: readonly string[];
+  /** P9-2: false when the panel's tabs carry the title (the Review tab shows the count). */
+  head?: boolean;
 };
+
+/** Drafts still to decide (P9-2: the Review tab's count); null until the state is loaded. */
+export const undecidedCount = (
+  review: Pick<ReturnType<typeof useReview>, "status" | "findings" | "decisionOf" | "postedOf">,
+): number | null =>
+  review.status !== "ready"
+    ? null
+    : review.findings.filter(
+        (f) => review.decisionOf(f.id).state === "draft" && review.postedOf(f.id) === null,
+      ).length;
 
 const NO_FILES: readonly string[] = [];
 
-export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) => {
+export const ReviewPanelContent = ({ current = null, files = NO_FILES, head = true }: Props) => {
   const {
     status,
     stale,
@@ -191,18 +203,20 @@ export const ReviewPanelContent = ({ current = null, files = NO_FILES }: Props) 
 
   return (
     <>
-      <div className="panel-head">
-        <h2 className="panel-title">
-          Review
-          {status === "ready" && undecided.length > 0 && (
-            <span className="panel-count">
-              {" "}
-              · {undecided.length}
-              <span className="sr-only"> AI drafts to decide</span>
-            </span>
-          )}
-        </h2>
-      </div>
+      {head && (
+        <div className="panel-head">
+          <h2 className="panel-title">
+            Review
+            {status === "ready" && undecided.length > 0 && (
+              <span className="panel-count">
+                {" "}
+                · {undecided.length}
+                <span className="sr-only"> AI drafts to decide</span>
+              </span>
+            )}
+          </h2>
+        </div>
+      )}
       <div className="panel-body">
         {status === "none" && (
           <p className="placeholder">

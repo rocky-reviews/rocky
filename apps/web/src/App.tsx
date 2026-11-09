@@ -7,6 +7,7 @@ import {
 } from "./data/shell-data.js";
 import type { ReviewPostingSource } from "./data/posting-data.js";
 import type { ReviewSource } from "./data/review-data.js";
+import type { AskSource } from "./ask/ask-data.js";
 import { ShellLoadError, type ShellLoadReason } from "./data/shell-http-source.js";
 import { signInHref } from "./session.js";
 import { Shell } from "./shell/Shell.js";
@@ -16,6 +17,8 @@ type Props = {
   pull: PullRef;
   review: ReviewSource;
   posting: ReviewPostingSource;
+  /** Where Ask's questions go (P9-2). */
+  ask: AskSource;
   /** Where "Sign in with GitHub" comes back to (H4-2): this page's own path. */
   returnTo?: string;
 };
@@ -83,7 +86,7 @@ export const LoadProblem = ({
  * Loads the shell's data through the port, validates it here (the one place, so no source can
  * skip it) and keeps "updated N ago" current.
  */
-export const App = ({ source, pull, review, posting, returnTo }: Props) => {
+export const App = ({ source, pull, review, posting, ask, returnTo }: Props) => {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [now, setNow] = useState(() => Date.now());
 
@@ -111,6 +114,6 @@ export const App = ({ source, pull, review, posting, returnTo }: Props) => {
   }, []);
 
   if (state.kind === "ready")
-    return <Shell data={state.data} now={now} review={review} posting={posting} />;
+    return <Shell data={state.data} now={now} review={review} posting={posting} ask={ask} />;
   return <LoadProblem state={state} {...(returnTo === undefined ? {} : { returnTo })} />;
 };

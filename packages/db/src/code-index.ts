@@ -941,3 +941,70 @@ export const searchCodeChunks = async (
     score: Number(r.score),
   }));
 };
+
+// --- Ask (P9-2) ----------------------------------------------------------------------------------
+
+/** What Ask needs about one pull request: its repository and that repository's index. */
+export interface AskTarget {
+  readonly pullRequestId: string;
+  readonly repoId: string;
+  readonly forgeRepoId: number;
+  /** `null` when the org row holds no installation (nothing can be read on its behalf). */
+  readonly installationId: number | null;
+  /** The repository's index, or `null` when none was ever asked for. */
+  readonly index: CodeIndexState | null;
+}
+
+const FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
+const MAX_INT = 2_147_483_647;
+
+/**
+ * The Ask target of `owner/repo#number` in `tx.orgId`, or `null` as the PR page answers it:
+ * unknown, a disabled repository, another org's (RLS), impossible names. A disabled
+ * repository's index is never served, though it is kept (ADR 0041 §6). Ids, commits and counts
+ * only.
+ */
+export const loadAskTarget = async (
+  tx: TenantTx,
+  target: { readonly owner: string; readonly repo: string; readonly number: number },
+): Promise<AskTarget | null> => {
+  const { owner, repo, number } = target;
+  if (!Number.isInteger(number) || number < 1 || number > MAX_INT) invalid("number");
+  if (typeof owner !== "string" || typeof repo !== "string") invalid("repository");
+  const fullName = `${owner}/${repo}`;
+  if (!FULL_NAME.test(fullName)) return null;
+  const { rows } = await tx.query<
+    Partial<StateRow> & {
+      pull_request_id: string;
+      repo_id: string;
+      forge_repo_id: string;
+      installation_id: string | null;
+      has_index: boolean;
+    }
+  >(
+    `select p.id as pull_request_id, r.id as repo_id, r.forge_repo_id::text as forge_repo_id,
+            o.installation_id::text as installation_id, i.id is not null as has_index,
+            ${STATE_COLUMNS}
+       from pull_requests p
+       join repos r on r.org_id = p.org_id and r.id = p.repo_id
+       join orgs o on o.id = p.org_id
+       left join code_indexes i on i.org_id = p.org_id and i.repo_id = r.id
+      where p.org_id = $1 and lower(r.full_name) = lower($2) and p.number = $3 and r.enabled
+      order by r.updated_at desc, r.id
+      limit 1`,
+    [tx.orgId, fullName, number],
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  const forgeRepoId = Number(row.forge_repo_id);
+  if (!Number.isSafeInteger(forgeRepoId) || forgeRepoId < 1) invalid("repository id");
+  const installationId = row.installation_id === null ? NaN : Number(row.installation_id);
+  return {
+    pullRequestId: row.pull_request_id,
+    repoId: row.repo_id,
+    forgeRepoId,
+    installationId:
+      Number.isSafeInteger(installationId) && installationId > 0 ? installationId : null,
+    index: row.has_index ? stateOf(row as StateRow) : null,
+  };
+};

@@ -4,6 +4,8 @@
 /packages/evals/src/seeded/ @federicoaldunate
 /packages/evals/src/memory/ @federicoaldunate
 /packages/evals/src/memory.test.ts @federicoaldunate
+/packages/evals/src/ask/ @federicoaldunate
+/packages/evals/src/ask.test.ts @federicoaldunate
 /packages/evals/src/injection/check.ts @federicoaldunate
 /packages/evals/src/score.ts @federicoaldunate
 /packages/evals/src/run/compare.ts @federicoaldunate

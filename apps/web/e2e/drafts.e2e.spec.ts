@@ -438,13 +438,13 @@ test.describe("review panel", () => {
   test("tallies the drafts and moves decided ones; the sidebar dot fades", async ({ page }) => {
     await open(page);
     const panel = page.locator("#review-panel");
-    await expect(panel.locator(".panel-title")).toHaveText("Review · 10 AI drafts to decide");
+    await expect(panel.locator("#panel-tab-review")).toHaveText("Review · 10 AI drafts to decide");
     const dot = page
       .locator('#sidebar button.nav-file[title="src/auth/invitations.ts"] .dot')
       .first();
     await expect(dot).not.toHaveClass(/done/);
     await card(page).getByRole("button", { name: "Accept", exact: true }).click();
-    await expect(panel.locator(".panel-title")).toHaveText("Review · 9 AI drafts to decide");
+    await expect(panel.locator("#panel-tab-review")).toHaveText("Review · 9 AI drafts to decide");
     await expect(panel.locator(".tally")).toHaveText(
       "AI drafts to decide9Your comments1Dismissed0",
     );

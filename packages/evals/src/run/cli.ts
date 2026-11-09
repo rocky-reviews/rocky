@@ -2,7 +2,7 @@
  * `pnpm evals` (P4-7). The entry point (`scripts/evals.ts`) wires the real LLM roles in; this
  * module owns arguments, output and exit codes, and is tested with injected I/O.
  *
- *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--max-tokens N] [--only id,…] [--out path]
+ *   pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--max-tokens N] [--only id,…] [--out path]
  *   pnpm evals compare <baseline.json> <report.json>
  *
  * Exit codes: 0 ok; 1 gate failed (compare) or the token cap stopped the run (run); 2 usage,
@@ -19,7 +19,11 @@ import { MAX_MEMORY_TRIALS } from "../memory/run.js";
 import { SEEDED_PRS } from "../seeded/index.js";
 import { compareReports, PlaceholderBaselineError } from "./compare.js";
 import { parseReport, type EvalReport, type ReportModels } from "./report.js";
-import { runEvals, type EvalSubject } from "./runner.js";
+import { runEvals, type AskEmbedding, type EvalSubject } from "./runner.js";
+import { ASK_QUESTIONS } from "../ask/questions.js";
+import { ASK_REPO } from "../ask/repo.js";
+import { ASK_EVAL_K } from "../ask/run.js";
+import { ASK_MIN_VALID_RATE } from "../ask/score.js";
 
 /** Default spend cap: the seeded PRs fit well inside it; `--injection` needs a higher one. */
 export const DEFAULT_MAX_TOKENS = 1_000_000;
@@ -41,11 +45,18 @@ export interface LiveTarget {
   readonly roles: LlmRoles;
   /** Key variables the config names that are unset (names only). */
   readonly missingSecrets: readonly string[];
+  /**
+   * P9-2: the embed role for `--ask` (null or absent: no `ROCKY_LLM_EMBED_PROVIDER`), and its
+   * provider's key variable when unset.
+   */
+  readonly ask?: AskEmbedding | null;
+  readonly askMissingSecrets?: readonly string[];
 }
 
 export interface FakeTargetLike {
   readonly models: ReportModels;
   rolesFor(subject: EvalSubject): LlmRoles;
+  readonly ask?: AskEmbedding;
 }
 
 export interface CliDeps {
@@ -56,7 +67,7 @@ export interface CliDeps {
 
 const USAGE = [
   "usage:",
-  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--max-tokens N] [--only pr-847,…] [--out report.json]",
+  "  pnpm evals run [--fake] [--dry-run] [--injection] [--memory [--memory-trials N]] [--ask] [--max-tokens N] [--only pr-847,…] [--out report.json]",
   "  pnpm evals compare <baseline.json> <report.json>",
   "",
 ].join("\n");
@@ -113,6 +124,13 @@ const summary = (report: EvalReport): string => {
           .join("; ")}`,
       );
   }
+  if (report.ask !== null && report.ask !== undefined) {
+    const a = report.ask;
+    lines.push(
+      "",
+      `ask: ${a.status}, ${a.pass ? "pass" : "FAIL"} (gate ${a.gate}, floor ${pct(ASK_MIN_VALID_RATE).trim()}); ${a.validlyCited} of ${a.questions} answered with valid citations (${pct(a.validRate).trim()}), ${a.onTarget} of them on target (${pct(a.onTargetRate).trim()}); citations ${a.validCitations} valid, ${a.invalidCitations} invalid; ${a.chunks} chunks, ${a.embeddingTokens} embedding tokens`,
+    );
+  }
   return `${lines.join("\n")}\n`;
 };
 
@@ -127,6 +145,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
       injection: { type: "boolean", default: false },
       memory: { type: "boolean", default: false },
       "memory-trials": { type: "string" },
+      ask: { type: "boolean", default: false },
       "max-tokens": { type: "string" },
       only: { type: "string" },
       out: { type: "string" },
@@ -154,10 +173,15 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
 
   let models: ReportModels;
   let rolesFor: (subject: EvalSubject) => LlmRoles;
+  let ask: AskEmbedding | undefined;
   if (kind === "fake") {
     const target = await (deps.fake ?? loadFake)();
     models = target.models;
     rolesFor = (subject) => target.rolesFor(subject);
+    if (values.ask) {
+      if (target.ask === undefined) throw new UsageError("the fake target has no --ask embedder");
+      ask = target.ask;
+    }
   } else {
     let target: LiveTarget;
     try {
@@ -171,6 +195,21 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         `evals: set ${target.missingSecrets.join(", ")} (the provider key) to run against real models, or pass --fake\n`,
       );
       return 2;
+    }
+    if (values.ask) {
+      if (target.ask === null || target.ask === undefined) {
+        io.stderr(
+          "evals: --ask needs an embedding model: set ROCKY_LLM_EMBED_PROVIDER, ROCKY_LLM_EMBED_MODEL and ROCKY_LLM_EMBED_DIMENSIONS\n",
+        );
+        return 2;
+      }
+      if ((target.askMissingSecrets ?? []).length > 0) {
+        io.stderr(
+          `evals: set ${(target.askMissingSecrets ?? []).join(", ")} (the embedding provider's key) to run --ask\n`,
+        );
+        return 2;
+      }
+      ask = target.ask;
     }
     models = target.models;
     rolesFor = () => target.roles;
@@ -187,6 +226,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
         `seeded PRs: ${prs.map((pr) => `${pr.id} (${pr.expected.length} seeded)`).join(", ")}`,
         `injection: ${values.injection ? `${INJECTION_CORPUS.length * INJECTION_FIXTURES.length} cases` : "off"}`,
         `memory: ${values.memory ? `${memoryTrials} × 3 analyses (learn, control, apply), triage pinned to important` : "off"}`,
+        `ask: ${ask === undefined ? "off" : `${ASK_QUESTIONS.length} questions on a repository of ${Object.keys(ASK_REPO).length} files, ${ASK_EVAL_K} excerpts each, gate ${kind === "live" ? "on_target" : "guard"}, embedded with ${ask.space.provider}/${ask.space.model} (${ask.space.dimensions})`}`,
         `token cap: ${maxTokens}`,
         "",
       ].join("\n"),
@@ -202,6 +242,7 @@ const run = async (args: string[], io: CliIo, deps: CliDeps): Promise<number> =>
     injection: values.injection,
     memory: values.memory,
     memoryTrials,
+    ...(ask === undefined ? {} : { ask }),
     ...(only === undefined ? {} : { only }),
     clock: io.clock,
     onProgress: (line) => io.stderr(`${line}\n`),

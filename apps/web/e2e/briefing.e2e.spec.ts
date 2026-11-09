@@ -97,7 +97,8 @@ test.describe("layout", () => {
 
 test.describe("files by risk (H4-10)", () => {
   const tablist = (page: Page) => page.getByRole("tablist", { name: "Files by risk" });
-  const panel = (page: Page) => page.getByRole("tabpanel");
+  // P9-2: the right panel has tab panels too; this is the briefing's.
+  const panel = (page: Page) => page.locator("#risk-panel");
 
   test("a chip per level with its count; the highest level's files are listed", async ({
     page,

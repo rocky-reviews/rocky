@@ -1,0 +1,270 @@
+/*
+ * The right panel's tabs and the Ask tab (P9-2), after design-poc/index.html (.tabs, .tab,
+ * .chat, .chat-q, .chat-a, .cite, .chat-input, .suggest, .typing). Tokens only.
+ * Differences from the POC: the answer bubble has the cyan AI bar the drafts have (cyan means
+ * AI), citations are underlined links, and the question box has a visible Ask button and hint.
+ */
+
+/* ---------- tabs (POC .tabs / .tab) ---------- */
+.panel-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  padding: 11px var(--space-3);
+  min-height: 40px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.panel-tab:hover {
+  color: var(--text);
+}
+.panel-tab.is-selected {
+  color: var(--text);
+  border-bottom-color: var(--you);
+}
+.panel-tab:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: -2px;
+}
+.ask-mark {
+  color: var(--ai);
+}
+.panel-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.panel-pane[hidden] {
+  display: none;
+}
+
+/* ---------- the conversation ---------- */
+.ask-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ask-hint,
+.ask-index-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.ask-index-note {
+  font-size: var(--text-sm);
+}
+.ask-index-note code {
+  font-family: var(--font-mono);
+}
+/* Rocky's own state, not AI text: a neutral bar (cyan is for what the AI wrote). */
+.ask-banner {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.ask-index-state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Where `/` puts focus while Ask cannot take a question (it then reads the state out). */
+.ask-index-state:focus-visible {
+  outline: 2px solid var(--you);
+  outline-offset: 2px;
+  border-radius: var(--radius-md);
+}
+.ask-banner p {
+  margin: 0;
+}
+.chat {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-q {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--you);
+  color: var(--on-you);
+  border-radius: var(--radius-xl) var(--radius-xl) 3px var(--radius-xl);
+  padding: 7px 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-a {
+  align-self: flex-start;
+  max-width: 94%;
+  background: var(--panel-2);
+  border-left: 3px solid var(--ai);
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl) 3px;
+  padding: 8px 11px;
+  overflow-wrap: anywhere;
+}
+.chat-a code {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  background: var(--panel);
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+}
+.ask-text {
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+}
+.ask-text:last-child {
+  margin-bottom: 0;
+}
+.ask-note {
+  color: var(--muted);
+}
+.chat-a.typing {
+  color: var(--muted);
+  font-style: italic;
+}
+/* A failure is Rocky's message, not the model's: neutral, and no severity colour. */
+.chat-a.ask-error {
+  border-left-color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.ask-cites {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cite {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--you);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.cite:hover {
+  color: var(--text);
+}
+
+/* ---------- the question box (POC .chat-input) ---------- */
+.chat-input {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 10px var(--space-3);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.suggest button {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  min-height: 24px;
+  font: inherit;
+  font-size: var(--text-base);
+  color: var(--muted);
+  cursor: pointer;
+}
+.suggest button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--you);
+}
+.suggest button:disabled {
+  cursor: default;
+}
+.chat-box {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+.chat-box textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.chat-box .btn-primary:disabled {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  filter: none;
+}
+.chat-box textarea:disabled {
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.chat-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.ask-selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 1px 2px 1px 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.ask-selection-label {
+  overflow-wrap: anywhere;
+}
+.chat-q .ask-selection {
+  display: flex;
+  margin-top: 4px;
+  padding-right: 8px;
+  background: var(--you-bg);
+}
+.ask-selection-remove {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  min-width: 24px;
+  min-height: 24px;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+}
+.ask-selection-remove:hover {
+  color: var(--text);
+}

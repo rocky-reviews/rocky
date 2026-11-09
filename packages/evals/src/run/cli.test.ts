@@ -91,6 +91,40 @@ describe("pnpm evals run", () => {
     expect(t.text()).toContain("level important");
   });
 
+  it("--ask runs the Ask eval and prints its rate against the floor (P9-2)", async () => {
+    const t = io();
+    const args = ["run", "--fake", "--only", "pr-912", "--ask", "--out", "r.json"];
+    expect(await evalsCli(args, t.io, deps())).toBe(0);
+    expect(written(t.written, "r.json").ask?.pass).toBe(true);
+    expect(t.text()).toMatch(
+      /ask: done, pass \(gate guard, floor 90\.0%\); 12 of 12 answered with valid citations \(100\.0%\), [0-9]+ of them on target/,
+    );
+    const dry = io();
+    expect(await evalsCli(["run", "--fake", "--dry-run", "--ask"], dry.io, deps())).toBe(0);
+    expect(dry.text()).toContain(
+      "ask: 12 questions on a repository of 11 files, 4 excerpts each, gate guard, embedded with fake/lexical-256",
+    );
+  });
+
+  it("a live --ask without an embedding model, or without its key, stops before any call", async () => {
+    const t = io();
+    expect(await evalsCli(["run", "--ask"], t.io, deps())).toBe(2);
+    expect(t.text()).toContain("ROCKY_LLM_EMBED_PROVIDER");
+    const base = deps();
+    const keyless: CliDeps = {
+      ...base,
+      live: (env) => ({
+        ...base.live(env),
+        ask: fakeTarget().ask,
+        askMissingSecrets: ["OPENAI_API_KEY"],
+      }),
+    };
+    const k = io();
+    expect(await evalsCli(["run", "--ask"], k.io, keyless)).toBe(2);
+    expect(k.text()).toContain("OPENAI_API_KEY");
+    expect({ ...t.written, ...k.written }).toEqual({});
+  });
+
   it.each([
     [["--memory", "--memory-trials", "0"]],
     [["--memory", "--memory-trials", "6"]],

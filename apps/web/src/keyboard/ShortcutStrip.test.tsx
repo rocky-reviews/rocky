@@ -31,7 +31,7 @@ const strip = (focused: string | null, onScreen: string | null, singleKeys = tru
 describe("shortcut strip", () => {
   it("lists a/e/d while the focused draft is on screen", () => {
     expect(strip("F1", "F1")).toBe(
-      "j / k previous & next file u / i previous & next AI draft a accept e edit d dismiss v viewed ? all shortcuts",
+      "j / k previous & next file u / i previous & next AI draft a accept e edit d dismiss v viewed / ask ? all shortcuts",
     );
   });
 
@@ -42,7 +42,7 @@ describe("shortcut strip", () => {
       ["F2", "F1"],
     ] as const)
       expect(strip(focused, onScreen)).toBe(
-        "j / k previous & next file u / i previous & next AI draft v viewed ? all shortcuts",
+        "j / k previous & next file u / i previous & next AI draft v viewed / ask ? all shortcuts",
       );
   });
 

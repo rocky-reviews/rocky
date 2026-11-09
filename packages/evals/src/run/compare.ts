@@ -13,8 +13,12 @@
  * noted and left out, so adding a seeded PR never moves the gate by itself. A failed PR counts
  * as finding nothing. Injection metrics and version changes are notes, not gated. Drops are
  * compared with a 1e-9 tolerance, so exactly 5 (or 10) points passes despite float error.
+ * The Ask eval (P9-2) fails the gate when a report ran it below `ASK_MIN_VALID_RATE` (90% of
+ * questions; a live report also on target, `src/ask/score.ts`), or skipped it after a baseline
+ * passed it.
  * A placeholder baseline cannot gate anything: `PlaceholderBaselineError`.
  */
+import { ASK_MIN_VALID_RATE, askPasses } from "../ask/score.js";
 import { totalsOf, type EvalReport, type RoleModel, type Totals } from "./report.js";
 
 export const RECALL_DROP_POINTS = 5;
@@ -123,6 +127,28 @@ export const compareReports = (baseline: EvalReport, report: EvalReport): Compar
       );
   } else if (report.memory?.pass === false)
     notes.push("memory eval: fail (not gated: the baseline did not pass it)");
+
+  // The Ask eval (P9-2): a report that ran it must pass the floor; once a baseline passed it, a
+  // report must run it.
+  if (report.ask !== null && report.ask !== undefined) {
+    const a = report.ask;
+    // Recomputed here, not read from `pass`: a live report is held to the on-target gate
+    // whatever gate it says it ran.
+    const gate = report.kind === "live" ? "on_target" : a.gate;
+    if (report.kind === "live" && a.gate !== "on_target")
+      reasons.push("a live ask eval must be scored on target (gate on_target)");
+    if (!askPasses(gate, a))
+      reasons.push(
+        `the ask eval failed: ${a.validlyCited} of ${a.questions} questions answered with valid citations (${pct(a.validRate)})${gate === "on_target" ? `, ${a.onTarget} on target (${pct(a.onTargetRate)})` : ""}; floor ${pct(ASK_MIN_VALID_RATE)}`,
+      );
+    else if (baseline.ask !== null && baseline.ask !== undefined) {
+      if (a.validRate !== baseline.ask.validRate)
+        notes.push(`ask valid rate ${pct(baseline.ask.validRate)} → ${pct(a.validRate)}`);
+      if (a.onTargetRate !== baseline.ask.onTargetRate)
+        notes.push(`ask on-target rate ${pct(baseline.ask.onTargetRate)} → ${pct(a.onTargetRate)}`);
+    }
+  } else if (baseline.ask?.pass === true)
+    reasons.push("the baseline ran the ask eval (--ask); this report did not");
 
   return { ok: reasons.length === 0, reasons, notes, common, baseline: before, report: after };
 };

@@ -86,6 +86,9 @@ importers:
       '@rocky-reviews/forge-github':
         specifier: workspace:*
         version: link:../../packages/forge-github
+      '@rocky-reviews/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../../packages/log
@@ -242,6 +245,9 @@ importers:
       '@rocky-reviews/core':
         specifier: workspace:*
         version: link:../core
+      '@rocky-reviews/indexer':
+        specifier: workspace:*
+        version: link:../indexer
       '@rocky-reviews/schema':
         specifier: workspace:*
         version: link:../schema

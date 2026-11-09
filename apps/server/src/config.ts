@@ -9,6 +9,8 @@ import {
   type GitHubAppAuth,
   type GitHubEndpoints,
 } from "@rocky-reviews/forge-github";
+import type { EmbeddingSpace } from "@rocky-reviews/core";
+import { LlmConfigError, llmConfigFromEnv, type LlmConfig } from "@rocky-reviews/llm";
 import type { GitHubAppSetupConfig } from "./github-app-setup.js";
 
 export class ConfigError extends Error {
@@ -339,5 +341,34 @@ export const authFromEnv = (env: Env): AuthSetup => {
       sessionSecret,
       production,
     },
+  };
+};
+
+export type AskConfig =
+  | { readonly enabled: false }
+  | { readonly enabled: true; readonly llm: LlmConfig; readonly space: EmbeddingSpace };
+
+/**
+ * Ask (P9-2, ADR 0041) reads the same `ROCKY_LLM_*` the worker does: the `ask` role answers and
+ * the embed role embeds the question in the index's space. Off (no route spends anything) until
+ * an embedding model is configured (`ROCKY_LLM_EMBED_PROVIDER`), as indexing is (ADR 0040 §1);
+ * a configuration that is set but invalid is refused at boot, naming variables only. Keys are
+ * read per call by the adapters, never here.
+ */
+export const askConfigFromEnv = (env: Readonly<Record<string, string | undefined>>): AskConfig => {
+  if ((env["ROCKY_LLM_EMBED_PROVIDER"] ?? "") === "") return { enabled: false };
+  let llm: LlmConfig;
+  try {
+    llm = llmConfigFromEnv(env);
+  } catch (error) {
+    if (error instanceof LlmConfigError) throw new ConfigError(error.message);
+    throw new ConfigError("ROCKY_LLM_* could not be read");
+  }
+  const embed = llm.roles.embed;
+  if (embed === null) return { enabled: false };
+  return {
+    enabled: true,
+    llm,
+    space: { provider: embed.provider, model: embed.model, dimensions: embed.dimensions },
   };
 };

@@ -235,3 +235,70 @@ describe("the project-memory eval gate (P8-2)", () => {
     expect(parseReport(JSON.parse(JSON.stringify(capped))).ok).toBe(false);
   });
 });
+
+describe("the Ask eval gate (P9-2)", () => {
+  const ask = (
+    good: number,
+    onTarget = good,
+    gate: "guard" | "on_target" = "on_target",
+    questions = 10,
+  ) => ({
+    status: "done" as const,
+    gate,
+    questions,
+    answered: questions,
+    validlyCited: good,
+    validRate: good / questions,
+    onTarget,
+    onTargetRate: onTarget / questions,
+    validCitations: good,
+    invalidCitations: questions - good,
+    citationValidity: good / questions,
+    targetHits: good,
+    chunks: 19,
+    embeddingTokens: 1200,
+    pass: good / questions >= 0.9,
+    results: [],
+  });
+  const prs = [pr("a", 8)];
+
+  it("a report that ran it must reach 90% of questions answered with valid citations", () => {
+    expect(compareReports(report(prs), report(prs, { ask: ask(9) })).ok).toBe(true);
+    const failed = compareReports(report(prs), report(prs, { ask: ask(8) }));
+    expect(failed.ok).toBe(false);
+    expect(failed.reasons.join(" ")).toMatch(/ask eval failed: 8 of 10 .*80\.0%.*floor 90\.0%/);
+  });
+
+  it("a live report must also cite the answering code in 90% of questions", () => {
+    const offTarget = compareReports(report(prs), report(prs, { ask: ask(10, 8) }));
+    expect(offTarget.ok).toBe(false);
+    expect(offTarget.reasons.join(" ")).toMatch(/8 on target \(80\.0%\)/);
+    // A live report cannot claim the fake's guard-only gate, even with `pass: true`.
+    const guardOnly = compareReports(
+      report(prs),
+      report(prs, { ask: { ...ask(10, 0, "guard"), pass: true } }),
+    );
+    expect(guardOnly.ok).toBe(false);
+    expect(guardOnly.reasons.join(" ")).toMatch(/must be scored on target/);
+    // A fake report is held to the guard only.
+    const fake = (over: Partial<EvalReport> = {}) => report(prs, { kind: "fake", ...over });
+    expect(compareReports(fake(), fake({ ask: ask(12, 7, "guard", 12) })).ok).toBe(true);
+  });
+
+  it("once the baseline passed it, the report must run it; a changed rate is a note", () => {
+    const baseline = report(prs, { ask: ask(10) });
+    const missing = compareReports(baseline, report(prs));
+    expect(missing.ok).toBe(false);
+    expect(missing.reasons.join(" ")).toMatch(/--ask/);
+    const lower = compareReports(baseline, report(prs, { ask: ask(9) }));
+    expect(lower.ok).toBe(true);
+    expect(lower.notes).toContain("ask valid rate 100.0% → 90.0%");
+    // Before P9-2 (no `ask` key) nothing is gated.
+    expect(compareReports(report(prs), report(prs)).ok).toBe(true);
+  });
+
+  it("a capped ask run marks the report capped", () => {
+    const capped = report(prs, { ask: { ...ask(0), status: "capped" } });
+    expect(parseReport(JSON.parse(JSON.stringify(capped))).ok).toBe(false);
+  });
+});

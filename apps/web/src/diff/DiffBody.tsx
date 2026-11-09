@@ -383,6 +383,8 @@ export const DiffBody = ({
       className="diff"
       role="group"
       aria-label={`Diff of ${path}`}
+      // P9-2: `/` reads which file a selection is in (ask/selection.ts).
+      data-path={path}
       style={{ "--ln-digits": digits } as CSSProperties}
       tabIndex={activeRendered ? -1 : 0}
       onKeyDown={onKeyDown}

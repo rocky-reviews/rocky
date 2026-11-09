@@ -245,6 +245,12 @@ packages/schema (analysis document; shared contract)
   `vector(1024)` for every embedding space (zero-padded) with the space on every row and one
   HNSW index; a model change re-indexes. `searchCodeChunks` returns the nearest chunks of one
   repository in one space (exact below 20 000 vectors, HNSW with an iterative scan above).
+- Ask (ADR 0041, P9-2): `POST /api/repos/:owner/:repo/pulls/:number/ask` (the `ask` policy, the
+  PR page's access check, the per-member `ask` rate limit) embeds the question in the index's
+  space, searches it inside `withOrg`, reads each hit's lines from GitHub by blob id on a
+  `contents: read` token revoked after the request, and asks the `ask` role through core's
+  `answerQuestion`. Citations survive only inside the lines the model was shown; the page links
+  them to the file at the indexed commit on GitHub. Nothing is stored; the answer acts on nothing.
 - Pull request mirror (ADR 0010): the worker's `pull_request` lane re-reads each pull request
   from GitHub (the event is a hint) on an installation token minted per row for that one
   repository with `contents`/`pull_requests: read` only, checked, and revoked when the row is

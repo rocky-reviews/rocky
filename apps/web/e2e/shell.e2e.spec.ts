@@ -130,7 +130,8 @@ test.describe("page overflow", () => {
       await openFile(page, "src/auth/invitations.ts");
       await scrollToEnd(page, "#main");
       await scrollToEnd(page, "#sidebar");
-      if (size.width > 1180) await scrollToEnd(page, "#review-panel .panel-body");
+      if (size.width > 1180)
+        await scrollToEnd(page, "#review-panel #panel-pane-review .panel-body");
       await expectNoPageScroll(page);
     });
   }
@@ -143,7 +144,7 @@ test.describe("page overflow", () => {
     await openFile(page, "src/auth/invitations.ts");
     await scrollToEnd(page, "#main");
     await page.getByRole("button", { name: "Review panel", exact: true }).click();
-    await scrollToEnd(page, "#review-panel .panel-body");
+    await scrollToEnd(page, "#review-panel #panel-pane-review .panel-body");
     await expectNoPageScroll(page);
   });
 
@@ -161,7 +162,7 @@ test.describe("page overflow", () => {
     await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Review panel", exact: true }).click();
-    await scrollToEnd(page, "#review-panel .panel-body");
+    await scrollToEnd(page, "#review-panel #panel-pane-review .panel-body");
     await expectNoPageScroll(page);
   });
 });

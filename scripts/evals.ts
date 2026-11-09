@@ -15,14 +15,14 @@ import {
  *
  *   pnpm evals run --fake                      scripted roles: tests the harness, free
  *   pnpm evals run --dry-run                   checks the config and key, calls nothing
- *   pnpm evals run [--injection] [--max-tokens N] [--only pr-847,…] [--out path]
+ *   pnpm evals run [--injection] [--memory] [--ask] [--max-tokens N] [--only pr-847,…] [--out path]
  *   pnpm evals compare <baseline.json> <report.json>
  *
  * A live run builds the roles exactly as the worker does, from `ROCKY_LLM_*` and the key the
  * config names (BYOK, e.g. ANTHROPIC_API_KEY), read from this process's environment only.
  */
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ROLES = ["triage", "review", "graph"] as const;
+const ROLES = ["triage", "review", "graph", "ask"] as const;
 /** pnpm runs root scripts at the root; relative paths are the caller's. */
 const CWD = process.env["INIT_CWD"] ?? process.cwd();
 
@@ -36,18 +36,38 @@ const live = (env: Readonly<Record<string, string | undefined>>): LiveTarget => 
       const name = settings?.apiKeyEnv;
       return name !== undefined && (env[name] ?? "") === "" ? [name] : [];
     });
+    // P9-2: `--ask` embeds with the embed role, in its configured space.
+    const embed = config.roles.embed;
+    const client = roles.embedding();
+    const embedKey =
+      embed === null
+        ? undefined
+        : (config.providers[embed.provider] as { apiKeyEnv?: string } | undefined)?.apiKeyEnv;
     return {
       roles,
       missingSecrets: [...new Set(missingSecrets)],
-      models: Object.fromEntries(
-        ROLES.map((role) => {
-          const target = config.roles[role];
-          return [
-            role,
-            { provider: target.provider, model: target.model, effort: target.effort ?? null },
-          ];
-        }),
-      ),
+      ask:
+        embed === null || client === undefined
+          ? null
+          : {
+              client,
+              space: { provider: embed.provider, model: embed.model, dimensions: embed.dimensions },
+            },
+      askMissingSecrets: embedKey !== undefined && (env[embedKey] ?? "") === "" ? [embedKey] : [],
+      models: {
+        ...Object.fromEntries(
+          ROLES.map((role) => {
+            const target = config.roles[role];
+            return [
+              role,
+              { provider: target.provider, model: target.model, effort: target.effort ?? null },
+            ];
+          }),
+        ),
+        ...(embed === null
+          ? {}
+          : { embed: { provider: embed.provider, model: embed.model, effort: null } }),
+      },
     };
   } catch (error) {
     // LlmConfigError names variables and fixed messages only; anything else is not printed.

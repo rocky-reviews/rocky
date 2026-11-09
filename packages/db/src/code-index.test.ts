@@ -9,6 +9,7 @@ import {
   codeIndexState,
   enqueueCodeIndex,
   finishCodeIndex,
+  loadAskTarget,
   loadCodeIndexTarget,
   removeIndexedFiles,
   renewCodeIndexLease,
@@ -434,5 +435,59 @@ describe("searchCodeChunks: the tenant filter", () => {
         searchCodeChunks(tx, { repoId: A.repoId, space: SPACE, vector: [1, 0, 0, 0], k: 500 }),
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("loadAskTarget (P9-2): the pull request's repository and its index", () => {
+  const target = (org: SeededOrg) => ({
+    owner: `org-${org === A ? 91 : 92}`,
+    repo: "api",
+    number: 847,
+  });
+
+  it("names the repository and says there is no index before one was asked for", async () => {
+    const found = await app.withOrg(A.orgId, (tx) => loadAskTarget(tx, target(A)));
+    expect(found).toEqual({
+      pullRequestId: A.pullRequestId,
+      repoId: A.repoId,
+      forgeRepoId: 2001,
+      installationId: 91,
+      index: null,
+    });
+  });
+
+  it("carries the index's state, commit and space; owner and name match case-insensitively", async () => {
+    const claim = await claimOne(A);
+    await app.withOrg(A.orgId, (tx) => beginCodeIndexRun(tx, claim, SPACE));
+    await app.withOrg(A.orgId, (tx) =>
+      finishCodeIndex(tx, claim, { kind: "done", indexedSha: "c".repeat(40), spentTokens: 3 }),
+    );
+    const found = await app.withOrg(A.orgId, (tx) =>
+      loadAskTarget(tx, { ...target(A), owner: "ORG-91", repo: "API" }),
+    );
+    expect(found?.index).toMatchObject({
+      status: "done",
+      indexedSha: "c".repeat(40),
+      space: SPACE,
+    });
+  });
+
+  it("is null for another org's pull request, an unknown number, impossible names, a disabled repository", async () => {
+    expect(await app.withOrg(A.orgId, (tx) => loadAskTarget(tx, target(B)))).toBeNull();
+    expect(
+      await app.withOrg(A.orgId, (tx) => loadAskTarget(tx, { ...target(A), number: 9 })),
+    ).toBeNull();
+    expect(
+      await app.withOrg(A.orgId, (tx) => loadAskTarget(tx, { ...target(A), repo: "../x" })),
+    ).toBeNull();
+    await expect(
+      app.withOrg(A.orgId, (tx) => loadAskTarget(tx, { ...target(A), number: 0 })),
+    ).rejects.toThrow();
+    await superuser.query("update repos set enabled = false where id = $1", [A.repoId]);
+    try {
+      expect(await app.withOrg(A.orgId, (tx) => loadAskTarget(tx, target(A)))).toBeNull();
+    } finally {
+      await superuser.query("update repos set enabled = true where id = $1", [A.repoId]);
+    }
   });
 });

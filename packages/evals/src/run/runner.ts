@@ -1,7 +1,7 @@
 /**
  * The eval runner (P4-7): every seeded PR through the real pipeline (`analyzePullRequest`) on the
  * roles it is given, scored with `scoreFindings`; optionally the injection corpus on pr-847 and
- * pr-912, reported separately. PRs run one after another; the pipeline runs a PR's unit calls
+ * pr-912, reported separately; optionally the project-memory eval (P8-2) and the Ask eval (P9-2). PRs run one after another; the pipeline runs a PR's unit calls
  * concurrently as it does in the worker. One meter counts tokens over the whole run and stops it
  * at `maxTokens`.
  */
@@ -13,8 +13,11 @@ import {
   type AnalysisOutcome,
   type AnalysisRequest,
   type Clock,
+  type EmbeddingRoleClient,
+  type EmbeddingSpace,
   type LlmRoles,
 } from "@rocky-reviews/core";
+import { runAskEval } from "../ask/run.js";
 import type { AnalysisDocument } from "@rocky-reviews/schema";
 import { INJECTION_CORPUS, type InjectionCase } from "../injection/corpus.js";
 import {
@@ -30,6 +33,7 @@ import { SEEDED_PRS, type SeededPr } from "../seeded/index.js";
 import { injectionResult, injectionTotals } from "./injection.js";
 import { createMeter } from "./meter.js";
 import {
+  AskEvalReport,
   MemoryEvalReport,
   PROMPT_HASH,
   REPORT_FORMAT,
@@ -49,7 +53,15 @@ export type EvalSubject =
       readonly case: InjectionCase;
     }
   /** One of the project-memory eval's three analyses (P8-2). */
-  | { readonly kind: "memory"; readonly step: MemoryStep };
+  | { readonly kind: "memory"; readonly step: MemoryStep }
+  /** The Ask eval's questions (P9-2). */
+  | { readonly kind: "ask" };
+
+/** What the Ask eval embeds with (P9-2): the index and the questions share one space. */
+export interface AskEmbedding {
+  readonly client: EmbeddingRoleClient;
+  readonly space: EmbeddingSpace;
+}
 
 export interface RunOptions {
   readonly kind: "fake" | "live";
@@ -62,6 +74,8 @@ export interface RunOptions {
   readonly memory?: boolean;
   /** How many times the memory eval's three analyses run (default 1; a live rate, P8-2). */
   readonly memoryTrials?: number;
+  /** Run the Ask eval (P9-2) last, embedding with this. */
+  readonly ask?: AskEmbedding;
   /** Seeded PR ids to run (all when absent). */
   readonly only?: readonly string[];
   readonly clock: Clock;
@@ -200,6 +214,24 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     );
   }
 
+  let ask: EvalReport["ask"] = null;
+  if (options.ask !== undefined) {
+    const result = await runAskEval({
+      llm: meter.wrap(options.rolesFor({ kind: "ask" })),
+      embedding: options.ask.client,
+      space: options.ask.space,
+      capped: () => meter.capped(),
+      // A live run must cite the answering code; the fake proves the guard only (score.ts).
+      gate: options.kind === "live" ? "on_target" : "guard",
+      ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+    });
+    // Parsed into the report's own shape: ids, codes and counts only.
+    ask = AskEvalReport.parse(result);
+    options.onProgress?.(
+      `ask: ${result.validlyCited}/${result.questions} answered with valid citations, ${result.pass ? "pass" : "FAIL"}`,
+    );
+  }
+
   return {
     format: REPORT_FORMAT,
     version: REPORT_VERSION,
@@ -213,6 +245,7 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
       maxTokens: options.maxTokens,
       injection: options.injection,
       memory: options.memory === true,
+      ask: options.ask !== undefined,
       only: options.only === undefined ? null : [...options.only],
     },
     usage: meter.usage(),
@@ -220,5 +253,6 @@ export const runEvals = async (options: RunOptions): Promise<EvalReport> => {
     total: totalsOf(prs),
     injection,
     memory,
+    ask,
   };
 };
