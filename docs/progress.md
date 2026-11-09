@@ -88,8 +88,13 @@ outside 0, markup 0`; `echoed` is how often the real model obeyed a payload (R1)
   (no live calls).
 - **Needs human: the PR needs the `evals-baseline-change` label** (protected eval paths changed:
   `src/ask/`, `src/run/`, `baselines/fake.json`, `evals.yml`, `CODEOWNERS`).
-- **Needs human: confirm the default limits** (ADR 0042 §3): `ask` 10/min per member, `ask.org`
-  60/min, `ask.org.day` 600/day; raise `ROCKY_RATE_LIMIT_ASK_ORG_DAY` for a large org.
+- **Needs human: confirm the default limits** (ADR 0042 §3): `ask` 10/min and `ask.day` 200/day
+  per member, `ask.org` 60/min and `ask.org.day` 600/day per org; raise
+  `ROCKY_RATE_LIMIT_ASK_ORG_DAY` (and `_ASK_DAY`) for a large org.
+- `llm_usage` does not refuse a row pairing a repository with another repository's pull request
+  (fix round, N2; ADR 0042 R5): a three-column key dangles `pull_request_id` when the repository
+  is deleted. A trigger checking the pair on INSERT, or a deferred check, would close it; today
+  the two callers pass one `loadAskTarget` row's ids.
 - A Postgres-backed `RateLimitStore` (ADR 0025 R1) matters more now: the day budget resets with
   the process and multiplies by the instance count.
 - A per-token org budget (charged after each call from `MeteredTotals`) could sit beside the

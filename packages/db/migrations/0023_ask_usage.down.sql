@@ -37,7 +37,6 @@ $$;
 
 DROP INDEX llm_usage_org_repo_idx;
 ALTER TABLE llm_usage
-  DROP CONSTRAINT llm_usage_pull_request_has_repo,
   DROP CONSTRAINT llm_usage_pull_request_fk,
   DROP CONSTRAINT llm_usage_repo_fk,
   DROP COLUMN pull_request_id,

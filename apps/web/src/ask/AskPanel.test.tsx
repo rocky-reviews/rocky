@@ -96,14 +96,14 @@ describe("a rate limit's message (P9-3)", () => {
     const html = error({ kind: "error", problem: "rate_limited", retryAfterSeconds: 42 });
     expect(html).toContain('class="chat-a ask-error" role="alert"');
     expect(text(html)).toContain(
-      "You’ve asked a lot in the last minute. Wait 42 seconds, then ask again.",
+      "You’ve asked a lot in a short time. Wait 42 seconds, then ask again.",
     );
     expect(text(html)).toContain("Try again");
     expect(text(error({ kind: "error", problem: "rate_limited", retryAfterSeconds: 1 }))).toContain(
       "Wait 1 second, then ask again.",
     );
     expect(text(error({ kind: "error", problem: "rate_limited" }))).toContain(
-      "You’ve asked a lot in the last minute. Wait a moment, then ask again.",
+      "You’ve asked a lot in a short time. Wait a moment, then ask again.",
     );
   });
 

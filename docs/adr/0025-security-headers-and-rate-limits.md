@@ -118,19 +118,20 @@ counts in one step; budgets that only some outcomes use up are checked with `all
 and spent with `spend` after the outcome is known (concurrent requests can overshoot by the
 number in flight):
 
-| Scope                  | Key                                                  | Default     | Where                                                                             |
-| ---------------------- | ---------------------------------------------------- | ----------- | --------------------------------------------------------------------------------- |
-| `auth.login`           | client address                                       | 30 / 10 min | `GET /auth/github/login`, before a `login_attempts` row                           |
-| `auth.callback`        | client address                                       | 30 / 10 min | `GET /auth/github/callback`, before the state is looked up                        |
-| `auth.logout`          | session (CSRF-proven), else client address           | 30 / 10 min | `POST /auth/logout` (after the CSRF guard)                                        |
-| `auth.session`         | session for POSTs (CSRF-proven), else client address | 300 / 1 min | the session API (`/api/session`, `/api/session/active-org`)                       |
-| `webhook.ip`           | client address + own/other app claim                 | 600 / 1 min | checked in `onRequest` before the precheck and the body; spent only by rejections |
-| `webhook.installation` | `<forge>:<installation>`                             | 600 / 1 min | checked after the signature holds; spent only when the inbox queued the delivery  |
-| `ask`                  | member id                                            | 10 / 1 min  | P9-3 (ADR 0042 §3): `POST …/pulls/:number/ask`, before the body is read           |
-| `ask.org`              | org id                                               | 60 / 1 min  | P9-3: the same route, after the member's limit; the 429 says `limit: "org"`       |
-| `ask.org.day`          | org id                                               | 600 / 1 day | P9-3: the same route, after `ask.org`                                             |
-| `diff`                 | member id                                            | 10 / 1 min  | H4-3 (ADR 0034): `GET …/pulls/:number/diff`, every request                        |
-| `diff.org`             | org id                                               | 15 / 1 min  | H4-3: the same route, spent only by reads that go to GitHub (`beforeForge`)       |
+| Scope                  | Key                                                  | Default     | Where                                                                                                                                                     |
+| ---------------------- | ---------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.login`           | client address                                       | 30 / 10 min | `GET /auth/github/login`, before a `login_attempts` row                                                                                                   |
+| `auth.callback`        | client address                                       | 30 / 10 min | `GET /auth/github/callback`, before the state is looked up                                                                                                |
+| `auth.logout`          | session (CSRF-proven), else client address           | 30 / 10 min | `POST /auth/logout` (after the CSRF guard)                                                                                                                |
+| `auth.session`         | session for POSTs (CSRF-proven), else client address | 300 / 1 min | the session API (`/api/session`, `/api/session/active-org`)                                                                                               |
+| `webhook.ip`           | client address + own/other app claim                 | 600 / 1 min | checked in `onRequest` before the precheck and the body; spent only by rejections                                                                         |
+| `webhook.installation` | `<forge>:<installation>`                             | 600 / 1 min | checked after the signature holds; spent only when the inbox queued the delivery                                                                          |
+| `ask`                  | member id                                            | 10 / 1 min  | P9-3 (ADR 0042 §3): `POST …/pulls/:number/ask`, before the body is read                                                                                   |
+| `ask.day`              | member id                                            | 200 / 1 day | P9-3: the same route, after `ask`                                                                                                                         |
+| `ask.org`              | org id                                               | 60 / 1 min  | P9-3: the same route, once the question is valid and about to spend (after the index-state check, before the embedding call); the 429 says `limit: "org"` |
+| `ask.org.day`          | org id                                               | 600 / 1 day | P9-3: the same route, after `ask.org`                                                                                                                     |
+| `diff`                 | member id                                            | 10 / 1 min  | H4-3 (ADR 0034): `GET …/pulls/:number/diff`, every request                                                                                                |
+| `diff.org`             | org id                                               | 15 / 1 min  | H4-3: the same route, spent only by reads that go to GitHub (`beforeForge`)                                                                               |
 
 - Auth uses the P7-1 seam `AuthDeps.rateLimit(scope)` (`authRateLimit`, an `onRequest` hook on
   the auth scope, mapped by route path). Webhooks take `WebhookDeps.rateLimit` (`sourceAllowed`,

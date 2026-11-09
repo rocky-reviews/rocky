@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { LlmUsageRecord, OrgId } from "@rocky-reviews/core";
+import type { ForgePullRequest, LlmUsageRecord, OrgId } from "@rocky-reviews/core";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import { beginOrgErasure } from "./installations.js";
 import { appliedMigrations, loadMigrations, migrate, rollback } from "./migrate.js";
+import { upsertPullRequest, upsertRepository } from "./mirror.js";
 import { DEFAULT_RETENTION, LLM_USAGE_MIN_RETENTION_DAYS, runRetention } from "./retention.js";
 import {
   asWorker,
@@ -286,8 +287,69 @@ describe("the server's own usage (Ask)", () => {
     expect(explicit.code).toBe(INSUFFICIENT_PRIVILEGE);
   });
 
+  /** A repository of A's with one pull request, created for a test (ids only). */
+  const seedRepository = (forgeRepoId: number) =>
+    worker.withOrg(A.orgId, async (tx) => {
+      const repoId = await upsertRepository(tx, {
+        id: forgeRepoId,
+        fullName: `acme/usage-${forgeRepoId}`,
+        private: true,
+        defaultBranch: "main",
+      });
+      const pr: ForgePullRequest = {
+        ref: { installationId: 41, repositoryId: forgeRepoId, number: 1 },
+        title: "t",
+        authorLogin: "a",
+        state: "open",
+        headSha: "a".repeat(40),
+        baseSha: "b".repeat(40),
+        openedAt: new Date("2026-11-01T00:00:00Z"),
+        closedAt: null,
+        updatedAt: new Date("2026-11-01T00:00:00Z"),
+        changedFiles: 1,
+        additions: 1,
+        deletions: 0,
+      };
+      await upsertPullRequest(tx, repoId, pr);
+      const { rows } = await tx.query<{ id: string }>(
+        "select id from pull_requests where org_id = $1 and repo_id = $2 and number = 1",
+        [A.orgId, repoId],
+      );
+      return { repoId, pullRequestId: rows[0]!.id };
+    });
+
+  it("keeps the rows, unlinked, when their pull request or their repository is deleted (fix round, S1)", async () => {
+    // The pull request goes: the row keeps its repository and loses the pull request.
+    const one = await seedRepository(9101);
+    const first = ask(one);
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [first]));
+    await worker.withOrg(A.orgId, (tx) =>
+      tx.query("delete from pull_requests where org_id = $1 and id = $2", [
+        A.orgId,
+        one.pullRequestId,
+      ]),
+    );
+    expect(await rowsOf(A.orgId, "call_id = $2", [first.callId])).toMatchObject([
+      { repo_id: one.repoId, pull_request_id: null, input_tokens: 1200 },
+    ]);
+    // The repository goes (its pull requests with it): the row loses both links and nothing else.
+    const two = await seedRepository(9102);
+    const second = ask(two);
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [second]));
+    await worker.withOrg(A.orgId, (tx) =>
+      tx.query("delete from repos where org_id = $1 and id = $2", [A.orgId, two.repoId]),
+    );
+    expect(await rowsOf(A.orgId, "call_id = $2", [second.callId])).toMatchObject([
+      { repo_id: null, pull_request_id: null, input_tokens: 1200, role: "ask" },
+    ]);
+  });
+
   it("refuses another tenant's repository or pull request, and a pull request without its repository", async () => {
     const FOREIGN_KEY_VIOLATION = "23503";
+    // Not refused by the database: a pull request named with a repository that is not its own
+    // (fix round, N2). A three-column key would leave the pull request id dangling when the
+    // repository is deleted (its SET NULL runs first); the writer's callers pass the row's own
+    // pair. Follow-up in docs/progress.md.
     const foreignRepo = await thrown(
       server.withOrg(A.orgId, (tx) =>
         recordLlmUsage(tx, [ask({ repoId: B.repoId, pullRequestId: undefined })]),

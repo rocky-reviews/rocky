@@ -1,4 +1,5 @@
 import {
+  ASK_INSTRUCTIONS,
   ASK_LABELS,
   MEMORY_CANARY_MARKER,
   memoryPart,
@@ -184,7 +185,6 @@ const askCall = (payload: string): ProviderCompletionCall<Verdict> => ({
   maxOutputTokens: 6000,
 });
 
-const ASK_INSTRUCTIONS = rockyInstructions`You answer one question a reviewer asks about a pull request, from excerpts of the repository.`;
 const ASK_SYSTEM = systemPrompt(ASK_INSTRUCTIONS);
 
 describe.each(INJECTION_CORPUS)("corpus case $id in Ask's inputs on the wire", (c) => {

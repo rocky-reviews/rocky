@@ -21,6 +21,7 @@ export const RATE_LIMIT_SCOPES = [
   "webhook.ip",
   "webhook.installation",
   "ask",
+  "ask.day",
   "ask.org",
   "ask.org.day",
   "diff",
@@ -43,9 +44,11 @@ const MINUTE = 60_000;
  * (or a leaked webhook secret) can push into the inbox. Ask (P9-3, ADR 0042 §3): every
  * question costs an embedding call, a model call with up to eight excerpts and a GitHub token,
  * so `ask` is per member (a person types a question in more than six seconds; a loop or a
- * stolen session does not), and the org has a budget of its own: `ask.org` bounds a burst
- * across its members and `ask.org.day` what a day may cost, whatever the number of members or
- * sessions. The PR diff (H4-3): `diff` counts every request per member (a page loads a diff
+ * stolen session does not) with `ask.day` bounding one member's day well below the org's, and
+ * the org has a budget of its own: `ask.org` bounds a burst across its members and
+ * `ask.org.day` what a day may cost, whatever the number of members or sessions. The member
+ * limits count every request; the org budgets only questions about to be answered (fix round,
+ * S2: junk requests must not eat the org's day). The PR diff (H4-3): `diff` counts every request per member (a page loads a diff
  * once); `diff.org` counts only the reads that go to GitHub, per org, since each costs the
  * installation about four calls of its shared hourly quota (ADR 0034 §4, D14: 15 × 4 × 60 =
  * 3,600 calls/h at most).
@@ -58,6 +61,7 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<RateLimitScope, RateLimitRule>
   "webhook.ip": { max: 600, windowMs: MINUTE },
   "webhook.installation": { max: 600, windowMs: MINUTE },
   ask: { max: 10, windowMs: MINUTE },
+  "ask.day": { max: 200, windowMs: 24 * 60 * MINUTE },
   "ask.org": { max: 60, windowMs: MINUTE },
   "ask.org.day": { max: 600, windowMs: 24 * 60 * MINUTE },
   diff: { max: 10, windowMs: MINUTE },

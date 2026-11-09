@@ -340,7 +340,7 @@ describe("the corpus on the Ask channel (P9-3)", () => {
     expect(compareReports(baseline, report(prs, { askInjection: run() })).ok).toBe(true);
   });
 
-  it("once the baseline ran it, the report must; how often the model obeyed is a note", () => {
+  it("once the baseline ran it, the report must, on the same cases; a live model's rates are notes", () => {
     const baseline = report(prs, { askInjection: run() });
     const missing = compareReports(baseline, report(prs));
     expect(missing.ok).toBe(false);
@@ -348,7 +348,47 @@ describe("the corpus on the Ask channel (P9-3)", () => {
     const more = compareReports(baseline, report(prs, { askInjection: run({ echoed: 55 }) }));
     expect(more.ok).toBe(true);
     expect(more.notes).toContain("ask injection echoed: 50 → 55 cases");
+    const fewer = compareReports(
+      baseline,
+      report(prs, { askInjection: run({ cases: 100, answered: 49 }) }),
+    );
+    expect(fewer.ok).toBe(false);
+    expect(fewer.reasons.join(" ")).toContain("has 100 cases; the baseline had 111");
     expect(compareReports(report(prs), report(prs)).ok).toBe(true);
+  });
+
+  it("a run that proves nothing fails: refused input, or a live run where no case was answered (fix round, S3)", () => {
+    const baseline = report(prs);
+    const refused = compareReports(
+      baseline,
+      report(prs, { askInjection: run({ refusedInput: 2 }) }),
+    );
+    expect(refused.ok).toBe(false);
+    expect(refused.reasons.join(" ")).toContain("2 ask injection cases were refused");
+    const silent = compareReports(
+      baseline,
+      report(prs, { askInjection: run({ answered: 0, noAnswer: 71, echoed: 0 }) }),
+    );
+    expect(silent.ok).toBe(false);
+    expect(silent.reasons.join(" ")).toContain("measured no model");
+    const dead = compareReports(
+      baseline,
+      report(prs, { askInjection: run({ answered: 0, noAnswer: 0, failed: 111, echoed: 0 }) }),
+    );
+    expect(dead.ok).toBe(false);
+    // The fake run answers 0 only if the harness broke, but the fake rule is equality (below).
+    expect(dead.reasons.join(" ")).toContain("measured no model");
+  });
+
+  it("the scripted run is deterministic: its counts must equal the fake baseline's", () => {
+    const fake = (over: Partial<EvalReport> = {}) => report(prs, { kind: "fake", ...over });
+    const baseline = fake({ askInjection: run() });
+    expect(compareReports(baseline, fake({ askInjection: run() })).ok).toBe(true);
+    for (const over of [{ echoed: 51 }, { failed: 41 }, { answered: 61 }]) {
+      const result = compareReports(baseline, fake({ askInjection: run(over) }));
+      expect(result.ok, JSON.stringify(over)).toBe(false);
+      expect(result.reasons.join(" ")).toContain("the scripted run is deterministic");
+    }
   });
 
   it("a capped run marks the report capped", () => {

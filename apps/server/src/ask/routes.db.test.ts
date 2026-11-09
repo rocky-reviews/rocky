@@ -152,6 +152,7 @@ const roles = (): LlmRoles => {
 type BuildOptions = {
   withoutAsk?: boolean;
   askLimit?: number;
+  askDayLimit?: number;
   askOrgLimit?: number;
   askOrgDayLimit?: number;
   space?: EmbeddingSpace;
@@ -177,6 +178,10 @@ const build = (options: BuildOptions = {}) => {
       rules: {
         ...DEFAULT_RATE_LIMITS,
         ask: { max: options.askLimit ?? DEFAULT_RATE_LIMITS.ask.max, windowMs: 60_000 },
+        "ask.day": {
+          max: options.askDayLimit ?? DEFAULT_RATE_LIMITS["ask.day"].max,
+          windowMs: 86_400_000,
+        },
         "ask.org": {
           max: options.askOrgLimit ?? DEFAULT_RATE_LIMITS["ask.org"].max,
           windowMs: 60_000,
@@ -691,14 +696,16 @@ describe("POST …/ask: refusals", () => {
     expect(await usageRows()).toHaveLength(2);
   });
 
-  it("the org's budget is shared by its members, counted before anything is read, and holds under concurrency (P9-3)", async () => {
+  it("the org's budget is shared by its members, counted before anything is spent, and holds under concurrency (P9-3)", async () => {
     await app.close();
     app = build({ askOrgLimit: 3 });
     await app.ready();
     await indexRepository();
     const { token: eve } = await sessionIn(A, 5103, "eve");
-    // Eight questions at once from two members of A: exactly three reach the model, whatever
-    // the interleaving, since `consume` counts and checks in one step.
+    // Eight valid questions at once from two members of A: exactly three reach the embedder
+    // and the model, whatever the interleaving, since `consume` counts and checks in one step.
+    // The budget is counted after the row, the access check and the index state (so every
+    // question was checked), and before the first call.
     const answers = await Promise.all(
       Array.from({ length: 8 }, (_, i) => post(i % 2 === 0 ? dana : eve, { question: `q${i}` })),
     );
@@ -710,18 +717,18 @@ describe("POST …/ask: refusals", () => {
     }
     expect(calls).toHaveLength(3);
     expect(embedded).toHaveLength(3);
-    expect(accessAsked).toHaveLength(3);
+    expect(accessAsked).toHaveLength(8);
     expect(await usageRows()).toHaveLength(6);
     // Another org's budget is its own: B is not limited by A's questions (B has no PR: 404).
     expect((await post(bo, { question: "q" })).statusCode).toBe(404);
-    const outcomes = lines
-      .map((l) => JSON.parse(l) as { ask_route?: { outcome: string } })
-      .flatMap((l) => (l.ask_route === undefined ? [] : [l.ask_route.outcome]));
-    expect(outcomes.filter((o) => o === "org_rate_limited")).toHaveLength(5);
+    // The limiter logs a refusal once per key and window; the route adds no line of its own.
+    const limitLines = lines.filter((l) => l.includes('"rate limited"'));
+    expect(limitLines).toHaveLength(1);
+    expect(limitLines[0]).toContain('"scope":"ask.org"');
     noContentInLogs();
   });
 
-  it("the org's day budget is counted too, before the burst one would allow more", async () => {
+  it("the org's day budget refuses once spent, with a wait of up to a day (`ask.org.day`)", async () => {
     await app.close();
     app = build({ askOrgDayLimit: 1 });
     await app.ready();
@@ -734,6 +741,46 @@ describe("POST …/ask: refusals", () => {
     expect(retryAfter).toBeGreaterThan(60);
     expect(retryAfter).toBeLessThanOrEqual(86_400);
     expect(calls).toHaveLength(1);
+  });
+
+  it("requests that cannot be answered do not spend the org's budgets (fix round, S2)", async () => {
+    await app.close();
+    app = build({ askOrgLimit: 1, askOrgDayLimit: 1 });
+    await app.ready();
+    // A bad body, a bad target, another org's pull request, a denied repository and an index
+    // that is not ready: none reaches the org's budgets.
+    expect((await post(dana, { nope: true })).statusCode).toBe(400);
+    expect((await post(dana, { question: "q" }, ASK_URL(0))).statusCode).toBe(400);
+    expect((await post(dana, { question: "q" }, ASK_URL(999))).statusCode).toBe(404);
+    accessAnswer = { allowed: false, reason: "no_read_permission", cached: false };
+    expect((await post(dana, { question: "q" })).statusCode).toBe(404);
+    accessAnswer = { allowed: true, cached: false, expiresAt: new Date(Date.now() + 60_000) };
+    expect((await post(dana, { question: "q" })).statusCode).toBe(409);
+    await indexRepository();
+    // The one question the budgets allow is still there for a valid one.
+    expect((await post(dana, { question: "q" })).statusCode).toBe(200);
+    expect((await post(dana, { question: "q" })).json()).toEqual({
+      error: "rate_limited",
+      limit: "org",
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("one member cannot spend the org's day: their own day limit (`ask.day`) stops them first", async () => {
+    await app.close();
+    app = build({ askDayLimit: 2, askOrgDayLimit: 3 });
+    await app.ready();
+    await indexRepository();
+    expect((await post(dana, { question: "q" })).statusCode).toBe(200);
+    expect((await post(dana, { question: "q" })).statusCode).toBe(200);
+    const limited = await post(dana, { question: "q" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({ error: "rate_limited", limit: "member" });
+    expect(Number(limited.headers["retry-after"])).toBeGreaterThan(60);
+    // The org still has a question left for another member.
+    const { token: eve } = await sessionIn(A, 5104, "eve2");
+    expect((await post(eve, { question: "q" })).statusCode).toBe(200);
+    expect(calls).toHaveLength(3);
   });
 
   it("records a failed model call with its partial usage, and the embedding of a question GitHub failed (P9-3)", async () => {

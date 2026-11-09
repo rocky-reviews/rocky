@@ -338,16 +338,23 @@ describe("rateLimitRulesFromEnv", () => {
     expect(rules["auth.callback"]).toEqual(DEFAULT_RATE_LIMITS["auth.callback"]);
   });
 
-  it("Ask (P9-3): a member's limit, the org's burst and the org's day, each with its variable", () => {
+  it("Ask (P9-3): a member's minute and day, the org's burst and day, each with its variable", () => {
     expect(DEFAULT_RATE_LIMITS.ask).toEqual({ max: 10, windowMs: 60_000 });
+    expect(DEFAULT_RATE_LIMITS["ask.day"]).toEqual({ max: 200, windowMs: 86_400_000 });
     expect(DEFAULT_RATE_LIMITS["ask.org"]).toEqual({ max: 60, windowMs: 60_000 });
     expect(DEFAULT_RATE_LIMITS["ask.org.day"]).toEqual({ max: 600, windowMs: 86_400_000 });
+    // One member's day stays well below the org's.
+    expect(DEFAULT_RATE_LIMITS["ask.day"].max * 2).toBeLessThanOrEqual(
+      DEFAULT_RATE_LIMITS["ask.org.day"].max,
+    );
     const rules = rateLimitRulesFromEnv({
       ROCKY_RATE_LIMIT_ASK: "5/60",
+      ROCKY_RATE_LIMIT_ASK_DAY: "50/86400",
       ROCKY_RATE_LIMIT_ASK_ORG: "20/60",
       ROCKY_RATE_LIMIT_ASK_ORG_DAY: "100/86400",
     });
     expect(rules.ask).toEqual({ max: 5, windowMs: 60_000 });
+    expect(rules["ask.day"]).toEqual({ max: 50, windowMs: 86_400_000 });
     expect(rules["ask.org"]).toEqual({ max: 20, windowMs: 60_000 });
     expect(rules["ask.org.day"]).toEqual({ max: 100, windowMs: 86_400_000 });
   });

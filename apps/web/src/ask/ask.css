@@ -224,6 +224,14 @@
   cursor: not-allowed;
   filter: none;
 }
+/* "Try again" while another question is answered or a limit's wait runs (P9-3): the same look. */
+.chat-a.ask-error .btn:disabled {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+  filter: none;
+}
 .chat-box textarea:disabled {
   background: var(--panel-2);
   color: var(--muted);

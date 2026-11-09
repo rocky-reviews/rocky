@@ -57,7 +57,7 @@ import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.
  *   404 not_found                               as the PR page (unknown, disabled repository,
  *                                               another org's, GitHub access denied)
  *   409 not_indexed | indexing                  nothing to search yet (as GET says)
- *   429 rate_limited                            `limit: "member"` (the `ask` scope) or
+ *   429 rate_limited                            `limit: "member"` (`ask`, `ask.day`) or
  *                                               `limit: "org"` (`ask.org`, `ask.org.day`), with
  *                                               `Retry-After` (ADR 0025, ADR 0042 §3)
  *   502 answer_failed                           the model refused, was cut off or answered
@@ -66,10 +66,11 @@ import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.
  *   502 forge_unavailable                       GitHub did not answer, or not as asked
  *   503 ask_unavailable | access_check_unavailable
  *
- * Order (POST): policy, the member's limit, then the org's two budgets (each counted
- * atomically, so concurrent questions cannot overshoot), the address, the body, the deps that
- * must exist, the row inside `withOrg` (ids only), the P3-6 access check, the index's state,
- * then the flow (`answerQuestion`, packages/core): the question is embedded by the metered embed
+ * Order (POST): policy, the member's minute and day limits (before anything is read), the
+ * address, the body, the deps that must exist, the row inside `withOrg` (ids only), the P3-6
+ * access check, the index's state, then the org's two budgets (before anything is spent; each
+ * counted atomically, so concurrent questions cannot overshoot), then the flow
+ * (`answerQuestion`, packages/core): the question is embedded by the metered embed
  * role, the search runs inside `withOrg` with the org, repository and space filter
  * (`searchCodeChunks`), the hits' lines are read from GitHub on a read-only token for that one
  * repository, revoked after (`excerpt-reader.ts`), and the `ask` role answers. Only citations
@@ -183,12 +184,13 @@ class ForgeFailure extends Error {
   }
 }
 
-/** The limits a question passes before anything is read or spent, in order (ADR 0042 §3). */
-const ASK_LIMITS = [
-  { scope: "ask", key: "member", limit: "member" },
-  { scope: "ask.org", key: "org", limit: "org" },
-  { scope: "ask.org.day", key: "org", limit: "org" },
-] as const;
+/**
+ * The limits a question passes, in order (ADR 0042 §3). The member's count every request,
+ * before anything is read; the org's count only questions about to spend (after the body, the
+ * row, the access check and the index state held), so junk cannot eat an org's day.
+ */
+const MEMBER_LIMITS = ["ask", "ask.day"] as const;
+const ORG_LIMITS = ["ask.org", "ask.org.day"] as const;
 
 export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): void => {
   const { db } = deps;
@@ -276,16 +278,14 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
       { bodyLimit: ASK_BODY_LIMIT, config: { policy: requires("ask") } },
       async (request, reply) => {
         const me = callerOf(request);
-        // Before anything is read or spent (ADR 0025, ADR 0042 §3): the member's limit, then
-        // the org's burst and day budgets. `consume` counts and checks in one step, so questions
-        // in flight at once cannot overshoot a budget; the 429 says which limit it was.
-        if (app.rateLimits !== undefined) {
-          for (const { scope, key, limit } of ASK_LIMITS) {
-            const id = key === "member" ? me.memberId : me.orgId;
-            if (!(await app.rateLimits.consume(request, reply, scope, id, { limit }))) {
-              log(request, `${limit}_rate_limited`, { orgId: me.orgId });
+        // Before anything is read (ADR 0025, ADR 0042 §3): the member's minute and day. `consume`
+        // counts and checks in one step, so questions in flight at once cannot overshoot; the
+        // 429 says which limit it was. The limiter logs a refusal once per key and window.
+        const limits = app.rateLimits;
+        if (limits !== undefined) {
+          for (const scope of MEMBER_LIMITS) {
+            if (!(await limits.consume(request, reply, scope, me.memberId, { limit: "member" })))
               return reply;
-            }
           }
         }
         if (targetOf(request) === null) {
@@ -315,6 +315,13 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
           return index.status === "off"
             ? json(reply, 503, { error: "ask_unavailable" })
             : json(reply, 409, { error: index.status });
+        }
+        // The question is valid and about to spend: the org's burst and day budgets.
+        if (limits !== undefined) {
+          for (const scope of ORG_LIMITS) {
+            if (!(await limits.consume(request, reply, scope, me.orgId, { limit: "org" })))
+              return reply;
+          }
         }
         const installationId = row.installationId;
         const started = Date.now();

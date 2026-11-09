@@ -118,8 +118,9 @@ test.describe("review round fixes", () => {
     await expect(first.getByRole("button", { name: "Try again" })).toBeDisabled();
     await expect(page.locator(".chat-a.typing")).toHaveCount(0);
     await first.getByRole("button", { name: "Try again" }).click();
-    // Both questions are still on screen; the first is asked again, last.
+    // Both questions are still on screen; the first is asked again, last; focus is on the box.
     await expect(page.locator(".chat-q bdi")).toHaveText(["Second question?", "First question?"]);
+    await expect(questionBox(page)).toBeFocused();
   });
 
   test("/ before the index can answer focuses its state, and focus never jumps later", async ({
@@ -186,21 +187,34 @@ test.describe("every state says what it is", () => {
     await alert.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Reading the code" })).toBeVisible();
     await expect(page.locator(".chat-a.ask-error")).toHaveCount(1);
+    // The turn that held the button is gone: focus moved to the box, not to <body> (fix round).
+    await expect(questionBox(page)).toBeFocused();
   });
 
-  // P9-3: a 429 says whose limit it was and how long to wait; Try again asks again regardless.
-  test("the member's limit: an alert with the wait in seconds", async ({ page }) => {
+  // P9-3: a 429 says whose limit it was and how long to wait; until the wait has passed nothing
+  // is sent: Try again, the Ask button and the suggestions are off (fix round, UI 2).
+  test("the member's limit: an alert with the wait in seconds, and nothing sends meanwhile", async ({
+    page,
+  }) => {
     await openAsk(page, "rate-limited");
     await showAskTab(page);
     await ask(page, "Who calls acceptInvitation?");
     const alert = page.locator(".chat-a.ask-error");
     await expect(alert).toHaveAttribute("role", "alert");
     await expect(alert).toContainText(
-      "You’ve asked a lot in the last minute. Wait 42 seconds, then ask again.",
+      "You’ve asked a lot in a short time. Wait 42 seconds, then ask again.",
     );
+    await expect(alert.getByRole("button", { name: "Try again" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Ask", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Who calls the changed code?" })).toBeDisabled();
+    // Enter sends nothing either: the one turn stays.
+    await ask(page, "Is this covered by tests?");
+    await expect(page.locator(".chat-q bdi")).toHaveText(["Who calls acceptInvitation?"]);
   });
 
-  test("the org's limit: an alert with the wait, and Try again asks again", async ({ page }) => {
+  test("the org's limit: an alert with the wait, Try again off until it has passed", async ({
+    page,
+  }) => {
     await openAsk(page, "org-rate-limited");
     await showAskTab(page);
     await ask(page, "Who calls acceptInvitation?");
@@ -209,11 +223,8 @@ test.describe("every state says what it is", () => {
     await expect(alert).toContainText(
       "Your organisation has reached its Ask limit for now. Try again in about 30 minutes.",
     );
-    await alert.getByRole("button", { name: "Try again" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Reading the code" })).toBeVisible();
-    // Asked again too early: the same state, once, and the question is still there.
-    await expect(page.locator(".chat-a.ask-error")).toHaveCount(1);
-    await expect(page.locator(".chat-a.ask-error")).toContainText("about 30 minutes");
+    await expect(alert.getByRole("button", { name: "Try again" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Ask", exact: true })).toBeDisabled();
     await expect(page.locator(".chat-q bdi")).toHaveText(["Who calls acceptInvitation?"]);
   });
 

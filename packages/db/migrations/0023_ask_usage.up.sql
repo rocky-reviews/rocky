@@ -6,7 +6,14 @@
 --   1. Columns: the repository and the pull request a call was made for (nullable; analysis
 --      calls keep their analysis_id, and the index run's embeddings may name their repository).
 --      Composite foreign keys with ON DELETE SET NULL, like analysis_id: the ledger survives
---      what it was made for (billing reconciles from it).
+--      what it was made for (billing reconciles from it). "A pull request only with its
+--      repository" is the writer's rule (recordLlmUsage), not a CHECK: a CHECK would make the
+--      repository's SET NULL fail on rows that still name a pull request, and a repository
+--      could no longer be deleted. The pull request's key is (org_id, id), not (org_id, repo_id,
+--      id): with the repository in it, the repository's SET NULL runs before the cascade reaches
+--      the pull request and the pull request's SET NULL no longer matches the row, so the pull
+--      request id would dangle. Pairing a repository with another repository's pull request is
+--      therefore not refused by the database (follow-up in docs/progress.md).
 --   2. Append-only kept: the one UPDATE the trigger allows is now "unlink", setting any of
 --      analysis_id, repo_id or pull_request_id to NULL and changing nothing else, which is what a
 --      foreign key's SET NULL does.
@@ -24,10 +31,7 @@ ALTER TABLE llm_usage
   ADD CONSTRAINT llm_usage_repo_fk FOREIGN KEY (org_id, repo_id)
     REFERENCES repos (org_id, id) ON DELETE SET NULL (repo_id),
   ADD CONSTRAINT llm_usage_pull_request_fk FOREIGN KEY (org_id, pull_request_id)
-    REFERENCES pull_requests (org_id, id) ON DELETE SET NULL (pull_request_id),
-  -- A pull request is named with its repository, or not at all.
-  ADD CONSTRAINT llm_usage_pull_request_has_repo
-    CHECK (pull_request_id IS NULL OR repo_id IS NOT NULL);
+    REFERENCES pull_requests (org_id, id) ON DELETE SET NULL (pull_request_id);
 
 -- Usage per repository (billing and the usage display, P11); analysis rows are reached through
 -- llm_usage_org_analysis_idx.
