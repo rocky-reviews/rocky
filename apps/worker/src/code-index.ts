@@ -224,6 +224,8 @@ export const runCodeIndex = async (
     targets: deps.usageTargets,
     log,
     clock,
+    // The row names the repository it was indexed for (P9-3, migration 0023).
+    repoId: target.repoId,
   }).embedding();
   if (embedder === undefined) return finish({ kind: "failed", errorCode: "embeddings_off" });
 

@@ -118,6 +118,27 @@ describe("createRateLimits on a route", () => {
     expect(handled).toHaveBeenCalledTimes(2);
   });
 
+  it("a route may add fixed words to the 429 body (which of its limits it was), never over the error", async () => {
+    const limits = createRateLimits({
+      rules: { ...DEFAULT_RATE_LIMITS, "ask.org": { max: 1, windowMs: 60_000 } },
+      trustProxy: { kind: "none" },
+      now: () => 0,
+    });
+    const app = Fastify({ loggerInstance: capture().log });
+    app.post("/ask", async (request, reply) => {
+      const ok = await limits.consume(request, reply, "ask.org", "org-1", {
+        limit: "org",
+        error: "not this",
+      });
+      return ok ? { ok: true } : reply;
+    });
+    expect((await app.inject({ method: "POST", url: "/ask" })).statusCode).toBe(200);
+    const limited = await app.inject({ method: "POST", url: "/ask" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers["retry-after"]).toBe("60");
+    expect(limited.json()).toEqual({ error: "rate_limited", limit: "org" });
+  });
+
   it("keys are independent (another member is not limited) and the window ends", async () => {
     const { app, advance } = build();
     const ask = (m: string) =>
@@ -315,6 +336,20 @@ describe("rateLimitRulesFromEnv", () => {
     const rules = rateLimitRulesFromEnv({ ROCKY_RATE_LIMIT_AUTH_LOGIN: "5/60" });
     expect(rules["auth.login"]).toEqual({ max: 5, windowMs: 60_000 });
     expect(rules["auth.callback"]).toEqual(DEFAULT_RATE_LIMITS["auth.callback"]);
+  });
+
+  it("Ask (P9-3): a member's limit, the org's burst and the org's day, each with its variable", () => {
+    expect(DEFAULT_RATE_LIMITS.ask).toEqual({ max: 10, windowMs: 60_000 });
+    expect(DEFAULT_RATE_LIMITS["ask.org"]).toEqual({ max: 60, windowMs: 60_000 });
+    expect(DEFAULT_RATE_LIMITS["ask.org.day"]).toEqual({ max: 600, windowMs: 86_400_000 });
+    const rules = rateLimitRulesFromEnv({
+      ROCKY_RATE_LIMIT_ASK: "5/60",
+      ROCKY_RATE_LIMIT_ASK_ORG: "20/60",
+      ROCKY_RATE_LIMIT_ASK_ORG_DAY: "100/86400",
+    });
+    expect(rules.ask).toEqual({ max: 5, windowMs: 60_000 });
+    expect(rules["ask.org"]).toEqual({ max: 20, windowMs: 60_000 });
+    expect(rules["ask.org.day"]).toEqual({ max: 100, windowMs: 86_400_000 });
   });
 
   it("refuses malformed values and unknown scopes (no silent fallback to unlimited)", () => {

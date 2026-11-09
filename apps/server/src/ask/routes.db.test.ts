@@ -5,6 +5,8 @@ import type {
   EmbeddingSpace,
   ForgePullRequest,
   LlmRoles,
+  LlmUsageRecord,
+  OrgId,
   RepositoryAccessRequest,
 } from "@rocky-reviews/core";
 import { LlmCallError } from "@rocky-reviews/core";
@@ -112,6 +114,7 @@ let dana: string;
 let danaMember: string;
 let bo: string;
 let repoA: string;
+let pullA: string;
 let script: Script;
 let calls: ReturnType<typeof scriptedRoles>["calls"] = [];
 let embedVector: number[] = [1, 0, 0, 0];
@@ -146,7 +149,15 @@ const roles = (): LlmRoles => {
   return { completion: scripted.roles.completion, embedding: () => embedding };
 };
 
-type BuildOptions = { withoutAsk?: boolean; askLimit?: number; space?: EmbeddingSpace };
+type BuildOptions = {
+  withoutAsk?: boolean;
+  askLimit?: number;
+  askOrgLimit?: number;
+  askOrgDayLimit?: number;
+  space?: EmbeddingSpace;
+  /** P9-3: a usage writer standing in for the `llm_usage` one. */
+  recordUsage?: (orgId: OrgId, records: readonly LlmUsageRecord[]) => Promise<void>;
+};
 
 const build = (options: BuildOptions = {}) => {
   const log = createLogger("ask-test", {
@@ -166,6 +177,14 @@ const build = (options: BuildOptions = {}) => {
       rules: {
         ...DEFAULT_RATE_LIMITS,
         ask: { max: options.askLimit ?? DEFAULT_RATE_LIMITS.ask.max, windowMs: 60_000 },
+        "ask.org": {
+          max: options.askOrgLimit ?? DEFAULT_RATE_LIMITS["ask.org"].max,
+          windowMs: 60_000,
+        },
+        "ask.org.day": {
+          max: options.askOrgDayLimit ?? DEFAULT_RATE_LIMITS["ask.org.day"].max,
+          windowMs: 86_400_000,
+        },
       },
       trustProxy: { kind: "none" },
     }),
@@ -197,6 +216,7 @@ const build = (options: BuildOptions = {}) => {
             usageTargets: TARGETS,
             forge,
             log,
+            ...(options.recordUsage === undefined ? {} : { recordUsage: options.recordUsage }),
           },
         }),
   });
@@ -345,6 +365,13 @@ beforeAll(async () => {
     }),
   );
   await db.withOrg(A.orgId, (tx) => upsertPullRequest(tx, repoA, forgePr(847)));
+  pullA = await db.withOrg(A.orgId, async (tx) => {
+    const { rows } = await tx.query<{ id: string }>(
+      "select id from pull_requests where org_id = $1 and repo_id = $2 and number = 847",
+      [A.orgId, repoA],
+    );
+    return rows[0]!.id;
+  });
   ({ token: dana, memberId: danaMember } = await sessionIn(A, 5101, "dana-k"));
   ({ token: bo } = await sessionIn(B, 5102, "bo"));
 }, CONTAINER_TIMEOUT_MS);
@@ -369,10 +396,36 @@ beforeEach(async () => {
     await tx.query("delete from code_files where org_id = $1", [A.orgId]);
     await tx.query("delete from code_indexes where org_id = $1", [A.orgId]);
   });
+  usageFrom = await lastUsageId();
   await app?.close();
   app = build();
   await app.ready();
 });
+
+/** The ledger is append-only: tests read the rows written since they started. */
+let usageFrom = 0;
+const lastUsageId = () =>
+  db.withOrg(A.orgId, async (tx) => {
+    const { rows } = await tx.query<{ id: string | null }>("select max(id) as id from llm_usage");
+    return Number(rows[0]?.id ?? 0);
+  });
+const usageRows = (org = A.orgId) =>
+  db.withOrg(org, async (tx) => {
+    const { rows } = await tx.query<{
+      role: string;
+      repo_id: string | null;
+      pull_request_id: string | null;
+      analysis_id: string | null;
+      outcome: string;
+      usage_status: string;
+      input_tokens: number | null;
+    }>(
+      `select role, repo_id, pull_request_id, analysis_id, outcome, usage_status, input_tokens
+         from llm_usage where id > $1 order by id`,
+      [usageFrom],
+    );
+    return rows;
+  });
 
 const noContentInLogs = () => {
   const text = lines.join("");
@@ -427,11 +480,29 @@ describe("POST /api/repos/:owner/:repo/pulls/:number/ask: an answer with citatio
       `GET repos/acme/rocky-app/git/blobs/${OTHER_BLOB}`,
     ]);
     noContentInLogs();
-    // Usage is metered (to the log: counts and ids only), one line per call.
-    const usage = lines
-      .map((l) => JSON.parse(l) as { ask_usage?: { records: { role: string }[] } })
-      .flatMap((l) => l.ask_usage?.records ?? []);
-    expect(usage.map((r) => r.role).sort()).toEqual(["ask", "embed"]);
+    // Every call is in the ledger (P9-3, migration 0023), written by the server's own login,
+    // for this org, repository and pull request, and never as an analysis.
+    expect(await usageRows()).toEqual([
+      {
+        role: "embed",
+        repo_id: repoA,
+        pull_request_id: pullA,
+        analysis_id: null,
+        outcome: "ok",
+        usage_status: "reported",
+        input_tokens: 7,
+      },
+      {
+        role: "ask",
+        repo_id: repoA,
+        pull_request_id: pullA,
+        analysis_id: null,
+        outcome: "ok",
+        usage_status: "reported",
+        input_tokens: 100,
+      },
+    ]);
+    expect(lines.join("")).not.toContain("ask_usage");
     const answered = lines
       .map((l) => JSON.parse(l) as { ask_route?: Record<string, unknown> })
       .find((l) => l.ask_route?.["outcome"] === "answered")?.ask_route;
@@ -602,14 +673,117 @@ describe("POST …/ask: refusals", () => {
     expect((await get(dana)).json()).toEqual({ index: { status: "off" } });
   });
 
-  it("limits each member's questions per minute (ADR 0025 `ask`)", async () => {
+  it("limits each member's questions per minute (ADR 0025 `ask`), saying so", async () => {
     await app.close();
     app = build({ askLimit: 1 });
     await app.ready();
     await indexRepository();
     expect((await post(dana, { question: "q" })).statusCode).toBe(200);
-    expect((await post(dana, { question: "q" })).statusCode).toBe(429);
+    const limited = await post(dana, { question: "q" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({ error: "rate_limited", limit: "member" });
+    expect(Number(limited.headers["retry-after"])).toBeLessThanOrEqual(60);
     expect(calls).toHaveLength(1);
+    // Nothing was read or spent for the refused question: one embedding, one row set, one
+    // access check.
+    expect(embedded).toHaveLength(1);
+    expect(accessAsked).toHaveLength(1);
+    expect(await usageRows()).toHaveLength(2);
+  });
+
+  it("the org's budget is shared by its members, counted before anything is read, and holds under concurrency (P9-3)", async () => {
+    await app.close();
+    app = build({ askOrgLimit: 3 });
+    await app.ready();
+    await indexRepository();
+    const { token: eve } = await sessionIn(A, 5103, "eve");
+    // Eight questions at once from two members of A: exactly three reach the model, whatever
+    // the interleaving, since `consume` counts and checks in one step.
+    const answers = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => post(i % 2 === 0 ? dana : eve, { question: `q${i}` })),
+    );
+    const statuses = answers.map((a) => a.statusCode).sort();
+    expect(statuses).toEqual([200, 200, 200, 429, 429, 429, 429, 429]);
+    for (const a of answers.filter((a) => a.statusCode === 429)) {
+      expect(a.json()).toEqual({ error: "rate_limited", limit: "org" });
+      expect(Number(a.headers["retry-after"])).toBeLessThanOrEqual(60);
+    }
+    expect(calls).toHaveLength(3);
+    expect(embedded).toHaveLength(3);
+    expect(accessAsked).toHaveLength(3);
+    expect(await usageRows()).toHaveLength(6);
+    // Another org's budget is its own: B is not limited by A's questions (B has no PR: 404).
+    expect((await post(bo, { question: "q" })).statusCode).toBe(404);
+    const outcomes = lines
+      .map((l) => JSON.parse(l) as { ask_route?: { outcome: string } })
+      .flatMap((l) => (l.ask_route === undefined ? [] : [l.ask_route.outcome]));
+    expect(outcomes.filter((o) => o === "org_rate_limited")).toHaveLength(5);
+    noContentInLogs();
+  });
+
+  it("the org's day budget is counted too, before the burst one would allow more", async () => {
+    await app.close();
+    app = build({ askOrgDayLimit: 1 });
+    await app.ready();
+    await indexRepository();
+    expect((await post(dana, { question: "q" })).statusCode).toBe(200);
+    const limited = await post(dana, { question: "q" });
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toEqual({ error: "rate_limited", limit: "org" });
+    const retryAfter = Number(limited.headers["retry-after"]);
+    expect(retryAfter).toBeGreaterThan(60);
+    expect(retryAfter).toBeLessThanOrEqual(86_400);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("records a failed model call with its partial usage, and the embedding of a question GitHub failed (P9-3)", async () => {
+    await indexRepository();
+    script = () => ({
+      error: new LlmCallError("network", {
+        partialUsage: {
+          inputTokens: 90,
+          outputTokens: 3,
+          cacheReadInputTokens: 0,
+          cacheWrite5mInputTokens: 0,
+          cacheWrite1hInputTokens: 0,
+        },
+      }),
+    });
+    expect((await post(dana, { question: "q" })).json()).toEqual({
+      error: "model_unavailable",
+      retryable: true,
+    });
+    expect((await usageRows()).map((r) => [r.role, r.outcome, r.usage_status, r.input_tokens])).toEqual([
+      ["embed", "ok", "reported", 7],
+      ["ask", "error", "partial", 90],
+    ]);
+    usageFrom = await lastUsageId();
+    script = () => answer([{ path: "src/auth/invite.ts", start: 1, end: 1 }]);
+    github.failRoute("blob", 502, 5);
+    expect((await post(dana, { question: "q" })).json()).toEqual({ error: "forge_unavailable" });
+    // The embedding was spent before GitHub failed: its row is there, and no model row follows.
+    expect((await usageRows()).map((r) => [r.role, r.repo_id, r.pull_request_id])).toEqual([
+      ["embed", repoA, pullA],
+    ]);
+  });
+
+  it("a usage write that keeps failing fails the question closed: 503, and the model is never asked", async () => {
+    await app.close();
+    app = build({ recordUsage: () => Promise.reject(new Error(`down ${MARKER}`)) });
+    await app.ready();
+    await indexRepository();
+    const res = await post(dana, { question: "q" });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: "ask_unavailable" });
+    // The embedding was made (its write failed after); the ask call never was.
+    expect(embedded).toHaveLength(1);
+    expect(calls).toHaveLength(0);
+    const outcomes = lines
+      .map((l) => JSON.parse(l) as { ask_route?: { outcome: string }; errorCode?: string })
+      .map((l) => l.ask_route?.outcome ?? l.errorCode);
+    expect(outcomes).toContain("usage_unrecorded");
+    expect(outcomes).toContain("llm_usage_unrecorded");
+    noContentInLogs();
   });
 
   it("maps a model outage, a refused answer and a GitHub outage to 502, with fixed codes", async () => {
