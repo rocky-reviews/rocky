@@ -211,6 +211,8 @@ const GROUPS: Record<string, (page: Page, found: Found, reviewApi: ReviewApi) =>
       ["ready", "answer"],
       ["no-answer", "no good answer"],
       ["error", "error"],
+      ["rate-limited", "rate limited (P9-3)"],
+      ["org-rate-limited", "org rate limited (P9-3)"],
       ["slow", "reading the code"],
     ] as const) {
       await openAsk(page, scenario);

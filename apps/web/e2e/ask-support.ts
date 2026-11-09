@@ -5,7 +5,7 @@ import { FIXTURE_NOW } from "./support.js";
 /**
  * P9-2: the PR page with the fixture Ask source in one of its scenarios
  * (`src/ask/ask-fixture-source.ts`: ready, not-indexed, indexing, off, index-error, no-answer,
- * error, slow), and helpers to reach the Ask tab at any width.
+ * error, rate-limited, org-rate-limited, slow), and helpers to reach the Ask tab at any width.
  */
 
 export const openAsk = async (page: Page, scenario = "ready"): Promise<void> => {

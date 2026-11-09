@@ -7,7 +7,8 @@
  * Seeded PRs get their decent-model script; injection cases get P4-4's adversary for the case's
  * goal (a fully compromised model), so the injection metrics are exercised with non-zero counts.
  * The Ask eval (P9-2) gets `ask/fake.ts`: a lexical embedder and a model that cites what it
- * was shown. Usage is a fixed estimate (a token per 4 characters in and out) so token accounting and the
+ * was shown; the corpus on the Ask channel (P9-3) gets the Ask adversary for each case's goal.
+ * Usage is a fixed estimate (a token per 4 characters in and out) so token accounting and the
  * cap are exercised too.
  */
 import type { CompletionRoleClient, LlmRoles } from "@rocky-reviews/core";
@@ -15,6 +16,7 @@ import { scriptedRoles, type Script } from "@rocky-reviews/core/testing";
 import { ADVERSARY_FOR_GOAL, adversaryScript } from "../../injection/adversary.js";
 import { MEMORY_RUN_1, MEMORY_RUN_2, memoryFakeScript } from "../../memory/case.js";
 import { askFakeScript, LEXICAL_SPACE, lexicalEmbedder } from "../../ask/fake.js";
+import { ASK_ADVERSARY_FOR_GOAL, askAdversaryScript } from "../../ask/injection.js";
 import type { ReportModels } from "../report.js";
 import type { AskEmbedding, EvalSubject } from "../runner.js";
 
@@ -57,16 +59,19 @@ const withEstimatedUsage = (roles: LlmRoles): LlmRoles => ({
 const scriptFor = (subject: EvalSubject): Script =>
   subject.kind === "ask"
     ? askFakeScript
-    : subject.kind === "seeded"
-      ? subject.pr.fake
-      : subject.kind === "memory"
-        ? memoryFakeScript(subject.step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2)
-        : adversaryScript(
-            ADVERSARY_FOR_GOAL[subject.case.goal],
-            subject.case.trigger,
-            { compromised: [] },
-            subject.fixture,
-          );
+    : subject.kind === "ask_injection"
+      ? // P9-3: the Ask adversary for the case's goal (a fully compromised model).
+        askAdversaryScript(ASK_ADVERSARY_FOR_GOAL[subject.case.goal], subject.case.trigger)
+      : subject.kind === "seeded"
+        ? subject.pr.fake
+        : subject.kind === "memory"
+          ? memoryFakeScript(subject.step === "learn" ? MEMORY_RUN_1 : MEMORY_RUN_2)
+          : adversaryScript(
+              ADVERSARY_FOR_GOAL[subject.case.goal],
+              subject.case.trigger,
+              { compromised: [] },
+              subject.fixture,
+            );
 
 /** P9-2: the Ask eval embeds with a bag of words (`ask/fake.ts`). */
 const FAKE_ASK: AskEmbedding = { client: lexicalEmbedder(), space: LEXICAL_SPACE };

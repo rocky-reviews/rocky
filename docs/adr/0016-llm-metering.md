@@ -34,6 +34,11 @@ apps/worker runAnalysis
 - `meterRoles` wraps any `LlmRoles` (completions and embeddings). The pipeline cannot tell it is
   there, and `runAnalysis` never hands it the unwrapped roles. `AnalysisRunnerDeps.usageTargets`
   (from `usageTargetsFor(config)`) is required, and `runAnalysis` refuses to run without it.
+- **P9-3 ([ADR 0042](0042-ask-safety.md) §4, migration 0023):** Ask's calls are made by the
+  server, which writes its own `ask` and `embed` rows through a column-scoped INSERT grant and a
+  restrictive policy (no `analysis_id`, those two roles only). Rows carry `repo_id` and
+  `pull_request_id` (Ask; the index run stamps its repository), with `ON DELETE SET NULL` like
+  `analysis_id`; the append-only trigger allows exactly that unlink.
 - The only port change: `LlmCallError` may carry `partialUsage` (numbers only, a frozen copy of the
   five counts). The Claude adapter fills it from the stream's `message_start` and `message_delta`
   events when a stream fails part-way. Nothing else in `packages/core/src/analysis/*` or the

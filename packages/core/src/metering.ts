@@ -59,6 +59,10 @@ export interface LlmUsageRecord {
   readonly model: string;
   /** The analysis the call was made for, when there is one. */
   readonly analysisId?: string;
+  /** The repository the call was made for, when there is one (Ask, the index run; P9-3). */
+  readonly repoId?: string;
+  /** The pull request the call was made for (Ask); only with `repoId`. */
+  readonly pullRequestId?: string;
   readonly outcome: LlmUsageOutcome;
   /** Set exactly when `outcome` is `error`. */
   readonly errorKind?: LlmErrorKind;

@@ -71,3 +71,20 @@ export { ASK_QUESTIONS, type AskQuestion, type AskTarget } from "./ask/questions
 export { ASK_REPO, ASK_REPO_PROVENANCE } from "./ask/repo.js";
 export { ASK_MIN_VALID_RATE, scoreAsk, scoreQuestion, type AskScore } from "./ask/score.js";
 export { runAskEval, type AskEvalOptions, type AskEvalResult } from "./ask/run.js";
+export {
+  ASK_ADVERSARIES,
+  ASK_ADVERSARY_FOR_GOAL,
+  ASK_INJECTION_CHANNELS,
+  ASK_INJECTION_QUESTION,
+  askAdversaryScript,
+  askInjectionTotals,
+  askInjectionViolations,
+  plantAskCase,
+  plantedPorts,
+  runAskInjection,
+  type AskAdversary,
+  type AskInjectionChannel,
+  type AskInjectionResult,
+  type AskInjectionRun,
+  type AskInjectionTotals,
+} from "./ask/injection.js";

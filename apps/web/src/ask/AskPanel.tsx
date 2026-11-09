@@ -4,7 +4,8 @@
  * `file:line` citations that open the cited lines on GitHub at the indexed commit.
  *
  * States: the index's (checking, not indexed, indexing, off, could not be checked), and per
- * question: "Reading the code…", the answer with its citations, no good answer, an error. The
+ * question: "Reading the code…", the answer with its citations, no good answer, an error (a
+ * limit, P9-3, says whose it is and how long to wait, with Try again like any error). The
  * answer is model text: shown as text with inline code and bold only (`InlineText`), never as
  * HTML or links; the only links are the citations, built by `citationUrl` from checked parts.
  * Nothing here acts on an answer. Questions and answers live in this page only (nothing is
@@ -62,7 +63,8 @@ export const SUGGESTED_QUESTIONS = [
 const PROBLEM_TEXT: Readonly<Record<AskProblem, string>> = {
   not_indexed: "This repository isn’t indexed yet, so Rocky can’t read its code to answer.",
   indexing: "Rocky is still indexing this repository. Ask again once the index is ready.",
-  rate_limited: "You’ve asked a lot in the last minute. Wait a moment, then ask again.",
+  rate_limited: "You’ve asked a lot in a short time. Wait a moment, then ask again.",
+  org_rate_limited: "Your organisation has reached its Ask limit for now. Try again later.",
   model_unavailable: "The AI model didn’t answer. Try again.",
   answer_failed: "The AI model’s answer couldn’t be used. Try asking another way.",
   forge_unavailable: "GitHub didn’t answer while Rocky read the code. Try again.",
@@ -71,6 +73,31 @@ const PROBLEM_TEXT: Readonly<Record<AskProblem, string>> = {
   not_found: "This pull request isn’t in Rocky, or you can’t read its repository on GitHub.",
   signed_out: "Your session ended. Reload the page and sign in to ask.",
   failed: "Something went wrong while asking. Try again.",
+};
+
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+
+/**
+ * P9-3: a limit's message, with the wait when the server said how long. The member's own limit
+ * is a minute's, so its wait is in seconds; the org's budget can be a day's, so its wait is
+ * rounded to seconds under 90 s, minutes up to 90 minutes, hours above. No countdown: the text
+ * is what the server said when it answered.
+ */
+const problemText = (reply: Extract<AskReply, { kind: "error" }>): string => {
+  const wait = reply.retryAfterSeconds;
+  if (wait === undefined) return PROBLEM_TEXT[reply.problem];
+  if (reply.problem === "rate_limited")
+    return `You’ve asked a lot in a short time. Wait ${plural(wait, "second")}, then ask again.`;
+  if (reply.problem === "org_rate_limited") {
+    const about =
+      wait < 90
+        ? plural(wait, "second")
+        : wait <= 90 * 60
+          ? plural(Math.round(wait / 60), "minute")
+          : plural(Math.round(wait / 3600), "hour");
+    return `Your organisation has reached its Ask limit for now. Try again in about ${about}.`;
+  }
+  return PROBLEM_TEXT[reply.problem];
 };
 
 const NO_ANSWER_TEXT = {
@@ -115,7 +142,8 @@ const SelectionChip = ({
   </span>
 );
 
-const Reply = ({
+/** One turn's answer side (exported for the unit tests of its fixed texts). */
+export const Reply = ({
   reply,
   retryDisabled,
   onRetry,
@@ -165,7 +193,7 @@ const Reply = ({
     case "error":
       return (
         <div className="chat-a ask-error" role="alert">
-          <p className="ask-text">{PROBLEM_TEXT[reply.problem]}</p>
+          <p className="ask-text">{problemText(reply)}</p>
           {reply.problem !== "signed_out" &&
             reply.problem !== "not_found" &&
             reply.problem !== "invalid_question" && (
@@ -340,10 +368,24 @@ export const AskPanelContent = ({
 
   const pending = turns.some((t) => t.reply === "pending");
 
+  // A limit's wait (P9-3): nothing is sent until the server's Retry-After has passed. The
+  // deadline is set when a limit answers; a timer clears it (no countdown is shown).
+  const [blockedUntil, setBlockedUntil] = useState(0);
+  useEffect(() => {
+    if (blockedUntil === 0) return;
+    const timer = window.setTimeout(
+      () => setBlockedUntil(0),
+      Math.max(0, blockedUntil - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [blockedUntil]);
+  const waiting = blockedUntil !== 0;
+
   /** Asks; false (and nothing changes) when no question can be sent now. */
   const send = (question: string, attached: AskSelection | null): boolean => {
     const text = question.trim();
-    if (text === "" || text.length > MAX_QUESTION_CHARS || !ready || pending) return false;
+    if (text === "" || text.length > MAX_QUESTION_CHARS || !ready || pending || waiting)
+      return false;
     const id = nextId.current++;
     setTurns((all) => [...all, { id, question: text, selection: attached, reply: "pending" }]);
     const abort = new AbortController();
@@ -357,6 +399,12 @@ export const AskPanelContent = ({
         (reply.problem === "not_indexed" || reply.problem === "indexing")
       )
         check();
+      if (
+        reply.kind === "error" &&
+        (reply.problem === "rate_limited" || reply.problem === "org_rate_limited") &&
+        reply.retryAfterSeconds !== undefined
+      )
+        setBlockedUntil(Date.now() + reply.retryAfterSeconds * 1000);
     };
     source
       .ask(pull, attached === null ? { question: text } : { question: text, selection: attached }, {
@@ -381,9 +429,15 @@ export const AskPanelContent = ({
     if (send(question, selection)) onClearSelection();
   };
 
-  /** The failed turn gives way to the new one only once that one is sent. */
+  /**
+   * The failed turn gives way to the new one only once that one is sent. The button that had
+   * focus goes with the turn, so focus moves to the question box (in the drawer, it must stay
+   * inside the dialog).
+   */
   const retry = (turn: Turn) => {
-    if (send(turn.question, turn.selection)) setTurns((all) => all.filter((t) => t !== turn));
+    if (!send(turn.question, turn.selection)) return;
+    setTurns((all) => all.filter((t) => t !== turn));
+    box.current?.focus();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -431,7 +485,11 @@ export const AskPanelContent = ({
                   <bdi>{turn.question}</bdi>
                   {turn.selection !== null && <SelectionChip selection={turn.selection} />}
                 </div>
-                <Reply reply={turn.reply} retryDisabled={pending} onRetry={() => retry(turn)} />
+                <Reply
+                  reply={turn.reply}
+                  retryDisabled={pending || waiting}
+                  onRetry={() => retry(turn)}
+                />
               </li>
             ))}
           </ol>
@@ -441,7 +499,12 @@ export const AskPanelContent = ({
         {ready && (
           <div className="suggest" aria-label="Suggested questions" role="group">
             {SUGGESTED_QUESTIONS.map((q) => (
-              <button key={q} type="button" disabled={pending} onClick={() => suggest(q)}>
+              <button
+                key={q}
+                type="button"
+                disabled={pending || waiting}
+                onClick={() => suggest(q)}
+              >
                 {q}
               </button>
             ))}
@@ -467,7 +530,7 @@ export const AskPanelContent = ({
           <button
             type="submit"
             className="btn btn-sm btn-primary"
-            disabled={!ready || pending || draft.trim() === ""}
+            disabled={!ready || pending || waiting || draft.trim() === ""}
           >
             Ask
           </button>
