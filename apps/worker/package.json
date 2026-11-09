@@ -7,12 +7,14 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/main.ts",
-    "mirror:rebuild": "tsx --env-file=../../.env src/rebuild-mirror.ts"
+    "mirror:rebuild": "tsx --env-file=../../.env src/rebuild-mirror.ts",
+    "index:bench": "tsx src/index-bench.ts"
   },
   "dependencies": {
     "@rocky-reviews/core": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/forge-github": "workspace:*",
+    "@rocky-reviews/indexer": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
     "@rocky-reviews/schema": "workspace:*",

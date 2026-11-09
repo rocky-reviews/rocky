@@ -8,6 +8,8 @@ import {
   ConfigError,
   databaseLoginHint,
   DEFAULT_ANALYSIS_CONFIG,
+  DEFAULT_INDEX_TOKEN_LIMIT,
+  indexConfigFromEnv,
   githubAppFromEnv,
   loadWorkerConfig,
   workerConfigFromEnv,
@@ -85,6 +87,7 @@ describe("workerConfigFromEnv", () => {
       githubApp: undefined,
       llm: llmConfigFromEnv({}),
       analysis: DEFAULT_ANALYSIS_CONFIG,
+      index: { auto: false, tokenLimit: DEFAULT_INDEX_TOKEN_LIMIT },
     });
   });
 
@@ -221,4 +224,37 @@ describe("main.ts (spawned)", () => {
     expect(result.status).toBe(1);
     expect(JSON.stringify(fatal(result.stdout))).toMatch(/WORKER_DATABASE_URL/);
   }, 30_000);
+});
+
+describe("indexConfigFromEnv (P9-1)", () => {
+  const withEmbed = llmConfigFromEnv({ ROCKY_LLM_EMBED_PROVIDER: "openai" });
+  const withoutEmbed = llmConfigFromEnv({});
+
+  it("is off by default, with the default token limit", () => {
+    expect(indexConfigFromEnv({}, withoutEmbed)).toEqual({
+      auto: false,
+      tokenLimit: DEFAULT_INDEX_TOKEN_LIMIT,
+    });
+  });
+
+  it("turns on only with an embedding model configured", () => {
+    expect(indexConfigFromEnv({ ROCKY_INDEX_AUTO: "on" }, withEmbed).auto).toBe(true);
+    expect(messageOf(() => indexConfigFromEnv({ ROCKY_INDEX_AUTO: "on" }, withoutEmbed))).toMatch(
+      /ROCKY_LLM_EMBED_PROVIDER/,
+    );
+    expect(messageOf(() => indexConfigFromEnv({ ROCKY_INDEX_AUTO: "yes" }, withEmbed))).toMatch(
+      /on or off/,
+    );
+  });
+
+  it("bounds the token limit and never echoes the value", () => {
+    expect(indexConfigFromEnv({ ROCKY_INDEX_TOKEN_LIMIT: "20000" }, withEmbed).tokenLimit).toBe(
+      20_000,
+    );
+    const message = messageOf(() =>
+      indexConfigFromEnv({ ROCKY_INDEX_TOKEN_LIMIT: "999" }, withEmbed),
+    );
+    expect(message).toMatch(/ROCKY_INDEX_TOKEN_LIMIT/);
+    expect(message).not.toContain("999");
+  });
 });

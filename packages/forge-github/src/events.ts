@@ -65,6 +65,19 @@ const OrganizationMemberRemovedPayload = z.object({
   installation: z.object({ id: ForgeId }),
 });
 
+/**
+ * `push` (P9-1): only the ids, the ref, the new head and whether the branch was deleted. The
+ * payload's `default_branch` is GitHub's (the body is signed); the worker re-reads the branch
+ * head anyway. Commit messages, authors, emails and file lists are never read.
+ */
+const PushPayload = z.object({
+  ref: z.string().max(300),
+  after: Sha,
+  deleted: z.boolean().optional(),
+  repository: z.object({ id: ForgeId, default_branch: z.string().min(1).max(255) }),
+  installation: z.object({ id: ForgeId }),
+});
+
 const Action = z.object({ action: z.string().max(64) });
 
 const INSTALLATION_ACTIONS: Readonly<Record<string, InstallationEventType>> = {
@@ -84,7 +97,7 @@ const PULL_REQUEST_ACTIONS: Readonly<Record<string, PullRequestEventType>> = {
  * `membership` (team membership) is deliberately not one: leaving a team is not leaving the
  * organization, and repository access through teams is the access check's (P3-6, ADR 0024 §7).
  */
-export const HANDLED_EVENTS = ["installation", "pull_request", "organization"] as const;
+export const HANDLED_EVENTS = ["installation", "pull_request", "organization", "push"] as const;
 
 export type DecodeResult =
   | { readonly kind: "event"; readonly event: ForgeEvent }
@@ -99,6 +112,26 @@ const lookup = <T>(table: Readonly<Record<string, T>>, key: string): T | undefin
  * action whose payload does not have the expected shape is `invalid`. Never throws.
  */
 export const decodeGitHubEvent = (eventName: string, payload: unknown): DecodeResult => {
+  if (eventName === "push") {
+    // Pushes carry no `action`.
+    const parsed = PushPayload.safeParse(payload);
+    if (!parsed.success) return { kind: "invalid" };
+    const p = parsed.data;
+    // Only the default branch is indexed; a deleted branch has nothing to index.
+    if (p.deleted === true || p.ref !== `refs/heads/${p.repository.default_branch}`) {
+      return { kind: "ignored" };
+    }
+    return {
+      kind: "event",
+      event: {
+        type: "repository.push",
+        installationId: p.installation.id,
+        repositoryId: p.repository.id,
+        headSha: p.after,
+      },
+    };
+  }
+
   const action = Action.safeParse(payload);
   if (!action.success) return { kind: "invalid" };
 

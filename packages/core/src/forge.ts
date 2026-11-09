@@ -12,6 +12,8 @@
  * forge (the source of truth), never as proof of that state.
  */
 
+import type { IndexTreeEntry } from "./indexing.js";
+
 export type ForgeKind = "github" | "gitlab" | "gitea";
 
 /** A forge-side numeric id (installation, account, repository). Positive safe integer. */
@@ -45,16 +47,20 @@ export const PULL_REQUEST_EVENT_TYPES = [
 ] as const;
 /** Someone stopped being a member of the organization on the forge (P7-2, ADR 0024). */
 export const ORG_MEMBER_EVENT_TYPES = ["org_member.removed"] as const;
+/** Commits reached a repository's default branch (P9-1, ADR 0040): the index catches up. */
+export const REPOSITORY_EVENT_TYPES = ["repository.push"] as const;
 /** Every event the domain consumes. Anything else a forge sends is acknowledged and ignored. */
 export const FORGE_EVENT_TYPES = [
   ...INSTALLATION_EVENT_TYPES,
   ...PULL_REQUEST_EVENT_TYPES,
   ...ORG_MEMBER_EVENT_TYPES,
+  ...REPOSITORY_EVENT_TYPES,
 ] as const;
 
 export type InstallationEventType = (typeof INSTALLATION_EVENT_TYPES)[number];
 export type PullRequestEventType = (typeof PULL_REQUEST_EVENT_TYPES)[number];
 export type OrgMemberEventType = (typeof ORG_MEMBER_EVENT_TYPES)[number];
+export type RepositoryEventType = (typeof REPOSITORY_EVENT_TYPES)[number];
 export type ForgeEventType = (typeof FORGE_EVENT_TYPES)[number];
 
 /** The forge user who triggered an event (for installations: who installed or removed the app). */
@@ -100,7 +106,19 @@ export interface OrgMemberEvent {
   readonly memberForgeUserId: ForgeNumericId;
 }
 
-export type ForgeEvent = InstallationEvent | PullRequestEvent | OrgMemberEvent;
+/**
+ * A push to a repository's default branch (P9-1). The decoder drops pushes to other branches and
+ * branch deletions; the consumer re-reads the branch head from the forge before indexing, so a
+ * replayed or reordered delivery can at most cause a redundant index run.
+ */
+export interface RepositoryPushEvent extends RepositoryRef {
+  readonly type: RepositoryEventType;
+  /** The branch head after the push, as the event says. */
+  readonly headSha: string;
+}
+
+export type ForgeEvent =
+  InstallationEvent | PullRequestEvent | OrgMemberEvent | RepositoryPushEvent;
 
 const EVENT_TYPES: ReadonlySet<string> = new Set(FORGE_EVENT_TYPES);
 
@@ -117,6 +135,9 @@ export const isPullRequestEvent = (event: ForgeEvent): event is PullRequestEvent
 
 export const isOrgMemberEvent = (event: ForgeEvent): event is OrgMemberEvent =>
   event.type === "org_member.removed";
+
+export const isRepositoryPushEvent = (event: ForgeEvent): event is RepositoryPushEvent =>
+  event.type === "repository.push";
 
 // --- Inbound: webhook deliveries ---------------------------------------------------------------
 
@@ -403,6 +424,70 @@ export interface Forge extends InstallationReader, CollaboratorReader {
    * (`installation_suspended`) when its installation is suspended.
    */
   locateRepository(fullName: string): Promise<RepositoryRef | null>;
+}
+
+// --- Outbound: reading a repository's code (P9-1, ADR 0040) -------------------------------------
+
+/** The regular files of one commit (symlinks and submodules are not listed). */
+export interface ForgeTree {
+  readonly commitSha: string;
+  readonly entries: readonly IndexTreeEntry[];
+  /** The forge cut the listing short: the caller must not treat a missing path as deleted. */
+  readonly truncated: boolean;
+}
+
+/** One regular file of an archive. `bytes` is null when it is over `maxFileBytes` (not read). */
+export interface ArchiveFile {
+  readonly path: string;
+  readonly size: number;
+  readonly bytes: Uint8Array | null;
+}
+
+export type BlobRead =
+  | { readonly kind: "ok"; readonly bytes: Uint8Array }
+  | { readonly kind: "too_large" }
+  /** The forge positively says there is no such blob. */
+  | { readonly kind: "not_found" };
+
+/**
+ * Read access to one repository's code on behalf of its installation (P9-1). Like
+ * `RepositorySession`, the adapter holds a short-lived credential scoped to this one repository
+ * with `contents: read` only, which never leaves the session; `close` revokes it. Content is
+ * untrusted: never logged, never stored beyond what the index needs (ADR 0040 §5).
+ */
+export interface CodeSession {
+  readonly repository: ForgeRepository;
+  /** The commit a branch points at now; `null` when the forge says there is no such branch. */
+  branchHead(branch: string): Promise<string | null>;
+  /**
+   * The repository's size as the forge reports it, in KiB (GitHub's `size`: the repository's
+   * stored size, history included); `null` when the forge reports none. Bounds an index's
+   * estimate when the tree listing is cut short.
+   */
+  repositorySizeKb(): Promise<number | null>;
+  /** Every regular file of a commit with its blob id and size; `null` when there is no commit. */
+  readTree(commitSha: string): Promise<ForgeTree | null>;
+  /** One blob's bytes, up to `maxBytes`. */
+  readBlob(blobSha: string, options: { readonly maxBytes: number }): Promise<BlobRead>;
+  /**
+   * The commit's files from one archive download, streamed: only files `wanted` accepts are
+   * yielded, and only those up to `maxFileBytes` are read. Throws `ForgeReadError` on a broken
+   * or oversized archive.
+   */
+  readArchive(
+    commitSha: string,
+    options: { readonly maxFileBytes: number; readonly wanted: (path: string) => boolean },
+  ): AsyncIterable<ArchiveFile>;
+  /** Revokes the credential (best effort) and refuses further reads. Idempotent. */
+  close(): Promise<void>;
+}
+
+export interface CodeReader {
+  /**
+   * `null` when the forge positively says the installation is gone or the repository is not one
+   * it can access; any other failure throws `ForgeReadError`.
+   */
+  openCode(ref: RepositoryRef): Promise<CodeSession | null>;
 }
 
 // --- Outbound: a user's own access to a repository (P3-6, ADR 0011) ----------------------------

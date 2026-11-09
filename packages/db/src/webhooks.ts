@@ -2,6 +2,7 @@ import {
   isForgeEventType,
   isInstallationEvent,
   isOrgMemberEvent,
+  isRepositoryPushEvent,
   type ForgeEvent,
   type WebhookDelivery,
 } from "@rocky-reviews/core";
@@ -103,6 +104,17 @@ export const minimalEvent = (event: ForgeEvent): ForgeEvent => {
     };
   }
   if (!isId(event.repositoryId)) return invalid("repository id");
+  if (isRepositoryPushEvent(event)) {
+    if (typeof event.headSha !== "string" || !OBJECT_ID.test(event.headSha)) {
+      return invalid("head sha");
+    }
+    return {
+      type: event.type,
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      headSha: event.headSha,
+    };
+  }
   if (!Number.isInteger(event.number) || event.number < 1 || event.number > MAX_PR_NUMBER) {
     return invalid("pull request number");
   }

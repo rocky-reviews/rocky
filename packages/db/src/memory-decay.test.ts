@@ -136,8 +136,8 @@ const plant = async (org: SeededOrg, p: Planted): Promise<string> => {
 const plantEmbedding = async (org: SeededOrg, entryId: string): Promise<string> => {
   const id = randomUUID();
   await superuser.query(
-    `insert into embeddings (id, org_id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
-     values ($1, $2, $3, $4, 'memory', $5, 'test-embed', $6::vector)`,
+    `insert into embeddings (id, org_id, repo_id, memory_entry_id, source_kind, source_ref, provider, model, dimensions, embedding)
+     values ($1, $2, $3, $4, 'memory', $5, 'openai-compatible', 'test-embed', 1024, $6::vector)`,
     [
       id,
       org.orgId,

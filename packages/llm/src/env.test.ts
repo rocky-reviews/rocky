@@ -201,7 +201,11 @@ describe("llmConfigFromEnv validation (fails fast, names the variable)", () => {
 
   it("rejects an embed role on a provider without embeddings", () => {
     expect(
-      messageOf({ ROCKY_LLM_EMBED_MODEL: "claude-opus-5-5", ROCKY_LLM_EMBED_DIMENSIONS: "1536" }),
+      messageOf({
+        ROCKY_LLM_EMBED_PROVIDER: "anthropic",
+        ROCKY_LLM_EMBED_MODEL: "claude-opus-5-5",
+        ROCKY_LLM_EMBED_DIMENSIONS: "1024",
+      }),
     ).toMatch(/ROCKY_LLM_EMBED_PROVIDER: provider anthropic has no embeddings/);
   });
 

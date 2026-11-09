@@ -1,6 +1,12 @@
 import {
   ForgeReadError,
+  type ArchiveFile,
+  type BlobRead,
   type Clock,
+  type CodeReader,
+  type CodeSession,
+  type ForgeTree,
+  type IndexTreeEntry,
   type DiffTruncation,
   type Forge,
   type ForgeDiff,
@@ -16,6 +22,7 @@ import { z } from "zod";
 import { githubAppJwt, type GitHubAppAuth } from "./app-auth.js";
 import { isAbort, readCapped, readUpTo } from "./http.js";
 import { createGitHubInstallationReader } from "./installations.js";
+import { readTar } from "./tar.js";
 
 /**
  * Pull request reads for the mirror (P3-4, ADR 0010), on behalf of one installation and one
@@ -58,6 +65,22 @@ export const MIRROR_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object
 export const COLLABORATOR_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object.freeze({
   metadata: "read",
 });
+/**
+ * Reading code for the repository index (P9-1, ADR 0040 §5): `contents: read` only, narrower
+ * than the mirror's token (no pull requests).
+ */
+export const CODE_TOKEN_PERMISSIONS: Readonly<Record<string, "read">> = Object.freeze({
+  contents: "read",
+});
+/** A recursive tree listing larger than this is treated as truncated. */
+export const MAX_TREE_BYTES = 64 * 1024 * 1024;
+/** Entries a tree listing may hold (GitHub's own recursive limit is 100 000). */
+export const MAX_TREE_ENTRIES = 200_000;
+/** The archive download: one deadline for the whole stream. */
+export const ARCHIVE_TIMEOUT_MS = 10 * 60_000;
+/** Decompressed archive bytes and entries read before an archive is refused. */
+export const MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024;
+export const MAX_ARCHIVE_ENTRIES = 1_000_000;
 /** GitHub adds `metadata: read` to every installation token. */
 const IMPLIED_PERMISSIONS: Readonly<Record<string, "read">> = { metadata: "read" };
 
@@ -156,7 +179,28 @@ const TooLarge = z.object({
     .refine((e) => e.some((x) => x.code === "too_large")),
 });
 
+const RepositorySizeJson = z.object({ id: ForgeId, size: Count.optional() });
+const RefJson = z.object({ object: z.object({ sha: Sha, type: z.literal("commit") }) });
+const TreeJson = z.object({
+  sha: Sha,
+  truncated: z.boolean(),
+  tree: z
+    .array(
+      z.object({
+        path: z.string().min(1).max(4096),
+        mode: z.string().max(16),
+        type: z.string().max(16),
+        sha: Sha,
+        size: Count.optional(),
+      }),
+    )
+    .max(MAX_TREE_ENTRIES),
+});
+/** Regular files (plain and executable); symlinks (120000) and submodules (160000) are not code. */
+const FILE_MODES = new Set(["100644", "100755"]);
+
 const JSON_TYPE = /^application\/(?:vnd\.github\+)?json\b/i;
+const RAW_TYPE = /^application\/(?:vnd\.github\.raw|octet-stream)\b/i;
 const DIFF_TYPE = /^(?:text\/plain|application\/vnd\.github\.diff)\b/i;
 
 /** A diff reading of exactly these bytes. */
@@ -216,7 +260,7 @@ interface Minted {
  * The GitHub `Forge`: installation reads as the app (`createGitHubInstallationReader`) plus
  * repository sessions on installation tokens.
  */
-export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
+export const createGitHubForge = (options: GitHubForgeOptions): Forge & CodeReader => {
   if (options.api.protocol !== "https:") throw new Error("GitHub API base must be https");
   const doFetch = options.fetch ?? fetch;
   const installations = createGitHubInstallationReader(options);
@@ -230,7 +274,14 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     method: "GET" | "POST" | "DELETE",
     path: string,
     credential: Credential,
-    init: { accept?: string; body?: unknown; search?: Record<string, string>; timeoutMs?: number },
+    init: {
+      accept?: string;
+      body?: unknown;
+      search?: Record<string, string>;
+      timeoutMs?: number;
+      /** Only the archive asks for `manual`: its redirect is followed by hand, without the key. */
+      redirect?: "manual";
+    },
   ): Promise<{ response: Response; signal: AbortSignal }> => {
     const url = new URL(path, options.api);
     for (const [key, value] of Object.entries(init.search ?? {})) url.searchParams.set(key, value);
@@ -248,7 +299,7 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
           ...(init.body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-        redirect: "error",
+        redirect: init.redirect ?? "error",
         signal,
       });
       return { response, signal };
@@ -553,6 +604,233 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     };
   };
 
+  /**
+   * Where GitHub may send an archive download: its codeload host (`codeload.github.com` next to
+   * `api.github.com`), or the API's own host (GitHub Enterprise Server). Anything else is refused,
+   * so a redirect cannot carry the request to a host of an attacker's choosing.
+   */
+  const archiveHostAllowed = (location: URL): boolean => {
+    if (location.protocol !== "https:" || location.username !== "" || location.password !== "") {
+      return false;
+    }
+    const apiHost = options.api.hostname;
+    const apex = apiHost.startsWith("api.") ? apiHost.slice(4) : apiHost;
+    return location.hostname === apiHost || location.hostname === `codeload.${apex}`;
+  };
+
+  const codeSession = (ref: RepositoryRef, first: Minted): CodeSession => {
+    let current: Minted = first;
+    let closed = false;
+    const repository = first.repository;
+    const base = `repos/${repoPath(repository.fullName)}`;
+
+    const credential = async (): Promise<Credential> => {
+      if (closed) throw new Error("code session is closed");
+      if (current.expiresAt - options.clock.now().getTime() < TOKEN_REFRESH_MARGIN_MS) {
+        const next = await mint(
+          ref.installationId,
+          { repositoryId: ref.repositoryId },
+          CODE_TOKEN_PERMISSIONS,
+        );
+        if (next === null) throw new ForgeReadError("http_status", 404);
+        const previous = current.token;
+        current = next;
+        await revoke(previous);
+      }
+      return { kind: "token", token: current.token };
+    };
+
+    const checkSha = (sha: string, where: string): void => {
+      if (!Sha.safeParse(sha).success) throw new Error(`${where}: invalid sha`);
+    };
+
+    const branchHead = async (branch: string): Promise<string | null> => {
+      if (!Branch.safeParse(branch).success) throw new Error("branchHead: invalid branch");
+      const path = branch
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/");
+      const answer = await exchange(
+        "GET",
+        `${base}/git/ref/heads/${path}`,
+        await credential(),
+        MAX_TOKEN_RESPONSE_BYTES,
+      );
+      if (isNotFound(answer)) return null;
+      if (answer.status !== 200) throw new ForgeReadError("http_status", answer.status);
+      const parsed = RefJson.safeParse(json(answer));
+      if (!parsed.success) throw new ForgeReadError("invalid_response");
+      return parsed.data.object.sha;
+    };
+
+    const repositorySizeKb = async (): Promise<number | null> => {
+      const answer = await exchange("GET", base, await credential(), MAX_TOKEN_RESPONSE_BYTES);
+      if (answer.status !== 200) throw new ForgeReadError("http_status", answer.status);
+      const parsed = RepositorySizeJson.safeParse(json(answer));
+      if (!parsed.success || parsed.data.id !== repository.id) {
+        throw new ForgeReadError("invalid_response");
+      }
+      return parsed.data.size ?? null;
+    };
+
+    const readTree = async (commitSha: string): Promise<ForgeTree | null> => {
+      checkSha(commitSha, "readTree");
+      const answer = await exchange(
+        "GET",
+        `${base}/git/trees/${commitSha}`,
+        await credential(),
+        MAX_TREE_BYTES,
+        { search: { recursive: "1" } },
+      );
+      // Too large to read: the caller indexes from the archive instead.
+      if (answer.status === 200 && answer.bytes === undefined) {
+        return { commitSha, entries: [], truncated: true };
+      }
+      if (isNotFound(answer) || answer.status === 422) return null;
+      if (answer.status !== 200) throw new ForgeReadError("http_status", answer.status);
+      const parsed = TreeJson.safeParse(json(answer));
+      if (!parsed.success) throw new ForgeReadError("invalid_response");
+      const entries: IndexTreeEntry[] = [];
+      for (const item of parsed.data.tree) {
+        if (item.type !== "blob" || !FILE_MODES.has(item.mode)) continue;
+        // A blob without a size is not one GitHub lists; refuse rather than guess.
+        if (item.size === undefined) throw new ForgeReadError("invalid_response");
+        entries.push({ path: item.path, blobSha: item.sha, size: item.size });
+      }
+      return { commitSha, entries, truncated: parsed.data.truncated };
+    };
+
+    const readBlob = async (
+      blobSha: string,
+      blobOptions: { readonly maxBytes: number },
+    ): Promise<BlobRead> => {
+      checkSha(blobSha, "readBlob");
+      const maxBytes = blobOptions.maxBytes;
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_DIFF_BYTES) {
+        throw new Error("readBlob: invalid maxBytes");
+      }
+      const { response, signal } = await open(
+        "GET",
+        `${base}/git/blobs/${blobSha}`,
+        await credential(),
+        {
+          accept: "application/vnd.github.raw+json",
+        },
+      );
+      const contentType = response.headers.get("content-type") ?? "";
+      try {
+        if (response.status === 200) {
+          if (!RAW_TYPE.test(contentType)) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new ForgeReadError("invalid_response");
+          }
+          const { bytes, overflow } = await readUpTo(response, maxBytes);
+          return overflow ? { kind: "too_large" } : { kind: "ok", bytes: new Uint8Array(bytes) };
+        }
+        const bytes = await readCapped(response, MAX_TOKEN_RESPONSE_BYTES);
+        const answer: Exchange = { status: response.status, contentType, bytes };
+        if (isNotFound(answer)) return { kind: "not_found" };
+        throw new ForgeReadError("http_status", response.status);
+      } catch (error) {
+        if (error instanceof ForgeReadError) throw error;
+        if (signal.aborted || isAbort(error)) throw new ForgeReadError("timeout");
+        throw new ForgeReadError("network");
+      }
+    };
+
+    async function* readArchive(
+      commitSha: string,
+      archiveOptions: { readonly maxFileBytes: number; readonly wanted: (path: string) => boolean },
+    ): AsyncIterable<ArchiveFile> {
+      checkSha(commitSha, "readArchive");
+      const { response: first } = await open(
+        "GET",
+        `${base}/tarball/${commitSha}`,
+        await credential(),
+        {
+          redirect: "manual",
+          timeoutMs: options.timeoutMs ?? REPOSITORY_READ_TIMEOUT_MS,
+        },
+      );
+      let archive: Response;
+      if (first.status === 302 || first.status === 307) {
+        await first.body?.cancel().catch(() => undefined);
+        let location: URL;
+        try {
+          location = new URL(first.headers.get("location") ?? "", options.api);
+        } catch {
+          throw new ForgeReadError("invalid_response");
+        }
+        if (!archiveHostAllowed(location)) throw new ForgeReadError("invalid_response");
+        // The redirect URL carries its own short-lived grant: the installation token is not sent.
+        try {
+          archive = await doFetch(location.href, {
+            method: "GET",
+            headers: { "user-agent": "rocky-reviews" },
+            redirect: "error",
+            signal: AbortSignal.timeout(ARCHIVE_TIMEOUT_MS),
+          });
+        } catch (error) {
+          throw new ForgeReadError(isAbort(error) ? "timeout" : "network");
+        }
+      } else if (first.status === 200) {
+        archive = first;
+      } else {
+        const bytes = await readCapped(first, MAX_TOKEN_RESPONSE_BYTES);
+        const answer: Exchange = {
+          status: first.status,
+          contentType: first.headers.get("content-type") ?? "",
+          bytes,
+        };
+        if (isNotFound(answer)) throw new ForgeReadError("http_status", 404);
+        throw new ForgeReadError("http_status", first.status);
+      }
+      if (archive.status !== 200 || archive.body === null) {
+        await archive.body?.cancel().catch(() => undefined);
+        throw new ForgeReadError("http_status", archive.status);
+      }
+      try {
+        yield* readTar(archive.body.pipeThrough(new DecompressionStream("gzip")), {
+          maxFileBytes: archiveOptions.maxFileBytes,
+          wanted: archiveOptions.wanted,
+          maxTotalBytes: MAX_ARCHIVE_BYTES,
+          maxEntries: MAX_ARCHIVE_ENTRIES,
+        });
+      } catch (error) {
+        if (error instanceof ForgeReadError) throw error;
+        if (isAbort(error)) throw new ForgeReadError("timeout");
+        // A gzip or stream failure: a broken archive, whatever the cause said.
+        throw new ForgeReadError("invalid_response");
+      }
+    }
+
+    return {
+      repository,
+      branchHead,
+      repositorySizeKb,
+      readTree,
+      readBlob,
+      readArchive,
+      close: async () => {
+        if (closed) return;
+        closed = true;
+        await revoke(current.token);
+      },
+    };
+  };
+
+  const openCode = async (ref: RepositoryRef): Promise<CodeSession | null> => {
+    if (!isId(ref.installationId) || !isId(ref.repositoryId)) {
+      throw new Error("openCode: invalid ids");
+    }
+    const minted = await mint(
+      ref.installationId,
+      { repositoryId: ref.repositoryId },
+      CODE_TOKEN_PERMISSIONS,
+    );
+    return minted === null ? null : codeSession(ref, minted);
+  };
+
   const openRepository = async (ref: RepositoryRef): Promise<RepositorySession | null> => {
     if (!isId(ref.installationId) || !isId(ref.repositoryId)) {
       throw new Error("openRepository: invalid ids");
@@ -623,5 +901,5 @@ export const createGitHubForge = (options: GitHubForgeOptions): Forge => {
     }
   };
 
-  return { ...installations, openRepository, locateRepository, isCollaborator };
+  return { ...installations, openRepository, openCode, locateRepository, isCollaborator };
 };

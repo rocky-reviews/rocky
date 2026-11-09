@@ -247,8 +247,8 @@ describe("deleteMemoryEntry", () => {
       ).toBe("superseded");
     }
     const embedded = await superuser.query(
-      `insert into public.embeddings (org_id, repo_id, memory_entry_id, source_kind, source_ref, model, embedding)
-       select org_id, repo_id, $1::uuid, 'memory', $1::text, 'test-embed', embedding
+      `insert into public.embeddings (org_id, repo_id, memory_entry_id, source_kind, source_ref, provider, model, dimensions, embedding)
+       select org_id, repo_id, $1::uuid, 'memory', $1::text, provider, 'test-embed', dimensions, embedding
          from public.embeddings where org_id = $2 limit 1 returning id`,
       [v1.id, A.orgId],
     );

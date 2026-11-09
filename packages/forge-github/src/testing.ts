@@ -12,7 +12,89 @@ import {
   verify,
   type KeyObject,
 } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { signWebhookBody } from "./signature.js";
+
+/** One entry of a test archive (P9-1). */
+export interface TarEntry {
+  readonly path: string;
+  readonly content?: string | Uint8Array;
+  /** Default `file`. */
+  readonly type?: "file" | "dir" | "symlink" | "hardlink";
+}
+
+const tarHeader = (name: Uint8Array, size: number, typeflag: string, link = ""): Uint8Array => {
+  const header = new Uint8Array(512);
+  const put = (text: string | Uint8Array, offset: number, length: number) => {
+    const bytes = typeof text === "string" ? new TextEncoder().encode(text) : text;
+    header.set(bytes.subarray(0, length), offset);
+  };
+  put(name, 0, 100);
+  put("0000644\0", 100, 8);
+  put("0000000\0", 108, 8);
+  put("0000000\0", 116, 8);
+  put(`${size.toString(8).padStart(11, "0")}\0`, 124, 12);
+  put("00000000000\0", 136, 12);
+  put("        ", 148, 8);
+  put(typeflag, 156, 1);
+  put(link, 157, 100);
+  put("ustar\0", 257, 6);
+  put("00", 263, 2);
+  let sum = 0;
+  for (const b of header) sum += b;
+  put(`${sum.toString(8).padStart(6, "0")}\0 `, 148, 8);
+  return header;
+};
+
+const padded = (bytes: Uint8Array): Uint8Array => {
+  const out = new Uint8Array(Math.ceil(bytes.length / 512) * 512);
+  out.set(bytes);
+  return out;
+};
+
+const paxRecord = (key: string, value: string): string => {
+  const body = ` ${key}=${value}\n`;
+  let length = body.length + 1;
+  while (`${length}${body}`.length !== length) length++;
+  return `${length}${body}`;
+};
+
+/**
+ * A gzipped tar shaped like GitHub's `git archive` output: a global pax header with the commit
+ * id, everything under `top/`, and pax `path` records for names over 100 bytes. Test-only.
+ */
+export const tarGz = (top: string, entries: readonly TarEntry[], commit = "c".repeat(40)) => {
+  const parts: Uint8Array[] = [];
+  const global = new TextEncoder().encode(paxRecord("comment", commit));
+  parts.push(tarHeader(new TextEncoder().encode("pax_global_header"), global.length, "g"));
+  parts.push(padded(global));
+  parts.push(tarHeader(new TextEncoder().encode(`${top}/`), 0, "5"));
+  for (const entry of entries) {
+    const full = new TextEncoder().encode(`${top}/${entry.path}`);
+    const content =
+      typeof entry.content === "string"
+        ? new TextEncoder().encode(entry.content)
+        : (entry.content ?? new Uint8Array());
+    let name = full;
+    if (full.length > 100) {
+      const pax = new TextEncoder().encode(paxRecord("path", `${top}/${entry.path}`));
+      parts.push(tarHeader(new TextEncoder().encode("pax_header"), pax.length, "x"));
+      parts.push(padded(pax));
+      name = full.subarray(0, 100);
+    }
+    const type = entry.type ?? "file";
+    const flag = { file: "0", dir: "5", symlink: "2", hardlink: "1" }[type];
+    const size = type === "file" ? content.length : 0;
+    parts.push(tarHeader(name, size, flag, type === "file" || type === "dir" ? "" : "../../etc"));
+    if (size > 0) parts.push(padded(content));
+  }
+  parts.push(new Uint8Array(1024));
+  return new Uint8Array(gzipSync(Buffer.concat(parts)));
+};
+
+/** git's blob id (`git hash-object`), for fake trees. */
+export const fakeBlobSha = (bytes: Uint8Array): string =>
+  createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
 
 /** A throwaway secret for tests (long enough for MIN_WEBHOOK_SECRET_LENGTH). */
 export const TEST_WEBHOOK_SECRET = "test-only-webhook-secret-0123456789abcdef";
@@ -85,6 +167,46 @@ export const organizationPayload = (
     node_id: "MDIzOkludGVncmF0aW9uSW5zdGFsbGF0aW9uNDI0Mg==",
   },
   sender: { id: 5, login: "alice", type: "User" },
+});
+
+/** A documentation-shaped `push` payload, with planted content that must never be kept. */
+export const pushPayload = (
+  options: {
+    installationId?: number;
+    repositoryId?: number;
+    ref?: string;
+    after?: string;
+    deleted?: boolean;
+    defaultBranch?: string;
+  } = {},
+): Record<string, unknown> => ({
+  ref: options.ref ?? "refs/heads/main",
+  before: "b".repeat(40),
+  after: options.after ?? "c".repeat(40),
+  created: false,
+  deleted: options.deleted ?? false,
+  forced: false,
+  compare: "https://github.com/acme/api/compare/bbbbbbb...ccccccc",
+  commits: [
+    {
+      id: options.after ?? "c".repeat(40),
+      message: PLANTED.body,
+      author: { name: "Alice", email: PLANTED.email },
+      added: ["src/new.ts"],
+      removed: [],
+      modified: ["src/a.ts"],
+    },
+  ],
+  head_commit: { id: options.after ?? "c".repeat(40), message: PLANTED.title },
+  pusher: { name: "alice", email: PLANTED.email },
+  repository: {
+    id: options.repositoryId ?? 77,
+    full_name: "acme/api",
+    private: true,
+    default_branch: options.defaultBranch ?? "main",
+  },
+  installation: { id: options.installationId ?? 4242 },
+  sender: { id: 5, login: "alice" },
 });
 
 export const pullRequestPayload = (
@@ -237,7 +359,9 @@ export type FakeRoute =
   | "installations"
   | "org_membership"
   | "review"
-  | "reviews";
+  | "reviews"
+  | "tree"
+  | "blob";
 
 /** A review as the fake holds it (P3-5): the posted payload, verbatim. */
 export interface FakeReview {
@@ -296,6 +420,25 @@ export interface FakeGitHubApi {
    * The diff `compare/{base}...{head}` serves: text, GitHub's 406 "too large", or a JSON 404
    * (commits gone). Without one, a small synthetic diff naming the head is served.
    */
+  /**
+   * P9-1: the files of one commit of a repository (text as UTF-8, bytes as they are), served by
+   * `git/trees/{sha}?recursive=1`, `git/blobs/{sha}` and `tarball/{sha}` (a 302 to a codeload URL
+   * with its own ticket); `branch` points `git/ref/heads/{branch}` at the commit. Symlinks and a
+   * submodule are listed in the tree too, as GitHub does.
+   */
+  putCode(
+    repositoryId: number,
+    commitSha: string,
+    files: Readonly<Record<string, string | Uint8Array>>,
+    options?: {
+      readonly branch?: string;
+      readonly truncated?: boolean;
+      /** The repository's `size` in KiB (default: the files' bytes); null leaves it out. */
+      readonly sizeKb?: number | null;
+    },
+  ): void;
+  /** Archive downloads from the codeload host: whether each one carried an authorization header. */
+  readonly archiveRequests: { authorized: boolean }[];
   putDiff(
     repositoryId: number,
     revision: { baseSha: string; headSha: string },
@@ -374,6 +517,10 @@ const LEGACY: Readonly<Record<FakePermission, string>> = {
   maintain: "write",
   admin: "admin",
 };
+const REF_ROUTE = /^repos\/([^/]+)\/([^/]+)\/git\/ref\/heads\/(.+)$/;
+const TREE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/git\/trees\/([0-9a-f]+)$/;
+const BLOB_ROUTE = /^repos\/([^/]+)\/([^/]+)\/git\/blobs\/([0-9a-f]+)$/;
+const TARBALL_ROUTE = /^repos\/([^/]+)\/([^/]+)\/tarball\/([0-9a-f]+)$/;
 const COMPARE_ROUTE = /^repos\/([^/]+)\/([^/]+)\/compare\/([0-9a-f]+)\.\.\.([0-9a-f]+)$/;
 
 /**
@@ -413,6 +560,12 @@ export const fakeGitHubApi = (options: {
   const repositories = new Map<number, { installationId: number; repo: FakeRepository }>();
   const pulls = new Map<number, Map<number, FakePullRequest>>();
   const diffs = new Map<string, string | Uint8Array | "too_large" | "missing">();
+  const commits = new Map<string, { files: Map<string, Uint8Array>; truncated: boolean }>();
+  const branches = new Map<string, string>();
+  const repositorySizes = new Map<number, number | null>();
+  const blobs = new Map<string, Uint8Array>();
+  const tickets = new Map<string, { repositoryId: number; commitSha: string; top: string }>();
+  const archiveRequests: { authorized: boolean }[] = [];
   const live = new Map<
     string,
     { installationId: number; repositoryIds: Set<number>; expiresAt: number }
@@ -808,6 +961,101 @@ export const fakeGitHubApi = (options: {
       if (role === undefined) return json(404, githubFixture("get-installation.not-found"));
       return new Response(null, { status: 204 });
     }
+    m = REPOSITORY_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("repository");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const size = repositorySizes.get(entry.repo.id) ?? null;
+      return json(200, {
+        ...githubFixture("get-repository"),
+        ...repositoryJson(entry.repo),
+        ...(size === null ? {} : { size }),
+      });
+    }
+    m = REF_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const entry = scoped(group(m, 1), group(m, 2));
+      const branch = group(m, 3).split("/").map(decodeURIComponent).join("/");
+      const sha = entry === undefined ? undefined : branches.get(`${entry.repo.id}:${branch}`);
+      if (sha === undefined) return json(404, githubFixture("get-installation.not-found"));
+      return json(200, {
+        ref: `refs/heads/${branch}`,
+        node_id: "REF_fixture",
+        object: { sha, type: "commit", url: "https://api.github.com/fixture" },
+      });
+    }
+    m = TREE_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("tree");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      const commit = entry === undefined ? undefined : commits.get(`${entry.repo.id}:${m[3]}`);
+      if (commit === undefined) return json(404, githubFixture("get-installation.not-found"));
+      const dirs = new Set<string>();
+      const tree: Record<string, unknown>[] = [];
+      for (const [file, bytes] of commit.files) {
+        const parts = file.split("/");
+        for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+        tree.push({
+          path: file,
+          mode: "100644",
+          type: "blob",
+          sha: fakeBlobSha(bytes),
+          size: bytes.length,
+        });
+      }
+      for (const dir of dirs)
+        tree.push({ path: dir, mode: "040000", type: "tree", sha: "e".repeat(40) });
+      tree.push({
+        path: "link-to-secret",
+        mode: "120000",
+        type: "blob",
+        sha: "f".repeat(40),
+        size: 11,
+      });
+      tree.push({ path: "vendor-submodule", mode: "160000", type: "commit", sha: "9".repeat(40) });
+      return json(200, {
+        sha: m[3],
+        url: "https://api.github.com/fixture",
+        tree,
+        truncated: commit.truncated,
+      });
+    }
+    m = BLOB_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const failure = takeRouteFailure("blob");
+      if (failure !== undefined) return json(failure, { message: "Injected failure" });
+      const entry = scoped(group(m, 1), group(m, 2));
+      const bytes = entry === undefined ? undefined : blobs.get(`${entry.repo.id}:${m[3]}`);
+      if (bytes === undefined) return json(404, githubFixture("get-installation.not-found"));
+      return new Response(Buffer.from(bytes), {
+        status: 200,
+        headers: { "content-type": "application/vnd.github.raw; charset=utf-8" },
+      });
+    }
+    m = TARBALL_ROUTE.exec(path);
+    if (method === "GET" && m !== null) {
+      const entry = scoped(group(m, 1), group(m, 2));
+      const commit = entry === undefined ? undefined : commits.get(`${entry.repo.id}:${m[3]}`);
+      if (entry === undefined || commit === undefined) {
+        return json(404, githubFixture("get-installation.not-found"));
+      }
+      const ticket = randomUUID();
+      const [owner, name] = entry.repo.fullName.split("/") as [string, string];
+      tickets.set(ticket, {
+        repositoryId: entry.repo.id,
+        commitSha: group(m, 3),
+        top: `${owner}-${name}-${group(m, 3).slice(0, 7)}`,
+      });
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: `https://codeload.github.com/${entry.repo.fullName}/legacy.tar.gz/${m[3]}?token=${ticket}`,
+        },
+      });
+    }
     m = COMPARE_ROUTE.exec(path);
     if (method === "GET" && m !== null) {
       const failure = takeRouteFailure("compare");
@@ -838,6 +1086,28 @@ export const fakeGitHubApi = (options: {
     const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
     const method = init?.method ?? "GET";
     const headers = new Headers(init?.headers);
+    if (url.origin === "https://codeload.github.com") {
+      archiveRequests.push({ authorized: headers.has("authorization") });
+      if (init?.redirect !== "error")
+        return json(400, { message: "test: redirects must be refused" });
+      const ticket = tickets.get(url.searchParams.get("token") ?? "");
+      const commit =
+        ticket === undefined
+          ? undefined
+          : commits.get(`${ticket.repositoryId}:${ticket.commitSha}`);
+      if (ticket === undefined || commit === undefined)
+        return new Response("Not Found", { status: 404 });
+      tickets.delete(url.searchParams.get("token") ?? "");
+      const body = tarGz(
+        ticket.top,
+        [...commit.files].map(([path, content]) => ({ path, content })),
+        ticket.commitSha,
+      );
+      return new Response(Buffer.from(body), {
+        status: 200,
+        headers: { "content-type": "application/x-gzip" },
+      });
+    }
     if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) {
       requests.push({ method, path: url.pathname, authorized: false });
       throw new TypeError("fetch failed: unexpected host");
@@ -851,7 +1121,8 @@ export const fakeGitHubApi = (options: {
       ? authorized(headers.get("authorization"))
       : token !== undefined || user !== undefined;
     requests.push({ method, path: url.pathname, authorized: ok });
-    if (init?.redirect !== "error")
+    // Only the archive is fetched with a manual redirect (its target is followed without the key).
+    if (init?.redirect !== "error" && !(init?.redirect === "manual" && TARBALL_ROUTE.test(path)))
       return json(400, { message: "test: redirects must be refused" });
     const failure = INSTALLATION_ROUTE.test(path) ? failures.shift() : undefined;
     if (failure !== undefined) {
@@ -1099,6 +1370,27 @@ export const fakeGitHubApi = (options: {
       const map = pulls.get(repositoryId) ?? new Map<number, FakePullRequest>();
       map.set(pullRequest.number, pullRequest);
       pulls.set(repositoryId, map);
+    },
+    archiveRequests,
+    putCode: (repositoryId, commitSha, files, codeOptions = {}) => {
+      const map = new Map<string, Uint8Array>();
+      for (const [path, content] of Object.entries(files)) {
+        const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
+        map.set(path, bytes);
+        blobs.set(`${repositoryId}:${fakeBlobSha(bytes)}`, bytes);
+      }
+      commits.set(`${repositoryId}:${commitSha}`, {
+        files: map,
+        truncated: codeOptions.truncated === true,
+      });
+      if (codeOptions.branch !== undefined) {
+        branches.set(`${repositoryId}:${codeOptions.branch}`, commitSha);
+      }
+      const bytes = [...map.values()].reduce((n, b) => n + b.byteLength, 0);
+      repositorySizes.set(
+        repositoryId,
+        codeOptions.sizeKb === undefined ? Math.ceil(bytes / 1024) : codeOptions.sizeKb,
+      );
     },
     putDiff: (repositoryId, revision, diff) => {
       diffs.set(`${repositoryId}:${revision.baseSha}...${revision.headSha}`, diff);

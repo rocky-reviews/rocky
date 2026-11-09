@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { nothingStoredYet, type LlmRoles, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
 import { createGitHubForge } from "@rocky-reviews/forge-github";
+import { createTreeSitterChunker } from "@rocky-reviews/indexer";
 import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
@@ -74,6 +75,20 @@ const erasers: OrgErasers = {
   object_storage: nothingStoredYet("object_storage"),
   embeddings: nothingStoredYet("embeddings"),
 };
+// The repository index (P9-1, ADR 0040): only with ROCKY_INDEX_AUTO=on, which the config refuses
+// without an embed role. The grammars load once, here, before anything is claimed.
+const embed = config.llm.roles.embed;
+const index =
+  config.index.auto && embed !== null
+    ? {
+        llm,
+        usageTargets: usageTargetsFor(config.llm),
+        space: { provider: embed.provider, model: embed.model, dimensions: embed.dimensions },
+        chunker: await createTreeSitterChunker(),
+        tokenLimit: config.index.tokenLimit,
+      }
+    : undefined;
+
 const jobs = startJobs({
   db,
   log,
@@ -93,6 +108,7 @@ const jobs = startJobs({
         },
       }
     : {}),
+  ...(index === undefined ? {} : { index }),
   forge:
     config.githubApp === undefined
       ? undefined
@@ -110,6 +126,8 @@ log.info(
     analysisConcurrency: config.analysis.concurrency,
     analysisOrgConcurrency: config.analysis.orgConcurrency,
     tokenLimit: config.analysis.tokenLimit,
+    codeIndex: config.githubApp !== undefined && index !== undefined,
+    indexTokenLimit: config.index.tokenLimit,
   },
   "worker ready",
 );
