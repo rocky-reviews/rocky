@@ -8,13 +8,20 @@ import { expect, type Page, test } from "./test.js";
  * P9-2: the Ask tab in every state at 375/1024/1440 px x light/dark, against the POC's Ask
  * (docs/design/poc/08-ask-*). Baselines in e2e/__screenshots__/, copies in
  * artifacts/screenshots/P9-2/, and `compare/` puts the POC and the app side by side.
+ * P9-3's rate-limit states have no POC: their copies go to artifacts/screenshots/P9-3/ alone.
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
-const OUT = join(ROOT, "artifacts/screenshots/P9-2");
+const OUT = join(ROOT, "artifacts/screenshots");
 const POC = join(ROOT, "docs/design/poc/08-ask");
 
-type State = { id: string; scenario?: string; run: (page: Page) => Promise<void> };
+type State = {
+  id: string;
+  scenario?: string;
+  /** Whose copies these are; only P9-2's states are put beside the POC. */
+  task?: "P9-3";
+  run: (page: Page) => Promise<void>;
+};
 
 const ready = async (page: Page) => {
   await showAskTab(page);
@@ -62,6 +69,26 @@ const STATES: State[] = [
   {
     id: "ask-error",
     scenario: "error",
+    run: async (page) => {
+      await ready(page);
+      await ask(page, "Who calls acceptInvitation?");
+      await page.locator(".chat-a.ask-error").waitFor();
+    },
+  },
+  {
+    id: "ask-rate-limited",
+    scenario: "rate-limited",
+    task: "P9-3",
+    run: async (page) => {
+      await ready(page);
+      await ask(page, "Who calls acceptInvitation?");
+      await page.locator(".chat-a.ask-error").waitFor();
+    },
+  },
+  {
+    id: "ask-org-limited",
+    scenario: "org-rate-limited",
+    task: "P9-3",
     run: async (page) => {
       await ready(page);
       await ask(page, "Who calls acceptInvitation?");
@@ -143,11 +170,14 @@ for (const state of STATES) {
         await expect(page.locator("html")).toHaveAttribute("data-mode", mode);
 
         await expect(page).toHaveScreenshot(`${name}.png`);
-        await mkdir(join(OUT, "compare"), { recursive: true });
-        const app = await page.screenshot({ path: join(OUT, `${name}.png`) });
+        const out = join(OUT, state.task ?? "P9-2");
+        await mkdir(out, { recursive: true });
+        const app = await page.screenshot({ path: join(out, `${name}.png`) });
+        if (state.task !== undefined) return;
+        await mkdir(join(out, "compare"), { recursive: true });
         const poc = await readFile(`${POC}-${size.width}-${mode}.png`);
         await sideBySide(page, poc, app, size, `${size.width} px ${mode}`);
-        await page.screenshot({ path: join(OUT, "compare", `${name}.png`), fullPage: true });
+        await page.screenshot({ path: join(out, "compare", `${name}.png`), fullPage: true });
       });
     }
   }

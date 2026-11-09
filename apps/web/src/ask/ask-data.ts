@@ -41,10 +41,12 @@ export interface Citation {
   readonly url: string;
 }
 
+/** `rate_limited` is the member's own per-minute limit; `org_rate_limited` the org's Ask budget. */
 export type AskProblem =
   | "not_indexed"
   | "indexing"
   | "rate_limited"
+  | "org_rate_limited"
   | "model_unavailable"
   | "answer_failed"
   | "forge_unavailable"
@@ -66,12 +68,21 @@ export type AskReply =
       readonly reason: "no_context" | "model" | "uncited";
       readonly note: string | null;
     }
-  | { readonly kind: "error"; readonly problem: AskProblem };
+  | {
+      readonly kind: "error";
+      readonly problem: AskProblem;
+      /** For the two limit problems only, when the server said how long (P9-3). */
+      readonly retryAfterSeconds?: number;
+    };
 
-/** An answer as the source got it: a status and the body, unchecked. */
+/**
+ * An answer as the source got it: a status and the body, unchecked. `retryAfterSeconds` is
+ * the `retry-after` header of a 429, in seconds, as far as the source could read it.
+ */
 export interface RawAnswer {
   readonly status: number;
   readonly body: unknown;
+  readonly retryAfterSeconds?: number;
 }
 
 /** The port the panel reads through (server, or fixtures in development and tests). */
@@ -86,6 +97,8 @@ export const MAX_SELECTION_CHARS = 4_000;
 const MAX_ANSWER_CHARS = 4_000;
 const MAX_NOTE_CHARS = 4_000;
 const MAX_CITATIONS = 8;
+/** The longest wait a 429 can ask for and still be shown (a day; the server never says more). */
+const MAX_RETRY_AFTER_SECONDS = 86_400;
 
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const GITHUB = "https://github.com";
@@ -184,12 +197,35 @@ const errorOf = (body: unknown): string | null => {
   return typeof error === "string" ? error : null;
 };
 
+const isRetryAfter = (value: unknown): value is number =>
+  typeof value === "number" &&
+  Number.isSafeInteger(value) &&
+  value >= 1 &&
+  value <= MAX_RETRY_AFTER_SECONDS;
+
+/**
+ * A `retry-after` header's value as seconds, or undefined: only the delay-seconds form, a plain
+ * integer from 1 to a day (the HTTP-date form, and anything else, is not read).
+ */
+export const retryAfterFromHeader = (value: string | null): number | undefined => {
+  if (value === null || !/^\d{1,5}$/.test(value)) return undefined;
+  const seconds = Number(value);
+  return isRetryAfter(seconds) ? seconds : undefined;
+};
+
 /** A `POST …/ask` answer as the panel shows it (see the module comment). */
 export const parseAskReply = (pull: PullRef, answer: RawAnswer): AskReply => {
   const fail = (problem: AskProblem): AskReply => ({ kind: "error", problem });
   if (answer.status === 401) return fail("signed_out");
   if (answer.status === 404) return fail("not_found");
-  if (answer.status === 429) return fail("rate_limited");
+  if (answer.status === 429) {
+    // P9-3: the body says whose limit it was; without it (an older server), the member's own.
+    const problem: AskProblem =
+      record(answer.body)?.["limit"] === "org" ? "org_rate_limited" : "rate_limited";
+    return isRetryAfter(answer.retryAfterSeconds)
+      ? { kind: "error", problem, retryAfterSeconds: answer.retryAfterSeconds }
+      : fail(problem);
+  }
   if (answer.status !== 200) {
     const code = errorOf(answer.body);
     return fail(

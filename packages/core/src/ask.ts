@@ -30,6 +30,9 @@ import type {
   StructuredCompletionResult,
 } from "./llm.js";
 
+/** The `ask` role's instructions (in `PROMPT_TEXTS`), for tests of what the wire carries. */
+export { ASK_INSTRUCTIONS };
+
 export const ASK_LIMITS = Object.freeze({
   /** A question longer than this is refused (the panel's box enforces it too). */
   maxQuestionChars: 2_000,

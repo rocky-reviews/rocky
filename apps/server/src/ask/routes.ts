@@ -3,17 +3,20 @@ import {
   AskSpaceError,
   checkAskRequest,
   isLlmCallError,
+  isLlmMeteringError,
   isSameSpace,
   type AskRequest,
   type CodeReader,
   type EmbeddingSpace,
   type LlmRoles,
   type LlmUsageRecord,
+  type OrgId,
   type RepositoryAccessCheck,
 } from "@rocky-reviews/core";
 import {
   codeIndexState,
   loadAskTarget,
+  recordLlmUsage,
   searchCodeChunks,
   type CodeIndexState,
   type CodeSearchHit,
@@ -54,27 +57,32 @@ import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.
  *   404 not_found                               as the PR page (unknown, disabled repository,
  *                                               another org's, GitHub access denied)
  *   409 not_indexed | indexing                  nothing to search yet (as GET says)
- *   429 rate_limited                            the per-member `ask` limit (ADR 0025)
+ *   429 rate_limited                            `limit: "member"` (`ask`, `ask.day`) or
+ *                                               `limit: "org"` (`ask.org`, `ask.org.day`), with
+ *                                               `Retry-After` (ADR 0025, ADR 0042 §3)
  *   502 answer_failed                           the model refused, was cut off or answered
  *                                               invalid output twice (`reason`)
  *   502 model_unavailable                       the provider failed (`retryable`)
  *   502 forge_unavailable                       GitHub did not answer, or not as asked
  *   503 ask_unavailable | access_check_unavailable
  *
- * Order (POST): policy, the per-member limit, the address, the body, the deps that must exist,
- * the row inside `withOrg` (ids only), the P3-6 access check, the index's state, then the flow
- * (`answerQuestion`, packages/core): the question is embedded by the metered embed role, the
- * search runs inside `withOrg` with the org, repository and space filter (`searchCodeChunks`),
- * the hits' lines are read from GitHub on a read-only token for that one repository, revoked
- * after (`excerpt-reader.ts`), and the `ask` role answers. Only citations into lines the model
- * was shown are served; the page builds each link itself, from the repository, `indexedSha` and
- * the citation, never from a URL.
+ * Order (POST): policy, the member's minute and day limits (before anything is read), the
+ * address, the body, the deps that must exist, the row inside `withOrg` (ids only), the P3-6
+ * access check, the index's state, then the org's two budgets (before anything is spent; each
+ * counted atomically, so concurrent questions cannot overshoot), then the flow
+ * (`answerQuestion`, packages/core): the question is embedded by the metered embed
+ * role, the search runs inside `withOrg` with the org, repository and space filter
+ * (`searchCodeChunks`), the hits' lines are read from GitHub on a read-only token for that one
+ * repository, revoked after (`excerpt-reader.ts`), and the `ask` role answers. Only citations
+ * into lines the model was shown are served; the page builds each link itself, from the
+ * repository, `indexedSha` and the citation, never from a URL.
  *
- * Nothing is stored and nothing acts on the answer: it is shown to the person who asked. Usage
- * goes through `meterRoles` (P4-5) to a log sink: the server's database role cannot write
- * `llm_usage` (ADR 0016), so writing it is P9-3's, with the rest of Ask's metering. Logs carry
- * ids, counts and fixed outcomes; never the question, the selection, code, paths, the prompt or
- * the answer.
+ * Nothing is stored and nothing acts on the answer: it is shown to the person who asked. Every
+ * model and embedding call goes through `meterRoles` (P4-5) into `llm_usage`, in its own
+ * transaction per call, with the org, repository and pull request (P9-3, migration 0023), a
+ * failed call's partial usage included; a usage write that fails after its retries fails the
+ * question closed (503), so nothing is spent unmetered. Logs carry ids, counts and fixed
+ * outcomes; never the question, the selection, code, paths, the prompt or the answer.
  */
 
 export const ASK_PATH = "/api/repos/:owner/:repo/pulls/:number/ask";
@@ -91,6 +99,8 @@ export interface AskDeps {
   readonly log: Logger;
   /** Tests: another reader. */
   readonly excerpts?: AskExcerptReader;
+  /** Tests: another usage writer (the default writes `llm_usage` inside `withOrg`). */
+  readonly recordUsage?: (orgId: OrgId, records: readonly LlmUsageRecord[]) => Promise<void>;
 }
 
 export interface AskRoutesDeps {
@@ -174,21 +184,13 @@ class ForgeFailure extends Error {
   }
 }
 
-/** Usage records hold ids, enums and numbers only (ADR 0016 §3); the sink logs them. */
-const usageLine = (record: LlmUsageRecord) => ({
-  callId: record.callId,
-  attempt: record.attempt,
-  role: record.role,
-  provider: record.provider,
-  model: record.model,
-  outcome: record.outcome,
-  errorKind: record.errorKind ?? null,
-  usageStatus: record.usageStatus,
-  tokens: record.tokens,
-  costMicroUsd: record.costMicroUsd,
-  costStatus: record.costStatus,
-  priceVersion: record.priceVersion,
-});
+/**
+ * The limits a question passes, in order (ADR 0042 §3). The member's count every request,
+ * before anything is read; the org's count only questions about to spend (after the body, the
+ * row, the access check and the index state held), so junk cannot eat an org's day.
+ */
+const MEMBER_LIMITS = ["ask", "ask.day"] as const;
+const ORG_LIMITS = ["ask.org", "ask.org.day"] as const;
 
 export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): void => {
   const { db } = deps;
@@ -196,6 +198,12 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
     deps.ask === undefined
       ? undefined
       : (deps.ask.excerpts ?? createAskExcerptReader({ forge: deps.ask.forge }));
+  // Each call's usage in its own tenant transaction (ADR 0016 §4): it survives whatever happens
+  // to the question. Records hold ids, enums and numbers only.
+  const recordUsage =
+    deps.ask?.recordUsage ??
+    ((orgId: OrgId, records: readonly LlmUsageRecord[]) =>
+      db.withOrg(orgId, (tx) => recordLlmUsage(tx, records)));
 
   const log = (
     request: FastifyRequest,
@@ -270,12 +278,15 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
       { bodyLimit: ASK_BODY_LIMIT, config: { policy: requires("ask") } },
       async (request, reply) => {
         const me = callerOf(request);
-        // Before anything is read or spent (ADR 0025): P9-3 owns the limits' tuning and metering.
-        if (
-          app.rateLimits !== undefined &&
-          !(await app.rateLimits.consume(request, reply, "ask", me.memberId))
-        ) {
-          return reply;
+        // Before anything is read (ADR 0025, ADR 0042 §3): the member's minute and day. `consume`
+        // counts and checks in one step, so questions in flight at once cannot overshoot; the
+        // 429 says which limit it was. The limiter logs a refusal once per key and window.
+        const limits = app.rateLimits;
+        if (limits !== undefined) {
+          for (const scope of MEMBER_LIMITS) {
+            if (!(await limits.consume(request, reply, scope, me.memberId, { limit: "member" })))
+              return reply;
+          }
         }
         if (targetOf(request) === null) {
           log(request, "invalid_target", { orgId: me.orgId });
@@ -305,17 +316,22 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
             ? json(reply, 503, { error: "ask_unavailable" })
             : json(reply, 409, { error: index.status });
         }
+        // The question is valid and about to spend: the org's burst and day budgets.
+        if (limits !== undefined) {
+          for (const scope of ORG_LIMITS) {
+            if (!(await limits.consume(request, reply, scope, me.orgId, { limit: "org" })))
+              return reply;
+          }
+        }
         const installationId = row.installationId;
         const started = Date.now();
         let blobs = 0;
         const llm = meterRoles(ask.llm, {
-          sink: {
-            record: async (records) => {
-              ask.log.info({ ask_usage: { ...ids, records: records.map(usageLine) } }, "ask usage");
-            },
-          },
+          sink: { record: (records) => recordUsage(me.orgId, records) },
           targets: ask.usageTargets,
           log: ask.log,
+          repoId: row.repoId,
+          pullRequestId: row.pullRequestId,
         });
         const embedding = llm.embedding();
         if (embedding === undefined) {
@@ -429,6 +445,12 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
           if (isLlmCallError(error)) {
             log(request, "model_failed", { ...ids, kind: error.kind });
             return json(reply, 502, { error: "model_unavailable", retryable: error.retryable });
+          }
+          if (isLlmMeteringError(error)) {
+            // The usage could not be written (it was logged as numbers by the meter): no more
+            // calls are made for this question, and none is made unmetered (fail closed).
+            log(request, "usage_unrecorded", ids);
+            return json(reply, 503, { error: "ask_unavailable" });
           }
           if (error instanceof AskSpaceError) {
             log(request, "space_mismatch", ids);

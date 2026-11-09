@@ -21,6 +21,9 @@ export const RATE_LIMIT_SCOPES = [
   "webhook.ip",
   "webhook.installation",
   "ask",
+  "ask.day",
+  "ask.org",
+  "ask.org.day",
   "diff",
   "diff.org",
 ] as const;
@@ -38,10 +41,17 @@ const MINUTE = 60_000;
  * (10 minutes): a person needs a handful, a brute forcer thousands. The session API is polled by
  * the web app. Webhooks: GitHub delivers from a shared pool of addresses, so the per-address
  * limit is generous and only stops floods; per installation it bounds what one installation
- * (or a leaked webhook secret) can push into the inbox. Ask is per member (P9). The PR diff
- * (H4-3): `diff` counts every request per member (a page loads a diff once); `diff.org` counts
- * only the reads that go to GitHub, per org, since each costs the installation about four
- * calls of its shared hourly quota (ADR 0034 §4, D14: 15 × 4 × 60 = 3,600 calls/h at most).
+ * (or a leaked webhook secret) can push into the inbox. Ask (P9-3, ADR 0042 §3): every
+ * question costs an embedding call, a model call with up to eight excerpts and a GitHub token,
+ * so `ask` is per member (a person types a question in more than six seconds; a loop or a
+ * stolen session does not) with `ask.day` bounding one member's day well below the org's, and
+ * the org has a budget of its own: `ask.org` bounds a burst across its members and
+ * `ask.org.day` what a day may cost, whatever the number of members or sessions. The member
+ * limits count every request; the org budgets only questions about to be answered (fix round,
+ * S2: junk requests must not eat the org's day). The PR diff (H4-3): `diff` counts every request per member (a page loads a diff
+ * once); `diff.org` counts only the reads that go to GitHub, per org, since each costs the
+ * installation about four calls of its shared hourly quota (ADR 0034 §4, D14: 15 × 4 × 60 =
+ * 3,600 calls/h at most).
  */
 export const DEFAULT_RATE_LIMITS: Readonly<Record<RateLimitScope, RateLimitRule>> = {
   "auth.login": { max: 30, windowMs: 10 * MINUTE },
@@ -50,7 +60,10 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<RateLimitScope, RateLimitRule>
   "auth.session": { max: 300, windowMs: MINUTE },
   "webhook.ip": { max: 600, windowMs: MINUTE },
   "webhook.installation": { max: 600, windowMs: MINUTE },
-  ask: { max: 20, windowMs: MINUTE },
+  ask: { max: 10, windowMs: MINUTE },
+  "ask.day": { max: 200, windowMs: 24 * 60 * MINUTE },
+  "ask.org": { max: 60, windowMs: MINUTE },
+  "ask.org.day": { max: 600, windowMs: 24 * 60 * MINUTE },
   diff: { max: 10, windowMs: MINUTE },
   "diff.org": { max: 15, windowMs: MINUTE },
 };
@@ -185,7 +198,8 @@ export interface RateLimits {
   clientKey(request: FastifyRequest): string;
   /**
    * Counts one hit of `key` in `scope`. Within the limit: `true`. Over it: answers 429 with
-   * `Retry-After` and a fixed body and returns `false`; the caller must stop. If the store
+   * `Retry-After` and a fixed body (plus `detail`, fixed words the client can show, such as
+   * which of a route's limits it was) and returns `false`; the caller must stop. If the store
    * fails: 503, `false` (fail closed).
    */
   consume(
@@ -193,6 +207,7 @@ export interface RateLimits {
     reply: FastifyReply,
     scope: RateLimitScope,
     key: string,
+    detail?: Readonly<Record<string, string>>,
   ): Promise<boolean>;
   /**
    * Checks `key` without counting: `true` while the budget is not spent, else the same 429 (or
@@ -271,13 +286,18 @@ export const createRateLimits = (options: {
     );
   };
 
-  const refuse = (reply: FastifyReply, resetAt: number, at: number): false => {
+  const refuse = (
+    reply: FastifyReply,
+    resetAt: number,
+    at: number,
+    detail: Readonly<Record<string, string>> = {},
+  ): false => {
     const retryAfter = Math.max(1, Math.ceil((resetAt - at) / 1000));
     void reply
       .code(429)
       .header("retry-after", String(retryAfter))
       .header("cache-control", "no-store")
-      .send(RATE_LIMITED_BODY);
+      .send({ ...detail, ...RATE_LIMITED_BODY });
     return false;
   };
 
@@ -294,7 +314,7 @@ export const createRateLimits = (options: {
       if (resolved.fallback !== undefined) noteFallback(request, resolved.fallback);
       return addressKey(resolved.address);
     },
-    consume: async (request, reply, scope, key) => {
+    consume: async (request, reply, scope, key, detail) => {
       const rule = options.rules[scope];
       const id = hashed(scope, key);
       const at = now();
@@ -307,7 +327,7 @@ export const createRateLimits = (options: {
       if (hit.count <= rule.max) return true;
       // Once per key and window: a flood does not become a log flood.
       if (hit.count === rule.max + 1) limited(request, scope, id, hit.count);
-      return refuse(reply, hit.resetAt, at);
+      return refuse(reply, hit.resetAt, at, detail);
     },
     allows: async (request, reply, scope, key) => {
       const rule = options.rules[scope];
