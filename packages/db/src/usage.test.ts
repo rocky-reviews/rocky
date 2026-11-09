@@ -191,12 +191,156 @@ describe("recordLlmUsage", () => {
     ).toBeInstanceOf(UsageStoreError);
   });
 
-  it("keeps only the SQLSTATE of a database error (the server login cannot insert)", async () => {
+  it("keeps only the SQLSTATE of a database error (the server login cannot insert analysis usage)", async () => {
     const error = await thrown(server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [record()])));
     expect(error).toBeInstanceOf(UsageStoreError);
     expect((error as UsageStoreError).code).toBe(INSUFFICIENT_PRIVILEGE);
     expect((error as Error).message).toBe("llm usage: the database refused the write");
     expect((error as Error).cause).toBeUndefined();
+  });
+});
+
+/**
+ * P9-3 (migration 0023, ADR 0042 §4): Ask's calls are made by the server, which may now write
+ * `ask` and `embed` records for its tenant, naming the repository and pull request they were
+ * about and never an analysis. Everything else the server could not do before, it still cannot.
+ */
+describe("the server's own usage (Ask)", () => {
+  const ask = (overrides: Partial<LlmUsageRecord> = {}) =>
+    record({
+      role: "ask",
+      model: "claude-sonnet-5-5",
+      repoId: A.repoId,
+      pullRequestId: A.pullRequestId,
+      ...overrides,
+    });
+
+  it("writes ask and embed records with their repository and pull request, as the server login", async () => {
+    const question = ask();
+    const embed = record({
+      role: "embed",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      repoId: A.repoId,
+      pullRequestId: A.pullRequestId,
+      tokens: { ...record().tokens!, outputTokens: 0 },
+      costMicroUsd: 24,
+    });
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [question]));
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [embed]));
+    const rows = await rowsOf(A.orgId, "call_id in ($2, $3)", [question.callId, embed.callId]);
+    expect(rows.map((r) => [r.role, r.analysis_id, r.repo_id, r.pull_request_id])).toEqual([
+      ["ask", null, A.repoId, A.pullRequestId],
+      ["embed", null, A.repoId, A.pullRequestId],
+    ]);
+    // A failed question's partial usage is a record like any other (metering writes it too).
+    const partial = ask({
+      outcome: "error",
+      errorKind: "network",
+      usageStatus: "partial",
+      costMicroUsd: null,
+      costStatus: "billing_unverified",
+    });
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [partial]));
+    expect(await rowsOf(A.orgId, "call_id = $2", [partial.callId])).toMatchObject([
+      { usage_status: "partial", outcome: "error", error_kind: "network", repo_id: A.repoId },
+    ]);
+  });
+
+  it("refuses the server every other role, and any analysis link (policy and column grant)", async () => {
+    for (const role of ["triage", "review", "graph"] as const) {
+      const error = await thrown(
+        server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [ask({ role })])),
+      );
+      expect((error as UsageStoreError).code, role).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+    const linked = await thrown(
+      server.withOrg(A.orgId, (tx) =>
+        recordLlmUsage(tx, [
+          ask({ analysisId: A.analysisId, repoId: undefined, pullRequestId: undefined }),
+        ]),
+      ),
+    );
+    expect((linked as UsageStoreError).code).toBe(INSUFFICIENT_PRIVILEGE);
+    // The worker's grant is unchanged: it still writes analysis usage, and ask usage too.
+    await worker.withOrg(A.orgId, (tx) =>
+      recordLlmUsage(tx, [record({ analysisId: A.analysisId }), ask()]),
+    );
+    // Naming the org explicitly is not in the server's grant either (it is the tenant's default).
+    const explicit = await pgError(
+      server.withOrg(A.orgId, (tx) =>
+        tx.query(
+          `insert into llm_usage (org_id, call_id, attempt, role, provider, model, outcome,
+             usage_status, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens,
+             cache_write_1h_tokens, cost_micro_usd, cost_status, price_version)
+           values ($1, gen_random_uuid(), 0, 'ask', 'anthropic', 'm', 'ok', 'reported',
+             1, 1, 0, 0, 0, 1, 'priced', '2026-10-27')`,
+          [A.orgId],
+        ),
+      ),
+    );
+    expect(explicit.code).toBe(INSUFFICIENT_PRIVILEGE);
+  });
+
+  it("refuses another tenant's repository or pull request, and a pull request without its repository", async () => {
+    const FOREIGN_KEY_VIOLATION = "23503";
+    const foreignRepo = await thrown(
+      server.withOrg(A.orgId, (tx) =>
+        recordLlmUsage(tx, [ask({ repoId: B.repoId, pullRequestId: undefined })]),
+      ),
+    );
+    expect((foreignRepo as UsageStoreError).code).toBe(FOREIGN_KEY_VIOLATION);
+    const foreignPr = await thrown(
+      server.withOrg(A.orgId, (tx) =>
+        recordLlmUsage(tx, [ask({ repoId: A.repoId, pullRequestId: B.pullRequestId })]),
+      ),
+    );
+    expect((foreignPr as UsageStoreError).code).toBe(FOREIGN_KEY_VIOLATION);
+    for (const [label, overrides] of [
+      ["repo id", { repoId: "x" }],
+      ["pull request id", { pullRequestId: "x" }],
+      ["pull request id", { repoId: undefined, pullRequestId: A.pullRequestId }],
+    ] as const) {
+      const error = await thrown(
+        server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [ask(overrides)])),
+      );
+      expect((error as Error).message, label).toBe(`llm usage: invalid ${label}`);
+    }
+  });
+
+  it("stays append-only: a link may only be unlinked, on its own (the foreign keys' SET NULL)", async () => {
+    await server.withOrg(A.orgId, (tx) => recordLlmUsage(tx, [ask()]));
+    for (const db of [server, worker]) {
+      const error = await pgError(
+        db.withOrg(A.orgId, (tx) => tx.query("update llm_usage set repo_id = null")),
+      );
+      expect(error.code).toBe(INSUFFICIENT_PRIVILEGE);
+    }
+    const owner = await pgs.migrator.connect();
+    try {
+      await owner.query("begin");
+      await owner.query("alter table llm_usage no force row level security");
+      for (const sql of [
+        "update llm_usage set repo_id = null, input_tokens = 0 where repo_id is not null",
+        "update llm_usage set pull_request_id = null, role = 'embed' where pull_request_id is not null",
+        `update llm_usage set repo_id = '${B.repoId}' where repo_id = '${A.repoId}'`,
+      ]) {
+        await owner.query("savepoint s");
+        const error = await pgError(owner.query(sql));
+        expect(error.code, sql).toBe(INSUFFICIENT_PRIVILEGE);
+        expect(error.message, sql).toMatch(/append-only/);
+        await owner.query("rollback to savepoint s");
+      }
+      // Unlinking alone passes the trigger: what a SET NULL cascade does.
+      const unlinked = await owner.query(
+        "update llm_usage set pull_request_id = null, repo_id = null where repo_id = $1",
+        [A.repoId],
+      );
+      expect(unlinked.rowCount).toBeGreaterThan(0);
+      await owner.query("rollback");
+    } finally {
+      owner.release();
+    }
   });
 });
 

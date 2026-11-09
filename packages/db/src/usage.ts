@@ -7,14 +7,15 @@ import {
   type LlmUsageRecord,
 } from "@rocky-reviews/core";
 import type { TenantTx } from "./client.js";
-import { llmUsage } from "./schema.js";
 
 /**
  * The llm_usage writer (P4-5, migration 0011, ADR 0016). Records are checked against the same
  * rules the table's CHECKs enforce, before any SQL, so a bad record fails with a fixed message
  * instead of a driver error that could echo values. Runs inside `withOrg` (the row's org is the
- * transaction's tenant) as the worker login: the server can read usage but not write it.
- * Idempotent per (call id, attempt): a write retried after an unclear failure stores nothing new.
+ * transaction's tenant). The worker login writes any record; the server login (P9-3, migration
+ * 0023) may write `ask` and `embed` records with no analysis link, for the repository and pull
+ * request the question was about. Idempotent per (call id, attempt): a write retried after an
+ * unclear failure stores nothing new.
  */
 
 /** A call has at most this many attempts (a fallback chain); a write never holds more. */
@@ -54,6 +55,13 @@ const check = (r: LlmUsageRecord): void => {
   if (typeof r.model !== "string" || !MODEL.test(r.model)) invalid("model");
   if (r.analysisId !== undefined && (typeof r.analysisId !== "string" || !UUID.test(r.analysisId)))
     invalid("analysis id");
+  if (r.repoId !== undefined && (typeof r.repoId !== "string" || !UUID.test(r.repoId)))
+    invalid("repo id");
+  if (
+    r.pullRequestId !== undefined &&
+    (typeof r.pullRequestId !== "string" || !UUID.test(r.pullRequestId) || r.repoId === undefined)
+  )
+    invalid("pull request id");
   if (!oneOf(LLM_USAGE_OUTCOMES, r.outcome)) invalid("outcome");
   if (r.errorKind !== undefined && (r.outcome !== "error" || !isLlmErrorKind(r.errorKind)))
     invalid("error kind");
@@ -95,30 +103,64 @@ export const recordLlmUsage = async (
   if (records.length === 0) return;
   if (records.length > LLM_USAGE_MAX_RECORDS) invalid("batch size");
   for (const record of records) check(record);
-  const rows = records.map((r) => ({
-    callId: r.callId,
-    attempt: r.attempt,
-    analysisId: r.analysisId ?? null,
-    role: r.role,
-    provider: r.provider,
-    model: r.model,
-    outcome: r.outcome,
-    errorKind: r.errorKind ?? null,
-    usageStatus: r.usageStatus,
-    inputTokens: r.tokens?.inputTokens ?? null,
-    outputTokens: r.tokens?.outputTokens ?? null,
-    cacheReadTokens: r.tokens?.cacheReadTokens ?? null,
-    cacheWrite5mTokens: r.tokens?.cacheWrite5mTokens ?? null,
-    cacheWrite1hTokens: r.tokens?.cacheWrite1hTokens ?? null,
-    costMicroUsd: r.costMicroUsd,
-    costStatus: r.costStatus,
-    priceVersion: r.priceVersion,
-  }));
+  // The INSERT names only the columns the batch carries. The server's grant (migration 0023) is
+  // column-scoped and a column written as NULL or DEFAULT still needs the privilege, which
+  // rules out the query builder (it names every column of the table): a link column no record
+  // names is left out, so an Ask write never mentions `analysis_id`.
+  const links = [
+    ["analysis_id", (r: LlmUsageRecord) => r.analysisId],
+    ["repo_id", (r: LlmUsageRecord) => r.repoId],
+    ["pull_request_id", (r: LlmUsageRecord) => r.pullRequestId],
+  ] as const;
+  const named = links.filter(([, of]) => records.some((r) => of(r) !== undefined));
+  const columns = [
+    "call_id",
+    "attempt",
+    "role",
+    "provider",
+    "model",
+    "outcome",
+    "error_kind",
+    "usage_status",
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_5m_tokens",
+    "cache_write_1h_tokens",
+    "cost_micro_usd",
+    "cost_status",
+    "price_version",
+    ...named.map(([column]) => column),
+  ];
+  const values: unknown[] = [];
+  const rows = records.map((r) => {
+    const row: unknown[] = [
+      r.callId,
+      r.attempt,
+      r.role,
+      r.provider,
+      r.model,
+      r.outcome,
+      r.errorKind ?? null,
+      r.usageStatus,
+      r.tokens?.inputTokens ?? null,
+      r.tokens?.outputTokens ?? null,
+      r.tokens?.cacheReadTokens ?? null,
+      r.tokens?.cacheWrite5mTokens ?? null,
+      r.tokens?.cacheWrite1hTokens ?? null,
+      r.costMicroUsd,
+      r.costStatus,
+      r.priceVersion,
+      ...named.map(([, of]) => of(r) ?? null),
+    ];
+    return `(${row.map((value) => `$${values.push(value)}`).join(", ")})`;
+  });
   try {
-    await tx.db
-      .insert(llmUsage)
-      .values(rows)
-      .onConflictDoNothing({ target: [llmUsage.orgId, llmUsage.callId, llmUsage.attempt] });
+    await tx.query(
+      `insert into llm_usage (${columns.join(", ")}) values ${rows.join(", ")}
+       on conflict (org_id, call_id, attempt) do nothing`,
+      values,
+    );
   } catch (error) {
     // Driver text can quote the row; only the SQLSTATE leaves.
     throw new UsageStoreError("llm usage: the database refused the write", sqlstateOf(error));

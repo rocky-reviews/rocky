@@ -112,7 +112,8 @@ const APP_TABLE_PRIVILEGES: Record<string, string[]> = {
   "public.embeddings": DML,
   "public.findings_state": DML,
   "public.jobs": DML,
-  // Append-only and written by the worker (P4-5, migration 0011): the server only reads it.
+  // Append-only (P4-5, migration 0011). The worker inserts through rocky_worker; the server
+  // reads, and inserts its Ask rows through the column grant below (P9-3, migration 0023).
   "public.llm_usage": ["SELECT"],
   "public.llm_usage_id_seq": [],
   "public.members": DML,
@@ -170,6 +171,32 @@ const SESSIONS_COLUMN_PRIVILEGES = [
   "rocky_app:UPDATE:revoked_reason",
 ];
 const USERS_COLUMN_PRIVILEGES = ["rocky_app:UPDATE:last_login_at"];
+
+/**
+ * P9-3 (migration 0023, ADR 0042 §4): the server records Ask's own calls. Every column a usage
+ * row needs except `org_id` (the tenant's default; FORCE RLS checks it) and `analysis_id` (the
+ * server makes no analysis call); a RESTRICTIVE policy keeps it to the `ask` and `embed` roles.
+ */
+const LLM_USAGE_COLUMN_PRIVILEGES = [
+  "rocky_app:INSERT:attempt",
+  "rocky_app:INSERT:cache_read_tokens",
+  "rocky_app:INSERT:cache_write_1h_tokens",
+  "rocky_app:INSERT:cache_write_5m_tokens",
+  "rocky_app:INSERT:call_id",
+  "rocky_app:INSERT:cost_micro_usd",
+  "rocky_app:INSERT:cost_status",
+  "rocky_app:INSERT:error_kind",
+  "rocky_app:INSERT:input_tokens",
+  "rocky_app:INSERT:model",
+  "rocky_app:INSERT:outcome",
+  "rocky_app:INSERT:output_tokens",
+  "rocky_app:INSERT:price_version",
+  "rocky_app:INSERT:provider",
+  "rocky_app:INSERT:pull_request_id",
+  "rocky_app:INSERT:repo_id",
+  "rocky_app:INSERT:role",
+  "rocky_app:INSERT:usage_status",
+];
 
 /**
  * The analysis claim (P4-6, migration 0012) reads and updates exactly the queue columns of
@@ -396,11 +423,13 @@ describe("every table in the database", () => {
         t.name,
       ).toEqual(["ALL"]);
       // orgs additionally carries a restrictive "never" DELETE policy for the app role (final
-      // review #2): the tenant root is only removed through retention.delete_org.
+      // review #2): the tenant root is only removed through retention.delete_org. llm_usage
+      // carries a restrictive INSERT policy (P9-3, migration 0023): a login without
+      // rocky_worker inserts only `ask` and `embed` rows with no analysis link.
       expect(
         forApp.filter((p) => p.permissive === "RESTRICTIVE").map((p) => p.cmd),
         t.name,
-      ).toEqual(t.name === "orgs" ? ["DELETE"] : []);
+      ).toEqual(t.name === "orgs" ? ["DELETE"] : t.name === "llm_usage" ? ["INSERT"] : []);
       // No policy grants the app role anything beyond the tenant policy, and PUBLIC gets none.
       for (const p of policies.rows) expect(p.roles, t.name).not.toContain("public");
     }
@@ -1157,6 +1186,7 @@ describe("other catalog objects (review #8)", () => {
           "public.orgs",
           "public.analyses",
           "public.code_indexes",
+          "public.llm_usage",
           "app.sessions",
           "app.users",
         ].includes(r.name)
@@ -1177,6 +1207,7 @@ describe("other catalog objects (review #8)", () => {
     expect(await columnGrants("public.orgs")).toEqual(ORGS_COLUMN_PRIVILEGES);
     expect(await columnGrants("public.analyses")).toEqual(ANALYSES_COLUMN_PRIVILEGES);
     expect(await columnGrants("public.code_indexes")).toEqual(CODE_INDEXES_COLUMN_PRIVILEGES);
+    expect(await columnGrants("public.llm_usage")).toEqual(LLM_USAGE_COLUMN_PRIVILEGES);
     expect(await columnGrants("app.sessions")).toEqual(SESSIONS_COLUMN_PRIVILEGES);
     expect(await columnGrants("app.users")).toEqual(USERS_COLUMN_PRIVILEGES);
   });
