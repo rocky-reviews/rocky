@@ -3,10 +3,11 @@
  * same origin, with the session cookie. A question carries the session's CSRF token
  * (`x-rocky-csrf`, ADR 0020 §5), read once from `/api/session` and kept in memory only. Answers
  * are handed over unchecked, with their status, for `ask-data.ts` to read; a body that is not
- * JSON is `undefined`. Nothing is cached (the server answers `no-store`).
+ * JSON is `undefined`. A 429's `retry-after` header goes with it when it is a plain number of
+ * seconds (P9-3). Nothing is cached (the server answers `no-store`).
  */
 import { CSRF_HEADER, fetchSession } from "../session.js";
-import { askPath, type AskSource, type RawAnswer } from "./ask-data.js";
+import { askPath, retryAfterFromHeader, type AskSource, type RawAnswer } from "./ask-data.js";
 
 type Fetch = typeof fetch;
 
@@ -17,7 +18,10 @@ const answerOf = async (response: Response): Promise<RawAnswer> => {
   } catch {
     body = undefined;
   }
-  return { status: response.status, body };
+  const retryAfterSeconds = retryAfterFromHeader(response.headers.get("retry-after"));
+  return retryAfterSeconds === undefined
+    ? { status: response.status, body }
+    : { status: response.status, body, retryAfterSeconds };
 };
 
 export const createHttpAskSource = (

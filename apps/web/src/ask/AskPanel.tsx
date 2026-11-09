@@ -4,7 +4,8 @@
  * `file:line` citations that open the cited lines on GitHub at the indexed commit.
  *
  * States: the index's (checking, not indexed, indexing, off, could not be checked), and per
- * question: "Reading the code…", the answer with its citations, no good answer, an error. The
+ * question: "Reading the code…", the answer with its citations, no good answer, an error (a
+ * limit, P9-3, says whose it is and how long to wait, with Try again like any error). The
  * answer is model text: shown as text with inline code and bold only (`InlineText`), never as
  * HTML or links; the only links are the citations, built by `citationUrl` from checked parts.
  * Nothing here acts on an answer. Questions and answers live in this page only (nothing is
@@ -63,6 +64,7 @@ const PROBLEM_TEXT: Readonly<Record<AskProblem, string>> = {
   not_indexed: "This repository isn’t indexed yet, so Rocky can’t read its code to answer.",
   indexing: "Rocky is still indexing this repository. Ask again once the index is ready.",
   rate_limited: "You’ve asked a lot in the last minute. Wait a moment, then ask again.",
+  org_rate_limited: "Your organisation has reached its Ask limit for now. Try again later.",
   model_unavailable: "The AI model didn’t answer. Try again.",
   answer_failed: "The AI model’s answer couldn’t be used. Try asking another way.",
   forge_unavailable: "GitHub didn’t answer while Rocky read the code. Try again.",
@@ -71,6 +73,31 @@ const PROBLEM_TEXT: Readonly<Record<AskProblem, string>> = {
   not_found: "This pull request isn’t in Rocky, or you can’t read its repository on GitHub.",
   signed_out: "Your session ended. Reload the page and sign in to ask.",
   failed: "Something went wrong while asking. Try again.",
+};
+
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+
+/**
+ * P9-3: a limit's message, with the wait when the server said how long. The member's own limit
+ * is a minute's, so its wait is in seconds; the org's budget can be a day's, so its wait is
+ * rounded to seconds under 90 s, minutes up to 90 minutes, hours above. No countdown: the text
+ * is what the server said when it answered.
+ */
+const problemText = (reply: Extract<AskReply, { kind: "error" }>): string => {
+  const wait = reply.retryAfterSeconds;
+  if (wait === undefined) return PROBLEM_TEXT[reply.problem];
+  if (reply.problem === "rate_limited")
+    return `You’ve asked a lot in the last minute. Wait ${plural(wait, "second")}, then ask again.`;
+  if (reply.problem === "org_rate_limited") {
+    const about =
+      wait < 90
+        ? plural(wait, "second")
+        : wait <= 90 * 60
+          ? plural(Math.round(wait / 60), "minute")
+          : plural(Math.round(wait / 3600), "hour");
+    return `Your organisation has reached its Ask limit for now. Try again in about ${about}.`;
+  }
+  return PROBLEM_TEXT[reply.problem];
 };
 
 const NO_ANSWER_TEXT = {
@@ -115,7 +142,8 @@ const SelectionChip = ({
   </span>
 );
 
-const Reply = ({
+/** One turn's answer side (exported for the unit tests of its fixed texts). */
+export const Reply = ({
   reply,
   retryDisabled,
   onRetry,
@@ -165,7 +193,7 @@ const Reply = ({
     case "error":
       return (
         <div className="chat-a ask-error" role="alert">
-          <p className="ask-text">{PROBLEM_TEXT[reply.problem]}</p>
+          <p className="ask-text">{problemText(reply)}</p>
           {reply.problem !== "signed_out" &&
             reply.problem !== "not_found" &&
             reply.problem !== "invalid_question" && (

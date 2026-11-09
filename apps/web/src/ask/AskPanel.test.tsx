@@ -6,12 +6,13 @@ import { ReviewContext } from "../drafts/ReviewProvider.js";
 import { reviewWith } from "../drafts/testing.js";
 import { RightPanelContent, type PanelTab } from "../shell/RightPanel.js";
 import { createFixtureAskSource } from "./ask-fixture-source.js";
-import type { AskSelection } from "./ask-data.js";
+import type { AskReply, AskSelection } from "./ask-data.js";
+import { Reply } from "./AskPanel.js";
 
 /**
  * P9-2: the right panel's tabs (POC "Review · n" and "✦ Ask") and the Ask tab's first render.
  * Its interactions (asking, citations, `/` with a selection, every state) are in
- * `e2e/ask.e2e.spec.ts`.
+ * `e2e/ask.e2e.spec.ts`. P9-3: the two rate-limit messages, with the wait when known.
  */
 
 const parsed = parseAnalysisDocument(pr847);
@@ -84,5 +85,55 @@ describe("the right panel's tabs", () => {
     });
     expect(text(html)).toContain("With the selected code from src/auth/invitations.ts:28–31");
     expect(html).toContain('aria-label="Remove the selected code"');
+  });
+});
+
+describe("a rate limit's message (P9-3)", () => {
+  const error = (reply: Extract<AskReply, { kind: "error" }>) =>
+    renderToStaticMarkup(<Reply reply={reply} retryDisabled={false} onRetry={() => undefined} />);
+
+  it("the member's own limit: an alert with the wait in seconds, and Try again", () => {
+    const html = error({ kind: "error", problem: "rate_limited", retryAfterSeconds: 42 });
+    expect(html).toContain('class="chat-a ask-error" role="alert"');
+    expect(text(html)).toContain(
+      "You’ve asked a lot in the last minute. Wait 42 seconds, then ask again.",
+    );
+    expect(text(html)).toContain("Try again");
+    expect(text(error({ kind: "error", problem: "rate_limited", retryAfterSeconds: 1 }))).toContain(
+      "Wait 1 second, then ask again.",
+    );
+    expect(text(error({ kind: "error", problem: "rate_limited" }))).toContain(
+      "You’ve asked a lot in the last minute. Wait a moment, then ask again.",
+    );
+  });
+
+  it("the organisation's budget: says so, with the wait in seconds, minutes or hours", () => {
+    const org = (retryAfterSeconds?: number) =>
+      text(
+        error(
+          retryAfterSeconds === undefined
+            ? { kind: "error", problem: "org_rate_limited" }
+            : { kind: "error", problem: "org_rate_limited", retryAfterSeconds },
+        ),
+      );
+    const html = error({ kind: "error", problem: "org_rate_limited", retryAfterSeconds: 1800 });
+    expect(html).toContain('class="chat-a ask-error" role="alert"');
+    expect(text(html)).toContain(
+      "Your organisation has reached its Ask limit for now. Try again in about 30 minutes.",
+    );
+    expect(text(html)).toContain("Try again");
+    expect(org(45)).toContain("Try again in about 45 seconds.");
+    expect(org(89)).toContain("Try again in about 89 seconds.");
+    expect(org(90)).toContain("Try again in about 2 minutes.");
+    expect(org(100)).toContain("Try again in about 2 minutes.");
+    expect(org(60)).toContain("Try again in about 60 seconds.");
+    expect(org(5400)).toContain("Try again in about 90 minutes.");
+    expect(org(5401)).toContain("Try again in about 2 hours.");
+    expect(org(3601)).toContain("Try again in about 60 minutes.");
+    expect(org(9000)).toContain("Try again in about 3 hours.");
+    expect(org(86_400)).toContain("Try again in about 24 hours.");
+    expect(org()).toContain(
+      "Your organisation has reached its Ask limit for now. Try again later.",
+    );
   });
 });

@@ -188,6 +188,35 @@ test.describe("every state says what it is", () => {
     await expect(page.locator(".chat-a.ask-error")).toHaveCount(1);
   });
 
+  // P9-3: a 429 says whose limit it was and how long to wait; Try again asks again regardless.
+  test("the member's limit: an alert with the wait in seconds", async ({ page }) => {
+    await openAsk(page, "rate-limited");
+    await showAskTab(page);
+    await ask(page, "Who calls acceptInvitation?");
+    const alert = page.locator(".chat-a.ask-error");
+    await expect(alert).toHaveAttribute("role", "alert");
+    await expect(alert).toContainText(
+      "You’ve asked a lot in the last minute. Wait 42 seconds, then ask again.",
+    );
+  });
+
+  test("the org's limit: an alert with the wait, and Try again asks again", async ({ page }) => {
+    await openAsk(page, "org-rate-limited");
+    await showAskTab(page);
+    await ask(page, "Who calls acceptInvitation?");
+    const alert = page.locator(".chat-a.ask-error");
+    await expect(alert).toHaveAttribute("role", "alert");
+    await expect(alert).toContainText(
+      "Your organisation has reached its Ask limit for now. Try again in about 30 minutes.",
+    );
+    await alert.getByRole("button", { name: "Try again" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Reading the code" })).toBeVisible();
+    // Asked again too early: the same state, once, and the question is still there.
+    await expect(page.locator(".chat-a.ask-error")).toHaveCount(1);
+    await expect(page.locator(".chat-a.ask-error")).toContainText("about 30 minutes");
+    await expect(page.locator(".chat-q bdi")).toHaveText(["Who calls acceptInvitation?"]);
+  });
+
   for (const size of WIDTHS) {
     for (const mode of MODES) {
       test(`axe: no serious issues in the Ask states at ${size.width} px ${mode}`, async ({
@@ -197,7 +226,14 @@ test.describe("every state says what it is", () => {
         await page.setViewportSize(size);
         await page.emulateMedia({ colorScheme: mode });
         const found: Record<string, string[]> = {};
-        for (const scenario of ["ready", "not-indexed", "no-answer", "error"]) {
+        for (const scenario of [
+          "ready",
+          "not-indexed",
+          "no-answer",
+          "error",
+          "rate-limited",
+          "org-rate-limited",
+        ]) {
           await openAsk(page, scenario);
           await showAskTab(page);
           if (scenario !== "not-indexed") {
