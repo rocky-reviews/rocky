@@ -45,7 +45,11 @@ export interface ClaudeMessagesClient {
     readonly messages: {
       stream(
         body: BetaMessageStreamParams,
-        options?: { signal?: AbortSignal | undefined },
+        options?: {
+          signal?: AbortSignal | undefined;
+          /** Per-request headers; the SDK merges them after its own. */
+          headers?: Readonly<Record<string, string>> | undefined;
+        },
       ): ClaudeMessageStream;
     };
   };
@@ -68,6 +72,12 @@ export interface ClaudePlatform {
   readonly client: (fetch: typeof globalThis.fetch) => Promise<ClaudeMessagesClient>;
   /** Server-side refusal fallbacks for this canonical model (Anthropic API only; ADR 0013 §1). */
   readonly serverFallbacks: (model: string) => boolean;
+  /**
+   * An `anthropic-version` other than the SDK's default (`2026-10-21`) for this canonical model,
+   * or undefined for the default; sent as a per-request header. Bedrock and Vertex set one: each
+   * keeps the pre-4.7 models on its previous wire version (ADR 0013, amendment "1.x SDKs").
+   */
+  readonly apiVersion?: (model: string) => string | undefined;
 }
 
 /** These take only `budget_tokens` thinking; every other catalogued model takes adaptive. */
@@ -382,6 +392,9 @@ export const claudeProvider = (
       const schema = promptSchema(call.output);
       const prompt = buildPrompt(call, nonce, schema === undefined ? {} : { schema });
       const params = requestFor(call, prompt, platform);
+      const apiVersion = platform.apiVersion?.(call.model);
+      const headers =
+        apiVersion === undefined ? {} : { headers: { "anthropic-version": apiVersion } };
       if (cancelledBy(call.signal)) throw new LlmCallError("cancelled");
       // The SDK's `timeout` stops once headers arrive, and covers neither credential lookups nor
       // its own auth middleware; this deadline covers the whole call (T9, review round 2 S1).
@@ -403,7 +416,7 @@ export const claudeProvider = (
       };
       const exchange = async (): Promise<BetaMessage> => {
         const client = await platform.client(cappedFetch(baseFetch, cap, budget));
-        const stream = client.beta.messages.stream(params, { signal });
+        const stream = client.beta.messages.stream(params, { signal, ...headers });
         stream.on("streamEvent", (event) => {
           started = true;
           reported = reportedUsage(reported, event);

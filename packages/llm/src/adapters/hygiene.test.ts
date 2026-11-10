@@ -144,8 +144,11 @@ beforeEach(() => {
       consoleCalls.push(args);
     });
   }
-  // A debugging operator turns SDK logging on; the adapters keep it off regardless.
+  // A debugging operator turns SDK logging and trace content capture on; the adapters keep both
+  // off regardless (`logLevel: "off"`, `openTelemetry: false`).
   vi.stubEnv("ANTHROPIC_LOG", "debug");
+  vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY", "true");
+  vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content");
   vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
 });
 afterEach(() => {
