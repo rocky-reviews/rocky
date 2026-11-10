@@ -4,6 +4,8 @@ coverage/
 .env
 .env.*
 !.env.example
+# The self-host application env file (deploy/docker-compose.yml); the example is tracked.
+deploy/rocky.env
 artifacts/
 test-results/
 playwright-report/

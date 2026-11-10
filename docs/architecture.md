@@ -37,6 +37,10 @@ Decisions behind this page:
                                  Object storage (R2): renders, exports
 ```
 
+Self-hosting runs the same two processes from distroless, non-root, read-only container images
+(`deploy/Dockerfile`: `server`, which also serves the built web app, `worker`, and a one-shot
+`migrate` step as the table owner) with `deploy/docker-compose.yml` (ADR 0043).
+
 ## Code layout and dependency direction
 
 ```

@@ -8,6 +8,7 @@ import { createLogger } from "@rocky-reviews/log";
 import pg from "pg";
 import { unitKeySaltFor } from "./analysis.js";
 import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
+import { heartbeatFileFromEnv, startHeartbeat } from "./heartbeat.js";
 import { startJobs } from "./jobs.js";
 
 const log = createLogger("worker");
@@ -19,9 +20,12 @@ const errorCode = (error: unknown): string => {
 };
 
 let config: WorkerConfig;
+let heartbeatFile: string | undefined;
 try {
   // Also removes GITHUB_APP_PRIVATE_KEY from process.env once parsed (L6).
   config = loadWorkerConfig(process.env);
+  // The container healthcheck's liveness file (P10-1, ADR 0043); unset in development.
+  heartbeatFile = heartbeatFileFromEnv(process.env);
 } catch (error) {
   // Fail closed: no worker without its own login, or (in production) without app credentials.
   log.fatal(
@@ -131,11 +135,15 @@ log.info(
   },
   "worker ready",
 );
+// Only once the lanes run: the healthcheck must not report a worker that claims nothing.
+const heartbeat =
+  heartbeatFile === undefined ? undefined : startHeartbeat({ file: heartbeatFile, log });
 
 let shuttingDown: Promise<void> | undefined;
 const shutdown = (): Promise<void> => {
   shuttingDown ??= (async () => {
     let code = 0;
+    heartbeat?.stop();
     try {
       await jobs.stop();
       await pool.end();

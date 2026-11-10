@@ -5,6 +5,7 @@
     "packages/*/src",
     "ee/src",
     "scripts",
+    "deploy",
     "*.config.ts",
     "packages/*/scripts"
   ],

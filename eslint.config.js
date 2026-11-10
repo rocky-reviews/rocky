@@ -255,7 +255,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["scripts/**/*.{ts,mjs}", "packages/*/scripts/**/*.ts"],
+    files: ["scripts/**/*.{ts,mjs}", "packages/*/scripts/**/*.ts", "deploy/**/*.mjs"],
     rules: { "no-console": "off" },
   },
   {
