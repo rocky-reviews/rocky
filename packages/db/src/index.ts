@@ -149,6 +149,7 @@ export {
   MEMORY_UNUSED_MIN_RETENTION_DAYS,
   retentionFromEnv,
   RETENTION_CATEGORIES,
+  RETENTION_ENV_VARS,
   runRetention,
   setRetentionSettings,
   validateRetention,
