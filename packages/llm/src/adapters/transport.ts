@@ -46,7 +46,8 @@ const SILENT_LOGGER = { error: silent, warn: silent, info: silent, debug: silent
 /**
  * Options every Claude SDK client gets (threats T1–T3). Each one is set explicitly so the
  * environment cannot change it: `ANTHROPIC_LOG` cannot turn on logging, OpenTelemetry content
- * capture cannot copy prompts into traces, and no redirect can carry `x-api-key` to another host.
+ * capture cannot copy prompts into traces, no redirect can carry the key to another host, and
+ * `ANTHROPIC_WEBHOOK_SIGNING_KEY` stays unread (Rocky verifies no Anthropic webhooks).
  */
 export const hardenedClientOptions = (
   transport: AdapterTransport,
@@ -56,6 +57,7 @@ export const hardenedClientOptions = (
     logLevel: "off",
     logger: SILENT_LOGGER,
     openTelemetry: false,
+    webhookKey: null,
     fetchOptions: { redirect: "error" },
     maxRetries: transport.maxRetries ?? DEFAULT_MAX_RETRIES,
     timeout: transport.timeoutMs ?? DEFAULT_TIMEOUT_MS,
