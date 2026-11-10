@@ -2,8 +2,8 @@
 
 Responses used by the provider contract tests (P4-2, ADR 0013). They are **not recorded**. They
 are **documentation-shaped**: they follow the wire shapes the providers document, as given by the
-`claude-api` skill (cached 2026-10-06) and the installed SDK types (`@anthropic-ai/sdk` 0.135.0),
-with synthetic values:
+`claude-api` skill (cached 2026-10-06) and the installed SDK types (`@anthropic-ai/sdk` 0.135.0,
+unchanged for the response shapes in 1.3.0), with synthetic values:
 
 - message ids `msg_01Fixture…`;
 - request id `req_fixture…`;
