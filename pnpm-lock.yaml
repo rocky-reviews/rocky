@@ -304,8 +304,8 @@ importers:
         specifier: 0.6.0
         version: 0.6.0(zod@4.6.7)
       '@anthropic-ai/sdk':
-        specifier: 0.135.0
-        version: 0.135.0(zod@4.6.7)
+        specifier: 1.4.0
+        version: 1.4.0(zod@4.6.7)
       '@anthropic-ai/vertex-sdk':
         specifier: 0.21.0
         version: 0.21.0(zod@4.6.7)
@@ -372,6 +372,15 @@ packages:
 
   '@anthropic-ai/sdk@0.135.0':
     resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@anthropic-ai/sdk@1.4.0':
+    resolution: {integrity: sha512-tyuibnhQL57kLOx5oomY4Ld7jOVOPNC5v3IiyRtR3l+Friv66tI4VbuZYF2NMel/T0WMuQMBFOMKDBUbUh8gPA==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -2884,7 +2893,15 @@ snapshots:
 
   '@anthropic-ai/sdk@0.135.0(zod@4.6.7)':
     dependencies:
-      '@opentelemetry/api': 1.9.1
+      '@opentelemetry/api': 1.10.0
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.1.1
+    optionalDependencies:
+      zod: 4.6.7
+
+  '@anthropic-ai/sdk@1.4.0(zod@4.6.7)':
+    dependencies:
+      '@opentelemetry/api': 1.10.0
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
