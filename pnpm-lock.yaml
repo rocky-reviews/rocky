@@ -301,8 +301,8 @@ importers:
         specifier: 0.35.0
         version: 0.35.0(zod@4.6.7)
       '@anthropic-ai/foundry-sdk':
-        specifier: 0.6.0
-        version: 0.6.0(zod@4.6.7)
+        specifier: 1.1.1
+        version: 1.1.1(zod@4.6.7)
       '@anthropic-ai/sdk':
         specifier: 0.135.0
         version: 0.135.0(zod@4.6.7)
@@ -367,11 +367,20 @@ packages:
   '@anthropic-ai/bedrock-sdk@0.35.0':
     resolution: {integrity: sha512-FZi3OOZagQWUWYd2vzqJEw3nPFJn1VyTxoCy608jjUEWWATubOrT9OSf2mWrGauu/j1kLMZlk+MPuAxp74k+8w==}
 
-  '@anthropic-ai/foundry-sdk@0.6.0':
-    resolution: {integrity: sha512-6f3kUuZT9aAaAkdJq4wZRKd2KgVaOcWkbY6KwK0Z86mfn3LWJI86ZVWZhh5CQZyg9VC3T+8jJk4vpXIth6bqUg==}
+  '@anthropic-ai/foundry-sdk@1.1.1':
+    resolution: {integrity: sha512-GgNBIjm4RkcaKaxynU8OrE/HGCpst966L3hq6rQ9GhtJ+sPVORq9f3GuKieZ4++kI3aEJ/IYqiQ1w0Zs8ijJQw==}
 
   '@anthropic-ai/sdk@0.135.0':
     resolution: {integrity: sha512-WWrdL57JhU5KoynpTjt9GXK6k7ud9nPw2uw/Trn+oBXh6s0KpjhAccWZm2Qxw08ARYG1UDQj5iC+JO42j1rt/g==}
+    hasBin: true
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      zod:
+        optional: true
+
+  '@anthropic-ai/sdk@1.4.0':
+    resolution: {integrity: sha512-tyuibnhQL57kLOx5oomY4Ld7jOVOPNC5v3IiyRtR3l+Friv66tI4VbuZYF2NMel/T0WMuQMBFOMKDBUbUh8gPA==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -2875,16 +2884,24 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@anthropic-ai/foundry-sdk@0.6.0(zod@4.6.7)':
+  '@anthropic-ai/foundry-sdk@1.1.1(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 0.135.0(zod@4.6.7)
-      '@opentelemetry/api': 1.9.1
+      '@anthropic-ai/sdk': 1.4.0(zod@4.6.7)
+      '@opentelemetry/api': 1.10.0
     transitivePeerDependencies:
       - zod
 
   '@anthropic-ai/sdk@0.135.0(zod@4.6.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
+      json-schema-to-ts: 3.1.1
+      standardwebhooks: 1.1.1
+    optionalDependencies:
+      zod: 4.6.7
+
+  '@anthropic-ai/sdk@1.4.0(zod@4.6.7)':
+    dependencies:
+      '@opentelemetry/api': 1.10.0
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
