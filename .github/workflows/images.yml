@@ -66,12 +66,17 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
         run: |
+          # The certificate identity is this workflow at the ref that ran (refs/heads/main on a
+          # push or the schedule, refs/pull/<n>/merge on a pull request), not any workflow of
+          # the repository.
+          identity="https://github.com/$REPOSITORY/.github/workflows/images.yml@$REF"
           cd artifacts/images
           for file in server.spdx.json worker.spdx.json migrate.spdx.json lockfile.spdx.json digests.txt; do
             cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
             cosign verify-blob --bundle "$file.sigstore.json" \
-              --certificate-identity-regexp "^https://github.com/$REPOSITORY/" \
+              --certificate-identity "$identity" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               "$file"
           done

@@ -32,10 +32,10 @@ services:
       # The bootstrap superuser: used by the init script once and by the healthcheck; no Rocky
       # process ever logs in with it.
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/.env}
       POSTGRES_DB: rocky
       # deploy/postgres-init.sh creates the migrator role `rocky` with it on the first start.
-      ROCKY_DB_MIGRATOR_PASSWORD: ${ROCKY_DB_MIGRATOR_PASSWORD}
+      ROCKY_DB_MIGRATOR_PASSWORD: ${ROCKY_DB_MIGRATOR_PASSWORD:?set in deploy/.env}
     volumes:
       - rocky-postgres:/var/lib/postgresql/data
       - ./postgres-init.sh:/docker-entrypoint-initdb.d/00-rocky-init.sh:ro
@@ -68,11 +68,11 @@ services:
     security_opt: ["no-new-privileges:true"]
     pids_limit: 128
     environment:
-      DATABASE_ADMIN_URL: postgres://rocky:${ROCKY_DB_MIGRATOR_PASSWORD}@postgres:5432/rocky
+      DATABASE_ADMIN_URL: postgres://rocky:${ROCKY_DB_MIGRATOR_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
       ROCKY_DB_APP_USER: rocky_app_user
-      ROCKY_DB_APP_PASSWORD: ${ROCKY_DB_APP_PASSWORD}
+      ROCKY_DB_APP_PASSWORD: ${ROCKY_DB_APP_PASSWORD:?set in deploy/.env}
       ROCKY_DB_WORKER_USER: rocky_worker_user
-      ROCKY_DB_WORKER_PASSWORD: ${ROCKY_DB_WORKER_PASSWORD}
+      ROCKY_DB_WORKER_PASSWORD: ${ROCKY_DB_WORKER_PASSWORD:?set in deploy/.env}
       # Retention periods (owner-managed settings, ADR 0005 §5); empty means the default.
       RETENTION_WEBHOOK_DELIVERIES_DAYS: ${RETENTION_WEBHOOK_DELIVERIES_DAYS:-}
       RETENTION_LLM_USAGE_DAYS: ${RETENTION_LLM_USAGE_DAYS:-}
@@ -104,8 +104,10 @@ services:
     env_file:
       - ${ROCKY_ENV_FILE:-./rocky.env}
     environment:
-      # Fixed here, after the env file, so the application file cannot repoint them.
-      DATABASE_URL: postgres://rocky_app_user:${ROCKY_DB_APP_PASSWORD}@postgres:5432/rocky
+      # Fixed here, after the env file, so the application file cannot repoint them or switch
+      # off the production rules (NODE_ENV decides whether secrets are required).
+      NODE_ENV: production
+      DATABASE_URL: postgres://rocky_app_user:${ROCKY_DB_APP_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
       HOST: 0.0.0.0
       PORT: "4310"
       ROCKY_WEB_DIR: /app/web
@@ -140,7 +142,8 @@ services:
     env_file:
       - ${ROCKY_ENV_FILE:-./rocky.env}
     environment:
-      WORKER_DATABASE_URL: postgres://rocky_worker_user:${ROCKY_DB_WORKER_PASSWORD}@postgres:5432/rocky
+      NODE_ENV: production
+      WORKER_DATABASE_URL: postgres://rocky_worker_user:${ROCKY_DB_WORKER_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
       ROCKY_HEARTBEAT_FILE: /tmp/rocky-worker-heartbeat
     depends_on:
       migrate:

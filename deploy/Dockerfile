@@ -21,7 +21,11 @@ WORKDIR /src
 COPY . .
 RUN --mount=type=cache,id=rocky-pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile --ignore-scripts
-RUN pnpm --dir apps/web exec vite build --outDir /out/web --emptyOutDir --logLevel warn
+# A production build with the fixture switch off whatever the build environment carries
+# (.dockerignore keeps dotenv files out of the context; this covers a `--build-arg`-less
+# environment leak too), then checked for fixture content (deploy/check-web-build.mjs).
+RUN VITE_ROCKY_FIXTURES= pnpm --dir apps/web exec vite build --outDir /out/web --emptyOutDir --logLevel warn \
+    && node deploy/check-web-build.mjs /out/web
 RUN node deploy/bundle.mjs /out/app
 
 # Final stages: distroless Node 24 (no shell, no package manager), the process as uid 65532

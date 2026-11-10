@@ -128,22 +128,43 @@ describe("deploy/Dockerfile", () => {
     }
   });
 
-  it("keeps secrets and sources out of the build context (S3)", () => {
+  it("keeps secrets and sources out of the build context, at any depth (S3)", () => {
     const ignore = read(".dockerignore")
       .split("\n")
       .map((l) => l.trim());
+    // A pattern without `**/` is anchored at the context root: `apps/web/.env.local` would
+    // reach `vite build` and its VITE_* values the served app (review round 1).
     for (const entry of [
       ".env",
       ".env.*",
+      "**/.env",
+      "**/.env.*",
+      "!**/.env.example",
       "**/*.env",
+      "**/.npmrc",
       "**/*.pem",
       "**/*.key",
+      "**/*.p12",
+      "**/id_rsa*",
+      "**/github-app.env",
       "node_modules",
       "**/node_modules",
       ".git",
       "artifacts",
     ]) {
       expect(ignore).toContain(entry);
+    }
+  });
+
+  it("builds the web app with the fixture switch off and checks the build for fixtures (S3)", () => {
+    const build = dockerfileLines.find((l) => l.includes("vite build"));
+    expect(build).toMatch(/^RUN VITE_ROCKY_FIXTURES= pnpm/);
+    expect(dockerfile).toMatch(/node deploy\/check-web-build\.mjs \/out\/web/);
+    expect(dockerfile).not.toMatch(/VITE_ROCKY_FIXTURES=on/);
+    const markers = read("deploy/check-web-build.mjs");
+    const budget = read("apps/web/src/bundle-budget.test.ts");
+    for (const marker of markers.match(/^ {2}"([^"]+)",$/gm) ?? []) {
+      expect(budget).toContain(marker.trim().replace(/,$/, ""));
     }
   });
 });
@@ -202,32 +223,35 @@ describe("deploy/docker-compose.yml", () => {
     const worker = service("worker").environment ?? {};
     const postgres = service("postgres").environment ?? {};
 
-    expect(migrate["DATABASE_ADMIN_URL"]).toMatch(
-      /^postgres:\/\/rocky:\$\{ROCKY_DB_MIGRATOR_PASSWORD\}@postgres:5432\/rocky$/,
+    // `${VAR:?message}`: compose refuses to start while a password is missing (nit, round 1).
+    const required = (name: string) => `\${${name}:?set in deploy/.env}`;
+    expect(migrate["DATABASE_ADMIN_URL"]).toBe(
+      `postgres://rocky:${required("ROCKY_DB_MIGRATOR_PASSWORD")}@postgres:5432/rocky`,
     );
     expect(migrate["ROCKY_DB_APP_USER"]).toBe("rocky_app_user");
-    expect(migrate["ROCKY_DB_APP_PASSWORD"]).toBe("${ROCKY_DB_APP_PASSWORD}");
+    expect(migrate["ROCKY_DB_APP_PASSWORD"]).toBe(required("ROCKY_DB_APP_PASSWORD"));
     expect(migrate["ROCKY_DB_WORKER_USER"]).toBe("rocky_worker_user");
-    expect(migrate["ROCKY_DB_WORKER_PASSWORD"]).toBe("${ROCKY_DB_WORKER_PASSWORD}");
+    expect(migrate["ROCKY_DB_WORKER_PASSWORD"]).toBe(required("ROCKY_DB_WORKER_PASSWORD"));
     expect(migrate["DATABASE_URL"]).toBeUndefined();
     expect(migrate["WORKER_DATABASE_URL"]).toBeUndefined();
 
-    expect(server["DATABASE_URL"]).toMatch(
-      /^postgres:\/\/rocky_app_user:\$\{ROCKY_DB_APP_PASSWORD\}@postgres:5432\/rocky$/,
+    expect(server["DATABASE_URL"]).toBe(
+      `postgres://rocky_app_user:${required("ROCKY_DB_APP_PASSWORD")}@postgres:5432/rocky`,
     );
     expect(server["DATABASE_ADMIN_URL"]).toBeUndefined();
     expect(server["WORKER_DATABASE_URL"]).toBeUndefined();
     expect(server["ROCKY_WEB_DIR"]).toBe("/app/web");
 
-    expect(worker["WORKER_DATABASE_URL"]).toMatch(
-      /^postgres:\/\/rocky_worker_user:\$\{ROCKY_DB_WORKER_PASSWORD\}@postgres:5432\/rocky$/,
+    expect(worker["WORKER_DATABASE_URL"]).toBe(
+      `postgres://rocky_worker_user:${required("ROCKY_DB_WORKER_PASSWORD")}@postgres:5432/rocky`,
     );
     expect(worker["DATABASE_URL"]).toBeUndefined();
     expect(worker["DATABASE_ADMIN_URL"]).toBeUndefined();
     expect(worker["ROCKY_HEARTBEAT_FILE"]).toMatch(/^\/tmp\//);
     expect(service("worker").tmpfs?.some((m) => m.startsWith("/tmp:"))).toBe(true);
 
-    expect(postgres["POSTGRES_PASSWORD"]).toBe("${POSTGRES_PASSWORD}");
+    expect(postgres["POSTGRES_PASSWORD"]).toBe(required("POSTGRES_PASSWORD"));
+    expect(postgres["ROCKY_DB_MIGRATOR_PASSWORD"]).toBe(required("ROCKY_DB_MIGRATOR_PASSWORD"));
     for (const [name, env] of [
       ["migrate", migrate],
       ["server", server],
@@ -240,13 +264,15 @@ describe("deploy/docker-compose.yml", () => {
     expect(worker["ROCKY_DB_APP_PASSWORD"]).toBeUndefined();
   });
 
-  it("never writes a literal credential: every password in the file is an interpolation (S3)", () => {
-    for (const url of composeText.match(/postgres:\/\/[^\s"']+/g) ?? []) {
-      expect(url).toMatch(/^postgres:\/\/[a-z_]+:\$\{[A-Z_]+\}@/);
+  it("never writes a literal credential: every password in the file is a required interpolation (S3)", () => {
+    const required = /^\$\{[A-Z_]+:\?[^}]+\}$/;
+    // To the end of the line: the `:?` message has spaces in it.
+    for (const url of composeText.match(/postgres:\/\/[^\n"']+/g) ?? []) {
+      expect(url).toMatch(/^postgres:\/\/[a-z_]+:\$\{[A-Z_]+:\?[^}]+\}@postgres:5432\/rocky$/);
     }
     for (const line of composeText.split("\n")) {
       const match = /^\s*([A-Z_]+):\s*(.+)$/.exec(line);
-      if (match && SECRET_NAME.test(match[1]!)) expect(match[2]!.trim()).toMatch(/^\$\{[A-Z_]+\}$/);
+      if (match && SECRET_NAME.test(match[1]!)) expect(match[2]!.trim()).toMatch(required);
     }
   });
 
@@ -256,6 +282,15 @@ describe("deploy/docker-compose.yml", () => {
     expect(service("worker").env_file).toEqual(envFile);
     expect(service("migrate").env_file).toBeUndefined();
     expect(service("postgres").env_file).toBeUndefined();
+  });
+
+  it("pins NODE_ENV=production after the env file, so rocky.env cannot switch production off", () => {
+    // `environment` wins over `env_file`: an operator's NODE_ENV=development (or an empty one)
+    // in rocky.env would otherwise drop the production rules (unverified webhooks, no session
+    // secret, http public URLs, the manifest setup route) (should-fix 1, round 1).
+    for (const name of ["server", "worker"] as const) {
+      expect(service(name).environment?.["NODE_ENV"], name).toBe("production");
+    }
   });
 
   it("starts the apps after the migration step succeeded, and that after Postgres is healthy (S5, S8)", () => {
@@ -275,7 +310,7 @@ describe("deploy/docker-compose.yml", () => {
         .filter((v): v is string => v !== undefined),
     );
     const used = new Set(
-      [...composeText.matchAll(/\$\{([A-Z_]+)(?::-[^}]*)?\}/g)].map((m) => m[1]!),
+      [...composeText.matchAll(/\$\{([A-Z_]+)(?::[-?][^}]*)?\}/g)].map((m) => m[1]!),
     );
     expect(used.size).toBeGreaterThan(5);
     for (const name of used) expect(documented, `${name} undocumented`).toContain(name);
@@ -288,13 +323,24 @@ describe("deploy scripts", () => {
   const trivy = read("scripts/security/trivy.sh");
   const build = read("deploy/build.sh");
 
-  it("provisioning passes passwords as psql variables, never spliced into SQL (S5)", () => {
+  it("provisioning passes passwords as psql variables, never spliced into SQL, never logged (S5)", () => {
     expect(init).toMatch(/<<-?'SQL'/);
     expect(init).toMatch(/-v migrator_password="\$ROCKY_DB_MIGRATOR_PASSWORD"/);
     expect(init).toContain(":'migrator_password'");
+    // The same alphabet as scripts/provision-logins.ts, checked before psql runs.
+    expect(init).toMatch(/\*\[!A-Za-z0-9\._~-\]\*\)/);
     const sql = init.slice(init.indexOf("<<'SQL'"));
     expect(sql).not.toMatch(/\$\{?ROCKY_DB_/);
     expect(sql).not.toMatch(/\$\{?POSTGRES_PASSWORD/);
+    // The statement carrying the password runs with statement, error and slow-query logging
+    // off, so it cannot land in the Postgres log (nit, round 1).
+    const passwordStatement = sql.indexOf("ALTER ROLE rocky PASSWORD :'migrator_password'");
+    expect(passwordStatement).toBeGreaterThan(0);
+    const before = sql.slice(0, passwordStatement);
+    expect(before).toMatch(/SET log_statement = 'none';/);
+    expect(before).toMatch(/SET log_min_error_statement = 'panic';/);
+    expect(before).toMatch(/SET log_min_duration_statement = -1;/);
+    expect(sql).not.toMatch(/CREATE ROLE rocky\b[^;]*PASSWORD/);
     for (const revoke of [
       "REVOKE USAGE ON LANGUAGE plpgsql FROM PUBLIC",
       "REVOKE USAGE ON LANGUAGE sql FROM PUBLIC",
@@ -310,14 +356,29 @@ describe("deploy scripts", () => {
 
   it("the scan fails on any critical, counts unfixed ones and looks for secrets (S1, S3)", () => {
     expect(trivy).toContain('"$TRIVY_IMAGE"');
-    expect(trivy).toMatch(/--severity CRITICAL/);
-    expect(trivy).toMatch(/--exit-code 1/);
-    expect(trivy).toMatch(/--scanners vuln,secret/);
+    expect(trivy).toMatch(
+      /trivy image --input "\/out\/\$target\.tar" --scanners vuln,secret --severity CRITICAL \\\n\s+--exit-code 1/,
+    );
     expect(trivy).not.toMatch(/--ignore-unfixed/);
     expect(trivy).not.toMatch(/--skip-/);
     expect(trivy).toMatch(/--format spdx-json/);
+    // The bundled npm dependencies are gated through the lockfile, not only listed in an SBOM
+    // (should-fix 4, round 1), and the result joins the script's status.
+    expect(trivy).toMatch(
+      /trivy fs --scanners vuln --severity CRITICAL --exit-code 1 [^\n]*\\\n[^\n]*\/src\/pnpm-lock\.yaml \|\| status=1/,
+    );
+  });
+
+  it("measures image size the same way on every image store (should-fix 3, round 1)", () => {
     const limit = /SIZE_LIMIT_BYTES=(\d+)/.exec(trivy)?.[1];
     expect(Number(limit)).toBeLessThanOrEqual(250 * 1000 * 1000);
+    // `docker image inspect .Size` is compressed under containerd, uncompressed under overlay2.
+    const layerSum = /docker history --human=false --format '\{\{\.Size\}\}'/;
+    for (const script of [trivy, build, smoke]) {
+      expect(script).toMatch(layerSum);
+      expect(script).not.toMatch(/docker image inspect --format '\{\{\.Size\}\}'/);
+      expect(script).toMatch(/uncompressed/);
+    }
   });
 
   it("the build never pushes and the smoke test never prints a secret (S7, S9)", () => {
@@ -373,9 +434,10 @@ describe(".github/workflows/images.yml", () => {
     }
     const publish = workflow.jobs["publish"];
     expect(publish).toBeDefined();
-    expect(publish?.if).toContain("vars.ROCKY_PUBLISH_IMAGES == 'true'");
-    expect(publish?.if).toContain("github.event_name == 'push'");
-    expect(publish?.if).toContain("github.ref == 'refs/heads/main'");
+    // Exact: a looser expression (an `||`, a different variable) must be a visible diff here.
+    expect(publish?.if).toBe(
+      "vars.ROCKY_PUBLISH_IMAGES == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'",
+    );
     expect(publish?.permissions).toEqual({
       contents: "read",
       packages: "write",
@@ -394,8 +456,18 @@ describe(".github/workflows/images.yml", () => {
     expect(runs).toContain("deploy/smoke.sh");
     expect(runs).toMatch(/cosign sign-blob/);
     expect(runs).toMatch(/cosign verify-blob/);
+    // The signature is checked against this workflow at the ref that ran, not any workflow of
+    // the repository (nit, round 1; security review).
+    expect(runs).toMatch(
+      /identity="https:\/\/github\.com\/\$REPOSITORY\/\.github\/workflows\/images\.yml@\$REF"/,
+    );
+    expect(runs).toMatch(/--certificate-identity "\$identity"/);
+    expect(runs).not.toMatch(/--certificate-identity-regexp/);
     expect(workflow.on).toHaveProperty("schedule");
     expect(workflow.on).toHaveProperty("pull_request");
+    // Neither runs untrusted PR code with the base repository's permissions and secrets.
+    expect(workflow.on).not.toHaveProperty("pull_request_target");
+    expect(workflow.on).not.toHaveProperty("workflow_run");
   });
 });
 

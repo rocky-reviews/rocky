@@ -5,11 +5,13 @@
 #   pnpm security:images
 #
 # 1. `trivy config` over deploy/ (Dockerfile misconfigurations, HIGH and CRITICAL).
-# 2. For each image: the size limit (under 250 MB), `trivy image --scanners vuln,secret
-#    --severity CRITICAL --exit-code 1` (unfixed vulnerabilities count; a secret in a layer
-#    fails too), and an SPDX SBOM.
-# 3. An SPDX SBOM of the lockfile: the npm dependencies bundled into the images (the image SBOM
-#    lists OS packages and the on-disk grammars only).
+# 2. For each image: the size limit (under 250 MB uncompressed: the sum of the layers in
+#    `docker history`, the same number on the containerd and the overlay2 stores), `trivy image
+#    --scanners vuln,secret --severity CRITICAL --exit-code 1` (unfixed vulnerabilities count; a
+#    secret in a layer fails too), and an SPDX SBOM.
+# 3. The lockfile: `trivy fs --scanners vuln --severity CRITICAL --exit-code 1` over
+#    pnpm-lock.yaml gates the npm dependencies bundled into the images (the image SBOM lists OS
+#    packages and the on-disk grammars only), and an SPDX SBOM of it.
 # Reports go to artifacts/images/ (gitignored). Images are handed to Trivy as `docker save`
 # tarballs: the scanner never gets the Docker socket. The vulnerability database is cached in
 # the docker volume rocky-trivy-cache. Requires: docker.
@@ -45,8 +47,10 @@ status=0
 : >"$OUT/digests.txt"
 for target in server worker migrate; do
   image="$PREFIX-$target:$TAG"
-  bytes=$(docker image inspect --format '{{.Size}}' "$image")
-  echo "trivy: $image is $((bytes / 1000000)) MB" >&2
+  # Uncompressed: the sum of the layers. (`docker image inspect .Size` is the compressed size
+  # under the containerd image store and the uncompressed one under overlay2.)
+  bytes=$(docker history --human=false --format '{{.Size}}' "$image" | awk '{ s += $1 } END { print s }')
+  echo "trivy: $image is $((bytes / 1000000)) MB uncompressed (sum of the layers in docker history)" >&2
   if [ "$bytes" -gt "$SIZE_LIMIT_BYTES" ]; then
     echo "trivy: $image is over the $((SIZE_LIMIT_BYTES / 1000000)) MB limit" >&2
     status=1
@@ -64,7 +68,11 @@ for target in server worker migrate; do
   rm -f "$OUT/$target.tar"
 done
 
-echo "trivy: SBOM of the lockfile (the bundled npm dependencies)" >&2
+echo "trivy: scanning the lockfile (the bundled npm dependencies, critical only)" >&2
+trivy fs --scanners vuln --severity CRITICAL --exit-code 1 --no-progress --format table \
+  --output /out/lockfile.trivy.txt /src/pnpm-lock.yaml || status=1
+cat "$OUT/lockfile.trivy.txt" >&2
+echo "trivy: SBOM of the lockfile" >&2
 trivy fs --scanners vuln --format spdx-json --no-progress --output /out/lockfile.spdx.json /src/pnpm-lock.yaml
 
 if [ "$status" -ne 0 ]; then

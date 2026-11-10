@@ -111,10 +111,10 @@ done
 echo "smoke: the worker image loads every tree-sitter grammar from /app/node_modules" >&2
 $COMPOSE exec -T worker /nodejs/bin/node --input-type=module <"$ROOT/deploy/smoke-grammars.mjs"
 
-echo "smoke: image sizes" >&2
+echo "smoke: image sizes, uncompressed (sum of the layers in docker history)" >&2
 for target in server worker migrate; do
   image="${ROCKY_IMAGE_PREFIX:-rocky}-$target:${ROCKY_IMAGE_TAG:-local}"
-  bytes=$(docker image inspect --format '{{.Size}}' "$image")
+  bytes=$(docker history --human=false --format '{{.Size}}' "$image" | awk '{ s += $1 } END { print s }')
   echo "  $image  $((bytes / 1000000)) MB" >&2
 done
 

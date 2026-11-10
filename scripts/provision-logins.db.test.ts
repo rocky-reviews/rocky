@@ -82,10 +82,23 @@ describe("loginProvisioningFromEnv", () => {
     );
   });
 
-  it("refuses a short, non-ASCII or non-printable password and a bad or reserved name", () => {
+  it("refuses a short, non-ASCII, non-printable or non-URL-safe password and a bad or reserved name", () => {
     expect(() => loginProvisioningFromEnv({ ...app, ROCKY_DB_APP_PASSWORD: "short" })).toThrow(
       /ROCKY_DB_APP_PASSWORD/,
     );
+    // `$` is interpolated by compose, `@`, `:`, `/`, `#` and `?` break the URL, quotes and
+    // spaces need escaping somewhere; every one is refused up front.
+    for (const bad of ["$", "@", ":", "/", "#", "?", "'", '"', " ", "\\", "%"]) {
+      expect(
+        () =>
+          loginProvisioningFromEnv({ ...app, ROCKY_DB_APP_PASSWORD: `${"a".repeat(20)}${bad}` }),
+        JSON.stringify(bad),
+      ).toThrow(/ROCKY_DB_APP_PASSWORD/);
+    }
+    expect(
+      loginProvisioningFromEnv({ ...app, ROCKY_DB_APP_PASSWORD: "Az09._~-".repeat(4) })[0]
+        ?.password,
+    ).toBe("Az09._~-".repeat(4));
     expect(() =>
       loginProvisioningFromEnv({ ...app, ROCKY_DB_APP_PASSWORD: "ü".repeat(32) }),
     ).toThrow(/ROCKY_DB_APP_PASSWORD/);

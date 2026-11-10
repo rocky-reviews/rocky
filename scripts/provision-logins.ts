@@ -25,8 +25,13 @@ type Env = Readonly<Record<string, string | undefined>>;
 
 /** What `ensureLoginRole` accepts, checked here so the message can name the variable. */
 const ROLE_NAME = /^[a-z0-9_]{3,63}$/;
-/** Printable ASCII only (no SASLprep, ADR 0005), and long enough to be generated, not typed. */
-const PASSWORD = /^[\x21-\x7e]{16,256}$/;
+/**
+ * URL-safe characters only: the password goes into a connection URL unescaped, compose
+ * interpolates `$` in deploy/.env, and quotes or spaces would need escaping somewhere. Plain
+ * ASCII, so no SASLprep (ADR 0005); long enough to be generated (`openssl rand -hex 24`), not
+ * typed. deploy/postgres-init.sh applies the same alphabet to the migrator's password.
+ */
+const PASSWORD = /^[A-Za-z0-9._~-]{16,256}$/;
 /** Names the migrations, the provisioning or Postgres own; a login must never shadow them. */
 const RESERVED = new Set([
   APP_ROLE,
@@ -59,7 +64,7 @@ const pair = (env: Env, prefix: string, worker: boolean): LoginSpec | undefined 
   }
   if (!PASSWORD.test(password)) {
     throw new Error(
-      `${passwordVar} must be 16-256 printable ASCII characters (openssl rand -hex 24)`,
+      `${passwordVar} must be 16-256 characters from A-Z a-z 0-9 . _ ~ - (openssl rand -hex 24)`,
     );
   }
   return { name, password, worker };

@@ -1,5 +1,8 @@
 # Build context for deploy/Dockerfile (P10-1, ADR 0043 S3). Secrets, local state and anything
-# the build does not need stay out, so they can never land in a layer or a build log.
+# the build does not need stay out, so they can never land in a layer or a build log. Patterns
+# are anchored at the context root unless they start with `**/`, so every dotenv, key and
+# per-user npm config is listed in the nested form too (`apps/web/.env.local` would otherwise
+# reach `vite build`, which inlines VITE_* values into the served app).
 .git
 .github
 .claude
@@ -13,9 +16,17 @@ test-results
 playwright-report
 .env
 .env.*
+**/.env
+**/.env.*
+!**/.env.example
 **/*.env
+**/.npmrc
 **/*.pem
 **/*.key
+**/*.p12
+**/*.pfx
+**/id_rsa*
+**/id_ed25519*
 **/github-app.env
 design-poc
 docs

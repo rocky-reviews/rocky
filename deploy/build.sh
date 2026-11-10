@@ -30,9 +30,11 @@ for target in server worker migrate; do
     "$ROOT"
 done
 
-echo "build: done" >&2
+echo "build: done; uncompressed sizes (sum of the layers in docker history)" >&2
 for target in server worker migrate; do
   image="$PREFIX-$target:$TAG"
-  bytes=$(docker image inspect --format '{{.Size}}' "$image")
+  # `docker image inspect .Size` is the compressed size under the containerd image store and
+  # the uncompressed one under overlay2; the layer sum is the uncompressed size on both.
+  bytes=$(docker history --human=false --format '{{.Size}}' "$image" | awk '{ s += $1 } END { print s }')
   echo "  $image  $((bytes / 1000000)) MB" >&2
 done
