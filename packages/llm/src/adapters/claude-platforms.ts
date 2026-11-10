@@ -25,13 +25,27 @@ import {
 const ANTHROPIC_API = "https://api.anthropic.com";
 const GOOGLE_CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 /**
- * Bedrock accepts the SDK's API version (`2026-10-21`) for Claude 4.7 and later only; its pre-4.7
- * models stay on the previous version (ADR 0013, amendment "1.x SDKs"). Haiku 4.5 is the one such
- * model in `BEDROCK_MODELS` (`providers.ts`): the others exist only on the legacy integration and
- * config refuses them.
+ * The catalogue's models older than Claude 4.7 (`CLAUDE_MODELS`, `providers.ts`). Bedrock accepts
+ * the SDK's API version (`2026-10-21`) for 4.7 and later only, and Vertex is assumed to follow the
+ * same rule (none was published when this was written), so each of the two keeps these models on
+ * its previous wire version (ADR 0013, amendment "1.x SDKs"). On Bedrock only Haiku 4.5 gets
+ * this far: config refuses the other three there (`BEDROCK_MODELS`).
  */
+const PRE_4_7_MODELS: ReadonlySet<string> = new Set([
+  "claude-opus-4-6",
+  "claude-opus-4-5",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5",
+]);
 const BEDROCK_PREVIOUS_API_VERSION = "2023-06-01";
-const BEDROCK_PREVIOUS_VERSION_MODELS: ReadonlySet<string> = new Set(["claude-haiku-4-5"]);
+/** Sent as the `anthropic-version` header; the Vertex client moves it into the body and drops the header. */
+const VERTEX_PREVIOUS_API_VERSION = "vertex-2023-10-16";
+
+/** A platform's `apiVersion`: its previous version for a pre-4.7 model, the SDK's default otherwise. */
+const previousVersionFor =
+  (version: string) =>
+  (model: string): string | undefined =>
+    PRE_4_7_MODELS.has(model) ? version : undefined;
 
 /** Reads a configured key at call time; a missing one fails before anything is sent. */
 const keyFrom = (secrets: SecretSource, name: string): string => {
@@ -130,8 +144,7 @@ export const bedrockAdapter =
           });
         },
         serverFallbacks: never,
-        apiVersion: (model) =>
-          BEDROCK_PREVIOUS_VERSION_MODELS.has(model) ? BEDROCK_PREVIOUS_API_VERSION : undefined,
+        apiVersion: previousVersionFor(BEDROCK_PREVIOUS_API_VERSION),
       },
       transport,
     );
@@ -202,6 +215,7 @@ export const vertexAdapter =
           });
         },
         serverFallbacks: never,
+        apiVersion: previousVersionFor(VERTEX_PREVIOUS_API_VERSION),
       },
       transport,
     );

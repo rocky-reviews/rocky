@@ -469,7 +469,8 @@ optional-field limit (9 and 2); `wire-schema.test.ts` runs the transform and the
 **Context.** The four Anthropic packages moved to their 1.x majors together (branch
 `task/deps-anthropic-sdk-1x`, replacing Dependabot's one-package PRs): `@anthropic-ai/sdk` 1.3.0,
 `@anthropic-ai/bedrock-sdk` 1.1.0, `@anthropic-ai/vertex-sdk` 1.1.0 and
-`@anthropic-ai/foundry-sdk` 1.1.0, each 17 days past `minimumReleaseAge` when chosen. The
+`@anthropic-ai/foundry-sdk` 1.1.0, each about 18 days old when chosen (11 days past the 7-day
+`minimumReleaseAge`). The
 one-package PRs failed CI for one reason: a platform package depends on
 `@anthropic-ai/sdk >=1.0.0 <2`, so bumped alone it resolved a second copy of the core SDK beside
 the 0.135.0 root. That copy's `BetaMessage` type made the client factories fail to type-check
@@ -490,24 +491,36 @@ API-version guide (`2026-10-21`) supplied the platform rules.
 2. **No `?beta=true` query.** The SDK marks its beta routes internally; the request path is
    `/v1/messages` on every platform. Betas still travel in the `anthropic-beta` header (the
    fallback tests). The contract URLs changed accordingly; the hosts did not.
-3. **Vertex takes the version from the body.** The 1.x Vertex client copies the SDK's
-   `anthropic-version` into `anthropic_version` (`2026-10-21`, where 0.21.0 wrote
-   `vertex-2023-10-16`). Vertex serves `2026-10-21` for every model (the skill's platform note).
+3. **Vertex takes the version from the body.** The 1.x Vertex client copies the request's
+   `anthropic-version` header into the body's `anthropic_version` and drops the header
+   (`2026-10-21` by default, where 0.21.0 wrote `vertex-2023-10-16`). Whether Vertex serves
+   `2026-10-21` for the models older than Claude 4.7 is not published (the skill's platform note
+   predates 1.x and names only Bedrock's rule), so Vertex follows Bedrock's rule conservatively:
+   the Vertex platform's `apiVersion` is `vertex-2023-10-16` for the catalogue's pre-4.7 models
+   (Opus 4.6, Opus 4.5, Sonnet 4.6, Haiku 4.5, the last two served as dated ids), the previous
+   body value exactly, and the SDK's default for every other model. One rule covers both
+   platforms (`PRE_4_7_MODELS`, `previousVersionFor` in `claude-platforms.ts`): a pre-4.7 model
+   keeps the platform's previous wire version. The contract test pins the body value for every
+   catalogue model, and a model added to the catalogue needs an entry there.
 4. **Bedrock accepts `2026-10-21` for Claude 4.7 and later only.** `BEDROCK_MODELS` keeps one
    older model, Haiku 4.5 (the other pre-4.7 models are refused there, §1). Decision: the Bedrock
-   platform sets `ClaudePlatform.apiVersion`, a per-request `anthropic-version: 2023-06-01` for
-   that model only, which reproduces the previous wire exactly (0.135.0 sent the same header and
-   Mantle passed it through) and leaves every other model on the SDK's default. The header is
-   inside SigV4's `SignedHeaders` (test), so it is not a forgery. The alternative, dropping Haiku
-   4.5 from the Bedrock catalogue, is the maintainer's call (`docs/progress.md`); removing the
-   override is then one line.
-5. **One credential per client, and a credential chain.** A 1.x client takes at most one of
-   `apiKey`, `authToken`, `credentials`, `config` and `profile`, and with none passed resolves
-   `ant auth login` profiles (`ANTHROPIC_PROFILE`, `ANTHROPIC_CONFIG_DIR`, `<config_dir>/`) and
-   workload identity federation (`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`,
-   `ANTHROPIC_IDENTITY_TOKEN[_FILE]`, ...) on first request; a profile may carry a `base_url`.
-   Rocky passes the key on the Anthropic API and Foundry, so the chain is never read; the Mantle
-   and Vertex clients refuse it by construction. Base URLs stay explicit on every client. The set
+   platform's `apiVersion` is a per-request `anthropic-version: 2023-06-01` for that model only,
+   which reproduces the previous wire exactly (0.135.0 sent the same header and Mantle passed it
+   through) and leaves every other model on the SDK's default. The override keys on the canonical
+   model, so an inference-profile ARN in `platformModel` gets it too (test). When SigV4 is in use
+   the header is inside `SignedHeaders` (test); in bearer mode (`AWS_BEARER_TOKEN_BEDROCK`) Mantle
+   signs nothing and the header travels as sent, with the bearer token going only to the
+   configured host (test). The alternative, dropping Haiku 4.5 from the Bedrock catalogue, is the
+   maintainer's call (`docs/progress.md`); removing the override is then one line.
+5. **One credential per client.** New in 1.x is the rule that a client holds at most one of
+   `apiKey`, `authToken`, `credentials`, `config` and `profile`, so a credential passed in code
+   excludes the rest, the environment variables for the others included. The chain itself is
+   older: 0.135.0 already resolved `ant auth login` profiles (`ANTHROPIC_PROFILE`,
+   `ANTHROPIC_CONFIG_DIR`, `<config_dir>/`) and workload identity federation
+   (`ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN[_FILE]`,
+   ...) when no credential was passed, and a profile may carry a `base_url`. Rocky passes the key
+   on the Anthropic API and Foundry, so the chain is never read; the Mantle and Vertex clients
+   refuse it by construction. Base URLs stay explicit on every client. The set
    of environment variables the four packages read is unchanged from 0.135.0 (42 names, compared
    on the published tarballs), so no new ambient variable needs a policy; `webhookKey: null` keeps
    `ANTHROPIC_WEBHOOK_SIGNING_KEY` unread as well. The new client options (`middleware`,
@@ -520,19 +533,20 @@ API-version guide (`2026-10-21`) supplied the platform rules.
 
 **Threat model (adds to the table above).**
 
-| #   | Threat                                                                                                                                                       | Prevention                                                                                                                                  | Test                                                                                                                                                                                                             |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| U1  | **A planted profile or federation environment** supplies a token or a base URL to Rocky's clients (an operator's `ant` login, a compromised CI environment). | The key is passed in code (one credential; the chain is unread); Mantle and Vertex refuse the chain; every base URL is explicit.            | Contract tests with a planted profile and the federation variables: one request, configured host, Rocky's key, nothing planted on the wire; the "planted profile is live" test shows the chain would have fired. |
-| U2  | **The bearer-token form reaches a gateway that expects `x-api-key`**, or the ambient `ANTHROPIC_AUTH_TOKEN` is sent in its place.                            | A 401 maps to `auth` and is not retried; `authToken` is `null`; the key is Rocky's.                                                         | "sends one structured, streamed request to the configured host only" and the gateway test assert the exact `Authorization` value with `ANTHROPIC_AUTH_TOKEN` set to another key.                                 |
-| U3  | **A version Bedrock rejects for Haiku 4.5** turns every call on that model into `invalid_request`, or the override leaks onto other models and platforms.    | `apiVersion` is set by the Bedrock platform alone, for the one model, as a per-request header the SDK merges after its own and SigV4 signs. | "sends API version 2026-10-21, except Bedrock's pre-4.7 model on 2023-06-01" per platform and model, with the header inside `SignedHeaders` on Bedrock.                                                          |
-| U4  | **Two copies of the core SDK** (a platform package bumped alone) make `instanceof APIError` false, so a 400 or 401 becomes the retryable `server_error`.     | The four packages are pinned to majors released together and resolve one copy; `toCallError` is unchanged.                                  | `sdk-instance.test.ts` (every platform client extends this package's `BaseAnthropic`); the T7 mapping tests, which failed on Dependabot's split.                                                                 |
+| #   | Threat                                                                                                                                                             | Prevention                                                                                                                                                                                                                                                | Test                                                                                                                                                                                                                                                                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U1  | **A planted profile or federation environment** supplies a token or a base URL to Rocky's clients (an operator's `ant` login, a compromised CI environment).       | The key is passed in code (one credential; the chain is unread); Mantle and Vertex refuse the chain; every base URL is explicit.                                                                                                                          | Contract tests with a planted profile and the federation variables: one request, configured host, Rocky's key, nothing planted on the wire; the "planted profile is live" test shows the chain would have fired.                                                           |
+| U2  | **The bearer-token form reaches a gateway that expects `x-api-key`**, or the ambient `ANTHROPIC_AUTH_TOKEN` is sent in its place.                                  | A 401 maps to `auth` and is not retried; `authToken` is `null`; the key is Rocky's.                                                                                                                                                                       | "sends one structured, streamed request to the configured host only" and the gateway test assert the exact `Authorization` value with `ANTHROPIC_AUTH_TOKEN` set to another key.                                                                                           |
+| U3  | **A version a platform rejects for a pre-4.7 model** turns every call on that model into `invalid_request`, or the override leaks onto other models and platforms. | `apiVersion` is set by the Bedrock and Vertex platforms only, for the catalogue's pre-4.7 models only, keyed on the canonical model, as a per-request header the SDK merges after its own; it is signed when SigV4 is in use (bearer mode signs nothing). | "sends API version 2026-10-21, except the pre-4.7 models on Bedrock and Vertex" per platform, model and `platformModel`, with the header inside `SignedHeaders` on Bedrock in SigV4 mode; the bearer-mode case; "Vertex: pins the body version for every catalogue model". |
+| U4  | **Two copies of the core SDK** (a platform package bumped alone) make `instanceof APIError` false, so a 400 or 401 becomes the retryable `server_error`.           | The four packages are pinned to majors released together and resolve one copy; `toCallError` is unchanged.                                                                                                                                                | `sdk-instance.test.ts` (every platform client extends this package's `BaseAnthropic`); the T7 mapping tests, which failed on Dependabot's split.                                                                                                                           |
 
 **Residual risks.**
 
-- Neither `2023-06-01` for Haiku 4.5 on Bedrock Mantle nor `2026-10-21` for the dated Haiku 4.5
-  and Opus 4.5 ids on Vertex was verified live (no accounts, `needs-human`); the override is the
-  previous wire for that model, and the Vertex rule is the skill's platform note. A rejection
-  would surface as `llm_invalid_request` (fatal, not retried).
+- Neither `2023-06-01` for Haiku 4.5 on Bedrock Mantle nor `vertex-2023-10-16` for the pre-4.7
+  models on Vertex was verified live (no accounts, `needs-human`); each is the previous wire for
+  those models. Should Vertex in fact serve `2026-10-21` for them, the override costs nothing but
+  the new version's behaviour; should it not, the override is what keeps them working. A
+  rejection would surface as `llm_invalid_request` (fatal, not retried).
 - A gateway that reads only `x-api-key` stops working at this upgrade; the failure is `auth` and
   is documented in `.env.example`.
 - The `claude-api` skill cache (2026-10-06) predates the 1.x releases; the changelogs and source

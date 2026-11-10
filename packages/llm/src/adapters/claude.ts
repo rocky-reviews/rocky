@@ -74,8 +74,8 @@ export interface ClaudePlatform {
   readonly serverFallbacks: (model: string) => boolean;
   /**
    * An `anthropic-version` other than the SDK's default (`2026-10-21`) for this canonical model,
-   * or undefined for the default. Only Bedrock sets one: it serves its pre-4.7 models on the
-   * previous version alone (ADR 0013, amendment "1.x SDKs").
+   * or undefined for the default; sent as a per-request header. Bedrock and Vertex set one: each
+   * keeps the pre-4.7 models on its previous wire version (ADR 0013, amendment "1.x SDKs").
    */
   readonly apiVersion?: (model: string) => string | undefined;
 }
