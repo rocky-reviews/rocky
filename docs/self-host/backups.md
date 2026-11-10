@@ -18,7 +18,7 @@ or by recomputing it; "not rebuildable" means a backup is the only copy.
 | **Project memory**: conventions learned from reviews and the ones members wrote, their confidence and history            | `memory_entries`, `repos.memory_enabled`                                                    | **Not rebuildable.** Learning starts again from zero.                                                                                                                                                                              |
 | **Review work in progress**: what each reviewer accepted, edited or dismissed, and the comments they have not posted yet | `findings_state`, `comments_pending`                                                        | **Not rebuildable.** Nothing on GitHub holds an unposted comment.                                                                                                                                                                  |
 | **Orgs, members and roles**: who is owner or admin in Rocky, org settings                                                | `orgs`, `members`                                                                           | **Not rebuildable.** An org is created from GitHub's installation event, which is not sent again for an existing installation (there is no installation reconciler yet). Roles given in Rocky and org settings exist nowhere else. |
-| **Encrypted secrets**: each org's wrapped data key, members' GitHub user tokens, an org's own LLM key                    | `orgs.data_key_ciphertext`, `members.forge_token_ciphertext`, `orgs.llm_api_key_ciphertext` | Unreadable without the KEKs ([below](#the-encryption-keys)). User tokens come back when people sign in again; an org's own LLM key has to be entered again.                                                                        |
+| **Encrypted secrets**: each org's wrapped data key, members' GitHub user tokens, an org's own LLM key (unused today)     | `orgs.data_key_ciphertext`, `members.forge_token_ciphertext`, `orgs.llm_api_key_ciphertext` | Unreadable without the KEKs, and losing them needs a manual recovery ([below](#the-encryption-keys)). The org LLM key column is unused today.                                                                                      |
 | **Audit log**                                                                                                            | `audit_events`                                                                              | **Not rebuildable.**                                                                                                                                                                                                               |
 | **LLM usage**: tokens and cost per call                                                                                  | `llm_usage`                                                                                 | **Not rebuildable.**                                                                                                                                                                                                               |
 | **Posted review records**: which attempt posted what (digests and counts, not the text)                                  | `review_submissions`, `review_submission_items`                                             | The reviews themselves are on GitHub. Without these rows, Rocky no longer knows which drafts were already posted.                                                                                                                  |
@@ -38,16 +38,43 @@ Envelope encryption ([ADR 0006](../adr/0006-envelope-encryption.md)) is what kee
 dump from exposing tokens: the database holds only ciphertexts and each org's data key **wrapped**
 by a key-encryption key. The KEKs live only in `ROCKY_KEK_KEYS`.
 
-- **Back up every KEK the database still uses**, not only the current one. Wrapped data keys
-  record which KEK version wrapped them; during a rotation both the old and the new one are in
-  use until every org is re-wrapped.
+- **Back up every KEK the database still uses**, not only the current one. Each wrapped data key
+  records which KEK wrapped it, and there is no re-wrap command yet
+  ([rotation](configuration.md#encryption-keys)), so every KEK that was ever current may still
+  be in use.
 - **Keep the KEKs apart from the dumps**: a different secret store, different access. A dump
   together with its KEKs is the plaintext.
-- **Losing the KEKs loses the encrypted columns** (there is no recovery), not the rest of the
-  database. Members sign in again to get new user tokens, and orgs re-enter their own LLM keys.
-  Everything else in the table above is unaffected.
+- **Losing the KEKs loses the encrypted columns**, not the rest of the database. There is no way
+  to decrypt them again. Worse, Rocky does not recover by itself: sign-in opens the org's
+  existing wrapped data key, so every org that already has one fails to sign anyone in
+  (`unknown_key_version`) until the unreadable values are cleared. The recovery below is
+  manual: it follows what the code does when a member is removed and when an org gets its
+  first data key, but it has not been run as a drill.
+  1. Stop the server and the worker.
+  2. Generate a new KEK with a **new id** and set `ROCKY_KEK_KEYS` to it alone, with
+     `ROCKY_KEK_CURRENT` naming it.
+  3. As a superuser (row-level security is forced on these tables), clear every value the old
+     KEKs protected, in one transaction:
+
+     ```sql
+     BEGIN;
+     UPDATE members SET forge_token_ciphertext = NULL, forge_token_key_version = NULL,
+                        forge_access_expires_at = NULL;
+     UPDATE orgs SET data_key_ciphertext = NULL, data_key_version = NULL,
+                     llm_api_key_ciphertext = NULL, llm_api_key_version = NULL;
+     COMMIT;
+     ```
+
+  4. Set a new `ROCKY_SESSION_SECRET`, which signs everyone out, and start the processes again.
+     The first member of each org to sign in provisions a new data key under the new KEK, and
+     each member's token is stored again at their next sign-in. Until then, posting as that
+     member reports that no token is stored.
+
+  The org's own LLM key column (`orgs.llm_api_key_ciphertext`) is unused today: nothing writes
+  it, so clearing it loses nothing.
+
 - Rotating a KEK does not touch the ciphertexts, so older dumps stay readable with the old KEK.
-  Keep a retired KEK as long as you keep dumps made while it was in use.
+  Keep every KEK as long as you keep dumps made while it was in use.
 
 ## Configuration and secrets
 
@@ -94,7 +121,7 @@ Restore into an **empty, provisioned database**, as a superuser:
 
 1. **Roles.** Load the `pg_dumpall --roles-only` file with `psql -f` (an error that the superuser
    role already exists is expected). The dump refers to `rocky_app`, `rocky_worker`,
-   `rocky_retention`, `rocky_lifecycle`, the migrator and the logins as owners and grantees, so
+   `rocky_retention`, `rocky_lifecycle`, `rocky_auth`, the migrator and the logins as owners and grantees, so
    the restore fails without them. Change the logins' passwords afterwards if the old cluster may
    be compromised.
 2. **Database.** Create the empty database, owned by the migrator.
@@ -131,8 +158,8 @@ Things that go wrong:
   log's insert trigger replaces every restored timestamp with the time of the restore, which
   moves old events out of reach of the retention purge. A full restore creates the triggers after
   the data, which is why it works.
-- **Restoring as a non-superuser** cannot hand the purge and claim functions to
-  `rocky_retention` and `rocky_lifecycle`, and row-level security, forced on every tenant table,
+- **Restoring as a non-superuser** cannot hand the purge, claim and sign-in functions to
+  `rocky_retention`, `rocky_lifecycle` and `rocky_auth`, and row-level security, forced on every tenant table,
   applies to the load itself.
 - **Encrypted columns need the same KEKs.** Start the server with the KEKs from the time of the
   dump (or a later `ROCKY_KEK_KEYS` that still lists them).

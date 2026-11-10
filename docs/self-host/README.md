@@ -37,31 +37,59 @@ From a checkout of the release you are deploying:
 ```sh
 corepack enable
 pnpm install --frozen-lockfile
-cp .env.example .env          # then fill it in; see the configuration reference
-pnpm db:migrate               # as the table owner (DATABASE_ADMIN_URL)
 pnpm --filter @rocky-reviews/web exec vite build   # writes apps/web/dist
 ```
 
 Point `ROCKY_WEB_DIR` at the absolute path of `apps/web/dist`: the server serves the web app
 itself, with the same security headers as the API.
 
-Then start the two processes under your process supervisor (systemd, for example), each with the
-environment from your secret store rather than a file on disk where you can:
+### Where the environment comes from
 
-```sh
-pnpm exec tsx apps/server/src/main.ts   # HTTP API, webhooks, login; serves the web app
-pnpm exec tsx apps/worker/src/main.ts   # webhook inbox, analysis and index lanes, retention
-```
+The convenience scripts are built for development and treat `.env` in the checkout specially:
 
-Set `NODE_ENV=production` for both. In production the server refuses to start without the
-webhook secret, the GitHub App credentials, GitHub login, a session secret, an https
-`ROCKY_PUBLIC_URL` and `ROCKY_TRUST_PROXY`; the [configuration reference](configuration.md)
-marks each of these. Run one server instance: rate limits are counted per instance, so several
-servers multiply them. Several workers can share the queues (the per-org analysis limit holds
-across workers).
+| Command                                                           | `.env`                                                                                                                                                     |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm db:migrate`, `pnpm seed`, `pnpm mirror:rebuild`, `pnpm dev` | **Create it when it is missing**, from `.env.example` (development database URLs) plus a freshly generated `ROCKY_KEK_KEYS` development key, then load it. |
+| `pnpm rocky`                                                      | Loads it when it exists.                                                                                                                                   |
+| `pnpm evals`, and `tsx` run directly                              | Never read it: only the process environment counts.                                                                                                        |
+
+Variables already in the process environment win over the file. That means a variable your
+supervisor does not set is silently taken from the file, which may be a development default.
+
+**Do not let the scripts create `.env` on a server.** Its generated KEK is a development key that
+nothing backs up: if the server ever started with it and stored tokens, losing the file loses them
+([backups](backups.md#the-encryption-keys)). Pick one of the two layouts and stick to it:
+
+- **The supervisor supplies the environment** (preferred, from your secret store), and you call
+  the entry points directly, so no file is involved:
+
+  ```sh
+  pnpm exec tsx scripts/migrate.ts                 # migrations, as the table owner
+  pnpm exec tsx apps/server/src/main.ts            # HTTP API, webhooks, login; serves the web app
+  pnpm exec tsx apps/worker/src/main.ts            # webhook inbox, analysis and index lanes, retention
+  ```
+
+- **A `.env` file you write yourself** (mode 0600, owned by the service user, every value
+  production's, no development leftovers), loaded explicitly by every process:
+
+  ```sh
+  pnpm db:migrate                                  # reads your .env (it exists, so nothing is generated)
+  pnpm exec tsx --env-file=.env apps/server/src/main.ts
+  pnpm exec tsx --env-file=.env apps/worker/src/main.ts
+  ```
+
+### Starting
+
+Run the migrations first ([upgrades](upgrades.md)), then start the server and the worker under
+your process supervisor (systemd, for example). Set `NODE_ENV=production` for both. In production
+the server refuses to start without the webhook secret, the GitHub App credentials, GitHub login,
+a session secret, an https `ROCKY_PUBLIC_URL` and `ROCKY_TRUST_PROXY`; the
+[configuration reference](configuration.md) marks each of these. Run one server instance: rate
+limits are counted per instance, so several servers multiply them. Several workers can share the
+queues (the per-org analysis limit holds across workers).
 
 There is no `start` script or compiled build yet: the processes run from TypeScript through `tsx`,
-as they do in development. The container images are the packaged form of the same commands.
+as they do in development.
 
 ## Security notes for operators
 

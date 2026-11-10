@@ -34,7 +34,7 @@ pnpm db:migrate down [n]    # roll back the last n migrations (default 1)
 - Each migration runs in its own transaction with its ledger row in `app.schema_migrations`
   (version, name, and a sha256 of the up and down scripts). A migration that fails rolls back on
   its own; the ones before it stay applied. Fix the cause and run it again.
-- **It refuses, before changing anything**, when:
+- **It refuses, before applying anything** (only the ledger table is created if it is missing), when:
   - the migration files have a gap or a duplicate (versions must be exactly 1..n, each with both
     an `.up.sql` and a `.down.sql`);
   - the database records a migration the checkout does not have, which is what happens when old
@@ -57,6 +57,7 @@ pnpm db:migrate down [n]    # roll back the last n migrations (default 1)
 | `rocky_worker`    | no      | Group for the worker on top of `rocky_app`: creating orgs, claiming webhook inbox rows, erasing orgs.                    |
 | `rocky_retention` | no      | Owns the retention purge and org deletion functions. Nobody logs in as it.                                               |
 | `rocky_lifecycle` | no      | Owns the queue-claim functions. Nobody logs in as it.                                                                    |
+| `rocky_auth`      | no      | Owns the sign-in lookup of a person's orgs (`auth.login_orgs`). Nobody logs in as it.                                    |
 | application login | yes     | A member of `rocky_app` and nothing else. `DATABASE_URL`. The server refuses any other kind of login.                    |
 | worker login      | yes     | A member of `rocky_app` and `rocky_worker`. `WORKER_DATABASE_URL`.                                                       |
 
@@ -113,7 +114,9 @@ This is what `deploy/dev/init.sql` runs for development (where the migrator is t
    the new schema while it changes.
 4. **Install the new version**: check out the target commit (or pull the new image), then
    `pnpm install --frozen-lockfile` and rebuild the web app.
-5. **Migrate**: `pnpm db:migrate`, with `DATABASE_ADMIN_URL` and your `RETENTION_*` values.
+5. **Migrate**: `pnpm db:migrate` (or `pnpm exec tsx scripts/migrate.ts` when the supervisor
+   supplies the environment; see [where the environment comes from](README.md#where-the-environment-comes-from)),
+   with `DATABASE_ADMIN_URL` and your `RETENTION_*` values.
    `pnpm db:migrate status` lists what is applied.
 6. **Start the server, then the worker**, and watch the first log lines: a configuration error
    names the variable and stops the process.
@@ -127,8 +130,9 @@ Two ways back, in order of preference:
   (reviews in progress, new analyses, memory changes) is lost; what came from GitHub can be
   rebuilt ([backups](backups.md#what-to-back-up)).
 - **Roll the schema back with the new code, then switch to the old code.** The `down` scripts
-  live in the newer checkout, and old code refuses a database that records migrations it does not
-  know, so the order matters:
+  live in the newer checkout, and the old checkout's `pnpm db:migrate` refuses a database that
+  records migrations it does not know (the old server and worker would not notice; they would
+  fail at the first query that meets the newer schema), so the order matters:
 
   ```sh
   # still on the NEW checkout, with the processes stopped

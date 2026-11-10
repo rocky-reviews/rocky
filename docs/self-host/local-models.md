@@ -1,8 +1,9 @@
 # Local models
 
 Rocky can run every role on a model you host, through any server that speaks the OpenAI
-chat-completions and embeddings API: Ollama, vLLM, or a router in front of several servers. Code
-and diffs then never leave your machines.
+chat-completions and embeddings API: Ollama, vLLM, or a router in front of several servers. When
+every role, embeddings included, runs on such a server, Rocky sends code and diffs to no model
+provider. (GitHub still holds the code, and Rocky still reads it from GitHub.)
 
 > **No measured results on this page.** Nothing here comes from running Rocky against a local
 > model: there are no scores, speeds or model recommendations because none have been measured.

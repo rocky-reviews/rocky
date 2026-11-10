@@ -8,7 +8,11 @@ reads a variable that has no row here, and when a row names a variable the code 
 
 General rules:
 
-- **Empty counts as unset** for every variable below.
+- **Empty counts as unset** for every variable below, except four the code reads as given:
+  an empty `PORT` makes the server listen on a random port, an empty `HOST` is not
+  `0.0.0.0`, an empty `LOG_LEVEL` is not a level the logger accepts, and an empty
+  `DATABASE_URL` leaves the Postgres driver to its own `PG*` variables and defaults. Leave
+  these unset rather than empty.
 - **Values are never printed.** A refused value stops the process with an error that names the
   variable and the rule, never the value.
 - **Production** means `NODE_ENV=production`, or `FLY_APP_NAME` set (the Fly.io platform sets
@@ -33,7 +37,7 @@ dev server and build).
 | `HOST`              | server         | `0.0.0.0`                             | Address the server listens on. Behind a reverse proxy on the same host, `127.0.0.1`.                                                                                                                                                                                                                                                                          |
 | `PORT`              | server         | `4310`                                | Port the server listens on.                                                                                                                                                                                                                                                                                                                                   |
 | `LOG_LEVEL`         | server, worker | `info`                                | Pino level: `trace`, `debug`, `info`, `warn`, `error`, `fatal` or `silent`. Logs never carry code, diffs, prompts, tokens or emails at any level ([logging](../logging.md)).                                                                                                                                                                                  |
-| `ROCKY_PUBLIC_URL`  | server         | `http://HOST:PORT` outside production | Where browsers reach Rocky, an origin with no path. **Required in production, https only.** http is accepted only on `127.0.0.1`, `localhost` or `[::1]` in development. CSRF checks accept this origin only.                                                                                                                                                 |
+| `ROCKY_PUBLIC_URL`  | server         | `http://HOST:PORT` outside production | Where browsers reach Rocky, an origin with no path. **Required in production, https only.** http is accepted only on `127.0.0.1`, `localhost` or `[::1]` in development, so the default works only with a loopback `HOST`; with `HOST=0.0.0.0` (the default) set it explicitly or login and app setup refuse to start. CSRF checks accept this origin only.   |
 | `ROCKY_TRUST_PROXY` | server         | `none` outside production             | Which client address the rate limits count. `none`: the socket's peer, forwarded headers ignored (refused on Fly.io). `fly`: `Fly-Client-IP` (only on Fly.io). `xff:<hops>`: the n-th `X-Forwarded-For` entry from the right, 1 to 9; safe only when the origin accepts traffic from the proxy alone. **Required in production.** The mode is logged at boot. |
 | `ROCKY_WEB_DIR`     | server         | unset                                 | Absolute path of the built web app (`apps/web/dist`). The server serves it with the API's security headers. Unset in development, where Vite serves the app.                                                                                                                                                                                                  |
 
@@ -45,7 +49,7 @@ role or the worker's login.
 
 | Variable              | Read by       | Default  | Meaning                                                                                                                                                                  |
 | --------------------- | ------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`        | server, seed  | required | The application login: a plain member of `rocky_app`, row-level security enforced.                                                                                       |
+| `DATABASE_URL`        | server, seed  | required | The application login: a plain member of `rocky_app`, row-level security enforced. Set it: unset or empty, the Postgres driver falls back to its `PG*` variables.        |
 | `WORKER_DATABASE_URL` | worker, seed  | required | The worker's login: a member of `rocky_app` and `rocky_worker`. Only the worker creates orgs, claims webhook inbox rows and erases orgs. Never use it as `DATABASE_URL`. |
 | `DATABASE_ADMIN_URL`  | migrate, seed | required | The table owner (migrator). Runs migrations and writes the retention settings. Never given to the server or the worker.                                                  |
 
@@ -73,10 +77,10 @@ Envelope encryption ([ADR 0006](../adr/0006-envelope-encryption.md)): each org's
 stored wrapped by a key-encryption key (KEK) that never touches the database. Back the KEKs up
 separately from the database ([backups](backups.md#the-encryption-keys)).
 
-| Variable            | Read by | Default             | Meaning                                                                                                                                                                                                                                                                                  |
-| ------------------- | ------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ROCKY_KEK_KEYS`    | server  | unset               | Comma-separated `<id>=<base64 of 32 random bytes>` entries, for example `k1=<base64>,k2=<base64>`. Required when GitHub login is on (user tokens are stored encrypted). Weak keys (not 32 bytes, too few distinct byte values) are refused. Generate one with `openssl rand -base64 32`. |
-| `ROCKY_KEK_CURRENT` | server  | the last listed key | The id that wraps new data keys. Every listed key still unwraps, which is how rotation works: add the new key, make it current, re-wrap, then remove the old one.                                                                                                                        |
+| Variable            | Read by | Default             | Meaning                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------- | ------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ROCKY_KEK_KEYS`    | server  | unset               | Comma-separated `<id>=<base64 of 32 random bytes>` entries, for example `k1=<base64>,k2=<base64>`. Required when GitHub login is on (user tokens are stored encrypted). Weak keys (not 32 bytes, too few distinct byte values) are refused. Generate one with `openssl rand -base64 32`.                                                                                                     |
+| `ROCKY_KEK_CURRENT` | server  | the last listed key | The id that wraps new data keys. Every listed key still unwraps. Rotation today means adding a new key and making it current: orgs that already have a data key keep it wrapped by the key that wrapped it, and there is no re-wrap command yet. **Never remove a key from `ROCKY_KEK_KEYS`**: the data keys it wrapped would become unreadable ([backups](backups.md#the-encryption-keys)). |
 
 ## GitHub App
 

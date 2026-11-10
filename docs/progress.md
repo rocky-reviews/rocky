@@ -102,6 +102,21 @@ Task log for the project plan. Agents append a row when a task is merged.
   provisioning before a restore and to check `pg_language`. The P2 follow-up "repeat the
   provisioning checks on every `migrate()` run or at server start" would catch a restore that
   skipped it.
+- **No KEK re-wrap command.** `rewrapDataKeys` (`packages/crypto/src/keyring.ts`) exists only as a
+  library function, so rotation today is "add a key and make it current", and no KEK can ever be
+  removed. Add a `pnpm` command that re-wraps every org's data key under the current KEK (per org,
+  compare-and-swap through `replaceOrgDataKey`) and reports which KEK ids are still in use.
+- **KEK loss needs a manual recovery** (`docs/self-host/backups.md`, "The encryption keys"):
+  sign-in opens the org's existing wrapped data key, so after losing the KEKs every org with a
+  data key fails with `unknown_key_version` until the operator clears the encrypted columns by
+  hand. The SQL there follows the code paths (member removal, first data key) but has not been
+  drilled. A supported command (or sign-in treating an unknown KEK as "re-provision after
+  confirmation") and a drill would close it.
+- **Empty is not unset everywhere.** `PORT` (`""` → port 0, random), `HOST`, `LOG_LEVEL` and
+  `DATABASE_URL` use `??`, so an empty value is used as given (`apps/server/src/server.ts`,
+  `apps/server/src/config.ts`, `packages/log/src/logger.ts`); the reference lists them as
+  exceptions. Make them treat empty as unset like every other variable, and make the server
+  refuse an unset `DATABASE_URL` instead of falling back to the driver's `PG*` variables.
 - **No `start` script or compiled build** for the server and worker; production runs them through
   `tsx`, as development does.
 - ADR 0040 §1's table names the self-hosted embedding settings `ROCKY_LLM_OPENAI_COMPATIBLE_*`;
