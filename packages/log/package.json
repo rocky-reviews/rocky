@@ -10,11 +10,11 @@
     "./fastify": "./src/fastify.ts"
   },
   "dependencies": {
-    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api": "1.10.0",
     "pino": "10.4.0"
   },
   "peerDependencies": {
-    "fastify": "5.12.7"
+    "fastify": "5.12.8"
   },
   "peerDependenciesMeta": {
     "fastify": {
@@ -22,6 +22,6 @@
     }
   },
   "devDependencies": {
-    "fastify": "5.12.7"
+    "fastify": "5.12.8"
   }
 }
