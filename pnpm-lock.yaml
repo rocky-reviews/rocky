@@ -98,6 +98,9 @@ importers:
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../../packages/log
+      '@rocky-reviews/mirror':
+        specifier: workspace:*
+        version: link:../../packages/mirror
       fastify:
         specifier: 5.12.8
         version: 5.12.8
@@ -160,6 +163,9 @@ importers:
       '@rocky-reviews/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@rocky-reviews/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@rocky-reviews/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -175,6 +181,9 @@ importers:
       '@rocky-reviews/log':
         specifier: workspace:*
         version: link:../../packages/log
+      '@rocky-reviews/mirror':
+        specifier: workspace:*
+        version: link:../../packages/mirror
       '@rocky-reviews/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -344,6 +353,15 @@ importers:
       fastify:
         specifier: 5.12.8
         version: 5.12.8
+
+  packages/mirror:
+    dependencies:
+      '@rocky-reviews/core':
+        specifier: workspace:*
+        version: link:../core
+      '@rocky-reviews/db':
+        specifier: workspace:*
+        version: link:../db
 
   packages/renderer:
     dependencies:

@@ -12,11 +12,13 @@
   },
   "dependencies": {
     "@rocky-reviews/core": "workspace:*",
+    "@rocky-reviews/crypto": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/forge-github": "workspace:*",
     "@rocky-reviews/indexer": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
+    "@rocky-reviews/mirror": "workspace:*",
     "@rocky-reviews/schema": "workspace:*",
     "pg": "8.23.1"
   },

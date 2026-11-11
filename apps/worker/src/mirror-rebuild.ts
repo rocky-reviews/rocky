@@ -1,7 +1,7 @@
 import { ForgeReadError, type Forge, type OrgId } from "@rocky-reviews/core";
-import { mirroredPullRequests, upsertRepository, type Db } from "@rocky-reviews/db";
+import type { Db } from "@rocky-reviews/db";
 import { isRepositoryFullName } from "@rocky-reviews/forge-github";
-import { mirrorPullRequest, MIRROR_DIFF_MAX_BYTES } from "./pull-requests.js";
+import { MIRROR_DIFF_MAX_BYTES, syncRepositoryMirror } from "@rocky-reviews/mirror";
 
 /**
  * Rebuild-from-GitHub for one repository's mirror (P3-4, ADR 0010 §4). The mirror is derived
@@ -120,67 +120,26 @@ export const rebuildRepositoryMirror = async (
 
   const session = await deps.forge.openRepository(ref);
   if (session === null) throw new RebuildError("repository_inaccessible");
-  const counts = {
-    listed: 0,
-    mirrored: 0,
-    unchanged: 0,
-    missing: 0,
-    stale: 0,
-    revisionsRecorded: 0,
-    truncatedDiffs: 0,
-  };
-  let limitReached = false;
-  const seen = new Set<number>();
   try {
-    const existing = new Map(
-      (
-        await deps.db.withOrg(org.orgId, async (tx) => {
-          await upsertRepository(tx, session.repository);
-          return mirroredPullRequests(tx, session.repository.id);
-        })
-      ).map((p) => [p.number, p]),
-    );
-    for await (const summary of session.listPullRequests()) {
-      if (seen.has(summary.number)) continue;
-      if (seen.size >= limit) {
-        limitReached = true;
-        break;
-      }
-      seen.add(summary.number);
-      counts.listed++;
-      const known = existing.get(summary.number);
-      if (
-        known !== undefined &&
-        known.headSha === summary.headSha &&
-        known.headDiffRead &&
-        known.forgeUpdatedAt?.getTime() === summary.updatedAt.getTime()
-      ) {
-        counts.unchanged++;
-        continue;
-      }
-      const pr = await session.getPullRequest(summary.number);
-      if (pr === null) {
-        counts.missing++;
-        continue;
-      }
-      const result = await mirrorPullRequest(deps.db, org.orgId, session, pr, {
-        maxDiffBytes: options.maxDiffBytes ?? MIRROR_DIFF_MAX_BYTES,
-      });
-      if (result.outcome === "pr_stale_snapshot") counts.stale++;
-      else if (result.outcome === "pr_unchanged") counts.unchanged++;
-      else counts.mirrored++;
-      if (result.revision === "created" || result.revision === "completed") {
-        counts.revisionsRecorded++;
-        if (result.truncation !== null) counts.truncatedDiffs++;
-      }
-    }
+    // The listing loop is the shared sync (packages/mirror, P10-4): nothing is queued for
+    // analysis by a rebuild (review round 1, SF4).
+    const report = await syncRepositoryMirror(deps.db, org.orgId, session, {
+      limit,
+      maxDiffBytes: options.maxDiffBytes ?? MIRROR_DIFF_MAX_BYTES,
+    });
     return {
       orgId: org.orgId,
       installationId: ref.installationId,
       repositoryId: ref.repositoryId,
-      ...counts,
-      notListed: limitReached ? null : [...existing.keys()].filter((n) => !seen.has(n)).length,
-      limitReached,
+      listed: report.listed,
+      mirrored: report.mirrored,
+      unchanged: report.unchanged,
+      missing: report.missing,
+      stale: report.stale,
+      revisionsRecorded: report.revisionsRecorded,
+      truncatedDiffs: report.truncatedDiffs,
+      notListed: report.notListed,
+      limitReached: report.limitReached,
     };
   } finally {
     await session.close();
