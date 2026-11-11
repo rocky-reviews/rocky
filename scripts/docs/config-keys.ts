@@ -57,10 +57,10 @@ export interface SourceScan {
   readonly dynamic: readonly string[];
 }
 
+const escapeRegExp = (text: string): string => text.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+
 const stringConstant = (source: string, ident: string): string | undefined =>
-  new RegExp(String.raw`\bconst\s+${ident.replace(/\$/g, "\\$")}\s*=\s*${QUOTED}`).exec(
-    source,
-  )?.[1];
+  new RegExp(String.raw`\bconst\s+${escapeRegExp(ident)}\s*=\s*${QUOTED}`).exec(source)?.[1];
 
 const label = (file: string, expression: string): string =>
   `${file}: ${expression.replace(/\s+/g, " ").trim()}`;

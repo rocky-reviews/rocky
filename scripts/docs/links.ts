@@ -50,11 +50,20 @@ const proseLines = (markdown: string): string[] => {
   });
 };
 
+/** Drops inline HTML tags, repeating until none is left (a removal can join a new tag). */
+const stripTags = (text: string): string => {
+  let previous: string;
+  let current = text;
+  do {
+    previous = current;
+    current = current.replace(/<[^<>]*>/g, "");
+  } while (current !== previous);
+  return current;
+};
+
 /** GitHub's slug for a heading's text. */
 export const githubSlug = (heading: string): string =>
-  heading
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/<[^>]+>/g, "")
+  stripTags(heading.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1"))
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, "")
