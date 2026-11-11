@@ -51,7 +51,7 @@ export interface SetupSessions {
    * null when the request carried none of the right shape; `client` is the client address key
    * the rate limits use.
    */
-  redeem(token: string | null, client?: string): RedeemResult;
+  redeem(token: string | null, client: string): RedeemResult;
   /** sha256 hex of the request's live session cookie, or `undefined`. */
   sessionOf(request: FastifyRequest): string | undefined;
   /** The synchronizer token for the request's session (the wizard reads it from its status). */
@@ -119,7 +119,7 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
   };
 
   return {
-    redeem: (token, client = "") => {
+    redeem: (token, client) => {
       // Hash both sides to a fixed length, then compare in constant time. The token is 256-bit,
       // so guessing is hopeless; the per-client lockout and the rate limit still bound attempts.
       const locked = (failures.get(client) ?? 0) >= MAX_TOKEN_FAILURES;

@@ -22,7 +22,7 @@ const valueOf = (cookie: string): string => cookie.split(";")[0]!.split("=")[1]!
 
 const started = (publicUrl = HTTP, now?: () => number) => {
   const sessions = createSetupSessions({ token, publicUrl, ...(now === undefined ? {} : { now }) });
-  const redeemed = sessions.redeem(token);
+  const redeemed = sessions.redeem(token, "203.0.113.9");
   if (!redeemed.ok) throw new Error("redeem failed");
   return { sessions, cookie: redeemed.cookie, value: valueOf(redeemed.cookie) };
 };
@@ -52,7 +52,7 @@ describe("setup sessions (P10-2)", () => {
     );
     expect(cookie).not.toContain(token);
     expect(sessions.sessionOf(request({ cookie: `rocky_setup=${value}` }))).toBeDefined();
-    expect(sessions.redeem(token)).toEqual({ ok: false, reason: "bad_token" });
+    expect(sessions.redeem(token, "203.0.113.9")).toEqual({ ok: false, reason: "bad_token" });
   });
 
   it("uses the __Host- prefix and Secure on https", () => {
@@ -163,6 +163,6 @@ describe("setup sessions (P10-2)", () => {
     expect(sessions.sessionOf(request({ cookie: `rocky_setup=${value}` }))).toBeUndefined();
     const fresh = createSetupSessions({ token, publicUrl: HTTP });
     fresh.close();
-    expect(fresh.redeem(token).ok).toBe(false);
+    expect(fresh.redeem(token, "203.0.113.9").ok).toBe(false);
   });
 });

@@ -194,7 +194,9 @@ This fits the production rules unchanged:
 - **Client addresses.** `init-env.sh` sets `ROCKY_TRUST_PROXY=xff:1`. Cloudflare's edge appends
   the visitor's address to `X-Forwarded-For` and `cloudflared` passes it on, so the rightmost entry
   is the visitor; the server is published on `127.0.0.1` only, so nothing reaches it but the
-  tunnel and the VM itself. The rate limits and the setup link's lockout count per visitor.
+  tunnel and the VM itself. The rate limits and the setup link's lockout count per visitor. Do not
+  set `ROCKY_BIND=0.0.0.0` to reach the VM from the host's browser: with `xff:1`, anyone on the
+  network could then send their own `X-Forwarded-For`. Use the tunnel's address.
   To confirm, after opening the wizard:
   `docker compose -f deploy/docker-compose.yml logs server | grep -c proxy_header_fallback`
   should print `0` (a warning there means the header did not arrive and every visitor shares one

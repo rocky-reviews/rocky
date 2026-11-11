@@ -85,8 +85,14 @@ Task log for the project plan. Agents append a row when a task is merged.
 
 ### P10-2 follow-ups
 
+- Re-review nits: `SetupConfig.credentialsWritten` (boot-time boolean) is now only read by its
+  test, since `server.ts` checks the file per request; drop it or make it the function. The
+  announcement does not repeat when the same text comes twice within 5 s (clear and re-set on
+  the next tick). No e2e for a double click on Finish while it is finishing (same guard as the
+  test call; a repeated close is harmless). `clientKey` runs twice on token-redeem requests, so a
+  missing proxy header counts twice in the fallback warning's number.
 - **Needs human: the timed fresh-VM run** (`docs/self-host/setup.md`, "Checklist for a timed
-  run"): a VM with a DNS name, the GitHub click to create and install the app, one live LLM test
+  run"): a VM with a DNS name or a local VM with the quick tunnel, the GitHub click to create and install the app, one live LLM test
   call and one analysed pull request. Record the time and the 14 screenshots in the PR.
 - The wizard's test call is not recorded in `llm_usage` (no org exists to count it against). If
   self-host reporting ever needs instance-level spend, add a non-tenant usage row for it.
