@@ -74,6 +74,8 @@ const DYNAMIC_READS_COVERED_BY: Readonly<Record<string, string>> = {
     "envSecrets(): the key variables, LLM_DEFAULT_KEY_ENVS",
   "scripts/evals.ts: env[embedKey]": "the embedding key the LLM config names, LLM_DEFAULT_KEY_ENVS",
   "scripts/evals.ts: env[name]": "the key variables the LLM config names, LLM_DEFAULT_KEY_ENVS",
+  "scripts/provision-logins.ts: env[name]":
+    "nonEmpty(): its callers pass literals, which the scan reads",
 };
 
 /**
