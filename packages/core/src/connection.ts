@@ -117,6 +117,8 @@ export const ConnectionResponse = z.strictObject({
   lastSyncedAt: z.iso.datetime().nullable(),
   /** `ROCKY_ANALYSIS_AUTO=on`: a sync queues an analysis of every new head it reads. */
   analysisAuto: z.boolean(),
+  /** A sync of this org is running now (the page asks again until it is done). */
+  syncing: z.boolean(),
 });
 export type ConnectionResponse = z.infer<typeof ConnectionResponse>;
 
@@ -175,8 +177,12 @@ export const RepositorySyncReport = z.strictObject({
 export type RepositorySyncReport = z.infer<typeof RepositorySyncReport>;
 
 export const SyncResponse = z.strictObject({
-  /** `synced` when every repository was read; otherwise the first problem met. */
-  outcome: z.enum(["synced", ...SYNC_PROBLEMS]),
+  /**
+   * `synced` when every repository was read; `running` when it goes on after the request's wait
+   * (no report yet: the inbox and the connection page show it running and ask again); otherwise
+   * the first problem met.
+   */
+  outcome: z.enum(["synced", "running", ...SYNC_PROBLEMS]),
   /** When GitHub's rate limit resets, for `rate_limited`. */
   retryAt: z.iso.datetime().nullable(),
   syncedAt: z.iso.datetime().nullable(),

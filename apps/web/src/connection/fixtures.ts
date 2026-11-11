@@ -57,6 +57,7 @@ export const CONNECTION: ConnectionResponse = {
   ],
   lastSyncedAt: "2026-10-25T12:09:00.000Z",
   analysisAuto: true,
+  syncing: false,
 };
 
 /** No token saved (it was removed): nothing is read or posted. */
@@ -64,6 +65,7 @@ export const CONNECTION_NO_TOKEN: ConnectionResponse = {
   ...CONNECTION,
   token: null,
   analysisAuto: false,
+  syncing: false,
 };
 
 /** A classic token with warnings, nothing followed yet, automatic analysis off. */
@@ -73,6 +75,7 @@ export const CONNECTION_EMPTY: ConnectionResponse = {
   repositories: [],
   lastSyncedAt: null,
   analysisAuto: false,
+  syncing: false,
 };
 
 export const AVAILABLE: AvailableRepositoriesResponse = {

@@ -36,8 +36,13 @@ org isolated by RLS exactly like an App org, and make token mode impossible on R
   outside needs to reach Rocky, and the browser reaches it through the loopback (or an SSH
   forward). Any other http URL is refused.
 - **Database backstop.** `auth.create_token_org` (migration 0024) creates the token org only
-  when no App org exists and no other live token org does. A Cloud database, which has App orgs,
-  can never gain one, even if the configuration check were bypassed.
+  when no App org exists and no other live token org does; a partial unique index
+  (`orgs_one_live_token`) settles two saves at once. A Cloud database, which has App orgs, can
+  never gain one, even if the configuration check were bypassed.
+- **Boot warnings** (never refusals): plain http with a `HOST` that is not a loopback address
+  (bare metal with `HOST=0.0.0.0` would serve the session and the sign-in link in clear to the
+  network), and token mode with no token connected and the wizard off (the sign-in link would
+  sign nobody in).
 
 ### 2. Schema (migration 0024)
 
@@ -48,6 +53,9 @@ org isolated by RLS exactly like an App org, and make token mode impossible on R
 - `auth.create_token_org` and `auth.token_org` (SECURITY DEFINER, owned by `rocky_auth`): the
   only ways to create and find the token org before a session exists. Create runs inside
   `withOrg` for the new id, so RLS on `orgs` (FORCE) still applies.
+- `auth.refresh_token_org_login`: the token org's display login follows its owner's GitHub login
+  (read again on every token save); that one column, of the current tenant's token org, for its
+  own account only (column grant, policy, and the identity trigger's exception for `rocky_auth`).
 - `repos.synced_at`: when Rocky last read a repository's pull requests.
 - The down migration drops the column only when no token org is left: a migration never deletes
   tenant data; remove the org first (erasure) to roll back.
@@ -65,8 +73,10 @@ work unchanged; reviews post as the token's owner.
 - **On save** (wizard or the connection page): `GET /user` (who, which kind, the expiry header,
   a classic token's scopes) and a listing probe (`GET /user/repos`). Refused with a fixed code:
   wrong shape, rejected, expired, a classic token without `repo`/`public_repo`
-  (`missing_permissions`), rate limited (with when to retry), GitHub unavailable. Replacing a
-  token must keep the same GitHub user (`token_user_mismatch`).
+  (`missing_permissions`; only when GitHub listed the scopes, read leniently), rate limited
+  (with when to retry), GitHub unavailable. Replacing a token must keep the same GitHub user
+  (`token_user_mismatch`), and is bound to the caller's org: another org is refused before GitHub
+  is asked or anything is written.
 - **Kinds.** A fine-grained token is recommended (Contents read, Pull requests read and write,
   Metadata read). A classic token is accepted with a warning (it reaches every repository of the
   user). An expiry within 14 days is warned about.
@@ -80,8 +90,9 @@ There is no OAuth App, so no GitHub login. At boot the server prints a one-time 
 (`/auth/token/start?token=…`, 256 bits, compared by hash in constant time, single use, 20 wrong
 tries per client before a lockout) on stderr, the same primitive as the setup link (ADR 0044),
 extracted to `auth/one-time-link.ts`. Opening it creates a normal session for the token's owner
-(the org's owner member) and redirects to `/inbox`. A lost or used link: restart the server for a
-new one. Saving the token in the wizard signs the operator in directly.
+(the org's owner member) and redirects to `/inbox`. The link is spent only when a session was
+issued: opened before a token is saved (or on a failure), it stays usable. A lost or used link:
+restart the server for a new one. Saving the token in the wizard signs the operator in directly.
 
 Sessions are those of ADR 0020 (cookies, CSRF), with a 1-day idle and 7-day absolute lifetime.
 A 401 answer carries `signIn: "token_link"` so the web app says where the link is instead of
@@ -94,18 +105,25 @@ requests when someone looks:
 
 - **Sync** on the connection page and the inbox (`POST /api/connection/sync`); at most once every
   5 s per org.
-- **Opening the inbox** syncs when the last sync is older than 60 s. It waits up to 4 s, then
-  answers with what it has and `sync.state: "running"`; the web app asks again.
-- **Opening a pull request** re-reads that one pull request.
+- **Adding a repository** syncs it.
+- **Opening the inbox** syncs when the last sync is older than 60 s.
+- **Opening a pull request** re-reads that one pull request (at most once a minute).
+
+No request waits for GitHub longer than 4 s (`REQUEST_WAIT_MS`): the work goes on in the
+background and the answer says so (`outcome: "running"`, `sync.state: "running"`,
+`syncing: true` on the connection page; the pull request page shows the mirror's row). The web
+app asks again a few times. A proxy or tunnel timeout therefore never cuts a sync half-way.
 
 A sync lists the open pull requests (up to 200 per repository) and re-reads only those Rocky
 still shows open that the listing did not return (to see them closed or merged): old closed pull
-requests are never read. New heads are queued for analysis when `ROCKY_ANALYSIS_AUTO=on`,
+requests are never read. One GitHub no longer has (404) is closed in the mirror, so it is not
+read again. New heads are queued for analysis when `ROCKY_ANALYSIS_AUTO=on`,
 through the same queue as the App's webhook path. The mirror code (`mirrorPullRequest`, the
 rebuild loop) moved from the worker to `packages/mirror` so both paths share it.
 
-GitHub's rate limit (a 403/429 with `x-ratelimit-remaining: 0`) becomes `rate_limited` with the
-reset time; the sync stops, keeps what it has, and the answer says when to retry. Nothing runs in
+GitHub's rate limit (a 403/429 with `x-ratelimit-remaining: 0`, or a secondary limit: 403/429
+with `retry-after`, or a bare 429), on every read including the streamed diff, becomes
+`rate_limited` with the time to retry; the sync stops, keeps what it has, and the answer says when to retry. Nothing runs in
 the background on a timer.
 
 ### 6. Pipeline reuse

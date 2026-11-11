@@ -40,6 +40,7 @@ import {
   loadTokenConnection,
   markRepositorySynced,
   recordTokenConnection,
+  refreshTokenOrgLogin,
   SecretStoreError,
   storeForgeToken,
   storeOrgDataKey,
@@ -77,8 +78,12 @@ import { MEMBER_TOKEN_PURPOSE } from "../repository-access.js";
 
 /** Open pull requests read per repository per sync (newest first; older ones wait for the next). */
 export const SYNC_PULL_REQUEST_LIMIT = 200;
-/** How long opening the inbox waits for the sync it started before answering with `running`. */
-export const SYNC_ON_OPEN_WAIT_MS = 4_000;
+/**
+ * How long a request waits for the GitHub work it started (the inbox's sync on open, Sync,
+ * adding a repository, opening a pull request) before answering with what it has (`running`);
+ * the work goes on without it, so a proxy or tunnel timeout never cuts a sync half-way.
+ */
+export const REQUEST_WAIT_MS = 4_000;
 /** Opening the inbox or a pull request syncs at most this often. */
 export const SYNC_ON_OPEN_INTERVAL_MS = 60_000;
 /** Explicit syncs ("Sync" button) are accepted at most this often per org. */
@@ -97,7 +102,7 @@ export interface TokenConnectionDeps {
   /** After a token is stored or cleared (ADR 0011 §6): the access check's `invalidateMember`. */
   readonly onMemberTokenChanged?: (orgId: OrgId, memberId: string) => void;
   readonly syncOnOpenIntervalMs?: number;
-  readonly syncOnOpenWaitMs?: number;
+  readonly requestWaitMs?: number;
   readonly syncLimit?: number;
 }
 
@@ -224,7 +229,29 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
   const now = deps.now ?? Date.now;
   const newOrgId = deps.newOrgId ?? (() => randomUUID() as OrgId);
   const onOpenInterval = deps.syncOnOpenIntervalMs ?? SYNC_ON_OPEN_INTERVAL_MS;
-  const onOpenWait = deps.syncOnOpenWaitMs ?? SYNC_ON_OPEN_WAIT_MS;
+  const requestWait = deps.requestWaitMs ?? REQUEST_WAIT_MS;
+
+  /**
+   * `work`'s result if it settles within the request's wait, else `"running"`: the work goes on
+   * in the background (its failures are logged where they happen and seen on the next look).
+   */
+  const withinWait = async <T>(work: Promise<T>): Promise<T | "running"> => {
+    let timer: NodeJS.Timeout | undefined;
+    const answer = await Promise.race([
+      work,
+      new Promise<"running">((resolve) => {
+        timer = setTimeout(() => resolve("running"), requestWait);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (answer === "running") work.catch(() => undefined);
+    return answer;
+  };
+  const RUNNING: SyncResponse = {
+    outcome: "running",
+    retryAt: null,
+    syncedAt: null,
+    repositories: [],
+  };
   const syncLimit = deps.syncLimit ?? SYNC_PULL_REQUEST_LIMIT;
   /** Orgs with a sync in flight (one at a time per org). */
   const syncing = new Set<string>();
@@ -350,6 +377,8 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     }
     const member = await db.withOrg(orgId, async (tx) => {
       const row = await upsertLoginMember(tx, { forgeUserId: identity.id, login: identity.login });
+      // A rename on GitHub: the org's display login follows the member's.
+      await refreshTokenOrgLogin(tx, { accountId: identity.id, login: identity.login });
       if (row === null) return null;
       await claimFirstOwner(tx, row.memberId);
       return row;
@@ -438,6 +467,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
       token,
       repositories: rows.map(repositoryView).filter((r) => r !== null),
       lastSyncedAt: last === null ? null : last.toISOString(),
+      syncing: syncing.has(orgId),
       analysisAuto: deps.analysisAuto,
     };
   };
@@ -625,7 +655,8 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     if (options.force !== true && since < SYNC_MIN_INTERVAL_MS && !syncing.has(orgId)) {
       return { outcome: "busy", retryAt: null, syncedAt: null, repositories: [] };
     }
-    return guarded(orgId, options.repoId);
+    const answer = await withinWait(guarded(orgId, options.repoId));
+    return answer === "running" ? RUNNING : answer;
   };
 
   const syncOnOpen: TokenConnectionService["syncOnOpen"] = async (orgId) => {
@@ -638,17 +669,8 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     if (since < onOpenInterval) {
       return { state: "skipped", lastSyncedAt: await stamp(), problem: null, retryAt: null };
     }
-    const running = guarded(orgId, undefined);
-    let timer: NodeJS.Timeout | undefined;
-    const waited = await Promise.race([
-      running,
-      new Promise<"waiting">((resolve) => {
-        timer = setTimeout(() => resolve("waiting"), onOpenWait);
-      }),
-    ]).finally(() => clearTimeout(timer));
-    if (waited === "waiting") {
-      // It goes on without the request; its failures are logged by `runSync` and seen next time.
-      running.catch(() => undefined);
+    const waited = await withinWait(guarded(orgId, undefined));
+    if (waited === "running" || waited.outcome === "running") {
       return { state: "running", lastSyncedAt: await stamp(), problem: null, retryAt: null };
     }
     const failed = waited.outcome !== "synced" && waited.outcome !== "busy";
@@ -661,6 +683,14 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
   };
 
   const syncPullRequest: TokenConnectionService["syncPullRequest"] = async (orgId, target) => {
+    // The page shows the mirror's row either way: it waits a little for a fresher one, no more.
+    await withinWait(readPullRequest(orgId, target));
+  };
+
+  const readPullRequest = async (
+    orgId: OrgId,
+    target: { readonly forgeRepoId: number; readonly number: number },
+  ): Promise<void> => {
     const key = `${orgId}|${target.forgeRepoId}|${target.number}`;
     if (now() - (lastPullSyncAt.get(key) ?? -Infinity) < onOpenInterval) return;
     lastPullSyncAt.set(key, now());
@@ -739,7 +769,8 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
       return id;
     });
     log("info", "repository_added", { orgId, repoId, forgeRepoId });
-    const synced = await guarded(orgId, repoId);
+    const waited = await withinWait(guarded(orgId, repoId));
+    const synced = waited === "running" ? RUNNING : waited;
     const row = await db.withOrg(orgId, (tx) => findConnectionRepository(tx, repoId));
     const view = row === null ? null : repositoryView(row);
     if (view === null) return { ok: false, reason: "repository_not_found" };

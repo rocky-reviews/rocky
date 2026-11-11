@@ -88,7 +88,8 @@ Task log for the project plan. Agents append a row when a task is merged.
 
 - Ask about the pull request and the repository index are off in token mode (they read code through the App installation); give them the token opener.
 - A new sign-in link needs a server restart; a CLI (`pnpm rocky sign-in-link` or a compose `exec`) would avoid the restart.
-- `packages/mirror` has no tests of its own; `syncOpenPullRequests` is covered through the server's token-mode suite. Move the cases into the package.
+- `packages/mirror` has no tests of its own; `syncOpenPullRequests` is covered through the server's token-mode suite (listing, merge detection, a vanished pull request closed). Move the cases into the package (left for later in the review fix round: a test move, no behaviour).
+- Review fix round, left as a follow-up: a local process on the server can lock the loopback client address out of the sign-in link (20 wrong tries, `127.0.0.1` is everyone on a loopback install). A restart prints a new link and clears the lockout; a per-link lockout bound or a CLI to print a fresh link would avoid the restart.
 - `deploy/init-env.sh` only accepts https addresses; accept `http://127.0.0.1:<port>` with `--token-mode` (and set `ROCKY_TRUST_PROXY=none`).
 - A fine-grained token's pull-request write permission is only proven at the first post (no read-only probe); surface GitHub's refusal there with the token hint.
 - The sync lock and throttles are in-process: fine for the single compose server, not for several replicas.

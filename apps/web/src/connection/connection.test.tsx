@@ -25,6 +25,7 @@ import {
   needsNewToken,
   SYNC_POLL_LIMIT,
   SYNC_POLL_MS,
+  SYNC_RUNNING_TEXT,
   syncBar,
   syncProblemText,
   syncReportText,
@@ -135,6 +136,13 @@ describe("the connection model", () => {
     expect(syncReportText({ ...SYNCED, outcome: "busy" })).toBe("A sync is already running.");
   });
 
+  it("a sync still running after the request's wait says so, as news, not a problem", () => {
+    const running = { ...SYNCED, outcome: "running" as const, syncedAt: null, repositories: [] };
+    expect(SyncResponse.safeParse(running).success).toBe(true);
+    expect(syncReportText(running)).toBe(SYNC_RUNNING_TEXT);
+    expect(SYNC_RUNNING_TEXT).toMatch(/in the background/);
+  });
+
   it("the sync bar's state follows the inbox's sync", () => {
     expect(syncBar(INBOX_SYNC.running)).toEqual({ kind: "running" });
     expect(syncBar(INBOX_SYNC.synced)).toEqual({ kind: "idle" });
@@ -213,6 +221,12 @@ describe("the connection page", () => {
     expect(html).toContain("analysed automatically.");
     expect(html).not.toContain("github_pat_");
     expect(html).not.toContain('type="password"');
+  });
+
+  it("while a sync runs on the server: Syncing…, and the button is unavailable", () => {
+    const html = renderConnection({ ...CONNECTION, syncing: true });
+    expect(html).toMatch(/aria-disabled="true"[^>]*>.*Syncing…/);
+    expect(renderConnection(CONNECTION)).toContain("Sync now");
   });
 
   it("no token: says Rocky stops, and asks for one", () => {

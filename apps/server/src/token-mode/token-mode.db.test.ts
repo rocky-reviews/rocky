@@ -472,6 +472,7 @@ describe("the connection API", () => {
       repositories: [],
       lastSyncedAt: null,
       analysisAuto: true,
+      syncing: false,
     });
     expect((await app().inject({ method: "GET", url: "/api/connection" })).statusCode).toBe(401);
   });
@@ -600,6 +601,51 @@ describe("the connection API", () => {
     }
   });
 
+  it("a pull request GitHub no longer has (404) is closed in the mirror, not re-read every sync", async () => {
+    github.putPullRequest(REPO.id, { number: 14, headSha: HEAD, baseSha: BASE, title: "Gone" });
+    let gone = false;
+    let reads = 0;
+    const vanishing: typeof fetch = async (input, init) => {
+      if (String(input).includes("/pulls/14")) {
+        reads++;
+        if (gone) {
+          return new Response(JSON.stringify({ message: "Not Found" }), {
+            status: 404,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          });
+        }
+      }
+      return github.fetch(input, init);
+    };
+    const service = createTokenConnectionService({
+      db,
+      keys: localKeyWrapperFromEnv({ ROCKY_KEK_KEYS: `v1=${KEK}` }),
+      client: createGitHubTokenClient({ api: githubEndpoints({}).api, fetch: vanishing }),
+      log: { info: () => undefined, warn: () => undefined },
+      forge: "github",
+      analysisAuto: false,
+    });
+    const open = async () =>
+      (
+        await superuser.query<{ state: string }>(
+          "select p.state from pull_requests p join repos r on r.id = p.repo_id where p.org_id = $1 and r.forge_repo_id = $2 and p.number = 14",
+          [orgId, REPO.id],
+        )
+      ).rows[0]?.state;
+    expect((await service.sync(orgId as OrgId, { force: true })).outcome).toBe("synced");
+    expect(await open()).toBe("open");
+    // Gone from GitHub: no longer listed, and its own read answers 404.
+    gone = true;
+    github.putPullRequest(REPO.id, { number: 14, headSha: HEAD, baseSha: BASE, state: "closed" });
+    reads = 0;
+    expect((await service.sync(orgId as OrgId, { force: true })).outcome).toBe("synced");
+    expect(reads).toBe(1);
+    expect(await open()).toBe("closed");
+    reads = 0;
+    expect((await service.sync(orgId as OrgId, { force: true })).outcome).toBe("synced");
+    expect(reads).toBe(0);
+  });
+
   it("stops following a repository: the inbox no longer lists it; another org's id is not found", async () => {
     const { repositories } = (await call(owner, "GET", "/api/connection")).json() as {
       repositories: { id: string }[];
@@ -694,11 +740,13 @@ describe("opening the inbox while a long sync runs", () => {
       log: { info: () => undefined, warn: () => undefined },
       forge: "github",
       analysisAuto: false,
-      syncOnOpenWaitMs: 20,
+      requestWaitMs: 20,
       syncOnOpenIntervalMs: 0,
     });
     const added = await service.addRepository(orgId as OrgId, REPO.id);
     expect(added.ok).toBe(true);
+    // Adding answers within the wait too; its sync finishes in the background first.
+    await pause(700);
     const before = listings;
     const first = await service.syncOnOpen(orgId as OrgId);
     expect(first).toMatchObject({ state: "running", problem: null });
@@ -710,6 +758,64 @@ describe("opening the inbox while a long sync runs", () => {
       tx.query<{ at: Date }>("select max(synced_at) as at from repos where enabled"),
     );
     expect(synced.rows[0]!.at.getTime()).toBeGreaterThan(Date.parse(first.lastSyncedAt!));
+  });
+
+  it("Sync, adding a repository and opening a pull request answer within the wait; the work finishes after", async () => {
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    let slowReads = 0;
+    let finished = 0;
+    const slow: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url.includes("/pulls")) {
+        slowReads++;
+        await pause(400);
+        const answer = await github.fetch(input, init);
+        finished++;
+        return answer;
+      }
+      return github.fetch(input, init);
+    };
+    const service = createTokenConnectionService({
+      db,
+      keys: localKeyWrapperFromEnv({ ROCKY_KEK_KEYS: `v1=${KEK}` }),
+      client: createGitHubTokenClient({ api: githubEndpoints({}).api, fetch: slow }),
+      log: { info: () => undefined, warn: () => undefined },
+      forge: "github",
+      analysisAuto: false,
+      requestWaitMs: 30,
+      syncOnOpenIntervalMs: 0,
+    });
+    const timed = async <T>(work: Promise<T>): Promise<{ value: T; ms: number }> => {
+      const start = Date.now();
+      const value = await work;
+      return { value, ms: Date.now() - start };
+    };
+
+    const explicit = await timed(service.sync(orgId as OrgId, { force: true }));
+    expect(explicit.value.outcome).toBe("running");
+    expect(explicit.ms).toBeLessThan(300);
+    // A second press while it runs is `busy`, not a second sync.
+    expect((await service.sync(orgId as OrgId, { force: true })).outcome).toBe("busy");
+    await pause(1_500);
+    expect(finished).toBe(slowReads);
+
+    const added = await timed(service.addRepository(orgId as OrgId, SECOND.id));
+    expect(added.ms).toBeLessThan(300);
+    expect(added.value).toMatchObject({ ok: true, sync: { outcome: "running" } });
+    await pause(1_500);
+    expect(finished).toBe(slowReads);
+
+    const opened = await timed(
+      service.syncPullRequest(orgId as OrgId, { forgeRepoId: REPO.id, number: 12 }),
+    );
+    expect(opened.ms).toBeLessThan(300);
+    await pause(1_000);
+    expect(finished).toBe(slowReads);
+    // Stop following the second repository again (the tests after this one list one).
+    const second = (await service.describe(orgId as OrgId))!.repositories.find(
+      (r) => r.name === "site",
+    )!;
+    expect(await service.removeRepository(orgId as OrgId, second.id)).toBe(true);
   });
 });
 

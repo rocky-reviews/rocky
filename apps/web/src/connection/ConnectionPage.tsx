@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "../shell/use-theme.js";
 import { SignIn } from "../SignIn.js";
 import { Connection } from "./Connection.js";
+import { SYNC_POLL_LIMIT, SYNC_POLL_MS } from "./connection-model.js";
 import { ConnectionLoadError, type ConnectionSource } from "./connection-source.js";
 
 type State =
@@ -46,6 +47,22 @@ export const ConnectionPage = ({ source }: { source: ConnectionSource }) => {
       abort.abort();
     };
   }, [load]);
+
+  // While a sync runs on the server (after Sync or adding a repository), ask again a few times.
+  const polls = useRef(0);
+  const syncing = state.kind === "ready" && state.data.syncing;
+  useEffect(() => {
+    if (!syncing) {
+      polls.current = 0;
+      return undefined;
+    }
+    if (polls.current >= SYNC_POLL_LIMIT) return undefined;
+    const timer = window.setTimeout(() => {
+      polls.current += 1;
+      void load();
+    }, SYNC_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [syncing, state, load]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);

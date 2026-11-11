@@ -107,7 +107,7 @@ export const Connection = ({ data, now, mode, onToggleMode, source, onReload }: 
     const report = syncReportText(result.sync);
     setRepoNotice({
       text: `Added ${fullName(result.repository)}. ${report}`,
-      alert: result.sync.outcome !== "synced",
+      alert: result.sync.outcome !== "synced" && result.sync.outcome !== "running",
     });
     closeDialog();
     void onReload();
@@ -125,7 +125,7 @@ export const Connection = ({ data, now, mode, onToggleMode, source, onReload }: 
     }
     const { outcome, retryAt } = answer.value;
     setSyncNotice(
-      outcome === "synced"
+      outcome === "synced" || outcome === "running"
         ? { text: syncReportText(answer.value), alert: false }
         : {
             text: syncProblemText(outcome, retryAt),
@@ -297,9 +297,9 @@ export const Connection = ({ data, now, mode, onToggleMode, source, onReload }: 
               type="button"
               className="btn btn-primary"
               onClick={() => void sync()}
-              {...(syncing ? { "aria-disabled": true } : {})}
+              {...(syncing || data.syncing ? { "aria-disabled": true } : {})}
             >
-              <span aria-hidden="true">↻</span> {syncing ? "Syncing…" : "Sync now"}
+              <span aria-hidden="true">↻</span> {syncing || data.syncing ? "Syncing…" : "Sync now"}
             </button>
             <span className="connection-when">
               {data.lastSyncedAt === null

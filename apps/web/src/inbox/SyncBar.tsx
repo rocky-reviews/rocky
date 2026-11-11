@@ -37,6 +37,9 @@ export const SyncBar = ({ sync, now, onSync }: Props) => {
       setAnswer("The sync could not be started. Try again.");
     } else if (result.value.outcome === "synced") {
       setAnnouncement("Synced with GitHub.");
+    } else if (result.value.outcome === "running") {
+      // Goes on on the server; the inbox shows it running and asks again until it is done.
+      setAnnouncement("Syncing with GitHub in the background…");
     } else {
       setAnnouncement("");
       setAnswer(syncProblemText(result.value.outcome, result.value.retryAt));

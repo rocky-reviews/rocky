@@ -109,8 +109,13 @@ const safeCode = (code: string): string => (/^[a-z][a-z0-9_]{0,63}$/.test(code) 
 
 const n = (count: number, one: string, many: string) => `${count}\u00a0${count === 1 ? one : many}`;
 
+/** A sync that goes on after the request's wait (the server answers `running`). */
+export const SYNC_RUNNING_TEXT =
+  "Rocky is reading GitHub in the background; the page updates when it is done.";
+
 /** One line about what a sync read (counts only). */
 export const syncReportText = (sync: SyncResponse): string => {
+  if (sync.outcome === "running") return SYNC_RUNNING_TEXT;
   if (sync.outcome !== "synced") return syncProblemText(sync.outcome, sync.retryAt);
   const listed = sync.repositories.reduce((sum, r) => sum + r.listed, 0);
   const mirrored = sync.repositories.reduce((sum, r) => sum + r.mirrored, 0);

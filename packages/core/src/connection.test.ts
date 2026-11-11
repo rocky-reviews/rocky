@@ -88,6 +88,7 @@ describe("the connection schemas", () => {
         repositories: [],
         lastSyncedAt: null,
         analysisAuto: false,
+        syncing: false,
       }).success,
     ).toBe(true);
     expect(
@@ -97,6 +98,7 @@ describe("the connection schemas", () => {
         repositories: [],
         lastSyncedAt: null,
         analysisAuto: false,
+        syncing: false,
       }).success,
     ).toBe(false);
     expect(
@@ -106,6 +108,7 @@ describe("the connection schemas", () => {
         repositories: [],
         lastSyncedAt: null,
         analysisAuto: false,
+        syncing: false,
       }).success,
     ).toBe(false);
   });
