@@ -48,11 +48,19 @@ const nonEmpty = (env: Env, name: string): string | undefined => {
   return value === undefined || value === "" ? undefined : value;
 };
 
-const pair = (env: Env, prefix: string, worker: boolean): LoginSpec | undefined => {
-  const userVar = `${prefix}_USER`;
-  const passwordVar = `${prefix}_PASSWORD`;
-  const name = nonEmpty(env, userVar);
-  const password = nonEmpty(env, passwordVar);
+interface LoginVars {
+  readonly userVar: string;
+  readonly passwordVar: string;
+  readonly name: string | undefined;
+  readonly password: string | undefined;
+}
+
+// Each variable is read by its literal name at the call site, so the config reference test
+// (scripts/docs/config-keys.test.ts) sees every one of them.
+const pair = (
+  { userVar, passwordVar, name, password }: LoginVars,
+  worker: boolean,
+): LoginSpec | undefined => {
   if (name === undefined && password === undefined) return undefined;
   if (name === undefined || password === undefined) {
     throw new Error(`${userVar} and ${passwordVar} must be set together (or neither)`);
@@ -71,8 +79,24 @@ const pair = (env: Env, prefix: string, worker: boolean): LoginSpec | undefined 
 };
 
 export const loginProvisioningFromEnv = (env: Env): LoginSpec[] => {
-  const app = pair(env, "ROCKY_DB_APP", false);
-  const worker = pair(env, "ROCKY_DB_WORKER", true);
+  const app = pair(
+    {
+      userVar: "ROCKY_DB_APP_USER",
+      passwordVar: "ROCKY_DB_APP_PASSWORD",
+      name: nonEmpty(env, "ROCKY_DB_APP_USER"),
+      password: nonEmpty(env, "ROCKY_DB_APP_PASSWORD"),
+    },
+    false,
+  );
+  const worker = pair(
+    {
+      userVar: "ROCKY_DB_WORKER_USER",
+      passwordVar: "ROCKY_DB_WORKER_PASSWORD",
+      name: nonEmpty(env, "ROCKY_DB_WORKER_USER"),
+      password: nonEmpty(env, "ROCKY_DB_WORKER_PASSWORD"),
+    },
+    true,
+  );
   if (app !== undefined && worker !== undefined && app.name === worker.name) {
     throw new Error("ROCKY_DB_APP_USER and ROCKY_DB_WORKER_USER name the same role");
   }
