@@ -155,7 +155,8 @@ CREATE FUNCTION auth.create_token_org(p_forge text, p_account_id bigint, p_login
 AS $$
   INSERT INTO public.orgs (id, forge, connection, installation_id, account_id, login, kind)
   SELECT app.current_org_id(), p_forge, 'token', NULL, p_account_id, p_login, 'user'
-   WHERE NOT EXISTS (SELECT 1 FROM public.orgs o WHERE o.connection = 'app')
+   WHERE p_login ~ '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'
+     AND NOT EXISTS (SELECT 1 FROM public.orgs o WHERE o.connection = 'app')
      AND NOT EXISTS (SELECT 1 FROM public.orgs o
                       WHERE o.connection = 'token' AND o.erasing_at IS NULL)
   ON CONFLICT DO NOTHING
@@ -199,6 +200,9 @@ AS $$
      WHERE o.id = app.current_org_id()
        AND o.connection = 'token'
        AND o.account_id = p_account_id
+       AND o.erasing_at IS NULL
+       -- The GitHub login shape, as the application checks it (defence in depth).
+       AND p_login ~ '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'
        AND o.login IS DISTINCT FROM p_login
     RETURNING 1
   )

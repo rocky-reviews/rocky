@@ -93,6 +93,31 @@ describe("creating the token org (as the application login)", () => {
     ).toBeNull();
   });
 
+  it("two saves at once with no token org yet: exactly one org, the other refused as usual", async () => {
+    // Both transactions pass the function's NOT EXISTS before either commits (each holds its
+    // transaction open after the insert), so only the unique index can settle it.
+    const racers = await Promise.allSettled(
+      [7_010, 7_011].map((id) =>
+        db.withOrg(newOrgId(), async (tx) => {
+          await createTokenOrg(tx, { forge: "github", accountId: id, login: `racer-${id}` });
+          await tx.query("select pg_sleep(0.3)");
+          return tx.orgId;
+        }),
+      ),
+    );
+    const won = racers.filter((r) => r.status === "fulfilled");
+    const lost = racers.filter((r) => r.status === "rejected");
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(1);
+    expect(String((lost[0] as PromiseRejectedResult).reason)).toMatch(/org not created/);
+    expect((lost[0] as PromiseRejectedResult).reason).not.toMatchObject({ code: "23505" });
+    const winner = (won[0] as PromiseFulfilledResult<OrgId>).value;
+    expect((await db.tokenOrg("github"))?.orgId).toBe(winner);
+    // Removed again: the tests below create the token org of OWNER.
+    await superuser.query("delete from orgs where id = $1", [winner]);
+    expect(await db.tokenOrg("github")).toBeNull();
+  });
+
   it("creates exactly a token org for the chosen tenant id, bound to the owner's account", async () => {
     tokenOrgId = newOrgId();
     await db.withOrg(tokenOrgId, (tx) =>
@@ -166,7 +191,7 @@ describe("creating the token org (as the application login)", () => {
     expect(await loginOf()).toBe(OWNER.login);
   });
 
-  it("at most one live token org, even for two saves at once (a unique index, not only the check)", async () => {
+  it("at most one live token org: a direct second insert is refused by the unique index", async () => {
     // A direct second insert, past the function's check (the race it would lose): refused.
     await asWorker(pgs.workerUrl, async (w) => {
       await expect(
@@ -178,18 +203,6 @@ describe("creating the token org (as the application login)", () => {
         ),
       ).rejects.toMatchObject({ code: "23505" });
     });
-    // Two saves at once: neither creates a second org; both are refused the usual way.
-    const racers = await Promise.allSettled(
-      [7_010, 7_011].map((id) =>
-        db.withOrg(newOrgId(), (tx) =>
-          createTokenOrg(tx, { forge: "github", accountId: id, login: `racer-${id}` }),
-        ),
-      ),
-    );
-    for (const r of racers) {
-      expect(r.status).toBe("rejected");
-      if (r.status === "rejected") expect(String(r.reason)).toMatch(/org not created/);
-    }
   });
 
   it("the application login still cannot insert an org itself, nor an App-shaped one through the function", async () => {
@@ -478,5 +491,68 @@ describe("the token org is a tenant like any other", () => {
 
   it("an App org has no token connection", async () => {
     expect(await db.withOrg(appOrg.orgId, loadTokenConnection)).toBeNull();
+  });
+
+  it("the login exception is narrow: no direct write, and never an App org's or another tenant's", async () => {
+    const orgRow = async (id: string) =>
+      (
+        await superuser.query<{ login: string; account_id: string }>(
+          "select login, account_id::text from orgs where id = $1",
+          [id],
+        )
+      ).rows[0]!;
+    const app = await orgRow(appOrg.orgId);
+    const token = await orgRow(tokenOrgId);
+    // The application login cannot write the column itself, in its own tenant or any other.
+    for (const id of [tokenOrgId, appOrg.orgId]) {
+      await expect(
+        db.withOrg(id, (tx) =>
+          tx.query("update orgs set login = 'hijacked' where id = $1", [tx.orgId]),
+        ),
+      ).rejects.toMatchObject({ code: "42501" });
+    }
+    // Through the function, from the App org: neither its own login nor the token org's moves.
+    expect(
+      await db.withOrg(appOrg.orgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: Number(app.account_id), login: "renamed-app" }),
+      ),
+    ).toBe(false);
+    expect(
+      await db.withOrg(appOrg.orgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: "renamed-owner" }),
+      ),
+    ).toBe(false);
+    expect(await orgRow(appOrg.orgId)).toEqual(app);
+    expect(await orgRow(tokenOrgId)).toEqual(token);
+  });
+
+  it("the functions check the login themselves (defence in depth), past the TypeScript check", async () => {
+    for (const bad of ["x y", "-lead", "a".repeat(40), "<script>", ""]) {
+      expect(
+        (
+          await db.withOrg(tokenOrgId, (tx) =>
+            tx.query<{ changed: boolean }>(
+              "select auth.refresh_token_org_login($1, $2) as changed",
+              [OWNER.id, bad],
+            ),
+          )
+        ).rows[0]?.changed,
+      ).toBe(false);
+      expect(
+        (
+          await db.withOrg(newOrgId(), (tx) =>
+            tx.query<{ id: string | null }>(
+              "select auth.create_token_org('github', 7_020, $1) as id",
+              [bad],
+            ),
+          )
+        ).rows[0]?.id,
+      ).toBeNull();
+    }
+    const { rows } = await superuser.query<{ login: string }>(
+      "select login from orgs where id = $1",
+      [tokenOrgId],
+    );
+    expect(rows[0]?.login).toBe(OWNER.login);
   });
 });
