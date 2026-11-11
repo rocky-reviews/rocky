@@ -93,6 +93,7 @@ Task log for the project plan. Agents append a row when a task is merged.
 - A fine-grained token's pull-request write permission is only proven at the first post (no read-only probe); surface GitHub's refusal there with the token hint.
 - The sync lock and throttles are in-process: fine for the single compose server, not for several replicas.
 - Web: after 10 re-fetches while the server still says `running`, the inbox sync bar keeps showing "Syncing…"; show "Still syncing, reload later". The `/connection` link lives in the inbox sync bar only; drive a nav entry from `session.connection`.
+- UI verification nits: the "Private" pill on `/connection` blends into the row (`tone-low` on `--panel-2`); the wizard's token step links `/connection` twice (step 2 "Add repositories", step 4); the token field's focus ring touches its label (`.token-field` gap); "Stop following" uses a red fill for a reversible action. Coverage: the axe sweep does not include the wizard token steps, the confirmations or token-rejected states, and no baseline shows token-rejected.
 - Two Playwright tests fail on `main` as well (seen while verifying P10-4, unrelated to it): `shell.e2e.spec.ts:377` (Review panel drawer focus trap at 1024 px: focus lands on "1 finding hidden by memory · show") and `drafts.e2e.spec.ts:260` (a refused comment reopens the composer: click times out).
 
 ### P10-2 follow-ups
