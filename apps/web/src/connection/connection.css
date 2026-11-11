@@ -54,13 +54,23 @@
   font-size: var(--text-base);
 }
 .token-problem {
-  color: var(--crit);
-  font-weight: 600;
+  color: var(--text);
+}
+/* Refusals and sync problems are waits or fixes, not risk: the medium tint with text in --text
+   (the severity reds stay for findings). */
+.token-problem:not(:empty),
+.connection-notice.is-alert:not(:empty),
+.sync-alert {
+  background: var(--med-bg);
+  border-left: 3px solid var(--med);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
 }
 .token-form .btn[aria-disabled="true"],
 .connection-app .btn[aria-disabled="true"],
 .sync-bar .btn[aria-disabled="true"] {
-  opacity: 0.7;
+  opacity: 0.45;
+  border-style: dashed;
   cursor: not-allowed;
 }
 
@@ -186,6 +196,16 @@
 .connection-repo .btn {
   min-height: 28px;
 }
+/* Narrow: the counts get their own line under the name, the button stays at the row's end. */
+@media (max-width: 599px) {
+  .connection-repo-meta {
+    flex-basis: 100%;
+    order: 1;
+  }
+  .connection-repo .btn {
+    margin-left: auto;
+  }
+}
 /* The live regions take no room while they are empty. */
 .connection-card .connection-notice {
   margin: 0;
@@ -200,8 +220,7 @@
   position: absolute;
 }
 .connection-notice.is-alert {
-  color: var(--crit);
-  font-weight: 600;
+  color: var(--text);
 }
 .connection-app a:not(.btn) {
   color: var(--you);
@@ -288,8 +307,7 @@
 }
 .sync-alert {
   margin: 0;
-  color: var(--crit);
-  font-weight: 600;
+  color: var(--text);
   overflow-wrap: anywhere;
 }
 .sync-alert a {
@@ -300,7 +318,7 @@
   height: 12px;
   border-radius: var(--radius-pill);
   border: 2px solid var(--border);
-  border-top-color: var(--ai);
+  border-top-color: var(--you);
   animation: sync-spin 0.9s linear infinite;
 }
 @keyframes sync-spin {
