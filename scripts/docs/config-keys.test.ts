@@ -55,13 +55,16 @@ const SCHEMA_KEYS: readonly string[] = [
 const DYNAMIC_READS_COVERED_BY: Readonly<Record<string, string>> = {
   "apps/server/src/config.ts: (env, homedir)":
     "githubAppSetupFromEnv(), credentialsFileFrom() (P10-2): pass the environment on",
+  "apps/server/src/config.ts: (env, name)":
+    "tokenModeFromEnv() (P10-4): GITHUB_APP_VARIABLES, the App's variables, each documented",
   "apps/server/src/config.ts: env[name]":
     "nonEmpty(): its callers pass literals, which the scan reads",
   "apps/server/src/main.ts: (process.env, log)": "startServer(env, log): passes the environment on",
   "apps/server/src/security/rate-limit.ts: Object.entries(env)": "RATE_LIMIT_ENV_VARS",
   "apps/worker/src/config.ts: (env, llm)":
     "indexConfigFromEnv(env, llm): passes the environment on",
-  "apps/worker/src/config.ts: (env, name)": "onOff(), boundedInteger(): callers pass literals",
+  "apps/worker/src/config.ts: (env, name)":
+    "onOff(), boundedInteger(): callers pass literals; tokenModeFromEnv() (P10-4): GITHUB_APP_VARIABLES",
   "apps/worker/src/config.ts: env[name]": "nonEmpty(): its callers pass literals",
   "packages/db/src/retention.ts: env[ENV_KEYS[key]": "RETENTION_ENV_VARS",
   "packages/llm/src/adapters/ambient.ts: env[name]": "REFUSED_AMBIENT_VARS",

@@ -202,6 +202,116 @@ This fits the production rules unchanged:
   should print `0` (a warning there means the header did not arrive and every visitor shares one
   limit).
 
+## Plan B: a personal access token
+
+Use the GitHub App above whenever you can. If you cannot install a GitHub App (your organization
+forbids it, or GitHub cannot reach your server), Rocky can connect with **one person's personal
+access token** instead ([ADR 0045](../adr/0045-personal-token-mode.md)). The trade-offs:
+
+- **Reviews post as you**, not as a bot: GitHub shows them as yours.
+- **No automatic updates.** There are no webhooks: Rocky reads pull requests when you open the
+  inbox or a pull request (at most once a minute), or when you choose **Sync**. A new commit is
+  analysed after the next sync sees it.
+- **One user.** There is no GitHub login: you sign in with a one-time link from the server's log.
+- **No public URL needed**: Rocky can listen on `127.0.0.1` only. Ask about the pull request is
+  not available in this mode yet.
+
+Token mode is for self-hosting only; Rocky refuses it on Rocky Cloud.
+
+### Create the token
+
+On GitHub, open _Settings → Developer settings → Personal access tokens → Fine-grained tokens_
+and choose **Generate new token**:
+
+- **Resource owner:** the account or organization that owns your repositories (an organization
+  may need to approve the token).
+- **Expiration:** your choice; Rocky warns two weeks before it expires.
+- **Repository access:** _Only select repositories_, the ones you want reviewed.
+- **Repository permissions:** _Contents_ read-only, _Pull requests_ read and write (to post your
+  reviews), _Metadata_ read-only (selected on its own).
+
+A classic token also works, with the `repo` scope (or `public_repo` for public repositories
+only), but it reaches every repository you can; Rocky shows a warning for it. Keep the token out
+of files and chats: you paste it into Rocky once and Rocky stores it encrypted with
+`ROCKY_KEK_KEYS`. It is never shown again or written to a log.
+
+### Configure
+
+Follow sections 1 and 2 above, with these changes in `deploy/rocky.env`:
+
+```sh
+ROCKY_GITHUB_CONNECTION=token
+# Without a reverse proxy: Rocky listens on the loopback only (compose's default ROCKY_BIND).
+ROCKY_PUBLIC_URL=http://127.0.0.1:4310
+ROCKY_TRUST_PROXY=none
+```
+
+- Leave every `GITHUB_APP_*` variable and `GITHUB_WEBHOOK_SECRET` unset: Rocky refuses to start
+  with both.
+- `deploy/init-env.sh` only accepts an https address: run it with any https address, then change
+  `ROCKY_PUBLIC_URL` and `ROCKY_TRUST_PROXY` as above. Behind Caddy or a tunnel, keep the https
+  address and `xff:1` instead.
+- GitHub Enterprise Server: add `GITHUB_URL=https://ghe.example.com`.
+- Back up `ROCKY_KEK_KEYS`: without it the stored token cannot be read (you can paste a new one).
+
+On a remote VM without a public address, reach Rocky through SSH:
+`ssh -L 4310:127.0.0.1:4310 you@vm`, then open `http://127.0.0.1:4310` on your machine.
+
+### Start and connect
+
+Start with the setup overlay (the `deploy/setup` directory is not needed in token mode):
+
+```sh
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.setup.yml up -d --build
+docker compose -f deploy/docker-compose.yml logs server | grep /setup/start
+```
+
+Open the setup link. The wizard's second step is **Connect GitHub with a personal token**: paste
+the token and choose **Connect**. Rocky checks it with GitHub (who owns it, what it can read)
+and says plainly what is wrong if it refuses it; on success you are signed in. Run the LLM test
+call (step 3), then **Add repositories** opens `/connection`.
+
+On `/connection`, **Add repository** lists what the token can see; pick yours. Rocky reads its
+open pull requests at once; with `ROCKY_ANALYSIS_AUTO=on` each new one is queued for analysis.
+**Sync now** reads them again; the inbox shows when Rocky last synced. Then **Finish setup** and
+restart without the overlay:
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+### Signing in later
+
+Each start of the server prints a new one-time **sign-in link** on its log. It works once and
+gives you a normal session (a day without use, a week at most):
+
+```sh
+docker compose -f deploy/docker-compose.yml logs server | grep /auth/token/start | tail -1
+```
+
+Lost or used it? Restart the server (`docker compose -f deploy/docker-compose.yml restart server`)
+and take the new one.
+
+### Replace or remove the token
+
+On `/connection`: **Replace** takes a new token of the same GitHub user (for another user, remove
+the token first); **Remove** deletes the stored token and Rocky stops reading GitHub until you add
+one. Revoke an old token on GitHub as well.
+
+### If something goes wrong
+
+| What you see                                              | What to do                                                                                                                                |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| The server refuses to start: "…refused on Fly.io…"        | Token mode is self-host only. Use the GitHub App.                                                                                         |
+| The server refuses to start: "GITHUB_APP_… must be unset" | Remove the App variables from `deploy/rocky.env`, or remove `ROCKY_GITHUB_CONNECTION=token` to use the App.                               |
+| "GitHub did not accept this token"                        | It was revoked, expired or mistyped. Create a new one and **Replace** it.                                                                 |
+| "This classic token has no repository scope"              | Add the `repo` scope (or `public_repo`), or create a fine-grained token instead.                                                          |
+| "GitHub refused this token's requests"                    | The organization enforces single sign-on (authorise the token for it on GitHub) or an IP allow list (add the server's address).           |
+| A repository is missing from **Add repository**           | The fine-grained token does not include it, or the organization has not approved the token yet. Edit the token on GitHub, then try again. |
+| "GitHub's rate limit for this token is used up"           | Rocky stopped reading and kept what it had. Wait until the time shown; following fewer repositories helps.                                |
+| Posting a review fails with a permission error            | The token has no _Pull requests: read and write_. Edit it on GitHub (the same token keeps working).                                       |
+| A sign-in hint instead of the inbox                       | Your session ended. Take the latest sign-in link (above).                                                                                 |
+
 ## Checklist for a timed run
 
 For verifying this guide on a fresh VM (P10-2's acceptance: under 15 minutes, a screenshot of each
