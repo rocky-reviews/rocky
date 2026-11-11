@@ -46,8 +46,8 @@ set_value "$here/.env" ROCKY_DB_APP_PASSWORD "$(hex 24)"
 set_value "$here/.env" ROCKY_DB_WORKER_PASSWORD "$(hex 24)"
 
 set_value "$here/rocky.env" ROCKY_PUBLIC_URL "$public_url"
-# The TLS proxy runs on this host and the server is published on 127.0.0.1 only, so the one
-# X-Forwarded-For hop it adds is the client (ADR 0025).
+# The TLS proxy (Caddy, or a Cloudflare quick tunnel) reaches the server on 127.0.0.1 only, so
+# the one X-Forwarded-For entry it adds is the client (ADR 0025).
 set_value "$here/rocky.env" ROCKY_TRUST_PROXY "xff:1"
 set_value "$here/rocky.env" ROCKY_SESSION_SECRET "$(hex 32)"
 set_value "$here/rocky.env" ROCKY_KEK_KEYS "prod=$(openssl rand -base64 32)"
