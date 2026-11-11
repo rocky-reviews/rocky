@@ -280,16 +280,27 @@ describe("before a token is saved", () => {
     ).toBe(404);
   });
 
-  it("warns at boot when the sign-in link cannot work (no token, no wizard) or http leaves the loopback", async () => {
+  it("warns at boot when the sign-in link cannot work (no token, no wizard)", async () => {
     lines.length = 0;
     await boot({ ROCKY_SETUP: undefined });
     expect(lines.some((l) => l.includes('"warning":"no_token_connected"'))).toBe(true);
-    expect(lines.some((l) => l.includes('"warning":"plain_http_beyond_loopback"'))).toBe(false);
     lines.length = 0;
-    await boot({ HOST: "0.0.0.0" });
-    expect(lines.some((l) => l.includes('"warning":"plain_http_beyond_loopback"'))).toBe(true);
+    await boot();
     // With the wizard open there is a way to connect a token: no warning about that.
     expect(lines.some((l) => l.includes('"warning":"no_token_connected"'))).toBe(false);
+  });
+
+  it("plain http is judged by the public URL, not HOST: the compose file's 0.0.0.0 is fine; a LAN URL is refused", async () => {
+    // The image listens on 0.0.0.0 inside its container; compose publishes it on 127.0.0.1.
+    lines.length = 0;
+    await boot({ HOST: "0.0.0.0", NODE_ENV: "production", ROCKY_TRUST_PROXY: "none" });
+    expect(lines.some((l) => l.includes("plain_http"))).toBe(false);
+    await boot({ HOST: "0.0.0.0", ROCKY_PUBLIC_URL: "http://[::1]:4310" });
+    expect(lines.some((l) => l.includes("plain_http"))).toBe(false);
+    // What matters: an http address others reach. Refused at boot, never only warned about.
+    await expect(boot({ ROCKY_PUBLIC_URL: "http://192.168.1.20:4310" })).rejects.toThrow(
+      /ROCKY_PUBLIC_URL must be https, or http on 127\.0\.0\.1\/localhost/,
+    );
     await boot();
   });
 
@@ -816,6 +827,48 @@ describe("opening the inbox while a long sync runs", () => {
       (r) => r.name === "site",
     )!;
     expect(await service.removeRepository(orgId as OrgId, second.id)).toBe(true);
+  });
+});
+
+describe("background work after the request's wait", () => {
+  it("a failure outside the per-repository read is logged as a fixed outcome, with a code only", async () => {
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const secret = "connection to db-host:5432 failed for user rocky";
+    let failing = false;
+    const flaky: Pick<Db, "withOrg" | "tokenOrg"> = {
+      tokenOrg: (forge) => db.tokenOrg(forge),
+      withOrg: async (org, fn) => {
+        if (failing) {
+          await pause(80);
+          throw Object.assign(new Error(secret), { code: "57P01" });
+        }
+        return db.withOrg(org, fn);
+      },
+    };
+    const logged: unknown[] = [];
+    const service = createTokenConnectionService({
+      db: flaky,
+      keys: localKeyWrapperFromEnv({ ROCKY_KEK_KEYS: `v1=${KEK}` }),
+      client: createGitHubTokenClient({ api: githubEndpoints({}).api, fetch: github.fetch }),
+      log: { info: (o: unknown) => void logged.push(o), warn: (o: unknown) => void logged.push(o) },
+      forge: "github",
+      analysisAuto: false,
+      requestWaitMs: 20,
+      syncOnOpenIntervalMs: 0,
+    });
+    failing = true;
+    expect((await service.sync(orgId as OrgId, { force: true })).outcome).toBe("running");
+    await service.syncPullRequest(orgId as OrgId, { forgeRepoId: REPO.id, number: 12 });
+    await pause(400);
+    failing = false;
+    const failures = logged
+      .map((o) => (o as { connection?: Record<string, unknown> }).connection)
+      .filter((c) => c?.["outcome"] === "background_failed");
+    expect(failures).toEqual([
+      { outcome: "background_failed", orgId, task: "sync", errorCode: "57P01" },
+      { outcome: "background_failed", orgId, task: "pull_request", errorCode: "57P01" },
+    ]);
+    expect(JSON.stringify(logged)).not.toContain(secret);
   });
 });
 

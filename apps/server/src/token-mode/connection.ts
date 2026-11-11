@@ -89,6 +89,18 @@ export const SYNC_ON_OPEN_INTERVAL_MS = 60_000;
 /** Explicit syncs ("Sync" button) are accepted at most this often per org. */
 export const SYNC_MIN_INTERVAL_MS = 5_000;
 
+/**
+ * A failure as a loggable code: a Postgres SQLSTATE, a forge read's code, or the error's class
+ * name; never its message.
+ */
+export const errorCodeOf = (error: unknown): string => {
+  if (error instanceof ForgeReadError) return error.code;
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) return code;
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "error";
+};
+
 export interface TokenConnectionDeps {
   readonly db: Pick<Db, "withOrg" | "tokenOrg">;
   readonly keys: KeyWrapper;
@@ -233,9 +245,13 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
 
   /**
    * `work`'s result if it settles within the request's wait, else `"running"`: the work goes on
-   * in the background (its failures are logged where they happen and seen on the next look).
+   * in the background. A failure there has no request left to answer, so it is logged as a fixed
+   * outcome with a code only (`errorCodeOf`): never a message, which may carry a host or more.
    */
-  const withinWait = async <T>(work: Promise<T>): Promise<T | "running"> => {
+  const withinWait = async <T>(
+    work: Promise<T>,
+    background: { readonly orgId: OrgId; readonly task: "sync" | "pull_request" },
+  ): Promise<T | "running"> => {
     let timer: NodeJS.Timeout | undefined;
     const answer = await Promise.race([
       work,
@@ -243,7 +259,15 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
         timer = setTimeout(() => resolve("running"), requestWait);
       }),
     ]).finally(() => clearTimeout(timer));
-    if (answer === "running") work.catch(() => undefined);
+    if (answer === "running") {
+      work.catch((error: unknown) =>
+        log("warn", "background_failed", {
+          orgId: background.orgId,
+          task: background.task,
+          errorCode: errorCodeOf(error),
+        }),
+      );
+    }
     return answer;
   };
   const RUNNING: SyncResponse = {
@@ -359,6 +383,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     const existing = await db.tokenOrg(deps.forge);
     if (options.orgId !== undefined && existing?.orgId !== options.orgId) {
       // Checked again after GitHub's answer: the token org is created once and never rebound.
+      log("warn", "token_refused", { reason: "not_found", orgId: options.orgId });
       return { ok: false, reason: "not_found" };
     }
     if (existing !== null) {
@@ -655,7 +680,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     if (options.force !== true && since < SYNC_MIN_INTERVAL_MS && !syncing.has(orgId)) {
       return { outcome: "busy", retryAt: null, syncedAt: null, repositories: [] };
     }
-    const answer = await withinWait(guarded(orgId, options.repoId));
+    const answer = await withinWait(guarded(orgId, options.repoId), { orgId, task: "sync" });
     return answer === "running" ? RUNNING : answer;
   };
 
@@ -669,7 +694,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     if (since < onOpenInterval) {
       return { state: "skipped", lastSyncedAt: await stamp(), problem: null, retryAt: null };
     }
-    const waited = await withinWait(guarded(orgId, undefined));
+    const waited = await withinWait(guarded(orgId, undefined), { orgId, task: "sync" });
     if (waited === "running" || waited.outcome === "running") {
       return { state: "running", lastSyncedAt: await stamp(), problem: null, retryAt: null };
     }
@@ -684,7 +709,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
 
   const syncPullRequest: TokenConnectionService["syncPullRequest"] = async (orgId, target) => {
     // The page shows the mirror's row either way: it waits a little for a fresher one, no more.
-    await withinWait(readPullRequest(orgId, target));
+    await withinWait(readPullRequest(orgId, target), { orgId, task: "pull_request" });
   };
 
   const readPullRequest = async (
@@ -769,7 +794,7 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
       return id;
     });
     log("info", "repository_added", { orgId, repoId, forgeRepoId });
-    const waited = await withinWait(guarded(orgId, repoId));
+    const waited = await withinWait(guarded(orgId, repoId), { orgId, task: "sync" });
     const synced = waited === "running" ? RUNNING : waited;
     const row = await db.withOrg(orgId, (tx) => findConnectionRepository(tx, repoId));
     const view = row === null ? null : repositoryView(row);

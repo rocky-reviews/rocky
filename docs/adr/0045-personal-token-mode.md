@@ -39,10 +39,11 @@ org isolated by RLS exactly like an App org, and make token mode impossible on R
   when no App org exists and no other live token org does; a partial unique index
   (`orgs_one_live_token`) settles two saves at once. A Cloud database, which has App orgs, can
   never gain one, even if the configuration check were bypassed.
-- **Boot warnings** (never refusals): plain http with a `HOST` that is not a loopback address
-  (bare metal with `HOST=0.0.0.0` would serve the session and the sign-in link in clear to the
-  network), and token mode with no token connected and the wizard off (the sign-in link would
-  sign nobody in).
+- **Plain http** is judged by the public URL (refused unless it is a loopback address), not by
+  `HOST`: the image listens on `0.0.0.0` inside its container and compose publishes the port on
+  `127.0.0.1` only.
+- **Boot warning** (not a refusal): token mode with no token connected and the wizard off (the
+  sign-in link would sign nobody in).
 
 ### 2. Schema (migration 0024)
 

@@ -172,9 +172,6 @@ export interface StartOptions {
   llmAdapters?: ProviderAdapters;
 }
 
-/** HOST values that keep the listener on this machine. */
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
-
 const announceToTerminal = (text: string): void => {
   process.stderr.write(`${text}\n`);
 };
@@ -551,14 +548,10 @@ export const startServer = async (
     );
   }
   if (tokenConfig !== undefined) {
-    // Plain http is only safe on the loopback: a non-loopback HOST would serve the session
-    // cookie and the sign-in link in clear to the network (bare metal, HOST=0.0.0.0).
-    if (!tokenConfig.cookieSecure && !LOOPBACK_HOSTS.has(host)) {
-      log.warn(
-        { tokenMode: { warning: "plain_http_beyond_loopback" } },
-        "ROCKY_PUBLIC_URL is http but HOST is not a loopback address: Rocky is reachable in plain http from the network; set HOST=127.0.0.1 or use https",
-      );
-    }
+    // Plain http is judged by the public URL, which `tokenModeFromEnv` already refuses unless
+    // it is a loopback address: the browser, the cookie and the sign-in link then stay on this
+    // machine. HOST is not: the image listens on 0.0.0.0 inside its container and compose
+    // publishes the port on 127.0.0.1 only.
     // Without the wizard there is no way to save a token, and the sign-in link signs nobody in.
     if (!setup.enabled) {
       const existing = await createDb({ pool })
