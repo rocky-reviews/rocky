@@ -10,6 +10,8 @@ import {
   type Forge,
   type ForgeDiff,
   type LlmRoles,
+  type OrgId,
+  type RepositorySession,
 } from "@rocky-reviews/core";
 import {
   ANALYSIS_MAX_ATTEMPTS,
@@ -66,13 +68,30 @@ import type { Logger } from "@rocky-reviews/log";
  *   real usage (ADR 0017 §8).
  */
 
+/** A repository session on a token org's own token, or the fixed reason there is none. */
+export interface TokenRepositoryOpener {
+  openRepository(
+    orgId: OrgId,
+    forgeRepoId: number,
+  ): Promise<
+    | { readonly ok: true; readonly session: RepositorySession | null }
+    | { readonly ok: false; readonly code: string }
+  >;
+}
+
 /** The longest diff read for an analysis; a longer one fails as `diff_truncated` (P4-6). */
 export const ANALYSIS_DIFF_MAX_BYTES = 1024 * 1024;
 
 export interface AnalysisRunnerDeps {
   /** A login under which `withOrg` applies RLS (the worker's or the server's). */
   readonly db: Db;
-  readonly forge: Forge;
+  /** The App's forge (installation tokens); absent on a token-mode worker (P10-4). */
+  readonly forge: Pick<Forge, "openRepository"> | undefined;
+  /**
+   * Token mode (P10-4, ADR 0045 §6): repository sessions on the org's stored personal token,
+   * for orgs whose `connection` is `token`. Absent on an App worker: such orgs then fail closed.
+   */
+  readonly tokenRepositories?: TokenRepositoryOpener;
   /** The configured roles, unmetered: `runAnalysis` wraps them for each run. */
   readonly llm: LlmRoles;
   /** From `usageTargetsFor(config)`: names provider and model for calls that never answered. */
@@ -226,22 +245,34 @@ export const runAnalysis = async (
     // Review round 1, SF3: a revision a later push replaced, or of a pull request that is no
     // longer open, is not analysed at all (no forge read, no estimate, no model call).
     if (target.superseded) throw new RunFailed("superseded");
-    const installation = await db.withOrg(orgId, (tx) =>
-      tx.query<{ installation_id: string }>("select installation_id from orgs where id = $1", [
-        tx.orgId,
-      ]),
+    const org = await db.withOrg(orgId, (tx) =>
+      tx.query<{ installation_id: string | null; connection: string }>(
+        "select installation_id, connection from orgs where id = $1",
+        [tx.orgId],
+      ),
     );
-    const installationId = Number(installation.rows[0]?.installation_id);
-    if (!Number.isSafeInteger(installationId) || installationId < 1) throw new RunFailed("no_org");
     const [owner, name, ...rest] = target.fullName.split("/");
     if (owner === undefined || name === undefined || rest.length > 0) {
       throw new RunFailed("invalid_request");
     }
 
-    const session = await deps.forge.openRepository({
-      installationId,
-      repositoryId: target.forgeRepoId,
-    });
+    let session: RepositorySession | null;
+    if (org.rows[0]?.connection === "token") {
+      // P10-4: the org's own personal token (the worker decrypts it for this read only).
+      if (deps.tokenRepositories === undefined) throw new RunFailed("no_org");
+      const opened = await deps.tokenRepositories.openRepository(orgId, target.forgeRepoId);
+      if (!opened.ok) throw new RunFailed(opened.code);
+      session = opened.session;
+    } else {
+      const installationId = Number(org.rows[0]?.installation_id);
+      if (!Number.isSafeInteger(installationId) || installationId < 1 || deps.forge === undefined) {
+        throw new RunFailed("no_org");
+      }
+      session = await deps.forge.openRepository({
+        installationId,
+        repositoryId: target.forgeRepoId,
+      });
+    }
     if (session === null) throw new RunFailed("repository_inaccessible");
     let diff: ForgeDiff;
     try {

@@ -22,6 +22,8 @@ import { frameworkErrors, registerErrorHandler } from "./security/errors.js";
 import { registerSecurityHeaders } from "./security/headers.js";
 import type { RateLimits } from "./security/rate-limit.js";
 import { registerWebApp, type WebApp } from "./web-app.js";
+import type { TokenConnectionService } from "./token-mode/connection.js";
+import { registerConnectionRoutes } from "./token-mode/routes.js";
 import { registerWebhooks, type WebhookDeps } from "./webhooks.js";
 
 export type HealthCheck = () => Promise<boolean>;
@@ -81,6 +83,11 @@ export interface AppDeps {
    * reader. Needs login and `repositoryAccess`; without it the routes say Ask is off.
    */
   ask?: AskDeps;
+  /**
+   * Token mode (P10-4, ADR 0045): the connection API, and the syncs the inbox and the pull
+   * request page run when opened. Needs `auth` (its `tokenMode` sign-in).
+   */
+  tokenMode?: { readonly connection: TokenConnectionService };
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -165,10 +172,13 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
         : { onMemberChanged: deps.auth.onMemberTokenChanged }),
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
+    const connection = deps.tokenMode?.connection;
+    if (connection !== undefined) registerConnectionRoutes(app, { connection });
     registerInboxRoutes(app, {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.pullRequestApprover === undefined ? {} : { approver: deps.pullRequestApprover }),
+      ...(connection === undefined ? {} : { syncOnOpen: (orgId) => connection.syncOnOpen(orgId) }),
     });
     registerReviewRoutes(app, {
       db: deps.auth.db,
@@ -178,12 +188,16 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     registerPullRequestPageRoutes(app, {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
+      ...(connection === undefined
+        ? {}
+        : { syncPullRequest: (orgId, target) => connection.syncPullRequest(orgId, target) }),
     });
     // H4-3: its diff, read from GitHub on demand.
     registerPullRequestDiffRoutes(app, {
       db: deps.auth.db,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.pullRequestDiffs === undefined ? {} : { diffs: deps.pullRequestDiffs }),
+      ...(connection === undefined ? {} : { tokenMode: true }),
     });
     // P9-2: Ask about the PR, answered from the repository's index.
     registerAskRoutes(app, {

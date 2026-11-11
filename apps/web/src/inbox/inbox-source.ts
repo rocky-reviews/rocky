@@ -11,8 +11,11 @@ import {
   BulkApproveRequest,
   BulkApproveResponse,
   InboxResponse,
+  type SyncResponse,
 } from "@rocky-reviews/core";
 import { z } from "zod";
+import { type Answer, createHttpConnectionSource } from "../connection/connection-source.js";
+import { SYNCED } from "../connection/fixtures.js";
 import { CSRF_HEADER, fetchSession } from "../session.js";
 import { INBOX_FIXTURE } from "./fixtures.js";
 
@@ -31,6 +34,8 @@ export type ApproveResult =
 export interface InboxSource {
   load(options?: { signal?: AbortSignal }): Promise<unknown>;
   approve(batch: BulkApproveRequest): Promise<ApproveResult>;
+  /** Token mode (P10-4): asks the server to read GitHub now (the inbox's Sync button). */
+  sync(): Promise<Answer<SyncResponse>>;
 }
 
 export class InboxLoadError extends Error {
@@ -64,6 +69,7 @@ export const APPROVALS_PATH = "/api/inbox/approvals";
 
 /** The server's inbox, same origin, with the session's CSRF token on the POST. */
 export const createHttpInboxSource = (): InboxSource => ({
+  sync: () => createHttpConnectionSource().sync(),
   load: async (options) => {
     const response = await fetch(INBOX_PATH, {
       credentials: "same-origin",
@@ -117,6 +123,7 @@ export const createFixtureInboxSource = (options: { delayMs?: number } = {}): In
       ...INBOX_FIXTURE,
       items: INBOX_FIXTURE.items.filter((item) => !approved.has(item.id)),
     }),
+    sync: async () => ({ kind: "ok", value: SYNCED }),
     approve: async (batch) => {
       await new Promise((resolve) => setTimeout(resolve, options.delayMs ?? 300));
       for (const pick of batch.pullRequests) approved.add(pick.id);

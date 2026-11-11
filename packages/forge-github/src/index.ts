@@ -63,6 +63,17 @@ export {
   type GitHubForgeOptions,
 } from "./repositories.js";
 export {
+  createGitHubTokenClient,
+  MAX_LISTED_REPOSITORIES,
+  USER_READ_TIMEOUT_MS,
+  type GitHubTokenClient,
+  type GitHubTokenClientOptions,
+  type TokenDenial,
+  type TokenIdentity,
+  type TokenRead,
+  type TokenRepository,
+} from "./token.js";
+export {
   createGitHubUserAccessReader,
   MAX_REPOSITORY_RESPONSE_BYTES,
   USER_ACCESS_TIMEOUT_MS,

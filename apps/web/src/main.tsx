@@ -12,6 +12,7 @@ import "./change-tree/change-tree.css";
 import "./memory/memory.css";
 import "./ask/ask.css";
 import "./setup/setup.css";
+import "./connection/connection.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -23,6 +24,8 @@ import { createHttpPostingSource } from "./data/posting-http-source.js";
 import { createHttpReviewSource } from "./data/review-http-source.js";
 import type { PullRef, ShellDataSource } from "./data/shell-data.js";
 import { createHttpShellSource } from "./data/shell-http-source.js";
+import { createHttpConnectionSource } from "./connection/connection-source.js";
+import { ConnectionPage } from "./connection/ConnectionPage.js";
 import { DiffProvider } from "./diff/DiffProvider.js";
 import { createHttpInboxSource, type InboxSource } from "./inbox/inbox-source.js";
 import { InboxPage } from "./inbox/InboxPage.js";
@@ -106,6 +109,13 @@ if (page.kind === "home") {
   createRoot(root).render(
     <StrictMode>
       <SetupPage source={createHttpSetupSource()} />
+    </StrictMode>,
+  );
+} else if (page.kind === "connection") {
+  // P10-4: token mode's connection page, from the server (Playwright answers its API itself).
+  createRoot(root).render(
+    <StrictMode>
+      <ConnectionPage source={createHttpConnectionSource()} />
     </StrictMode>,
   );
 } else if (page.kind === "inbox") {

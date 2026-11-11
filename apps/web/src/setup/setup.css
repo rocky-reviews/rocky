@@ -228,3 +228,31 @@
     padding-left: 0;
   }
 }
+
+/* ---------- token mode (P10-4) ---------- */
+/* App mode's way out: collapsed and secondary, under the app's own instructions. */
+.setup-alt {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+.setup-alt summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 600;
+  min-height: 24px;
+}
+.setup-alt summary:hover {
+  color: var(--text);
+}
+.setup-alt-body {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+.setup-tradeoffs {
+  margin: 0;
+  padding-left: 1.2em;
+  display: grid;
+  gap: var(--space-1);
+  max-width: 75ch;
+}

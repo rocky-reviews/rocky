@@ -1,4 +1,9 @@
-import { ForgeReadError, type Clock, type Forge } from "@rocky-reviews/core";
+import {
+  ForgeReadError,
+  type Clock,
+  type Forge,
+  type RepositorySession,
+} from "@rocky-reviews/core";
 import { createHash } from "node:crypto";
 
 /**
@@ -42,7 +47,8 @@ export const DIFF_CACHE_MAX_ENTRIES = 64;
 
 export interface PullRequestDiffTarget {
   readonly orgId: string;
-  readonly installationId: number;
+  /** `null` in token mode (P10-4): the opener finds the org's token by `orgId` instead. */
+  readonly installationId: number | null;
   readonly repositoryId: number;
   readonly number: number;
   /** The mirror's head: the diff served is this commit's, or nothing. */
@@ -104,8 +110,20 @@ export interface PullRequestDiffReader {
   ): Promise<PullRequestDiffResult>;
 }
 
+/**
+ * Token mode (P10-4, ADR 0045): opens the repository session on the org's own stored token,
+ * found by `orgId` (there is no installation).
+ */
+export type DiffRepositoryOpener = (
+  orgId: string,
+  repositoryId: number,
+) => Promise<RepositorySession | null>;
+
 export interface PullRequestDiffReaderOptions {
-  readonly forge: Pick<Forge, "openRepository">;
+  /** The App forge: an installation token per ref. Exactly one of `forge` and `openByOrg`. */
+  readonly forge?: Pick<Forge, "openRepository">;
+  /** Token mode: the session on the org's token. */
+  readonly openByOrg?: DiffRepositoryOpener;
   readonly clock?: Clock;
   /** 1 … `PULL_REQUEST_DIFF_MAX_BYTES` (default). */
   readonly maxBytes?: number;
@@ -126,7 +144,8 @@ const invalidTarget = (): never => {
 
 const checkTarget = (target: PullRequestDiffTarget): void => {
   if (typeof target.orgId !== "string" || !UUID.test(target.orgId)) invalidTarget();
-  if (!isId(target.installationId) || !isId(target.repositoryId)) invalidTarget();
+  if (target.installationId !== null && !isId(target.installationId)) invalidTarget();
+  if (!isId(target.repositoryId)) invalidTarget();
   if (!isId(target.number) || target.number > MAX_NUMBER) invalidTarget();
   if (typeof target.headSha !== "string" || !SHA.test(target.headSha)) invalidTarget();
   if (typeof target.baseSha !== "string" || !SHA.test(target.baseSha)) invalidTarget();
@@ -175,6 +194,10 @@ export const wholeFiles = (bytes: Uint8Array): Uint8Array => {
 export const createPullRequestDiffReader = (
   options: PullRequestDiffReaderOptions,
 ): PullRequestDiffReader => {
+  const { forge, openByOrg } = options;
+  if ((forge === undefined) === (openByOrg === undefined)) {
+    throw new Error("pull request diff: exactly one of forge and openByOrg");
+  }
   const clock = options.clock ?? { now: () => new Date() };
   const maxBytes = bounded(
     options.maxBytes,
@@ -251,10 +274,16 @@ export const createPullRequestDiffReader = (
 
   const readFromForge = async (target: PullRequestDiffTarget): Promise<Entry["result"]> => {
     try {
-      const session = await options.forge.openRepository({
-        installationId: target.installationId,
-        repositoryId: target.repositoryId,
-      });
+      // The App forge mints for the installation; token mode opens on the org's own token.
+      const session =
+        openByOrg !== undefined
+          ? await openByOrg(target.orgId, target.repositoryId)
+          : target.installationId === null || forge === undefined
+            ? null
+            : await forge.openRepository({
+                installationId: target.installationId,
+                repositoryId: target.repositoryId,
+              });
       if (session === null) return { kind: "not_found" };
       try {
         const pull = await session.getPullRequest(target.number);

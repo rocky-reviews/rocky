@@ -27,7 +27,12 @@ export interface Session {
   readonly csrfToken: string;
   readonly expiresAt: string;
   readonly idleExpiresAt: string;
+  /** How this server is connected to GitHub (P10-4); absent from older servers: the App. */
+  readonly connection?: "app" | "token";
 }
+
+/** How a signed-out browser signs in (P10-4): GitHub's login, or the server's one-time link. */
+export type SignInMethod = "github" | "token_link";
 
 export const CSRF_HEADER = "x-rocky-csrf";
 
@@ -46,6 +51,27 @@ export const fetchSession = async (): Promise<Session | null> => {
   if (response.status === 401) return null;
   if (!response.ok) throw new Error(`session: ${response.status}`);
   return (await response.json()) as Session;
+};
+
+/**
+ * How to sign in, from `GET /api/session`'s 401 answer (P10-4). Anything else (signed in, an
+ * error, an older server without the field) is GitHub's login, as before.
+ */
+export const fetchSignInMethod = async (options?: {
+  signal?: AbortSignal;
+}): Promise<SignInMethod> => {
+  try {
+    const response = await fetch("/api/session", {
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+      ...(options?.signal === undefined ? {} : { signal: options.signal }),
+    });
+    if (response.status !== 401) return "github";
+    const body = (await response.json().catch(() => null)) as { signIn?: unknown } | null;
+    return body?.signIn === "token_link" ? "token_link" : "github";
+  } catch {
+    return "github";
+  }
 };
 
 /** Ends the session on the server (POST with the CSRF token). */

@@ -12,14 +12,17 @@ import {
   type InboxFilter,
   type InboxItem,
   type InboxRisk,
+  type InboxSync,
   matchesFilter,
   NO_FILTER,
   repoKey,
+  type SyncResponse,
 } from "@rocky-reviews/core";
 import { useId, useMemo, useState } from "react";
 import { timeAgo } from "../lib/time.js";
 import { BrandMark } from "../shell/BrandMark.js";
 import type { Mode } from "../theme.js";
+import type { Answer } from "../connection/connection-source.js";
 import { ApproveDialog } from "./ApproveDialog.js";
 import {
   ANALYSIS_LABEL,
@@ -31,6 +34,7 @@ import {
   RISK_OPTIONS,
 } from "./inbox-model.js";
 import type { InboxSource } from "./inbox-source.js";
+import { SyncBar } from "./SyncBar.js";
 
 type Props = {
   items: readonly InboxItem[];
@@ -40,9 +44,21 @@ type Props = {
   source: InboxSource;
   /** Asks the page to load the inbox again (after a refused batch). */
   onReload: () => void;
+  /** Token mode only (P10-4): the sync with GitHub, and how to start another. */
+  sync?: InboxSync | undefined;
+  onSync?: () => Promise<Answer<SyncResponse>>;
 };
 
-export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload }: Props) => {
+export const Inbox = ({
+  items: loaded,
+  now,
+  mode,
+  onToggleMode,
+  source,
+  onReload,
+  sync,
+  onSync,
+}: Props) => {
   const [filter, setFilter] = useState<InboxFilter>(NO_FILTER);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [approved, setApproved] = useState<ReadonlySet<string>>(() => new Set());
@@ -129,6 +145,9 @@ export const Inbox = ({ items: loaded, now, mode, onToggleMode, source, onReload
         </header>
       </div>
       <main id="main" className="inbox-main" tabIndex={-1}>
+        {sync !== undefined && onSync !== undefined && (
+          <SyncBar sync={sync} now={now} onSync={onSync} />
+        )}
         <Filters filter={filter} repos={repos} onChange={setFilter} />
         <div className="inbox-counts">
           <p aria-live="polite">{filtered ? `Showing ${shown.length} of ${items.length}` : ""}</p>

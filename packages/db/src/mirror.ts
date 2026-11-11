@@ -29,6 +29,8 @@ export interface MirroredPullRequest {
   readonly forgeUpdatedAt: Date | null;
   /** The revision of the current head exists and its diff was read (`unavailable` is not read). */
   readonly headDiffRead: boolean;
+  /** The mirror says the pull request is open (P10-4: the token sync re-reads ones gone closed). */
+  readonly open: boolean;
 }
 
 export type PullRequestWrite = "created" | "updated" | "unchanged" | "stale";
@@ -71,7 +73,13 @@ const checkRepository = (repo: ForgeRepository): void => {
 };
 
 const checkPullRequest = (pr: ForgePullRequest): void => {
-  if (!isId(pr.ref.repositoryId) || !isId(pr.ref.installationId)) invalid("pull request ref");
+  // A token-mode read (P10-4) carries no installation in its ref; the mirror stores neither.
+  if (
+    !isId(pr.ref.repositoryId) ||
+    (pr.ref.installationId !== null && !isId(pr.ref.installationId))
+  ) {
+    invalid("pull request ref");
+  }
   if (!Number.isInteger(pr.ref.number) || pr.ref.number < 1 || pr.ref.number > MAX_INT) {
     invalid("pull request number");
   }
@@ -233,7 +241,7 @@ export const recordRevision = async (
 };
 
 const MIRRORED_SQL = `
-  select p.number, p.head_sha, p.forge_updated_at,
+  select p.number, p.head_sha, p.forge_updated_at, p.state = 'open' as open,
          (r.diff_bytes is not null and r.diff_truncation is distinct from 'unavailable')
            as head_diff_read
     from pull_requests p
@@ -247,11 +255,13 @@ const mirroredFromRow = (row: {
   head_sha: string;
   forge_updated_at: Date | null;
   head_diff_read: boolean;
+  open: boolean;
 }): MirroredPullRequest => ({
   number: row.number,
   headSha: row.head_sha,
   forgeUpdatedAt: row.forge_updated_at,
   headDiffRead: row.head_diff_read,
+  open: row.open,
 });
 
 /** Every mirrored pull request of the repository with this forge id, by number. */
@@ -265,6 +275,31 @@ export const mirroredPullRequests = async (
     [tx.orgId, forgeRepositoryId],
   );
   return rows.map(mirroredFromRow);
+};
+
+/**
+ * Closes a mirrored pull request GitHub no longer has (its read answers 404: deleted, or the
+ * repository moved away from the token), so a sync stops re-reading it. Only an open row
+ * changes; `true` when one did. GitHub stays the source of truth: if it comes back, the next
+ * read writes it again.
+ */
+export const closeVanishedPullRequest = async (
+  tx: TenantTx,
+  forgeRepositoryId: number,
+  number: number,
+  at: Date,
+): Promise<boolean> => {
+  if (!isId(forgeRepositoryId)) invalid("repository id");
+  if (!Number.isInteger(number) || number < 1 || number > MAX_INT) invalid("pull request number");
+  const { rowCount } = await tx.query(
+    `update pull_requests p
+        set state = 'closed', closed_at = coalesce(p.closed_at, $4), updated_at = now()
+       from repos r
+      where r.id = p.repo_id and r.org_id = $1 and r.forge_repo_id = $2
+        and p.org_id = $1 and p.number = $3 and p.state = 'open'`,
+    [tx.orgId, forgeRepositoryId, number, at],
+  );
+  return (rowCount ?? 0) > 0;
 };
 
 /** One mirrored pull request, or `undefined` when it is not in the mirror. */

@@ -9,7 +9,7 @@ import {
   SESSION_COOKIE,
   sha256,
 } from "../auth/cookies.js";
-import { LOGIN_PATH, LOGOUT_PATH } from "../auth/routes.js";
+import { LOGIN_PATH, LOGOUT_PATH, TOKEN_LOGIN_PATH } from "../auth/routes.js";
 import type { WebhookRateLimit } from "../webhooks.js";
 import type { RateLimits, RateLimitScope } from "./rate-limit.js";
 
@@ -21,6 +21,8 @@ import type { RateLimits, RateLimitScope } from "./rate-limit.js";
 /** Auth routes by path; any other route in the auth scope counts as the session API. */
 const AUTH_SCOPES: Readonly<Record<string, RateLimitScope>> = {
   [LOGIN_PATH]: "auth.login",
+  // Token mode's one-time link (P10-4): a sign-in start, per client address.
+  [TOKEN_LOGIN_PATH]: "auth.login",
   [OAUTH_CALLBACK_PATH]: "auth.callback",
   [LOGOUT_PATH]: "auth.logout",
 };

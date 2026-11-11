@@ -1,12 +1,20 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SETUP_FIXTURES, SETUP_DONE, SETUP_FRESH } from "./fixtures.js";
+import { fakeToken } from "../connection/fixtures.js";
+import {
+  SETUP_FIXTURES,
+  SETUP_DONE,
+  SETUP_FRESH,
+  SETUP_TOKEN_CONNECTED,
+  SETUP_TOKEN_REQUIRED,
+} from "./fixtures.js";
 import { Setup } from "./Setup.js";
 import { allDone, outcomeText, pullPath } from "./setup-model.js";
 import {
   createHttpSetupSource,
   FINISH_PATH,
   LLM_TEST_PATH,
+  SETUP_TOKEN_PATH,
   parseSetupStatus,
   SetupLoadError,
   STATUS_PATH,
@@ -23,6 +31,7 @@ const source: SetupSource = {
   load: () => Promise.resolve(SETUP_FRESH),
   testLlm: () => Promise.resolve({ kind: "error" }),
   finish: () => Promise.resolve(true),
+  saveToken: () => Promise.resolve({ kind: "error" }),
 };
 
 const render = (status = SETUP_FRESH, loadProblem = false) =>
@@ -159,6 +168,106 @@ describe("the setup page (P10-2)", () => {
     });
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).not.toContain("<img");
+  });
+});
+
+describe("token mode in the setup wizard (P10-4)", () => {
+  it("App mode keeps the app first and offers the token as a collapsed alternative", () => {
+    const html = render();
+    expect(html.indexOf("Create the GitHub App")).toBeLessThan(
+      html.indexOf("Use a personal token instead"),
+    );
+    expect(html).toMatch(
+      /<details class="setup-alt"><summary>Can’t install a GitHub App\? Use a personal token instead<\/summary>/,
+    );
+    expect(html).not.toMatch(/<details[^>]*open/);
+    for (const text of [
+      "posted as you, not as a Rocky bot",
+      "Only you can sign in",
+      "no public URL is needed",
+      "Rocky Cloud refuses token mode",
+      "<code>ROCKY_GITHUB_CONNECTION=token</code>",
+      "<code>deploy/rocky.env</code>",
+      'href="https://github.com/rocky-reviews/rocky/blob/main/docs/self-host/setup.md#plan-b-a-personal-access-token"',
+    ])
+      expect(html, text).toContain(text);
+    // Not once the app exists.
+    expect(render(SETUP_FIXTURES.installed)).not.toContain("setup-alt");
+  });
+
+  it("token required: how to create the token, the field, no app to create", () => {
+    const html = render(SETUP_TOKEN_REQUIRED);
+    expect(html).toContain("Connect GitHub with a personal token");
+    expect(html).not.toContain("Create the GitHub App");
+    expect(html).not.toContain("setup-alt");
+    expect(html).toContain('href="https://github.com/settings/personal-access-tokens/new"');
+    expect(html).toContain("Contents: Read, Pull requests: Read and write");
+    expect(html).toContain("<code>ghp_…</code>");
+    expect(html).toMatch(
+      /<input[^>]*type="password"[^>]*autoComplete="off"[^>]*spellCheck="false"/,
+    );
+    expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+    expect(html).toMatch(/type="submit"[^>]*>Connect</);
+    expect(html).toContain("Connect a token first (step 2).");
+    expect(html).toMatch(/aria-labelledby="setup-repo-title"[\s\S]*?tone-waiting">Waiting</);
+  });
+
+  it("token connected: who, which kind, its warnings, and where to add repositories", () => {
+    const html = render(SETUP_TOKEN_CONNECTED);
+    expect(html).toContain("@sam-r");
+    expect(html).toContain("Classic");
+    expect(html).toContain("Never");
+    expect(html).toContain("Classic token</span>");
+    expect(html).toContain("Never expires</span>");
+    expect(html).toMatch(/class="btn btn-primary" href="\/connection">Add repositories</);
+    expect(html).not.toContain('type="password"');
+    expect(html).toContain("personal token");
+    expect(html).toMatch(/aria-labelledby="setup-app-title"[\s\S]*?tone-ok">Done</);
+  });
+
+  it("is done with a token instead of the app", () => {
+    expect(
+      allDone({ ...SETUP_DONE, connection: "token", githubApp: SETUP_TOKEN_CONNECTED.githubApp }),
+    ).toBe(true);
+    expect(allDone({ ...SETUP_DONE, githubApp: SETUP_TOKEN_REQUIRED.githubApp })).toBe(false);
+  });
+
+  it("posts the token once with the CSRF token and reads refusals by code", async () => {
+    const token = fakeToken();
+    const saved = { token: SETUP_TOKEN_CONNECTED.githubApp.token };
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(saved))));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await createHttpSetupSource().saveToken("t".repeat(43), token)).toEqual({
+      kind: "ok",
+      value: saved,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(SETUP_TOKEN_PATH);
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["x-rocky-csrf"]).toBe("t".repeat(43));
+    expect(JSON.parse(init.body as string)).toEqual({ token });
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ error: "rate_limited", retryAt: "2026-10-25T12:40:00.000Z" }),
+          {
+            status: 429,
+          },
+        ),
+      ),
+    );
+    expect(await createHttpSetupSource().saveToken("t", token)).toEqual({
+      kind: "refused",
+      error: "rate_limited",
+      retryAt: "2026-10-25T12:40:00.000Z",
+    });
+    // An answer that is not the schema's (here, one echoing the token) is an error, not shown.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(new Response(JSON.stringify({ ...saved, value: token }))),
+    );
+    expect(await createHttpSetupSource().saveToken("t", token)).toEqual({ kind: "error" });
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("offline")));
+    expect(await createHttpSetupSource().saveToken("t", token)).toEqual({ kind: "error" });
   });
 });
 

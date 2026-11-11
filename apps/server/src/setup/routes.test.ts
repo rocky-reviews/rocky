@@ -49,6 +49,7 @@ const fakeChecks = (
     createBlocked: null,
     credentialsFile: "/setup/github-app.env",
     installUrl: null,
+    token: null,
   }),
   llm: () => ({
     state: "not_tested",

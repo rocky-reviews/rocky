@@ -43,7 +43,15 @@ export const orgs = pgTable("orgs", {
     .primaryKey()
     .default(sql`app.current_org_id()`),
   forge: text("forge").notNull().default("github"),
-  installationId: bigint("installation_id", { mode: "number" }).notNull(),
+  /**
+   * How the org reaches the forge (P10-4, migration 0024): `app` through an installation (every
+   * org before P10-4), `token` through its owner's personal access token (self-host only).
+   */
+  connection: text("connection", { enum: ["app", "token"] })
+    .notNull()
+    .default("app"),
+  /** The installation an `app` org is bound to; `null` exactly for a `token` org (CHECK). */
+  installationId: bigint("installation_id", { mode: "number" }),
   /** The forge's immutable account id: orgs bind by it, never by `login` (ADR 0009). */
   accountId: bigint("account_id", { mode: "number" }).notNull(),
   /** Display only; the forge can rename and reuse logins. */
@@ -91,6 +99,8 @@ export const repos = pgTable("repos", {
   enabled: boolean("enabled").notNull().default(true),
   /** Whether reviews of the repository use project memory (P8-3, migration 0020). */
   memoryEnabled: boolean("memory_enabled").notNull().default(true),
+  /** When the pull requests were last read from the forge on a token (P10-4, migration 0024). */
+  syncedAt: timestamp("synced_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });

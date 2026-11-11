@@ -10,7 +10,7 @@ import type {
 import { runMemoryDecay, runRetention, type Db } from "@rocky-reviews/db";
 import type { LlmUsageTargets } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
-import { runAnalysis } from "./analysis.js";
+import { runAnalysis, type TokenRepositoryOpener } from "./analysis.js";
 import { createAnalysisLane, type AnalysisLane } from "./analysis-lane.js";
 import { createAppCheck } from "./app-check.js";
 import { runCodeIndex } from "./code-index.js";
@@ -69,6 +69,11 @@ export interface JobDeps {
    * in the inbox and no org is erased (the sweep re-verifies every uninstall with GitHub first).
    */
   readonly forge: (Forge & CodeReader) | undefined;
+  /**
+   * Token mode (P10-4, ADR 0045 §6): no App, no webhooks; the analysis lane reads token orgs'
+   * repositories on their own token. Every App lane stays off (`forge` is undefined).
+   */
+  readonly tokenRepositories?: TokenRepositoryOpener;
   /**
    * The analysis lane (P4-6), only with `ROCKY_ANALYSIS_AUTO=on`. Without it the mirror queues
    * nothing and nothing is claimed. Needs `forge`.
@@ -176,10 +181,58 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
     );
   });
 
-  if (deps.forge === undefined) {
-    deps.log.warn(
-      "GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY not set: installation and pull request events stay in the inbox and no org is erased (development only)",
+  // Analyses (P4-6, ADR 0017): claimed fairly across orgs, run without blocking this timer. On
+  // the App's forge, or (token mode, P10-4) on token orgs' own tokens.
+  if (
+    deps.analysis !== undefined &&
+    (deps.forge !== undefined || deps.tokenRepositories !== undefined)
+  ) {
+    const analysis = deps.analysis;
+    const forge = deps.forge;
+    const tokenRepositories = deps.tokenRepositories;
+    const analysisLane = createAnalysisLane(
+      {
+        db: deps.db,
+        log: deps.log,
+        run: (claim, signal) =>
+          runAnalysis(
+            {
+              db: deps.db,
+              forge,
+              ...(tokenRepositories === undefined ? {} : { tokenRepositories }),
+              llm: analysis.llm,
+              clock: deps.clock,
+              log: deps.log,
+              unitKeySalt: analysis.unitKeySalt,
+              usageTargets: analysis.usageTargets,
+              tokenLimit: analysis.tokenLimit,
+              ...(analysis.version === undefined ? {} : { version: analysis.version }),
+            },
+            claim,
+            { signal },
+          ),
+      },
+      { slots: analysis.concurrency, orgConcurrency: analysis.orgConcurrency },
     );
+    lane = analysisLane;
+    every("analyses", intervals.analysisMs, async () => {
+      const started = await analysisLane.tick();
+      if (started > 0) {
+        deps.log.info(
+          { job: "analyses", started, inFlight: analysisLane.inFlight },
+          "analyses started",
+        );
+      }
+      return false;
+    });
+  }
+
+  if (deps.forge === undefined) {
+    if (deps.tokenRepositories === undefined) {
+      deps.log.warn(
+        "GITHUB_APP_ID/GITHUB_APP_PRIVATE_KEY not set: installation and pull request events stay in the inbox and no org is erased (development only)",
+      );
+    }
   } else {
     const forge = deps.forge;
     const appCheck = createAppCheck({ forge, clock: deps.clock, log: deps.log });
@@ -269,45 +322,6 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
           deps.log.info(
             { job: "code_index", started, inFlight: created.inFlight },
             "index started",
-          );
-        }
-        return false;
-      });
-    }
-
-    // Analyses (P4-6, ADR 0017): claimed fairly across orgs, run without blocking this timer.
-    if (deps.analysis !== undefined) {
-      const analysis = deps.analysis;
-      const analysisLane = createAnalysisLane(
-        {
-          db: deps.db,
-          log: deps.log,
-          run: (claim, signal) =>
-            runAnalysis(
-              {
-                db: deps.db,
-                forge,
-                llm: analysis.llm,
-                clock: deps.clock,
-                log: deps.log,
-                unitKeySalt: analysis.unitKeySalt,
-                usageTargets: analysis.usageTargets,
-                tokenLimit: analysis.tokenLimit,
-                ...(analysis.version === undefined ? {} : { version: analysis.version }),
-              },
-              claim,
-              { signal },
-            ),
-        },
-        { slots: analysis.concurrency, orgConcurrency: analysis.orgConcurrency },
-      );
-      lane = analysisLane;
-      every("analyses", intervals.analysisMs, async () => {
-        const started = await analysisLane.tick();
-        if (started > 0) {
-          deps.log.info(
-            { job: "analyses", started, inFlight: analysisLane.inFlight },
-            "analyses started",
           );
         }
         return false;

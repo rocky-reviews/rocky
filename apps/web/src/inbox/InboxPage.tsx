@@ -1,13 +1,15 @@
-import { type InboxItem } from "@rocky-reviews/core";
-import { useCallback, useEffect, useState } from "react";
-import { signInHref } from "../session.js";
+import { type InboxItem, type InboxSync } from "@rocky-reviews/core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { SYNC_POLL_LIMIT, SYNC_POLL_MS } from "../connection/connection-model.js";
+import { SignIn } from "../SignIn.js";
 import { useTheme } from "../shell/use-theme.js";
 import { Inbox } from "./Inbox.js";
 import { InboxLoadError, type InboxSource, parseInbox } from "./inbox-source.js";
 
 type State =
   | { kind: "loading" }
-  | { kind: "ready"; items: readonly InboxItem[] }
+  /** `sync`: token mode only (P10-4). */
+  | { kind: "ready"; items: readonly InboxItem[]; sync: InboxSync | undefined }
   | { kind: "signed_out" }
   | { kind: "unavailable" }
   | { kind: "failed" };
@@ -29,7 +31,9 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
       .load({ signal: abort.signal })
       .then(parseInbox)
       .then(
-        (inbox) => !abort.signal.aborted && setState({ kind: "ready", items: inbox.items }),
+        (inbox) =>
+          !abort.signal.aborted &&
+          setState({ kind: "ready", items: inbox.items, sync: inbox.sync }),
         // The error may describe PR content; the page says only that it failed.
         (error: unknown) =>
           !abort.signal.aborted &&
@@ -37,6 +41,30 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
       );
     return () => abort.abort();
   }, [source, generation]);
+
+  // P10-4: while the sync the server started is running, ask again a few times, then stop.
+  const polls = useRef(0);
+  const syncing = state.kind === "ready" && state.sync?.state === "running";
+  useEffect(() => {
+    if (!syncing) {
+      polls.current = 0;
+      return undefined;
+    }
+    if (polls.current >= SYNC_POLL_LIMIT) return undefined;
+    const timer = window.setTimeout(() => {
+      polls.current += 1;
+      reload();
+    }, SYNC_POLL_MS);
+    return () => window.clearTimeout(timer);
+  }, [syncing, generation, reload]);
+
+  const sync = useCallback(async () => {
+    const answer = await source.sync();
+    polls.current = 0;
+    setNow(Date.now());
+    reload();
+    return answer;
+  }, [source, reload]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -47,6 +75,8 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
     return (
       <Inbox
         items={state.items}
+        sync={state.sync}
+        onSync={sync}
         now={now}
         mode={mode}
         onToggleMode={toggle}
@@ -58,7 +88,7 @@ export const InboxPage = ({ source }: { source: InboxSource }) => {
     <main className="status-page" id="main">
       {state.kind === "signed_out" ? (
         <p>
-          <a href={signInHref("/inbox")}>Sign in with GitHub</a> to see your inbox.
+          <SignIn returnTo="/inbox" rest="to see your inbox." />
         </p>
       ) : state.kind === "unavailable" ? (
         <p role="alert">

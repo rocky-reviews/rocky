@@ -35,6 +35,8 @@ export const PERMISSION_MIN_ROLE = Object.freeze({
   "org.delete": "owner",
   "roles.manage": "owner",
   "ownership.transfer": "owner",
+  /** Token mode (P10-4, ADR 0045): replace or remove the token, follow repositories. */
+  "connection.manage": "owner",
 } as const satisfies Record<string, Role>);
 
 export type Permission = keyof typeof PERMISSION_MIN_ROLE;

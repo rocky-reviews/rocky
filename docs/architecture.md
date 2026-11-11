@@ -43,6 +43,9 @@ Self-hosting runs the same two processes from distroless, non-root, read-only co
 starts with the setup wizard (`ROCKY_SETUP=true`, `/setup`, ADR 0044): before a GitHub App
 exists, a production server runs in setup mode and serves only health, the wizard and the
 manifest flow.
+Self-hosters who cannot install the App can connect one person's personal access token instead
+(`ROCKY_GITHUB_CONNECTION=token`, ADR 0045): no webhooks or GitHub login; pull requests are read
+on demand and reviews post as the token's owner. Refused on Rocky Cloud.
 
 ## Code layout and dependency direction
 

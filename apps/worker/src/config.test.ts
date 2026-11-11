@@ -258,3 +258,34 @@ describe("indexConfigFromEnv (P9-1)", () => {
     expect(message).not.toContain("999");
   });
 });
+
+describe("token mode (P10-4, ADR 0045)", () => {
+  const base = { WORKER_DATABASE_URL: "postgres://w@localhost/rocky" };
+
+  it("reads no App credentials, even in production, and keeps the API base", () => {
+    const config = workerConfigFromEnv({
+      ...base,
+      NODE_ENV: "production",
+      ROCKY_GITHUB_CONNECTION: "token",
+    });
+    expect(config.githubApp).toBeUndefined();
+    expect(config.token?.api.href).toBe("https://api.github.com/");
+    expect(workerConfigFromEnv(base).token).toBeUndefined();
+  });
+
+  it("is refused on Fly.io and next to any App variable, naming the variable only", () => {
+    expect(() =>
+      workerConfigFromEnv({ ...base, ROCKY_GITHUB_CONNECTION: "token", FLY_APP_NAME: "rocky" }),
+    ).toThrow(/refused on Fly\.io/);
+    expect(() =>
+      workerConfigFromEnv({
+        ...base,
+        ROCKY_GITHUB_CONNECTION: "token",
+        GITHUB_APP_PRIVATE_KEY: "-----BEGIN secret",
+      }),
+    ).toThrow(/^GITHUB_APP_PRIVATE_KEY must be unset/);
+    expect(() => workerConfigFromEnv({ ...base, ROCKY_GITHUB_CONNECTION: "pat" })).toThrow(
+      /must be app or token/,
+    );
+  });
+});

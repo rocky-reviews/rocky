@@ -122,6 +122,7 @@ export {
 export {
   mirroredPullRequest,
   mirroredPullRequests,
+  closeVanishedPullRequest,
   recordRevision,
   upsertPullRequest,
   upsertRepository,
@@ -298,6 +299,22 @@ export {
   type ReviewSubmissionRecord,
   type ReviewSubmissionStatus,
 } from "./reviews.js";
+export {
+  createTokenOrg,
+  refreshTokenOrgLogin,
+  disableRepository,
+  enableRepository,
+  findConnectionRepository,
+  lastSyncedAt,
+  listConnectionRepositories,
+  loadTokenConnection,
+  markRepositorySynced,
+  recordTokenConnection,
+  TokenConnectionError,
+  tokenOrgOf,
+  type ConnectionRepositoryRow,
+  type TokenConnection,
+} from "./token-connection.js";
 export {
   checkDatabaseSetup,
   loadOrgSetupProgress,

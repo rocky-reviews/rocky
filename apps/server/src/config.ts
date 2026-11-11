@@ -118,7 +118,7 @@ const nonEmpty = (env: Env, name: string): string | undefined => {
 };
 
 export type GitHubAppSetup =
-  | { enabled: false; reason: "not_requested" | "configured" }
+  | { enabled: false; reason: "not_requested" | "configured" | "token_mode" }
   | { enabled: true; config: GitHubAppSetupConfig };
 
 /**
@@ -191,6 +191,8 @@ export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup
       "ROCKY_SETUP is not supported on Windows (file modes cannot protect the credentials); run it under WSL, macOS or Linux",
     );
   }
+  // P10-4: a server connected through a token creates no App.
+  if (connectionModeFromEnv(env) === "token") return { enabled: false, reason: "token_mode" };
   const credentialsFile = credentialsFileFrom(env, homedir);
   if (nonEmpty(env, "GITHUB_APP_ID") !== undefined || pathExists(credentialsFile)) {
     return { enabled: false, reason: "configured" };
@@ -279,7 +281,11 @@ export const setupFromEnv = (env: Env, homedir: string): SetupConfig => {
   if (!setupRequested(env)) return { enabled: false };
   const githubApp = githubAppSetupFromEnv(env, homedir);
   const credentialsFile = credentialsFileFrom(env, homedir);
-  const publicUrl = githubApp.enabled ? githubApp.config.publicUrl : setupPublicUrl(env);
+  const publicUrl = githubApp.enabled
+    ? githubApp.config.publicUrl
+    : connectionModeFromEnv(env) === "token"
+      ? tokenModePublicUrl(env)
+      : setupPublicUrl(env);
   let endpoints: GitHubEndpoints;
   if (githubApp.enabled) {
     endpoints = githubApp.config.endpoints;
@@ -430,6 +436,135 @@ export const authFromEnv = (env: Env): AuthSetup => {
       sessionSecret,
       production,
     },
+  };
+};
+
+/**
+ * How this server connects to GitHub (P10-4, ADR 0045): the GitHub App (the default and the
+ * recommended path) or one person's personal access token (`ROCKY_GITHUB_CONNECTION=token`,
+ * self-hosting only). Token mode is refused on Rocky Cloud, which runs on Fly.io: `FLY_APP_NAME`
+ * is set by the platform on every Fly machine, so the refusal cannot be configured away there
+ * (a self-hoster on Fly.io has a public URL and can install the App). The database refuses a
+ * token org on any instance that has an App org besides (migration 0024).
+ */
+export type ConnectionMode = "app" | "token";
+
+export const connectionModeFromEnv = (env: Env): ConnectionMode => {
+  const raw = nonEmpty(env, "ROCKY_GITHUB_CONNECTION");
+  if (raw === undefined || raw === "app") return "app";
+  if (raw !== "token") throw new ConfigError("ROCKY_GITHUB_CONNECTION must be app or token");
+  if ((env["FLY_APP_NAME"] ?? "") !== "") {
+    throw new ConfigError(
+      "ROCKY_GITHUB_CONNECTION=token is for self-hosting only and is refused on Fly.io, where Rocky Cloud runs (FLY_APP_NAME is set): install the GitHub App instead",
+    );
+  }
+  return "token";
+};
+
+/** `ROCKY_ANALYSIS_AUTO` as the worker reads it (P4-6); in token mode a sync queues analyses. */
+export const analysisAutoFromEnv = (env: Env): boolean => {
+  const raw = nonEmpty(env, "ROCKY_ANALYSIS_AUTO");
+  if (raw === undefined) return false;
+  if (raw !== "on" && raw !== "off") throw new ConfigError("ROCKY_ANALYSIS_AUTO must be on or off");
+  return raw === "on";
+};
+
+/** The GitHub App's variables: none may be set in token mode (one connection, one truth). */
+export const GITHUB_APP_VARIABLES = [
+  "GITHUB_APP_ID",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_WEBHOOK_SECRET",
+] as const;
+
+/**
+ * Where browsers reach a token-mode Rocky. Token mode needs no public URL (nothing calls Rocky
+ * from outside), so besides https it accepts http on a loopback address even in production:
+ * the browser and the server are on the same machine, cookies then lack `Secure` (browsers drop
+ * Secure cookies on plain http) and nothing leaves the host. Anything else must be https.
+ */
+export const tokenModePublicUrl = (env: Env): URL => {
+  const host = env["HOST"] ?? "0.0.0.0";
+  const publicRaw =
+    nonEmpty(env, "ROCKY_PUBLIC_URL") ??
+    (isProduction(env)
+      ? undefined
+      : `http://${host.includes(":") ? `[${host}]` : host}:${env["PORT"] ?? "4310"}`);
+  if (publicRaw === undefined) {
+    throw new ConfigError(
+      "ROCKY_PUBLIC_URL is required in production (with ROCKY_GITHUB_CONNECTION=token, http://127.0.0.1:<port> is accepted)",
+    );
+  }
+  const publicUrl = urlFrom(publicRaw, "ROCKY_PUBLIC_URL");
+  if (publicUrl.protocol !== "https:") {
+    if (publicUrl.protocol !== "http:" || !LOOPBACK.has(publicUrl.hostname)) {
+      throw new ConfigError(
+        "ROCKY_PUBLIC_URL must be https, or http on 127.0.0.1/localhost (set it explicitly when HOST is 0.0.0.0)",
+      );
+    }
+  }
+  if (publicUrl.pathname !== "/") throw new ConfigError("ROCKY_PUBLIC_URL must not have a path");
+  return publicUrl;
+};
+
+export interface TokenModeConfig {
+  /** Where browsers reach Rocky; its origin is the only one CSRF checks accept. */
+  readonly publicUrl: URL;
+  readonly cookieSecure: boolean;
+  readonly endpoints: GitHubEndpoints;
+  readonly sessionSecret: string | undefined;
+  readonly production: boolean;
+  /** `ROCKY_ANALYSIS_AUTO=on`: a sync queues an analysis of every new open head it reads. */
+  readonly analysisAuto: boolean;
+}
+
+/**
+ * Token mode's own configuration (ADR 0045 §2): the public URL (`tokenModePublicUrl`) and the
+ * session secret rule of GitHub login (ADR 0020 §8), without an app. The GitHub App's variables
+ * must be absent: a server is connected one way, and a leftover app id or webhook secret would
+ * mean two sources of truth for the same repositories. The KEK is checked by the caller (the
+ * token is stored encrypted). Messages name variables, never values.
+ */
+export const tokenModeFromEnv = (env: Env): TokenModeConfig => {
+  for (const name of GITHUB_APP_VARIABLES) {
+    if (nonEmpty(env, name) !== undefined) {
+      throw new ConfigError(
+        `${name} must be unset with ROCKY_GITHUB_CONNECTION=token: a server connects through the GitHub App or through a token, not both`,
+      );
+    }
+  }
+  const production = isProduction(env);
+  const publicUrl = tokenModePublicUrl(env);
+  const sessionSecret = nonEmpty(env, "ROCKY_SESSION_SECRET");
+  if (sessionSecret === undefined) {
+    if (production) throw new ConfigError("ROCKY_SESSION_SECRET is required in production");
+  } else if (
+    sessionSecret.length < MIN_SESSION_SECRET_LENGTH ||
+    !SESSION_SECRET_SHAPE.test(sessionSecret)
+  ) {
+    throw new ConfigError(
+      `ROCKY_SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} printable characters without spaces (e.g. openssl rand -hex 32)`,
+    );
+  }
+  const webUrl = nonEmpty(env, "GITHUB_URL");
+  const apiUrl = nonEmpty(env, "GITHUB_API_URL");
+  let endpoints: GitHubEndpoints;
+  try {
+    endpoints = githubEndpoints({
+      ...(webUrl === undefined ? {} : { webUrl }),
+      ...(apiUrl === undefined ? {} : { apiUrl }),
+    });
+  } catch (error) {
+    throw new ConfigError(`GITHUB_URL/GITHUB_API_URL: ${(error as Error).message}`);
+  }
+  return {
+    publicUrl,
+    cookieSecure: publicUrl.protocol === "https:",
+    endpoints,
+    sessionSecret,
+    production,
+    analysisAuto: analysisAutoFromEnv(env),
   };
 };
 

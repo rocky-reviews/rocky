@@ -9,6 +9,7 @@ import {
 
 const status = (overrides: Partial<Status> = {}): Status => ({
   mode: "setup",
+  connection: "app",
   csrfToken: "a".repeat(43),
   database: { state: "ok", details: [] },
   githubApp: {
@@ -18,6 +19,7 @@ const status = (overrides: Partial<Status> = {}): Status => ({
     createBlocked: null,
     credentialsFile: "/setup/github-app.env",
     installUrl: null,
+    token: null,
   },
   llm: {
     state: "not_tested",
@@ -44,6 +46,7 @@ describe("SetupStatusResponse (P10-2)", () => {
         createBlocked: null,
         credentialsFile: "/setup/github-app.env",
         installUrl: "https://github.com/apps/rocky-reviews/installations/new",
+        token: null,
       },
       repositories: {
         state: "analysed",

@@ -47,6 +47,7 @@ import {
 } from "./installations.js";
 import * as schema from "./schema.js";
 import { createSessionStore, type SessionStore } from "./sessions.js";
+import { tokenOrgOf } from "./token-connection.js";
 import {
   inboxDatabaseError,
   inboxInsert,
@@ -181,6 +182,11 @@ export interface Db {
   recordWebhookDelivery(delivery: WebhookDelivery): Promise<"queued" | "duplicate">;
   /** Purges inbox rows past their retention period (retention.purge_webhook_deliveries). */
   purgeWebhookDeliveries(asOf: Date): Promise<number>;
+  /**
+   * The one live token-mode org of a forge (P10-4, ADR 0045), ids only, through
+   * `auth.token_org`; `null` when the instance is not connected through a token.
+   */
+  tokenOrg(forge: ForgeKind): Promise<{ orgId: OrgId; accountId: number } | null>;
   /**
    * Login attempts, users and sessions (P7-1, ADR 0020): user-level rows in `app`, outside tenant
    * RLS, holding ids, hashes and times only. Org data is still read only inside `withOrg`.
@@ -733,6 +739,7 @@ export const createDb = (options: DbOptions): Db => {
     liveOrgs,
     recordWebhookDelivery,
     purgeWebhookDeliveries,
+    tokenOrg: (forge) => tokenOrgOf(pool, forge),
     sessions: createSessionStore(pool),
     close: () => pool.end(),
   };

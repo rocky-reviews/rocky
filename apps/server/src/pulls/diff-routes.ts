@@ -47,6 +47,8 @@ export interface PullRequestDiffRoutesDeps {
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
   /** The on-demand reader; without it (no app key) the route answers 503. */
   readonly diffs?: PullRequestDiffReader;
+  /** Token mode (P10-4): the org has no installation; the reader's opener finds the token. */
+  readonly tokenMode?: boolean;
 }
 
 const json = (reply: FastifyReply, status: number, body?: unknown) =>
@@ -137,7 +139,7 @@ export const registerPullRequestDiffRoutes = (
           // The same answer as an unknown pull request: nothing about a repository they cannot read.
           return json(reply, 404, { error: "not_found" });
         }
-        if (row.installationId === null) {
+        if (row.installationId === null && deps.tokenMode !== true) {
           // No installation to read on behalf of: nothing can be verified (fail closed).
           log(request, "no_installation", ids);
           return json(reply, 404, { error: "not_found" });

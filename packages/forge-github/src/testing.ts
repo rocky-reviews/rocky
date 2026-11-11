@@ -377,6 +377,16 @@ export interface FakeReview {
 /** A user's role on a repository, as GitHub grants it (P3-6). */
 export type FakePermission = "admin" | "maintain" | "write" | "triage" | "read";
 
+/** P10-4: a personal access token instead of the default OAuth-shaped test token. */
+export interface FakeUserOptions {
+  /** The token value to issue (e.g. a `github_pat_…` or `ghp_…` shape); default a test value. */
+  readonly token?: string;
+  /** `GET /user` then carries `github-authentication-token-expiration` (GitHub's text form). */
+  readonly tokenExpiresAt?: string;
+  /** `GET /user` then carries `x-oauth-scopes` (a classic token's scopes). */
+  readonly scopes?: string;
+}
+
 export interface FakeGitHubApi {
   /** Pass as the reader's `fetch`. */
   readonly fetch: typeof fetch;
@@ -450,9 +460,16 @@ export interface FakeGitHubApi {
    * value, also listed in `userTokens`), valid on `GET /user`, `GET /repos/{owner}/{repo}` and
    * `GET /repos/{owner}/{repo}/collaborators/{username}/permission` until revoked.
    */
-  addUser(user: { readonly id: number; readonly login: string }): string;
+  addUser(user: { readonly id: number; readonly login: string }, options?: FakeUserOptions): string;
   /** Every user token issued, so a test can prove none of them leaked. */
   readonly userTokens: string[];
+  /**
+   * P10-4: GitHub's rate limit for every credential is exhausted from now on: each request
+   * answers 403 with `x-ratelimit-remaining: 0` and `x-ratelimit-reset` at `resetAtMs` (epoch
+   * seconds on the wire), until `restoreRateLimit()`.
+   */
+  exhaustRateLimit(resetAtMs: number): void;
+  restoreRateLimit(): void;
   /**
    * Every review created through `POST /repos/{owner}/{repo}/pulls/{number}/reviews` (P3-5),
    * in order: who posted it, on which pull request, and the request body exactly as sent.
@@ -572,7 +589,11 @@ export const fakeGitHubApi = (options: {
   >();
   const tokens: FakeGitHubApi["tokens"] = { mints: [], issued: [], revoked: 0 };
   const userTokens: string[] = [];
-  const users = new Map<string, { id: number; login: string; revoked: boolean }>();
+  const users = new Map<
+    string,
+    { id: number; login: string; revoked: boolean; tokenExpiresAt?: string; scopes?: string }
+  >();
+  let rateLimitResetMs: number | undefined;
   const reviews: FakeReview[] = [];
   let nextReviewId = 880011;
   const permissions = new Map<string, FakePermission>();
@@ -626,15 +647,56 @@ export const fakeGitHubApi = (options: {
     });
   };
 
-  /** `GET /user`: who the token belongs to. */
-  const authenticatedUser = (user: { id: number; login: string }): Response => {
+  /** `GET /user`: who the token belongs to (and, for a personal token, its expiry and scopes). */
+  const authenticatedUser = (user: {
+    id: number;
+    login: string;
+    tokenExpiresAt?: string;
+    scopes?: string;
+  }): Response => {
     const failure = takeRouteFailure("user");
     if (failure !== undefined) return json(failure, { message: "Injected failure" });
-    return json(200, {
+    const response = json(200, {
       ...githubFixture("get-authenticated-user"),
       id: user.id,
       login: user.login,
     });
+    if (user.tokenExpiresAt !== undefined) {
+      response.headers.set("github-authentication-token-expiration", user.tokenExpiresAt);
+    }
+    if (user.scopes !== undefined) response.headers.set("x-oauth-scopes", user.scopes);
+    return response;
+  };
+
+  /**
+   * P10-4: `GET /user/repos` as a user: the repositories the user has a role on (what GitHub
+   * lists for the owner, collaborator and organization member affiliations), newest id first.
+   */
+  const userRepositories = (userId: number, url: URL): Response => {
+    const failure = takeRouteFailure("list");
+    if (failure !== undefined) return json(failure, { message: "Injected failure" });
+    const perPage = Math.min(Number(url.searchParams.get("per_page") ?? "30"), 100);
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const mine = [...repositories.values()]
+      .filter((r) => permissions.has(`${userId}:${r.repo.id}`))
+      .sort((a, b) => b.repo.id - a.repo.id);
+    return json(
+      200,
+      mine.slice((page - 1) * perPage, page * perPage).map((r) => ({
+        ...githubFixture("get-repository"),
+        ...repositoryJson(r.repo),
+        private: (visibilities.get(r.repo.id) ?? "private") !== "public",
+        permissions: flags(permissions.get(`${userId}:${r.repo.id}`), true),
+      })),
+    );
+  };
+
+  /** P10-4: `GET /repositories/{id}` as a user: 404 unless visible. */
+  const repositoryByIdAsUser = (repositoryId: number, userId: number): Response => {
+    const entry = repositories.get(repositoryId);
+    if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+    const [owner, name] = entry.repo.fullName.split("/") as [string, string];
+    return repositoryAsUser(owner, name, userId);
   };
 
   const reviewJson = (review: FakeReview): Record<string, unknown> => {
@@ -907,11 +969,18 @@ export const fakeGitHubApi = (options: {
     path: string,
     url: URL,
     token: string | undefined,
+    user?: { id: number },
   ): Response | undefined => {
+    // An installation token reaches the repositories it was minted for; a user token (P10-4: a
+    // personal token) the repositories the user can see, as on GitHub.
     const scoped = (owner: string, name: string) => {
       const entry = repositoryByName(owner, name);
-      if (entry === undefined || token === undefined) return undefined;
-      return live.get(token)?.repositoryIds.has(entry.repo.id) === true ? entry : undefined;
+      if (entry === undefined) return undefined;
+      if (token !== undefined) {
+        return live.get(token)?.repositoryIds.has(entry.repo.id) === true ? entry : undefined;
+      }
+      if (user !== undefined) return visibleTo(owner, name, user.id)?.entry;
+      return undefined;
     };
     let m = PULL_ROUTE.exec(path);
     if (method === "GET" && m !== null) {
@@ -934,8 +1003,10 @@ export const fakeGitHubApi = (options: {
       const page = Number(url.searchParams.get("page") ?? "1");
       const item =
         (githubFixture("list-pull-requests") as unknown as Record<string, unknown>[])[0] ?? {};
+      const wanted = url.searchParams.get("state") ?? "open";
       const all = [...(pulls.get(entry.repo.id)?.values() ?? [])]
         .map((pr) => pullJson(entry.repo, pr))
+        .filter((pr) => wanted === "all" || pr["state"] === wanted)
         .sort(
           (a, b) =>
             String(b["created_at"]).localeCompare(String(a["created_at"])) ||
@@ -1138,6 +1209,16 @@ export const fakeGitHubApi = (options: {
       if (injected !== undefined) return json(injected, { message: "Injected failure" });
     }
     if (!ok) return json(401, { message: "Bad credentials" });
+    if (rateLimitResetMs !== undefined) {
+      const limited = json(403, {
+        message: "API rate limit exceeded for user ID 1.",
+        documentation_url: "https://docs.github.com/rest/overview/rate-limits-for-the-rest-api",
+      });
+      limited.headers.set("x-ratelimit-limit", "5000");
+      limited.headers.set("x-ratelimit-remaining", "0");
+      limited.headers.set("x-ratelimit-reset", String(Math.floor(rateLimitResetMs / 1000)));
+      return limited;
+    }
     if (method === "GET" && path === "app") {
       return json(200, { ...githubFixture("get-app"), id: reportedAppId });
     }
@@ -1201,6 +1282,13 @@ export const fakeGitHubApi = (options: {
       });
     }
     if (method === "GET" && path === "user" && user !== undefined) return authenticatedUser(user);
+    if (method === "GET" && path === "user/repos" && user !== undefined) {
+      return userRepositories(user.id, url);
+    }
+    const byId = /^repositories\/(\d+)$/.exec(path);
+    if (method === "GET" && byId !== null && user !== undefined) {
+      return repositoryByIdAsUser(Number(byId[1]), user.id);
+    }
     const membershipMatch = /^user\/memberships\/orgs\/([^/]+)$/.exec(path);
     if (method === "GET" && membershipMatch !== null && user !== undefined) {
       const failure = takeRouteFailure("org_membership");
@@ -1297,7 +1385,7 @@ export const fakeGitHubApi = (options: {
         user.id,
       );
     }
-    const routed = repoRoute(method, path, url, token);
+    const routed = repoRoute(method, path, url, token, user);
     if (routed !== undefined) return routed;
     // P10-2: the setup wizard's list of the app's installations (one page).
     if (method === "GET" && path === "app/installations") {
@@ -1418,11 +1506,25 @@ export const fakeGitHubApi = (options: {
       reviews.push({ ...review, id });
       return id;
     },
-    addUser: (user) => {
-      const value = `test-user-token-${randomUUID()}`;
+    addUser: (user, userOptions = {}) => {
+      const value = userOptions.token ?? `test-user-token-${randomUUID()}`;
       userTokens.push(value);
-      users.set(value, { id: user.id, login: user.login, revoked: false });
+      users.set(value, {
+        id: user.id,
+        login: user.login,
+        revoked: false,
+        ...(userOptions.tokenExpiresAt === undefined
+          ? {}
+          : { tokenExpiresAt: userOptions.tokenExpiresAt }),
+        ...(userOptions.scopes === undefined ? {} : { scopes: userOptions.scopes }),
+      });
       return value;
+    },
+    exhaustRateLimit: (resetAtMs) => {
+      rateLimitResetMs = resetAtMs;
+    },
+    restoreRateLimit: () => {
+      rateLimitResetMs = undefined;
     },
     setPermission: (userId, repositoryId, permission) => {
       if (permission === null) permissions.delete(`${userId}:${repositoryId}`);

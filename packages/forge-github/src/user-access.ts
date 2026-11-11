@@ -28,7 +28,9 @@ import { isRepositoryFullName } from "./repositories.js";
  *    GitHub user can read a public repository and every enterprise member an internal one, so
  *    neither `pull` nor an effective role (the `/collaborators/{login}/permission` endpoint
  *    answers `read` for them: review round 2, B1) proves anything there; only membership does.
- *    Anything but a positive `true` is a deny.
+ *    Anything but a positive `true` is a deny. A locator without an installation (a token-mode
+ *    org, P10-4) skips this step: its only member is the token's owner, who picked the
+ *    repository, and there is no installation to ask on behalf of.
  *
  * Fail closed: 401 is `token_rejected` and 403 `forbidden` on the user's calls (SSO enforcement,
  * IP allow list, rate limit); any other status, a non-JSON or oversized body, a missing or
@@ -154,8 +156,7 @@ export const createGitHubUserAccessReader = (
   ): Promise<UserRepositoryAccess> => {
     const { installationId, id, fullName } = repository;
     if (
-      !Number.isSafeInteger(installationId) ||
-      installationId < 1 ||
+      (installationId !== null && (!Number.isSafeInteger(installationId) || installationId < 1)) ||
       !Number.isSafeInteger(id) ||
       id < 1 ||
       !isRepositoryFullName(fullName)
@@ -192,6 +193,9 @@ export const createGitHubUserAccessReader = (
     if (parsed.data.private && parsed.data.visibility === "private") return { access: "read" };
 
     // 3. Not private: read access is everyone's, so require membership (never effective access).
+    // A token-mode org (P10-4, ADR 0045 §4) has no installation to ask on behalf of, and no
+    // member but the token's owner, who chose the repository: their own read access counts.
+    if (installationId === null) return { access: "read" };
     const member = await options.collaborators.isCollaborator(
       { installationId, repositoryId: id },
       user.data.login,

@@ -36,9 +36,15 @@ const systemClock: Clock = { now: () => new Date() };
 export const MEMBER_TOKEN_PURPOSE = "github_token";
 
 export interface MemberAccessSourceOptions {
-  readonly db: Db;
+  readonly db: Pick<Db, "withOrg">;
   readonly keys: KeyWrapper;
   readonly reader: UserAccessReader;
+  /**
+   * Token mode (P10-4, ADR 0045 §4): the org has no installation, so the locator carries none and
+   * the reader skips the membership step (the only member is the token's owner). In App mode an
+   * org without an installation is a deny (`no_installation`).
+   */
+  readonly tokenMode?: boolean;
 }
 
 const none = (reason: Extract<RepositoryAccessAnswer, { access: "none" }>["reason"]) =>
@@ -52,8 +58,10 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
     if (!context.member || context.forgeUserId === null) return none("not_member");
     if (context.repositoryFullName === null) return none("unknown_repository");
     if (context.token === null) return none("no_token");
-    // No installation to ask membership on behalf of: nothing can be verified.
-    if (context.installationId === null) return none("no_installation");
+    // No installation to ask membership on behalf of: nothing can be verified (App mode).
+    if (context.installationId === null && options.tokenMode !== true) {
+      return none("no_installation");
+    }
     if (context.dataKey === null) return none("token_unreadable");
 
     let token: string;
@@ -75,7 +83,7 @@ export const memberAccessSource = (options: MemberAccessSourceOptions): Reposito
       // The reader checks that GitHub says this token is `forge_user_id`'s (token_user_mismatch).
       { token, userId: context.forgeUserId },
       {
-        installationId: context.installationId,
+        installationId: options.tokenMode === true ? null : context.installationId,
         id: repositoryId,
         fullName: context.repositoryFullName,
       },

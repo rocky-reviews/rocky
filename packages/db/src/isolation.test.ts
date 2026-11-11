@@ -52,8 +52,13 @@ const ALLOWED_NON_TENANT_TABLES = [
  * purges. Erasure moved to the worker in P3-3 (ADR 0009).
  */
 const ALLOWED_SECURITY_DEFINER = [
+  // Token mode (P10-4, ADR 0045): the server creates exactly a token org, and finds it.
+  "auth.create_token_org",
   // Login (P7-1, ADR 0020): live org ids for the installations GitHub lists for the user.
   "auth.login_orgs",
+  // P10-4: the token org's display login follows its owner's GitHub login (that column only).
+  "auth.refresh_token_org_login",
+  "auth.token_org",
   "retention.purge_analyses",
   "retention.purge_audit_events",
   "retention.purge_jobs",
@@ -145,11 +150,17 @@ const ORGS_COLUMN_PRIVILEGES = [
   "rocky_app:UPDATE:updated_at",
   // P7-1: the login lookup's owner reads ids and the lifecycle state, never keys or settings.
   "rocky_auth:SELECT:account_id",
+  // P10-4: and the connection kind, to keep token orgs out of sign-in and find the token org.
+  "rocky_auth:SELECT:connection",
   "rocky_auth:SELECT:delete_after",
   "rocky_auth:SELECT:erasing_at",
   "rocky_auth:SELECT:forge",
   "rocky_auth:SELECT:id",
   "rocky_auth:SELECT:installation_id",
+  // P10-4: the token org's display login (auth.refresh_token_org_login; policy and trigger
+  // restrict it to the current tenant's token org).
+  "rocky_auth:SELECT:login",
+  "rocky_auth:UPDATE:login",
   "rocky_worker:UPDATE:delete_after",
   "rocky_worker:UPDATE:erasing_at",
   "rocky_worker:UPDATE:installation_id",
@@ -261,8 +272,9 @@ const ROLE_TABLE_PRIVILEGES: Record<string, Record<string, string[]>> = {
     "app.webhook_queue": ["DELETE", "INSERT", "SELECT", "UPDATE"],
     "public.orgs": ["SELECT"],
   },
-  // P7-1: column-level SELECT on orgs only (ORGS_COLUMN_PRIVILEGES), no table privilege.
-  rocky_auth: {},
+  // P7-1: column-level SELECT on orgs (ORGS_COLUMN_PRIVILEGES); P10-4: INSERT, so that
+  // auth.create_token_org can insert exactly a token org (policy orgs_auth_insert).
+  rocky_auth: { "public.orgs": ["INSERT"] },
 };
 
 /**

@@ -6,7 +6,8 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
-    "./app": "./src/app.ts"
+    "./app": "./src/app.ts",
+    "./server": "./src/server.ts"
   },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/main.ts"
@@ -19,6 +20,7 @@
     "@rocky-reviews/forge-github": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
     "@rocky-reviews/log": "workspace:*",
+    "@rocky-reviews/mirror": "workspace:*",
     "fastify": "5.12.8",
     "parse5": "8.1.0",
     "pg": "8.23.1"
