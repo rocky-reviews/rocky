@@ -1,0 +1,21 @@
+# The setup wizard (P10-2, ADR 0044), laid over deploy/docker-compose.yml for the first start
+# only. It opens the wizard on the server and gives it one writable directory for the GitHub
+# App's credentials (written once, mode 0600); nothing else changes. The directory must exist,
+# owned by the containers' uid and closed to others, or the wizard refuses to create the app:
+#
+#   sudo install -d -m 0700 -o 65532 -g 65532 deploy/setup
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.setup.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml logs server | grep /setup/start   # the one-time link
+#
+# When setup is finished, start without this file: the server is recreated without the wizard and
+# without the directory.
+#
+#   docker compose -f deploy/docker-compose.yml up -d
+
+services:
+  server:
+    environment:
+      ROCKY_SETUP: "true"
+      GITHUB_APP_CREDENTIALS_FILE: /setup/github-app.env
+    volumes:
+      - ./setup:/setup

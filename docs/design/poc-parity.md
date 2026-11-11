@@ -163,6 +163,18 @@ follows the inbox's frame and the POC's cards, pills, memory mark (◆), AI mark
 - [x] Export `context.md` (a download from the server) — `memory.e2e.spec.ts` "the export is a context.md download from the server"
 - [ ] A link to the page from the briefing's "Project memory applied" (follow-up, see `docs/progress.md` P8-3)
 
+## Setup wizard (P10-2, not in the POC)
+
+The POC has no setup page; it follows the inbox's frame and the POC's top bar, cards, status
+pills and buttons (indigo for the person's actions, the AI mark on the LLM step).
+
+- [x] Four step cards (Database, GitHub App, LLM provider, First repository), each with a numbered badge (a check when done) and a Done / To do / Needs attention / Waiting pill — [setup-fresh-1440-light](../../apps/web/e2e/__screenshots__/setup-fresh-1440-light.png), [setup-fresh-1440-dark](../../apps/web/e2e/__screenshots__/setup-fresh-1440-dark.png), [setup-fresh-375-light](../../apps/web/e2e/__screenshots__/setup-fresh-375-light.png), [setup-fresh-1024-dark](../../apps/web/e2e/__screenshots__/setup-fresh-1024-dark.png)
+- [x] GitHub App created: restart first, install after, with the Compose commands — [setup-created-1440-light](../../apps/web/e2e/__screenshots__/setup-created-1440-light.png), [setup-created-375-dark](../../apps/web/e2e/__screenshots__/setup-created-375-dark.png)
+- [x] LLM test call: each model with its roles and its answer and duration (`setup.e2e.spec.ts` "the test call posts with the CSRF token…") — [setup-created-1024-light](../../apps/web/e2e/__screenshots__/setup-created-1024-light.png), [setup-failures-1024-light](../../apps/web/e2e/__screenshots__/setup-failures-1024-light.png)
+- [x] First repository: install link, per-account counts, then the first analysed pull request linked into Rocky — [setup-installed-1440-light](../../apps/web/e2e/__screenshots__/setup-installed-1440-light.png), [setup-installed-375-dark](../../apps/web/e2e/__screenshots__/setup-installed-375-dark.png), [setup-done-1440-dark](../../apps/web/e2e/__screenshots__/setup-done-1440-dark.png), [setup-done-375-dark](../../apps/web/e2e/__screenshots__/setup-done-375-dark.png)
+- [x] Failures named with what to do (migrations, webhook URL, provider errors) — [setup-failures-1440-light](../../apps/web/e2e/__screenshots__/setup-failures-1440-light.png), [setup-failures-1440-dark](../../apps/web/e2e/__screenshots__/setup-failures-1440-dark.png), [setup-failures-375-light](../../apps/web/e2e/__screenshots__/setup-failures-375-light.png)
+- [x] Finish setup and the closed page — [setup-finished-1440-light](../../apps/web/e2e/__screenshots__/setup-finished-1440-light.png), [setup-finished-375-dark](../../apps/web/e2e/__screenshots__/setup-finished-375-dark.png); keyboard path and axe 0 serious at every width and mode (`setup.e2e.spec.ts`)
+
 ## Known POC defects (do NOT copy)
 
 Found while capturing the P0-8 screenshots.

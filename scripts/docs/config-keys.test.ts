@@ -53,6 +53,8 @@ const SCHEMA_KEYS: readonly string[] = [
  * until it is reviewed and listed here; a listed label the scan no longer finds fails too.
  */
 const DYNAMIC_READS_COVERED_BY: Readonly<Record<string, string>> = {
+  "apps/server/src/config.ts: (env, homedir)":
+    "githubAppSetupFromEnv(), credentialsFileFrom() (P10-2): pass the environment on",
   "apps/server/src/config.ts: env[name]":
     "nonEmpty(): its callers pass literals, which the scan reads",
   "apps/server/src/main.ts: (process.env, log)": "startServer(env, log): passes the environment on",

@@ -39,7 +39,10 @@ Decisions behind this page:
 
 Self-hosting runs the same two processes from distroless, non-root, read-only container images
 (`deploy/Dockerfile`: `server`, which also serves the built web app, `worker`, and a one-shot
-`migrate` step as the table owner) with `deploy/docker-compose.yml` (ADR 0043).
+`migrate` step as the table owner) with `deploy/docker-compose.yml` (ADR 0043). A first install
+starts with the setup wizard (`ROCKY_SETUP=true`, `/setup`, ADR 0044): before a GitHub App
+exists, a production server runs in setup mode and serves only health, the wizard and the
+manifest flow.
 
 ## Code layout and dependency direction
 
@@ -348,8 +351,8 @@ packages/schema (analysis document; shared contract)
   whole files and flagged), kept in memory for a minute per org + repository + revision and
   never stored. The web's `createHttpDiffSource` feeds the file view, so drafts, own comments
   and Finish review work on a real PR; every refusal has fixed text.
-- GitHub App (ADR 0008): created by the manifest flow (`GITHUB_APP_SETUP=true`, development
-  only, one-time token printed to the terminal); five permissions (`contents:read`,
+- GitHub App (ADR 0008): created by the manifest flow (`ROCKY_SETUP=true`, one-time token
+  printed to the terminal; in production too since the setup wizard, P10-2, ADR 0044); five permissions (`contents:read`,
   `pull_requests:write`, `checks:read`, `metadata:read`, and org `members:read` for sign-in,
   ADR 0020) and three subscribed events
   (`pull_request`; `organization` for members who leave, ADR 0024; `push` for the repository

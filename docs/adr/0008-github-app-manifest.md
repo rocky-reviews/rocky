@@ -87,6 +87,14 @@ Pinned exactly (`app-manifest.test.ts` "is pinned exactly…"):
 
 ### 4. The setup routes (`apps/server/src/github-app-setup.ts`)
 
+> **Amended by [ADR 0044](0044-setup-wizard.md) (P10-2):** setup is requested with `ROCKY_SETUP=true`
+> (`GITHUB_APP_SETUP=true` still works) and is allowed in production behind an https
+> `ROCKY_PUBLIC_URL`. The one-time token and the session moved to `setup/session.ts`, shared with
+> the setup wizard: the link is `/setup/start?token=…`, the cookie is `Path=/` (`__Host-` and
+> `Secure` on https), and after creation the session stays for the wizard while these routes
+> close. The success page sends the person to the wizard (restart first, install after) instead
+> of the install link.
+
 - **Off unless requested.** Routes are registered only when `GITHUB_APP_SETUP=true`, **not in
   production** (`NODE_ENV=production` or `FLY_APP_NAME` → ConfigError, the server does not boot),
   and no app is configured (`GITHUB_APP_ID` set, or anything exists at the credentials path).
