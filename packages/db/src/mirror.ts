@@ -277,6 +277,31 @@ export const mirroredPullRequests = async (
   return rows.map(mirroredFromRow);
 };
 
+/**
+ * Closes a mirrored pull request GitHub no longer has (its read answers 404: deleted, or the
+ * repository moved away from the token), so a sync stops re-reading it. Only an open row
+ * changes; `true` when one did. GitHub stays the source of truth: if it comes back, the next
+ * read writes it again.
+ */
+export const closeVanishedPullRequest = async (
+  tx: TenantTx,
+  forgeRepositoryId: number,
+  number: number,
+  at: Date,
+): Promise<boolean> => {
+  if (!isId(forgeRepositoryId)) invalid("repository id");
+  if (!Number.isInteger(number) || number < 1 || number > MAX_INT) invalid("pull request number");
+  const { rowCount } = await tx.query(
+    `update pull_requests p
+        set state = 'closed', closed_at = coalesce(p.closed_at, $4), updated_at = now()
+       from repos r
+      where r.id = p.repo_id and r.org_id = $1 and r.forge_repo_id = $2
+        and p.org_id = $1 and p.number = $3 and p.state = 'open'`,
+    [tx.orgId, forgeRepositoryId, number, at],
+  );
+  return (rowCount ?? 0) > 0;
+};
+
 /** One mirrored pull request, or `undefined` when it is not in the mirror. */
 export const mirroredPullRequest = async (
   tx: TenantTx,

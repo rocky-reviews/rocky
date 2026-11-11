@@ -56,6 +56,8 @@ const ALLOWED_SECURITY_DEFINER = [
   "auth.create_token_org",
   // Login (P7-1, ADR 0020): live org ids for the installations GitHub lists for the user.
   "auth.login_orgs",
+  // P10-4: the token org's display login follows its owner's GitHub login (that column only).
+  "auth.refresh_token_org_login",
   "auth.token_org",
   "retention.purge_analyses",
   "retention.purge_audit_events",
@@ -155,6 +157,10 @@ const ORGS_COLUMN_PRIVILEGES = [
   "rocky_auth:SELECT:forge",
   "rocky_auth:SELECT:id",
   "rocky_auth:SELECT:installation_id",
+  // P10-4: the token org's display login (auth.refresh_token_org_login; policy and trigger
+  // restrict it to the current tenant's token org).
+  "rocky_auth:SELECT:login",
+  "rocky_auth:UPDATE:login",
   "rocky_worker:UPDATE:delete_after",
   "rocky_worker:UPDATE:erasing_at",
   "rocky_worker:UPDATE:installation_id",

@@ -108,6 +108,24 @@ export const createTokenOrg = async (
   if (rows[0]?.id !== tx.orgId) fail("org not created");
 };
 
+/**
+ * The token org's display login, when its owner (`accountId`, the org's account) was renamed on
+ * GitHub. Through `auth.refresh_token_org_login`: the current tenant's token org only. `true`
+ * when it changed.
+ */
+export const refreshTokenOrgLogin = async (
+  tx: TenantTx,
+  owner: { readonly accountId: number; readonly login: string },
+): Promise<boolean> => {
+  const accountId = assertId(owner.accountId, "account id");
+  if (typeof owner.login !== "string" || !LOGIN.test(owner.login)) fail("invalid login");
+  const { rows } = await tx.query<{ changed: boolean }>(
+    "select auth.refresh_token_org_login($1, $2) as changed",
+    [accountId, owner.login],
+  );
+  return rows[0]?.changed === true;
+};
+
 /** What the server knows about the saved token without decrypting it. */
 export interface TokenConnection {
   readonly memberId: string;

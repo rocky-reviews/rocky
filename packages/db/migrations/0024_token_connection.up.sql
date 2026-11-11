@@ -33,6 +33,10 @@ ALTER TABLE orgs ADD CONSTRAINT orgs_connection_installation
 -- A token belongs to a person: a token org is that person's User account.
 ALTER TABLE orgs ADD CONSTRAINT orgs_token_connection_user
   CHECK (connection = 'app' OR kind = 'user');
+-- At most one live token org (one token, one owner): the function below checks first, and this
+-- index settles two saves at once (the loser's insert does nothing).
+CREATE UNIQUE INDEX orgs_one_live_token ON orgs (connection)
+  WHERE connection = 'token' AND erasing_at IS NULL;
 
 -- The connection kind never changes (an org is created one way and stays that way).
 CREATE OR REPLACE FUNCTION app.orgs_guard_identity() RETURNS trigger
@@ -51,7 +55,9 @@ BEGIN
       OR NEW.delete_after IS DISTINCT FROM OLD.delete_after
       OR NEW.erasing_at IS DISTINCT FROM OLD.erasing_at
       OR NEW.installer_forge_user_id IS DISTINCT FROM OLD.installer_forge_user_id
-      OR NEW.login IS DISTINCT FROM OLD.login
+      -- A token org's display login is refreshed by auth.refresh_token_org_login (rocky_auth).
+      OR (NEW.login IS DISTINCT FROM OLD.login
+          AND NOT (OLD.connection = 'token' AND current_user = 'rocky_auth'))
       OR NEW.kind IS DISTINCT FROM OLD.kind)
      AND NOT pg_has_role(current_user, 'rocky_worker', 'USAGE') THEN
     RAISE EXCEPTION 'orgs: the installation lifecycle columns belong to the worker'
@@ -152,6 +158,7 @@ AS $$
    WHERE NOT EXISTS (SELECT 1 FROM public.orgs o WHERE o.connection = 'app')
      AND NOT EXISTS (SELECT 1 FROM public.orgs o
                       WHERE o.connection = 'token' AND o.erasing_at IS NULL)
+  ON CONFLICT DO NOTHING
   RETURNING id
 $$;
 
@@ -173,6 +180,33 @@ AS $$
    LIMIT 1
 $$;
 
+-- The token org's display login follows its owner's GitHub login (a rename on GitHub), read
+-- again on every token save. rocky_auth may change that one column of the current tenant's
+-- token org, for its own account only.
+GRANT SELECT (login) ON orgs TO rocky_auth;
+GRANT UPDATE (login) ON orgs TO rocky_auth;
+CREATE POLICY orgs_auth_token_login ON orgs FOR UPDATE TO rocky_auth
+  USING (id = app.current_org_id() AND connection = 'token')
+  WITH CHECK (id = app.current_org_id() AND connection = 'token');
+
+CREATE FUNCTION auth.refresh_token_org_login(p_account_id bigint, p_login text)
+  RETURNS boolean
+  LANGUAGE sql SECURITY DEFINER
+  SET search_path = pg_catalog
+AS $$
+  WITH changed AS (
+    UPDATE public.orgs o SET login = p_login
+     WHERE o.id = app.current_org_id()
+       AND o.connection = 'token'
+       AND o.account_id = p_account_id
+       AND o.login IS DISTINCT FROM p_login
+    RETURNING 1
+  )
+  SELECT count(*) > 0 FROM changed
+$$;
+
+REVOKE ALL ON FUNCTION auth.refresh_token_org_login(bigint, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION auth.refresh_token_org_login(bigint, text) TO rocky_app;
 REVOKE ALL ON FUNCTION auth.create_token_org(text, bigint, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION auth.token_org(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION auth.create_token_org(text, bigint, text) TO rocky_app;
@@ -182,6 +216,7 @@ GRANT CREATE ON SCHEMA auth TO rocky_auth;
 ALTER FUNCTION auth.login_orgs(text, bigint[], bigint[]) OWNER TO rocky_auth;
 ALTER FUNCTION auth.create_token_org(text, bigint, text) OWNER TO rocky_auth;
 ALTER FUNCTION auth.token_org(text) OWNER TO rocky_auth;
+ALTER FUNCTION auth.refresh_token_org_login(bigint, text) OWNER TO rocky_auth;
 REVOKE CREATE ON SCHEMA auth FROM rocky_auth;
 
 -- --- 4. When a repository was last synced on the token ------------------------------------------

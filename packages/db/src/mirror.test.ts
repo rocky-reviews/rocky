@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDb, type Db } from "./client.js";
 import { insertInstallationOrg } from "./installations.js";
 import {
+  closeVanishedPullRequest,
   mirroredPullRequest,
   mirroredPullRequests,
   recordRevision,
@@ -372,5 +373,39 @@ describe("reading the mirror back", () => {
     await expect(worker.withOrg(a, (tx) => mirroredPullRequests(tx, 0))).rejects.toThrow();
     await expect(worker.withOrg(a, (tx) => mirroredPullRequest(tx, 1, 0))).rejects.toThrow();
     await expect(worker.withOrg(a, (tx) => mirroredPullRequest(tx, 0, 1))).rejects.toThrow();
+  });
+
+  it("closes a pull request GitHub no longer has, once, in its own tenant only", async () => {
+    const a = await newOrg();
+    const b = await newOrg();
+    for (const org of [a, b]) {
+      await worker.withOrg(org, async (tx) => {
+        const repoId = await upsertRepository(tx, REPO);
+        await upsertPullRequest(
+          tx,
+          repoId,
+          pr({ ref: { installationId: 1, repositoryId: REPO.id, number: 5 } }),
+        );
+      });
+    }
+    const at = new Date("2026-11-11T10:00:00Z");
+    expect(await worker.withOrg(a, (tx) => closeVanishedPullRequest(tx, REPO.id, 5, at))).toBe(
+      true,
+    );
+    expect(await worker.withOrg(a, (tx) => closeVanishedPullRequest(tx, REPO.id, 5, at))).toBe(
+      false,
+    );
+    expect(await worker.withOrg(a, (tx) => mirroredPullRequest(tx, REPO.id, 5))).toMatchObject({
+      open: false,
+    });
+    expect(await worker.withOrg(b, (tx) => mirroredPullRequest(tx, REPO.id, 5))).toMatchObject({
+      open: true,
+    });
+    expect(await worker.withOrg(a, (tx) => closeVanishedPullRequest(tx, REPO.id, 404, at))).toBe(
+      false,
+    );
+    await expect(
+      worker.withOrg(a, (tx) => closeVanishedPullRequest(tx, 0, 5, at)),
+    ).rejects.toThrow();
   });
 });

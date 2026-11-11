@@ -4,15 +4,20 @@
 -- their 0013 and 0007 bodies, then handed back (the same pattern as the up script).
 
 ALTER TABLE repos DROP COLUMN synced_at;
+DROP INDEX orgs_one_live_token;
 
 GRANT USAGE ON SCHEMA auth TO rocky_auth;
 SET LOCAL ROLE rocky_auth;
 DROP FUNCTION auth.token_org(text);
+DROP FUNCTION auth.refresh_token_org_login(bigint, text);
 DROP FUNCTION auth.create_token_org(text, bigint, text);
 DROP FUNCTION auth.login_orgs(text, bigint[], bigint[]);
 RESET ROLE;
 REVOKE USAGE ON SCHEMA auth FROM rocky_auth;
 DROP POLICY orgs_auth_insert ON orgs;
+DROP POLICY orgs_auth_token_login ON orgs;
+REVOKE UPDATE (login) ON orgs FROM rocky_auth;
+REVOKE SELECT (login) ON orgs FROM rocky_auth;
 REVOKE INSERT ON orgs FROM rocky_auth;
 REVOKE USAGE ON SCHEMA app FROM rocky_auth;
 REVOKE SELECT (connection) ON orgs FROM rocky_auth;

@@ -122,6 +122,7 @@ export {
 export {
   mirroredPullRequest,
   mirroredPullRequests,
+  closeVanishedPullRequest,
   recordRevision,
   upsertPullRequest,
   upsertRepository,
@@ -300,6 +301,7 @@ export {
 } from "./reviews.js";
 export {
   createTokenOrg,
+  refreshTokenOrgLogin,
   disableRepository,
   enableRepository,
   findConnectionRepository,

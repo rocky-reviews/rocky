@@ -28,6 +28,7 @@ import {
 } from "./testing/index.js";
 import {
   createTokenOrg,
+  refreshTokenOrgLogin,
   disableRepository,
   enableRepository,
   findConnectionRepository,
@@ -121,6 +122,74 @@ describe("creating the token org (as the application login)", () => {
       ).rejects.toMatchObject({ name: "TokenConnectionError", message: /org not created/ });
     }
     expect(await db.tokenOrg("github")).toEqual({ orgId: tokenOrgId, accountId: OWNER.id });
+  });
+
+  it("refreshes the token org's display login when the owner's GitHub login changes, nothing else", async () => {
+    const loginOf = async () =>
+      (
+        await superuser.query<{ login: string }>("select login from orgs where id = $1", [
+          tokenOrgId,
+        ])
+      ).rows[0]?.login;
+    expect(
+      await db.withOrg(tokenOrgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: "solo-renamed" }),
+      ),
+    ).toBe(true);
+    expect(await loginOf()).toBe("solo-renamed");
+    // Another account's login, or the same login again: nothing changes.
+    expect(
+      await db.withOrg(tokenOrgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: 9_999, login: "intruder" }),
+      ),
+    ).toBe(false);
+    expect(
+      await db.withOrg(tokenOrgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: "solo-renamed" }),
+      ),
+    ).toBe(false);
+    // From another tenant: not this org.
+    expect(
+      await db.withOrg(newOrgId(), (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: "elsewhere" }),
+      ),
+    ).toBe(false);
+    await expect(
+      db.withOrg(tokenOrgId, (tx) =>
+        refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: "x y" }),
+      ),
+    ).rejects.toThrow(/invalid login/);
+    expect(await loginOf()).toBe("solo-renamed");
+    await db.withOrg(tokenOrgId, (tx) =>
+      refreshTokenOrgLogin(tx, { accountId: OWNER.id, login: OWNER.login }),
+    );
+    expect(await loginOf()).toBe(OWNER.login);
+  });
+
+  it("at most one live token org, even for two saves at once (a unique index, not only the check)", async () => {
+    // A direct second insert, past the function's check (the race it would lose): refused.
+    await asWorker(pgs.workerUrl, async (w) => {
+      await expect(
+        w.withOrg(newOrgId(), (tx) =>
+          tx.query(
+            "insert into orgs (id, connection, installation_id, account_id, login, kind) values ($1, 'token', null, 7_003, 'racer', 'user')",
+            [tx.orgId],
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "23505" });
+    });
+    // Two saves at once: neither creates a second org; both are refused the usual way.
+    const racers = await Promise.allSettled(
+      [7_010, 7_011].map((id) =>
+        db.withOrg(newOrgId(), (tx) =>
+          createTokenOrg(tx, { forge: "github", accountId: id, login: `racer-${id}` }),
+        ),
+      ),
+    );
+    for (const r of racers) {
+      expect(r.status).toBe("rejected");
+      if (r.status === "rejected") expect(String(r.reason)).toMatch(/org not created/);
+    }
   });
 
   it("the application login still cannot insert an org itself, nor an App-shaped one through the function", async () => {

@@ -1,5 +1,10 @@
 import type { OrgId, RepositorySession } from "@rocky-reviews/core";
-import { mirroredPullRequests, upsertRepository, type Db } from "@rocky-reviews/db";
+import {
+  closeVanishedPullRequest,
+  mirroredPullRequests,
+  upsertRepository,
+  type Db,
+} from "@rocky-reviews/db";
 import { MIRROR_DIFF_MAX_BYTES, mirrorPullRequest } from "./mirror.js";
 
 /**
@@ -204,8 +209,13 @@ export const syncOpenPullRequests = async (
     for (const known of existing.values()) {
       if (!known.open || seen.has(known.number)) continue;
       const outcome = await read(known.number);
-      if (outcome === "missing") counts.missing++;
-      else {
+      if (outcome === "missing") {
+        // Gone from GitHub: closed in the mirror, so the next sync does not read it again.
+        counts.missing++;
+        await db.withOrg(orgId, (tx) =>
+          closeVanishedPullRequest(tx, session.repository.id, known.number, new Date()),
+        );
+      } else {
         counts.closed++;
         if (outcome === "written") counts.mirrored++;
       }
