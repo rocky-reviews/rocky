@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "@rocky-reviews/log";
@@ -56,9 +65,18 @@ describe("startHeartbeat", () => {
     const { log, out } = capture();
     heartbeat = startHeartbeat({ file, intervalMs: 20, log });
     await sleep(5);
-    const first = readFileSync(file, "utf8");
+    // One descriptor for the read and the mode, so both describe the same file.
+    const fd = openSync(file, "r");
+    let first: string;
+    let mode: number;
+    try {
+      first = readFileSync(fd, "utf8");
+      mode = fstatSync(fd).mode;
+    } finally {
+      closeSync(fd);
+    }
     expect(new Date(first).getTime()).toBeGreaterThan(Date.now() - 5_000);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(mode & 0o777).toBe(0o600);
     await sleep(60);
     expect(readFileSync(file, "utf8")).not.toBe(first);
     expect(out).toEqual([]);

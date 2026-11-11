@@ -14,7 +14,7 @@ check("gid is 65532", process.getgid() === 65532);
 
 const writeFails = (path) => {
   try {
-    writeFileSync(path, "probe");
+    writeFileSync(path, "probe", { mode: 0o600 });
     rmSync(path, { force: true });
     return false;
   } catch (error) {
