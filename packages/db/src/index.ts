@@ -299,6 +299,21 @@ export {
   type ReviewSubmissionStatus,
 } from "./reviews.js";
 export {
+  createTokenOrg,
+  disableRepository,
+  enableRepository,
+  findConnectionRepository,
+  lastSyncedAt,
+  listConnectionRepositories,
+  loadTokenConnection,
+  markRepositorySynced,
+  recordTokenConnection,
+  TokenConnectionError,
+  tokenOrgOf,
+  type ConnectionRepositoryRow,
+  type TokenConnection,
+} from "./token-connection.js";
+export {
   checkDatabaseSetup,
   loadOrgSetupProgress,
   REQUIRED_EXTENSIONS,

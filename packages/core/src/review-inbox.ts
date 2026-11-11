@@ -19,6 +19,7 @@ import {
   RepoOwner,
 } from "@rocky-reviews/schema";
 import { z } from "zod";
+import { InboxSync } from "./connection.js";
 import { preTriage } from "./analysis/rules.js";
 import { belowVerdictFloor } from "./analysis/verdict.js";
 import type { OrgId } from "./ports.js";
@@ -274,6 +275,12 @@ export const InboxResponse = z.strictObject({
     .refine((items) => new Set(items.map((i) => i.id)).size === items.length, "duplicate ids"),
   /** More open pull requests exist than the inbox lists. */
   truncated: z.boolean(),
+  /**
+   * Token mode only (P10-4, ADR 0045): the sync with GitHub that opening the inbox started, and
+   * when the org's repositories were last synced. Absent on an App org, whose mirror follows
+   * webhooks.
+   */
+  sync: InboxSync.optional(),
 });
 export type InboxResponse = z.infer<typeof InboxResponse>;
 

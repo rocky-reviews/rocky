@@ -260,6 +260,7 @@ describe("revisions", () => {
     const after = await worker.withOrg(orgId, (tx) => mirroredPullRequest(tx, REPO.id, 847));
     expect(after).toEqual({
       number: 847,
+      open: true,
       headSha: HEAD,
       forgeUpdatedAt: new Date("2026-10-26T10:00:00Z"),
       headDiffRead: true,
@@ -359,8 +360,8 @@ describe("reading the mirror back", () => {
       }
     });
     expect(await worker.withOrg(a, (tx) => mirroredPullRequests(tx, REPO.id))).toEqual([
-      { number: 1, headSha: HEAD, forgeUpdatedAt: pr().updatedAt, headDiffRead: true },
-      { number: 2, headSha: HEAD, forgeUpdatedAt: pr().updatedAt, headDiffRead: false },
+      { number: 1, headSha: HEAD, forgeUpdatedAt: pr().updatedAt, headDiffRead: true, open: true },
+      { number: 2, headSha: HEAD, forgeUpdatedAt: pr().updatedAt, headDiffRead: false, open: true },
     ]);
     expect(await worker.withOrg(b, (tx) => mirroredPullRequests(tx, REPO.id))).toEqual([]);
     expect(await worker.withOrg(b, (tx) => mirroredPullRequest(tx, REPO.id, 1))).toBeUndefined();

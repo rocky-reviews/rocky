@@ -29,6 +29,8 @@ export interface MirroredPullRequest {
   readonly forgeUpdatedAt: Date | null;
   /** The revision of the current head exists and its diff was read (`unavailable` is not read). */
   readonly headDiffRead: boolean;
+  /** The mirror says the pull request is open (P10-4: the token sync re-reads ones gone closed). */
+  readonly open: boolean;
 }
 
 export type PullRequestWrite = "created" | "updated" | "unchanged" | "stale";
@@ -71,7 +73,13 @@ const checkRepository = (repo: ForgeRepository): void => {
 };
 
 const checkPullRequest = (pr: ForgePullRequest): void => {
-  if (!isId(pr.ref.repositoryId) || !isId(pr.ref.installationId)) invalid("pull request ref");
+  // A token-mode read (P10-4) carries no installation in its ref; the mirror stores neither.
+  if (
+    !isId(pr.ref.repositoryId) ||
+    (pr.ref.installationId !== null && !isId(pr.ref.installationId))
+  ) {
+    invalid("pull request ref");
+  }
   if (!Number.isInteger(pr.ref.number) || pr.ref.number < 1 || pr.ref.number > MAX_INT) {
     invalid("pull request number");
   }
@@ -233,7 +241,7 @@ export const recordRevision = async (
 };
 
 const MIRRORED_SQL = `
-  select p.number, p.head_sha, p.forge_updated_at,
+  select p.number, p.head_sha, p.forge_updated_at, p.state = 'open' as open,
          (r.diff_bytes is not null and r.diff_truncation is distinct from 'unavailable')
            as head_diff_read
     from pull_requests p
@@ -247,11 +255,13 @@ const mirroredFromRow = (row: {
   head_sha: string;
   forge_updated_at: Date | null;
   head_diff_read: boolean;
+  open: boolean;
 }): MirroredPullRequest => ({
   number: row.number,
   headSha: row.head_sha,
   forgeUpdatedAt: row.forge_updated_at,
   headDiffRead: row.head_diff_read,
+  open: row.open,
 });
 
 /** Every mirrored pull request of the repository with this forge id, by number. */

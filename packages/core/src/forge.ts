@@ -32,7 +32,10 @@ export interface RepositoryRef {
   readonly repositoryId: ForgeNumericId;
 }
 
-export interface PullRequestRef extends RepositoryRef {
+export interface PullRequestRef {
+  /** The installation the read was on behalf of; `null` on a personal token (P10-4). */
+  readonly installationId: ForgeNumericId | null;
+  readonly repositoryId: ForgeNumericId;
   readonly number: number;
 }
 
@@ -86,6 +89,8 @@ export interface InstallationEvent {
 /** A pull request changed (P3-4 re-reads it from the forge and updates the mirror). */
 export interface PullRequestEvent extends PullRequestRef {
   readonly type: PullRequestEventType;
+  /** Webhooks always come from an installation. */
+  readonly installationId: ForgeNumericId;
   /** Head commit at the time of the event: lets a consumer skip a stale delivery. */
   readonly headSha: string;
   /** Only meaningful for `pull_request.closed`; false otherwise. */
@@ -314,7 +319,12 @@ export type ForgeReadFailure =
   /** The installation is suspended: the forge refuses reads on its behalf until unsuspended. */
   | "installation_suspended"
   /** The configured credentials authenticate a different app than the configured app id. */
-  | "app_mismatch";
+  | "app_mismatch"
+  /**
+   * The forge's rate limit for this credential is exhausted (P10-4: a personal token shares one
+   * budget across everything it does); `retryAt` says when it resets, when the forge said.
+   */
+  | "rate_limited";
 
 /**
  * A failed forge read. Carries a fixed reason and at most an HTTP status: never a body, a token
@@ -323,15 +333,22 @@ export type ForgeReadFailure =
  */
 export class ForgeReadError extends Error {
   override readonly name = "ForgeReadError";
+  /** When a `rate_limited` read may be tried again, as the forge announced it (set only then). */
+  declare readonly retryAt?: Date;
   constructor(
     readonly reason: ForgeReadFailure,
     readonly status?: number,
+    options: { readonly retryAt?: Date } = {},
   ) {
     super(
       status === undefined
         ? `forge read failed: ${reason}`
         : `forge read failed: ${reason} ${status}`,
     );
+    // Own keys stay exactly name, reason and status unless a reset time was given (forge.test).
+    if (options.retryAt !== undefined) {
+      Object.defineProperty(this, "retryAt", { value: options.retryAt, enumerable: true });
+    }
   }
 
   /**
@@ -340,7 +357,12 @@ export class ForgeReadError extends Error {
    * Retried without counting against the row; everything else is a property of the answer.
    */
   get transient(): boolean {
-    if (this.reason === "timeout" || this.reason === "network" || this.reason === "app_mismatch") {
+    if (
+      this.reason === "timeout" ||
+      this.reason === "network" ||
+      this.reason === "app_mismatch" ||
+      this.reason === "rate_limited"
+    ) {
       return true;
     }
     if (this.reason !== "http_status" || this.status === undefined) return false;
@@ -385,8 +407,13 @@ export interface RepositorySession {
   readonly repository: ForgeRepository;
   /** `null` only when the forge positively says there is no such pull request. */
   getPullRequest(number: number): Promise<ForgePullRequest | null>;
-  /** Every pull request of the repository, any state, most recently updated first. */
-  listPullRequests(): AsyncIterable<ForgePullRequestSummary>;
+  /**
+   * Every pull request of the repository, any state (or only the open ones: the token sync of
+   * P10-4), newest first.
+   */
+  listPullRequests(options?: {
+    readonly state?: "all" | "open";
+  }): AsyncIterable<ForgePullRequestSummary>;
   /** The diff of one revision, read up to `maxBytes`. */
   getDiff(revision: RevisionRef, options: { readonly maxBytes: number }): Promise<ForgeDiff>;
   /** Revokes the credential (best effort) and refuses further reads. Idempotent. */
@@ -507,8 +534,11 @@ export interface ForgeUserCredential {
 
 /** The repository to ask about: the id is the identity, the name only addresses the request. */
 export interface RepositoryLocator {
-  /** The org's installation (`orgs.installation_id`): the membership check runs on its behalf. */
-  readonly installationId: ForgeNumericId;
+  /**
+   * The org's installation (`orgs.installation_id`): the membership check runs on its behalf.
+   * `null` for a token-mode org (P10-4), which has no installation and no membership step.
+   */
+  readonly installationId: ForgeNumericId | null;
   readonly id: ForgeNumericId;
   /** `owner/name` as last mirrored (display data; the answer's id must match `id`). */
   readonly fullName: string;

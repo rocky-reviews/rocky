@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONNECTION_KINDS, ConnectionToken } from "./connection.js";
 
 /**
  * The setup wizard's API (P10-2, ADR 0044): what `GET /api/setup/status` and
@@ -30,6 +31,10 @@ export const SETUP_GITHUB_APP_STATES = [
   "configured",
   /** `GITHUB_APP_ID` is set but the check with GitHub failed (`error` says how). */
   "check_failed",
+  /** Token mode (P10-4): no token saved yet; the step asks for one. */
+  "token_required",
+  /** Token mode: a token is saved and GitHub accepted it (`token` describes it). */
+  "token_connected",
 ] as const;
 
 export const SETUP_LLM_STATES = ["not_tested", "ok", "failed", "invalid_config"] as const;
@@ -37,6 +42,8 @@ export const SETUP_LLM_STATES = ["not_tested", "ok", "failed", "invalid_config"]
 export const SETUP_REPOSITORY_STATES = [
   /** The app is not configured yet. */
   "waiting_for_app",
+  /** Token mode: no token saved yet. */
+  "waiting_for_token",
   /** The app is installed nowhere. */
   "not_installed",
   /** Installed; no analysis has finished yet. */
@@ -87,6 +94,8 @@ export type SetupInstallation = z.infer<typeof SetupInstallation>;
 export const SetupStatusResponse = z.strictObject({
   /** `setup`: the server runs the wizard only (production, before the app is configured). */
   mode: z.enum(["setup", "full"]),
+  /** How this server connects to GitHub (P10-4): the App, or one person's token. */
+  connection: z.enum(CONNECTION_KINDS),
   /** The synchronizer token the wizard's POSTs carry in `x-rocky-csrf`. */
   csrfToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   database: z.strictObject({
@@ -105,6 +114,8 @@ export const SetupStatusResponse = z.strictObject({
     credentialsFile: z.string().max(4096),
     /** GitHub's page to install the app on repositories (https). */
     installUrl: z.url({ protocol: /^https$/ }).nullable(),
+    /** Token mode: the saved token, described without its value; `null` until one is saved. */
+    token: ConnectionToken.nullable(),
   }),
   llm: z.strictObject({
     state: z.enum(SETUP_LLM_STATES),
