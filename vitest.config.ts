@@ -7,7 +7,11 @@ const COVERED = ["core", "schema", "db", "llm", "crypto", "renderer", "indexer"]
 
 export default defineConfig({
   test: {
-    include: ["{apps,packages,ee}/**/src/**/*.test.{ts,tsx}", "scripts/**/*.test.ts"],
+    include: [
+      "{apps,packages,ee}/**/src/**/*.test.{ts,tsx}",
+      "scripts/**/*.test.ts",
+      "deploy/**/*.test.ts",
+    ],
     passWithNoTests: true,
     coverage: {
       provider: "v8",

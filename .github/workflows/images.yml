@@ -1,0 +1,158 @@
+# Container images (P10-1, ADR 0043): build the three images from deploy/Dockerfile, scan them
+# with Trivy (0 critical, size under 250 MB, no secrets in a layer), boot the self-host compose
+# file and check health, the read-only filesystem and the non-root user, generate SPDX SBOMs,
+# and sign the SBOMs and the digest list keyless (cosign, GitHub OIDC). Nothing is pushed.
+#
+# Publishing to ghcr.io is a separate job that runs only when the repository variable
+# ROCKY_PUBLISH_IMAGES is "true" (Settings > Secrets and variables > Actions > Variables) and
+# the event is a push to main. The variable does not exist until a maintainer creates it.
+#
+# Every third-party action is pinned to a full commit SHA (tag in the comment). The weekly run
+# re-scans the pinned base images against new advisories.
+name: Images
+
+on:
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "design-poc/**"
+      - "**.md"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  images:
+    name: build, scan, smoke, sign
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Keyless signing only: the OIDC token proves the workflow identity to Sigstore.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the images (loaded locally, never pushed)
+        run: deploy/build.sh
+
+      - name: Trivy (0 critical, no secrets), size limit, SBOMs
+        run: scripts/security/trivy.sh
+
+      - name: Smoke test (compose up, healthchecks, read-only filesystem, uid 65532)
+        run: deploy/smoke.sh
+
+      - name: Install cosign
+        # Pull requests from forks get no OIDC token; the scans above still ran for them.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Sign the SBOMs and the digest list (keyless, GitHub OIDC) and verify them
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          # The certificate identity is this workflow at the ref that ran (refs/heads/main on a
+          # push or the schedule, refs/pull/<n>/merge on a pull request), not any workflow of
+          # the repository.
+          identity="https://github.com/$REPOSITORY/.github/workflows/images.yml@$REF"
+          cd artifacts/images
+          for file in server.spdx.json worker.spdx.json migrate.spdx.json lockfile.spdx.json digests.txt; do
+            cosign sign-blob --yes --bundle "$file.sigstore.json" "$file"
+            cosign verify-blob --bundle "$file.sigstore.json" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$file"
+          done
+
+      - name: Upload SBOMs, signatures and scan reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images
+          path: artifacts/images/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  publish:
+    # Off by default: a maintainer creates the repository variable ROCKY_PUBLISH_IMAGES="true"
+    # to turn it on. Rebuilds from the same Dockerfile, pushes to ghcr.io, signs each image by
+    # digest and attaches its SBOM as an attestation. The only job with packages: write.
+    name: publish to ghcr.io (off until ROCKY_PUBLISH_IMAGES is true)
+    needs: images
+    if: vars.ROCKY_PUBLISH_IMAGES == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Build, push, sign and attest each image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          # shellcheck source=scripts/security/images.sh
+          . scripts/security/images.sh
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          mkdir -p artifacts/published
+          for target in server worker migrate; do
+            name="ghcr.io/$owner/rocky-$target"
+            docker buildx build --push \
+              --file deploy/Dockerfile --target "$target" \
+              --tag "$name:sha-$SHA" --tag "$name:main" \
+              --metadata-file "artifacts/published/$target.json" .
+            digest=$(jq -r '."containerimage.digest"' "artifacts/published/$target.json")
+            # The SBOM of what was pushed, from a tarball (the scanner gets no registry credentials).
+            docker pull "$name@$digest"
+            docker save "$name@$digest" -o "artifacts/published/$target.tar"
+            docker run --rm -v "$PWD/artifacts/published:/out" "$TRIVY_IMAGE" image \
+              --input "/out/$target.tar" --format spdx-json --no-progress --output "/out/$target.spdx.json"
+            rm -f "artifacts/published/$target.tar"
+            cosign sign --yes "$name@$digest"
+            cosign attest --yes --type spdxjson --predicate "artifacts/published/$target.spdx.json" "$name@$digest"
+            echo "$name@$digest" >> artifacts/published/digests.txt
+          done
+
+      - name: Upload the published digests and SBOMs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-images
+          path: artifacts/published/
+          retention-days: 90

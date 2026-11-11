@@ -1,0 +1,161 @@
+# Self-hosting Rocky Reviews (P10-1, ADR 0043). Four services: Postgres (pgvector), a migration
+# step that runs once as the table owner, then the server and the worker as their own database
+# logins. Secrets never live in this file: compose-level values (passwords, ports, image tags)
+# come from `deploy/.env` (copy `deploy/.env.example`), the application's configuration from
+# `deploy/rocky.env` (copy `deploy/rocky.env.example`; read by the server and the worker only).
+#
+#   cp deploy/.env.example deploy/.env && cp deploy/rocky.env.example deploy/rocky.env
+#   (fill both in)
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#
+# Every container runs on a read-only root filesystem, without capabilities and without the
+# ability to gain any (`no-new-privileges`); the app images are distroless and run as uid 65532.
+# A tmpfs is mounted only where a file must be written. The server is published on
+# 127.0.0.1 only (put a TLS-terminating reverse proxy in front: ROCKY_PUBLIC_URL must be https);
+# Postgres is not published at all.
+
+name: rocky
+
+services:
+  postgres:
+    # The same digest as docker-compose.dev.yml and scripts/security/images.sh.
+    image: pgvector/pgvector:0.8.7-pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    user: postgres
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=16m
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    environment:
+      # The bootstrap superuser: used by the init script once and by the healthcheck; no Rocky
+      # process ever logs in with it.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/.env}
+      POSTGRES_DB: rocky
+      # deploy/postgres-init.sh creates the migrator role `rocky` with it on the first start.
+      ROCKY_DB_MIGRATOR_PASSWORD: ${ROCKY_DB_MIGRATOR_PASSWORD:?set in deploy/.env}
+    volumes:
+      - rocky-postgres:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/00-rocky-init.sh:ro
+    healthcheck:
+      # Over TCP: during initdb a temporary server answers on the socket only.
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U postgres -d rocky"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  migrate:
+    # Applies pending migrations and writes the retention settings as the owner, then creates
+    # or updates the two login roles below (scripts/migrate.ts, ADR 0043 §2). Exits 0 when done;
+    # the server and the worker start only then.
+    image: ${ROCKY_IMAGE_PREFIX:-rocky}-migrate:${ROCKY_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: migrate
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    environment:
+      DATABASE_ADMIN_URL: postgres://rocky:${ROCKY_DB_MIGRATOR_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
+      ROCKY_DB_APP_USER: rocky_app_user
+      ROCKY_DB_APP_PASSWORD: ${ROCKY_DB_APP_PASSWORD:?set in deploy/.env}
+      ROCKY_DB_WORKER_USER: rocky_worker_user
+      ROCKY_DB_WORKER_PASSWORD: ${ROCKY_DB_WORKER_PASSWORD:?set in deploy/.env}
+      # Retention periods (owner-managed settings, ADR 0005 §5); empty means the default.
+      RETENTION_WEBHOOK_DELIVERIES_DAYS: ${RETENTION_WEBHOOK_DELIVERIES_DAYS:-}
+      RETENTION_LLM_USAGE_DAYS: ${RETENTION_LLM_USAGE_DAYS:-}
+      RETENTION_MEMORY_DECAY_DAYS: ${RETENTION_MEMORY_DECAY_DAYS:-}
+      RETENTION_MEMORY_UNUSED_DAYS: ${RETENTION_MEMORY_UNUSED_DAYS:-}
+      RETENTION_MEMORY_SUPERSEDED_DAYS: ${RETENTION_MEMORY_SUPERSEDED_DAYS:-}
+      ORG_DELETION_GRACE_DAYS: ${ORG_DELETION_GRACE_DAYS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: on-failure:3
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  server:
+    image: ${ROCKY_IMAGE_PREFIX:-rocky}-server:${ROCKY_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: server
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    env_file:
+      - ${ROCKY_ENV_FILE:-./rocky.env}
+    environment:
+      # Fixed here, after the env file, so the application file cannot repoint them or switch
+      # off the production rules (NODE_ENV decides whether secrets are required).
+      NODE_ENV: production
+      DATABASE_URL: postgres://rocky_app_user:${ROCKY_DB_APP_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
+      HOST: 0.0.0.0
+      PORT: "4310"
+      ROCKY_WEB_DIR: /app/web
+    ports:
+      - "${ROCKY_BIND:-127.0.0.1}:${ROCKY_PORT:-4310}:4310"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  worker:
+    image: ${ROCKY_IMAGE_PREFIX:-rocky}-worker:${ROCKY_IMAGE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: worker
+    user: "65532:65532"
+    read_only: true
+    # The only file the worker writes: its heartbeat for the healthcheck.
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    env_file:
+      - ${ROCKY_ENV_FILE:-./rocky.env}
+    environment:
+      NODE_ENV: production
+      WORKER_DATABASE_URL: postgres://rocky_worker_user:${ROCKY_DB_WORKER_PASSWORD:?set in deploy/.env}@postgres:5432/rocky
+      ROCKY_HEARTBEAT_FILE: /tmp/rocky-worker-heartbeat
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  rocky-postgres:
