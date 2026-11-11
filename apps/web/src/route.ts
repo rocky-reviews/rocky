@@ -10,6 +10,7 @@
  *   /?fixture=pr-847              the pr-847 fixture; also `?fixture=large-diff`, `?pr=<n>`
  *                                 (`&repo=<owner>/<name>`) and `?diff=newer-push` (P6-2…P6-5)
  *   /                             without a switch (or in production): the inbox
+ *   /setup                        the setup wizard (P10-2), from the server
  *
  * Which fixture PR a fixture address names is read by `diff-fixture-source.ts`, loaded only
  * when fixtures are on, so production builds carry none of them. Names in an address are checked
@@ -41,6 +42,8 @@ export type Page =
   | { readonly kind: "pull"; readonly source: "fixture"; readonly search: string }
   /** `/` without a fixture switch: the app sends the browser to the inbox. */
   | { readonly kind: "home" }
+  /** The setup wizard (P10-2); the server serves this page only while setup is open. */
+  | { readonly kind: "setup" }
   | { readonly kind: "not_found" };
 
 /** Query parameters that ask for a fixture PR page. */
@@ -53,6 +56,7 @@ export const pageFor = (
 ): Page => {
   const params = new URLSearchParams(search);
   const fixture = options.fixtures;
+  if (pathname === "/setup" || pathname === "/setup/") return { kind: "setup" };
   if (pathname === "/inbox" || pathname === "/inbox/")
     return {
       kind: "inbox",

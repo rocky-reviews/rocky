@@ -123,6 +123,18 @@ describe("the dev server in front of the Rocky server", () => {
     expect(seen.at(-1)?.url).toBe("/auth?x=1");
   });
 
+  it("proxies the setup wizard's server routes, and leaves its page to Vite (P10-2)", async () => {
+    await (await fetch(`${base}/setup/start?token=t`, { redirect: "manual" })).text();
+    expect(seen.at(-1)?.url).toBe("/setup/start?token=t");
+    await (await fetch(`${base}/setup/github-app/callback?code=c`, { redirect: "manual" })).text();
+    expect(seen.at(-1)?.url).toBe("/setup/github-app/callback?code=c");
+    const count = seen.length;
+    const page = await fetch(`${base}/setup`);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    await page.text();
+    expect(seen.length).toBe(count);
+  });
+
   it("passes the login redirect and its cookie back untouched", async () => {
     const res = await fetch(`${base}/auth/github/login?returnTo=%2Finbox`, { redirect: "manual" });
     expect(res.status).toBe(302);
