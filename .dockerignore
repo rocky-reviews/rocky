@@ -28,6 +28,7 @@ playwright-report
 **/id_rsa*
 **/id_ed25519*
 **/github-app.env
+deploy/setup
 design-poc
 docs
 **/*.md

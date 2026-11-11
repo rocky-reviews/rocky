@@ -58,14 +58,19 @@ Keep `HOST=127.0.0.1` and `PORT=4310` from `.env.example`. The public URL then d
 1. Run `pnpm dev`. In the server's output, look for:
 
    ```
-   GitHub App setup is open. Open this one-time URL in your browser (do not share it):
-     http://127.0.0.1:4310/setup/github-app?token=…
+   Rocky setup is open. Open this one-time URL in your browser (do not share it):
+     http://127.0.0.1:4310/setup/start?token=…
    ```
+
+   Since P10-2 the link opens the setup wizard ([docs/self-host/setup.md](../self-host/setup.md)),
+   whose GitHub App step leads to the page below. The older form, `/setup/github-app?token=…`,
+   still works and goes straight to it; step 2 uses it.
 
    The URL is printed to the terminal only, never to the logs. It works once. If it is lost or
    used, restart `pnpm dev` for a new one.
 
-2. Append `&org=rocky-reviews` to that URL and open it in your browser. Use `127.0.0.1` exactly
+2. Replace `/setup/start` with `/setup/github-app`, append `&org=rocky-reviews`, and open it in
+   your browser. Use `127.0.0.1` exactly
    as printed; `localhost` will not work because the session cookie is tied to the host.
 3. The page explains what will be created. Click **Continue to GitHub**.
 4. On GitHub, check the name. Edit it if GitHub says it is taken, for example "Rocky Reviews

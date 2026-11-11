@@ -4,6 +4,7 @@ import { testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config.js";
+import { SETUP_RATE_LIMIT_PER_MINUTE } from "./github-app-setup.js";
 import {
   createServerPool,
   POOL_TIMEOUTS,
@@ -250,18 +251,74 @@ describe("GitHub App setup at boot (P3-1)", () => {
     running = await startServer(SETUP_ENV, log, { announce: (text) => printed.push(text) });
     expect(running.githubAppSetup).toBe(true);
     expect(printed).toHaveLength(1);
-    const token = /\/setup\/github-app\?token=([A-Za-z0-9_-]{43})/.exec(printed[0]!)?.[1];
+    // P10-2: the wizard's start URL; the manifest flow shares its session.
+    const token = /\/setup\/start\?token=([A-Za-z0-9_-]{43})/.exec(printed[0]!)?.[1];
     expect(token).toBeDefined();
-    expect(printed[0]).toContain("http://127.0.0.1:4310/setup/github-app?token=");
+    expect(printed[0]).toContain("http://127.0.0.1:4310/setup/start?token=");
     expect(JSON.stringify(lines)).not.toContain(token);
     expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({
       githubAppSetup: true,
     });
-    const res = await running.app.inject({
-      method: "GET",
-      url: `/setup/github-app?token=${token}`,
-    });
+    const res = await running.app.inject({ method: "GET", url: `/setup/start?token=${token}` });
     expect(res.statusCode).toBe(303);
+    expect(res.headers["location"]).toBe("/setup");
+    expect(running.setupWizard).toBe(true);
+    expect(running.setupMode).toBe(false);
+  });
+
+  it("boots in setup mode in production before any app exists: the wizard only (P10-2)", async () => {
+    const { log, lines } = capture();
+    const printed: string[] = [];
+    const production = {
+      ...BASE_ENV,
+      NODE_ENV: "production",
+      ROCKY_SETUP: "true",
+      ROCKY_PUBLIC_URL: "https://rocky.example.com",
+      ROCKY_TRUST_PROXY: "none",
+      GITHUB_APP_CREDENTIALS_FILE: "/nonexistent-rocky-test/github-app.env",
+    };
+    // Without ROCKY_SETUP the same environment is refused (no webhook secret, no app, no login).
+    await expect(
+      startServer({ ...production, ROCKY_SETUP: undefined }, capture().log),
+    ).rejects.toThrow(ConfigError);
+    running = await startServer(production, log, { announce: (t) => printed.push(t) });
+    expect(running.setupMode).toBe(true);
+    expect(running.setupWizard).toBe(true);
+    expect(running.githubAppSetup).toBe(true);
+    expect(running.webhooks).toBe(false);
+    expect(running.auth).toBe(false);
+    expect(printed[0]).toContain("https://rocky.example.com/setup/start?token=");
+    expect(lines.find((l) => l["msg"] === "server listening")).toMatchObject({ setupMode: true });
+    const routes = running.app.routePolicies().map((r) => r.url);
+    expect(routes).not.toContain("/webhooks/github");
+    expect(routes.some((r) => r.startsWith("/api/inbox"))).toBe(false);
+    expect(routes).toContain("/api/setup/status");
+  });
+
+  it("counts the setup routes' limits per client address under ROCKY_TRUST_PROXY (fix round, item 3)", async () => {
+    running = await startServer(
+      {
+        ...BASE_ENV,
+        NODE_ENV: "production",
+        ROCKY_SETUP: "true",
+        ROCKY_PUBLIC_URL: "https://rocky.example.com",
+        ROCKY_TRUST_PROXY: "xff:1",
+        GITHUB_APP_CREDENTIALS_FILE: "/nonexistent-rocky-test/github-app.env",
+      },
+      capture().log,
+      { announce: () => undefined },
+    );
+    const get = (address: string) =>
+      running!.app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: { "x-forwarded-for": address },
+      });
+    let last = 0;
+    for (let i = 0; i <= SETUP_RATE_LIMIT_PER_MINUTE; i++)
+      last = (await get("203.0.113.9")).statusCode;
+    expect(last).toBe(429);
+    expect((await get("198.51.100.7")).statusCode).toBe(403);
   });
 
   it("generates a different token on every boot", async () => {

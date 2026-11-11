@@ -2,7 +2,7 @@ import { ForgeReadError } from "@rocky-reviews/core";
 import { describe, expect, it } from "vitest";
 import { parseGitHubAppAuth } from "./app-auth.js";
 import { githubEndpoints } from "./app-manifest.js";
-import { createGitHubInstallationReader } from "./installations.js";
+import { createGitHubInstallationReader, SETUP_INSTALLATIONS_PAGE } from "./installations.js";
 import { fakeGitHubApi, FIXTURE_APP_ID, githubFixture, testAppKeys } from "./testing.js";
 
 /**
@@ -301,5 +301,70 @@ describe("verifyApp: the key belongs to the configured app (review M2)", () => {
       reader(() => Promise.reject(new TypeError("fetch failed"))).verifyApp(),
     );
     expect(network.reason).toBe("network");
+  });
+});
+
+describe("listInstallations: the setup wizard's first repository step (P10-2)", () => {
+  it("lists the app's installations as the app, one page", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    github.install(4242, { id: 9001, login: "acme", type: "Organization" });
+    github.install(4343, { id: 9101, login: "octo-dev", type: "User" }, { suspended: true });
+    expect(await reader(github.fetch).listInstallations()).toEqual([
+      { id: 4242, account: { id: 9001, login: "acme", kind: "organization" }, suspended: false },
+      { id: 4343, account: { id: 9101, login: "octo-dev", kind: "user" }, suspended: true },
+    ]);
+    expect(github.requests).toEqual([
+      { method: "GET", path: "/app/installations", authorized: true },
+    ]);
+  });
+
+  it("is empty before the app is installed anywhere", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    expect(await reader(github.fetch).listInstallations()).toEqual([]);
+  });
+
+  it("leaves out enterprise installations and keeps the rest", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    github.install(4242, { id: 9001, login: "acme", type: "Enterprise" });
+    github.install(4343, { id: 9101, login: "octo-dev", type: "User" });
+    expect((await reader(github.fetch).listInstallations()).map((i) => i.id)).toEqual([4343]);
+  });
+
+  it("fails closed on anything but a list of this app's installations", async () => {
+    const org = githubFixture("get-installation.organization");
+    for (const [label, fetchImpl] of [
+      ["not a list", respond(200, { installations: [] })],
+      ["404", respond(404, NOT_FOUND)],
+      ["another app", respond(200, [{ ...org, app_id: 1 }])],
+      ["malformed entry", respond(200, [{ id: "x" }])],
+    ] as const) {
+      expect((await failure(reader(fetchImpl).listInstallations())).reason, label).toBe(
+        "invalid_response",
+      );
+    }
+    expect((await failure(reader(respond(401, {})).listInstallations())).reason).toBe(
+      "http_status",
+    );
+  });
+
+  it("reads the app's slug for its install link, after the same app check", async () => {
+    const github = fakeGitHubApi({ appId: FIXTURE_APP_ID, publicKey: keys.publicKey });
+    expect(await reader(github.fetch).appSlug()).toBe("rocky-reviews-test");
+    const app = githubFixture("get-app");
+    for (const slug of [undefined, "", "../evil", "a b", 7]) {
+      expect(await reader(respond(200, { ...app, slug })).appSlug(), String(slug)).toBeNull();
+    }
+    expect((await failure(reader(respond(200, { ...app, id: 1 })).appSlug())).reason).toBe(
+      "app_mismatch",
+    );
+  });
+
+  it(`asks for one page of ${SETUP_INSTALLATIONS_PAGE}`, async () => {
+    const seen: string[] = [];
+    await reader((input) => {
+      seen.push(String(input));
+      return respond(200, [])();
+    }).listInstallations();
+    expect(seen).toEqual([`${api.href}app/installations?per_page=${SETUP_INSTALLATIONS_PAGE}`]);
   });
 });

@@ -1299,27 +1299,43 @@ export const fakeGitHubApi = (options: {
     }
     const routed = repoRoute(method, path, url, token);
     if (routed !== undefined) return routed;
+    // P10-2: the setup wizard's list of the app's installations (one page).
+    if (method === "GET" && path === "app/installations") {
+      const perPage = Number(url.searchParams.get("per_page") ?? 30);
+      return json(
+        200,
+        [...installed].slice(0, perPage).map(([id, entry]) => installationJson(id, entry)),
+      );
+    }
     const match = INSTALLATION_ROUTE.exec(path);
     if (method !== "GET" || match === null)
       return json(404, githubFixture("get-installation.not-found"));
     const id = Number(match[1]);
     const entry = installed.get(id);
     if (entry === undefined) return json(404, githubFixture("get-installation.not-found"));
+    return json(200, installationJson(id, entry));
+  };
+
+  /** GitHub's installation object for one fake installation. */
+  const installationJson = (
+    id: number,
+    entry: { account: FakeAccount; suspended: boolean },
+  ): Record<string, unknown> => {
     if (entry.account.type === "Enterprise") {
       const body = githubFixture("get-installation.enterprise");
-      return json(200, {
+      return {
         ...body,
         id,
         app_id: options.appId,
         target_id: entry.account.id,
         account: { ...(body["account"] as Record<string, unknown>), id: entry.account.id },
-      });
+      };
     }
     const body = githubFixture(
       entry.suspended ? "get-installation.user-suspended" : "get-installation.organization",
     );
     const account = body["account"] as Record<string, unknown>;
-    return json(200, {
+    return {
       ...body,
       id,
       app_id: options.appId,
@@ -1331,7 +1347,7 @@ export const fakeGitHubApi = (options: {
         login: entry.account.login,
         type: entry.account.type,
       },
-    });
+    };
   };
 
   return {

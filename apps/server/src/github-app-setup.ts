@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   buildGitHubAppManifest,
   convertManifestCode,
@@ -20,6 +20,9 @@ import {
   writeCredentialsOnce,
 } from "./credentials-file.js";
 import { pageCsp } from "./security/headers.js";
+import { createSetupSessions, type SetupSessions } from "./setup/session.js";
+
+export { MAX_TOKEN_FAILURES, SETUP_COOKIE, SETUP_SESSION_TTL_MS } from "./setup/session.js";
 
 /**
  * GitHub App manifest flow for self-hosters (P3-1, ADR 0008).
@@ -28,22 +31,20 @@ import { pageCsp } from "./security/headers.js";
  *   GET /setup/github-app          (session) page with a form that POSTs the manifest to GitHub
  *   GET /setup/github-app/callback (session) `code` + `state` → one conversion → credentials file
  *
- * Registered only when explicitly requested outside production and no app is configured
- * (`githubAppSetupFromEnv`); every route answers 404 once an app has been created. Secrets from
- * the conversion go to the credentials file only: never to logs, responses or the database.
+ * Registered only when setup is requested (`ROCKY_SETUP`, P10-2) and no app is configured
+ * (`setupFromEnv`); every route answers 404 once an app has been created. The session is the
+ * setup wizard's (`setup/session.ts`). Secrets from the conversion go to the credentials file
+ * only: never to logs, responses or the database.
  */
 
 export const SETUP_PATH = "/setup/github-app";
 export const SETUP_CALLBACK = "/setup/github-app/callback";
-export const SETUP_COOKIE = "rocky_setup";
-/** A setup session lasts one hour (GitHub's manifest code also lives one hour). */
-export const SETUP_SESSION_TTL_MS = 60 * 60 * 1000;
+/** The setup wizard's page (P10-2): where the success page sends the person next. */
+export const WIZARD_PATH = "/setup";
 /** Time to click "Create GitHub App" on GitHub after the page was rendered. */
 export const SETUP_STATE_TTL_MS = 30 * 60 * 1000;
 /** Outstanding states per session; older ones are dropped. */
 const MAX_STATES = 10;
-/** Wrong setup tokens tolerated before token redemption locks until the server restarts. */
-export const MAX_TOKEN_FAILURES = 20;
 /** Requests per client per minute across the setup routes; a person needs a handful. */
 export const SETUP_RATE_LIMIT_PER_MINUTE = 100;
 
@@ -70,9 +71,19 @@ const STATE_FETCH_SITES = new Set(["none", "same-origin"]);
 export interface GitHubAppSetupDeps extends GitHubAppSetupConfig {
   /** One-time token printed to the server's terminal at boot (never logged). */
   token: string;
+  /** The wizard's sessions (P10-2); without them the flow keeps its own, from `token`. */
+  sessions?: SetupSessions;
+  /**
+   * The client address key (`RateLimits.clientKey`, which follows `ROCKY_TRUST_PROXY`); defaults
+   * to the socket's peer. Keys the rate limit and the token lockout (fix round, items 2 and 3).
+   */
+  clientKey?: (request: FastifyRequest) => string;
   fetch?: typeof fetch;
   now?: () => number;
 }
+
+/** Without a trusted-proxy rule: the socket's peer (Fastify's `request.ip` without trustProxy). */
+export const peerAddress = (request: FastifyRequest): string => request.ip;
 
 const sha256 = (value: string): Buffer => createHash("sha256").update(value, "utf8").digest();
 const randomToken = (): string => randomBytes(32).toString("base64url");
@@ -104,14 +115,11 @@ const securityHeaders = (reply: FastifyReply, formOrigin: string): void => {
 const html = (title: string, body: string): string =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>${STYLE}</style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
 
-const send = (reply: FastifyReply, status: number, title: string, body: string) =>
+export const sendSetupPage = (reply: FastifyReply, status: number, title: string, body: string) =>
   reply.code(status).type("text/html; charset=utf-8").send(html(title, body));
 
 const NOT_FOUND = { message: "Route not found", error: "Not Found", statusCode: 404 } as const;
 
-interface Session {
-  expiresAt: number;
-}
 interface PendingState {
   session: string;
   org: string | undefined;
@@ -126,28 +134,13 @@ const param = (request: FastifyRequest, name: string): string | undefined | null
   return typeof value === "string" ? value : null;
 };
 
-const cookieValue = (request: FastifyRequest): string | undefined => {
-  const header = request.headers.cookie;
-  if (typeof header !== "string") return undefined;
-  for (const part of header.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq !== -1 && part.slice(0, eq).trim() === SETUP_COOKIE) {
-      const value = part.slice(eq + 1).trim();
-      return TOKEN_SHAPE.test(value) ? value : undefined;
-    }
-  }
-  return undefined;
-};
-
 export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetupDeps): void => {
   const now = deps.now ?? Date.now;
-  const tokenHash = sha256(deps.token);
-  let tokenUsed = false;
-  let tokenFailures = 0;
+  const sessions =
+    deps.sessions ?? createSetupSessions({ token: deps.token, publicUrl: deps.publicUrl, now });
+  const clientKey = deps.clientKey ?? peerAddress;
   let done = false;
   let exchanging = false;
-  /** Keyed by sha256(session id) hex; the cookie value is never stored. */
-  const sessions = new Map<string, Session>();
   /** Keyed by sha256(state) hex. */
   const states = new Map<string, PendingState>();
   /** sha256 of every code ever presented to GitHub. */
@@ -160,20 +153,11 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       deps.endpoints.web,
     ).href;
   const link = (href: string): string => `<a href="${escapeHtml(href)}">${escapeHtml(href)}</a>`;
-  const secure = deps.publicUrl.protocol === "https:";
-
-  const prune = (): void => {
-    const t = now();
-    for (const [k, s] of sessions) if (s.expiresAt <= t) sessions.delete(k);
-    for (const [k, s] of states) if (s.expiresAt <= t) states.delete(k);
-  };
 
   const sessionOf = (request: FastifyRequest): string | undefined => {
-    prune();
-    const value = cookieValue(request);
-    if (value === undefined) return undefined;
-    const key = sha256(value).toString("hex");
-    return sessions.has(key) ? key : undefined;
+    const t = now();
+    for (const [k, s] of states) if (s.expiresAt <= t) states.delete(k);
+    return sessions.sessionOf(request);
   };
 
   const log = (
@@ -184,7 +168,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
   ) => request.log[level]({ githubAppSetup: { outcome, ...extra } }, "github app setup");
 
   const forbidden = (reply: FastifyReply) =>
-    send(
+    sendSetupPage(
       reply,
       403,
       "Setup link required",
@@ -196,21 +180,22 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
     await scope.register(rateLimit, {
       max: SETUP_RATE_LIMIT_PER_MINUTE,
       timeWindow: 60_000,
+      keyGenerator: clientKey,
     });
     scope.addHook("onRequest", async (_request, reply) => {
       securityHeaders(reply, formOrigin);
-      if (done) return reply.code(404).send(NOT_FOUND);
+      if (done || sessions.closed) return reply.code(404).send(NOT_FOUND);
       return undefined;
     });
 
-    // Development only, before any org exists: guarded by the one-time token and the state cookie.
-    const policy = publicRoute("one-time setup token from the server's terminal (development)");
+    // Before any org exists: guarded by the one-time token and the state cookie.
+    const policy = publicRoute("one-time setup token from the server's terminal");
     scope.get(SETUP_PATH, { config: { policy } }, async (request, reply) => {
       const token = param(request, "token");
       const org = param(request, "org");
       if (org === null || (org !== undefined && !isOrganizationLogin(org))) {
         log(request, "warn", "bad_org");
-        return send(
+        return sendSetupPage(
           reply,
           400,
           "Invalid organization",
@@ -219,32 +204,20 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       }
 
       if (token !== undefined) {
-        // Hash both sides to a fixed length, then compare in constant time.
-        // The token is 256-bit, so guessing is hopeless; the lockout still bounds attempts (a
-        // rate limit for a route that has no other client to serve).
-        const locked = tokenFailures >= MAX_TOKEN_FAILURES;
-        const ok =
-          token !== null && !tokenUsed && !locked && timingSafeEqual(sha256(token), tokenHash);
-        if (!ok) {
-          if (!locked) tokenFailures += 1;
-          log(request, "warn", locked ? "token_locked" : "bad_token");
+        const shaped = token !== null && TOKEN_SHAPE.test(token) ? token : null;
+        const redeemed = sessions.redeem(shaped, clientKey(request));
+        if (!redeemed.ok) {
+          log(request, "warn", redeemed.reason);
           return forbidden(reply);
         }
-        tokenUsed = true;
-        const session = randomToken();
-        sessions.set(sha256(session).toString("hex"), { expiresAt: now() + SETUP_SESSION_TTL_MS });
         log(request, "info", "session_started");
-        const cookie = [
-          `${SETUP_COOKIE}=${session}`,
-          `Path=${SETUP_PATH}`,
-          `Max-Age=${SETUP_SESSION_TTL_MS / 1000}`,
-          "HttpOnly",
-          "SameSite=Lax",
-          ...(secure ? ["Secure"] : []),
-        ].join("; ");
         // Fixed, relative target: the only dynamic part is a validated organization login.
         const location = org === undefined ? SETUP_PATH : `${SETUP_PATH}?org=${org}`;
-        return reply.code(303).header("set-cookie", cookie).header("location", location).send();
+        return reply
+          .code(303)
+          .header("set-cookie", redeemed.cookie)
+          .header("location", location)
+          .send();
       }
 
       const session = sessionOf(request);
@@ -253,7 +226,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         return forbidden(reply);
       }
       if (deps.webhookUrl === undefined) {
-        return send(
+        return sendSetupPage(
           reply,
           409,
           "Webhook URL needed",
@@ -264,7 +237,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       const fetchSite = request.headers["sec-fetch-site"];
       if (fetchSite !== undefined && !STATE_FETCH_SITES.has(String(fetchSite))) {
         log(request, "warn", "cross_site_page");
-        return send(
+        return sendSetupPage(
           reply,
           403,
           "Open this page directly",
@@ -278,7 +251,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       } catch (error) {
         const reason = error instanceof CredentialsFileError ? error.reason : "io";
         log(request, "warn", "credentials_target_unusable", { reason });
-        return send(
+        return sendSetupPage(
           reply,
           409,
           "Credentials file unusable",
@@ -308,7 +281,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       // The form POSTs cross-origin to GitHub; with `no-referrer` browsers send `Origin: null`,
       // which GitHub may refuse. This URL carries no secret (the token was dropped by the 303).
       void reply.header("referrer-policy", "strict-origin");
-      return send(
+      return sendSetupPage(
         reply,
         200,
         "Create the Rocky Reviews GitHub App",
@@ -328,7 +301,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       const state = param(request, "state");
       if (typeof state !== "string" || !TOKEN_SHAPE.test(state) || !isManifestCode(code)) {
         log(request, "warn", "bad_parameters");
-        return send(
+        return sendSetupPage(
           reply,
           400,
           "Invalid callback",
@@ -341,7 +314,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       if (pending !== undefined) states.delete(stateKey);
       if (pending === undefined || pending.session !== session || pending.expiresAt <= now()) {
         log(request, "warn", "bad_state");
-        return send(
+        return sendSetupPage(
           reply,
           403,
           "Invalid or expired state",
@@ -351,7 +324,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       const codeKey = sha256(code).toString("hex");
       if (exchanging || usedCodes.has(codeKey)) {
         log(request, "warn", exchanging ? "busy" : "code_reused");
-        return send(
+        return sendSetupPage(
           reply,
           409,
           "Already in progress or used",
@@ -368,7 +341,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         } catch (error) {
           const reason = error instanceof CredentialsFileError ? error.reason : "io";
           log(request, "error", "credentials_target_unusable", { reason });
-          return send(
+          return sendSetupPage(
             reply,
             409,
             "Credentials file unusable",
@@ -390,7 +363,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
             ...(e?.status === undefined ? {} : { status: e.status }),
           });
           const apps = appsList(pending.org);
-          return send(
+          return sendSetupPage(
             reply,
             502,
             "GitHub did not complete the setup",
@@ -412,7 +385,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         const widened = widenedGrants(credentials.permissions, credentials.events);
         if (widened.length > 0) {
           log(request, "error", "grants_widened", { widened });
-          return send(
+          return sendSetupPage(
             reply,
             502,
             "The app has more access than Rocky asked for",
@@ -439,7 +412,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
         } catch (error) {
           const reason = error instanceof CredentialsFileError ? error.reason : "io";
           log(request, "error", "credentials_write_failed", { reason });
-          return send(
+          return sendSetupPage(
             reply,
             500,
             "Could not save the credentials",
@@ -447,15 +420,11 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
           );
         }
 
+        // The manifest routes close; the wizard's session goes on (its next step is the restart).
         done = true;
-        sessions.clear();
         states.clear();
         log(request, "info", "created", { webhookSecretSource });
-        const install =
-          credentials.slug === undefined
-            ? undefined
-            : new URL(`apps/${credentials.slug}/installations/new`, deps.endpoints.web).href;
-        return send(
+        return sendSetupPage(
           reply,
           200,
           "GitHub App created",
@@ -463,9 +432,10 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
             (webhookSecretSource === "generated"
               ? `<p><strong>Webhook secret:</strong> GitHub did not return a usable one, so Rocky generated <code>GITHUB_WEBHOOK_SECRET</code> in that file. Paste it into the app's webhook settings on GitHub before installing.</p>`
               : "") +
-            (install === undefined
-              ? `<p>Next, install the app on your repositories: GitHub did not return its slug, so open it from ${link(appsList(pending.org))}, choose <em>Install App</em>, and add <code>GITHUB_APP_SLUG</code> (the last part of its public URL) to your settings. Setup is now closed on this server.</p>`
-              : `<p>Next, install the app on your repositories: ${link(install)}. Setup is now closed on this server.</p>`),
+            (credentials.slug === undefined
+              ? `<p>GitHub did not return the app's slug: open it from ${link(appsList(pending.org))} and add <code>GITHUB_APP_SLUG</code> (the last part of its public URL) to your settings.</p>`
+              : "") +
+            `<p>Next, add these values to Rocky's configuration and restart it. <strong>Install the app on a repository only after the restart</strong>: until then Rocky does not receive GitHub's events. The <a href="${WIZARD_PATH}">setup page</a> walks you through both. Creating an app is now closed on this server.</p>`,
         );
       } finally {
         exchanging = false;

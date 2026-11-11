@@ -471,6 +471,72 @@ describe(".github/workflows/images.yml", () => {
   });
 });
 
+describe("deploy/docker-compose.setup.yml (P10-2, ADR 0044)", () => {
+  const overlay = parse(read("deploy/docker-compose.setup.yml")) as Compose;
+
+  it("only opens the wizard on the server and mounts its one credentials directory", () => {
+    expect(Object.keys(overlay.services)).toEqual(["server"]);
+    const server = overlay.services["server"]!;
+    expect(Object.keys(server).sort()).toEqual(["environment", "volumes"]);
+    expect(server.environment).toEqual({
+      ROCKY_SETUP: "true",
+      GITHUB_APP_CREDENTIALS_FILE: "/setup/github-app.env",
+    });
+    expect(server.volumes).toEqual(["./setup:/setup"]);
+  });
+
+  it("keeps the credentials directory out of git and out of the build context", () => {
+    expect(read(".gitignore")).toMatch(/^deploy\/setup\/$/m);
+    expect(read(".dockerignore")).toMatch(/^deploy\/setup$/m);
+  });
+
+  it("does not loosen anything the base file sets (no ports, users, capabilities or env file)", () => {
+    const text = read("deploy/docker-compose.setup.yml");
+    for (const key of [
+      "ports",
+      "user",
+      "cap_add",
+      "privileged",
+      "env_file",
+      "read_only",
+      "NODE_ENV",
+    ]) {
+      expect(text, key).not.toMatch(new RegExp(`^\\s+${key}:`, "m"));
+    }
+  });
+});
+
+describe("deploy/init-env.sh (P10-2)", () => {
+  const script = read("deploy/init-env.sh");
+
+  it("writes private files, never overwrites, and prints no value", () => {
+    expect(script).toMatch(/^umask 077$/m);
+    expect(script).toMatch(/refusing to overwrite/);
+    expect(script).toMatch(/^chmod 600 /m);
+    for (const line of script.split("\n").filter((l) => /^\s*echo /.test(l))) {
+      expect(line, line).not.toMatch(/\$\(|\$\{?(value|escaped|public_url)\b/);
+    }
+  });
+
+  it("fills every password compose requires and the production secrets", () => {
+    for (const name of [
+      "POSTGRES_PASSWORD",
+      "ROCKY_DB_MIGRATOR_PASSWORD",
+      "ROCKY_DB_APP_PASSWORD",
+      "ROCKY_DB_WORKER_PASSWORD",
+      "ROCKY_PUBLIC_URL",
+      "ROCKY_TRUST_PROXY",
+      "ROCKY_SESSION_SECRET",
+      "ROCKY_KEK_KEYS",
+    ]) {
+      expect(script, name).toMatch(new RegExp(`set_value "\\$here/[a-z.]*env" ${name} `));
+    }
+    for (const name of [...composeText.matchAll(/\$\{([A-Z_]+):\?/g)].map((m) => m[1]!)) {
+      expect(script, name).toContain(` ${name} `);
+    }
+  });
+});
+
 describe("configuration reference", () => {
   it("documents the new variables in .env.example", () => {
     const example = read(".env.example");

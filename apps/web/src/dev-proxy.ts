@@ -20,9 +20,10 @@ export const DEFAULT_DEV_SERVER = "http://127.0.0.1:4310";
 /**
  * What the browser reaches through Vite: `/api` and `/auth` and below, as whole path segments
  * (Vite's plain keys are string prefixes, so `/apis` would match `/api`); everything else, the
- * app's own pages included, Vite serves itself.
+ * app's own pages included, Vite serves itself. P10-2: the setup wizard's server routes under
+ * `/setup/` (`/setup/start`, `/setup/github-app`); `/setup` itself is the app's page.
  */
-export const PROXIED_PATHS = ["^/api(?:[/?]|$)", "^/auth(?:[/?]|$)"] as const;
+export const PROXIED_PATHS = ["^/api(?:[/?]|$)", "^/auth(?:[/?]|$)", "^/setup/"] as const;
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 

@@ -7,8 +7,13 @@ import { buildGitHubAppManifest, githubEndpoints } from "@rocky-reviews/forge-gi
 import { createLogger } from "@rocky-reviews/log";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SetupStatusResponse } from "@rocky-reviews/core";
+import { recordingAdapters } from "@rocky-reviews/llm/testing";
 import { buildApp } from "./app.js";
 import { createHash } from "node:crypto";
+import { pathExists } from "./config.js";
+import { createSetupChecks } from "./setup/checks.js";
+import { createSetupSessions } from "./setup/session.js";
 import {
   MAX_TOKEN_FAILURES,
   SETUP_RATE_LIMIT_PER_MINUTE,
@@ -245,7 +250,8 @@ describe("setup token (one-time, from the server terminal)", () => {
     expect(cookie).toMatch(new RegExp(`^${SETUP_COOKIE}=[A-Za-z0-9_-]{43};`));
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).toContain("Path=/setup/github-app");
+    // P10-2: one setup session for the manifest flow and the wizard (ADR 0044).
+    expect(cookie).toContain("Path=/;");
     expect(cookie).toContain(`Max-Age=${SETUP_SESSION_TTL_MS / 1000}`);
     // The cookie is not the token.
     expect(cookie).not.toContain(h.token);
@@ -416,9 +422,13 @@ describe("callback", () => {
     expect(env["GITHUB_APP_CLIENT_SECRET"]).toBe(body.client_secret);
     expect(env["GITHUB_WEBHOOK_SECRET"]).toBe(body.webhook_secret);
 
-    // The page: where the file is and how to install. Deliberately no secret, no id, no code.
+    // The page: where the file is and what comes next (P10-2: restart, then install from the
+    // wizard; no install link before Rocky can receive the installation event). Deliberately no
+    // secret, no id, no code.
     expect(res.body).toContain(h.file);
-    expect(res.body).toContain("https://github.com/apps/rocky-reviews-h3/installations/new");
+    expect(res.body).toContain('href="/setup"');
+    expect(res.body).toContain("only after the restart");
+    expect(res.body).not.toContain("installations/new");
     const everything = res.body + JSON.stringify(res.headers) + h.logs.join("\n");
     for (const secret of [
       body.client_secret,
@@ -435,6 +445,56 @@ describe("callback", () => {
     // The app id as a whole number: log timestamps (epoch ms) can contain its digits.
     expect(everything).not.toMatch(/(?<!\d)98765(?!\d)/);
     expect(h.logs.join("\n")).toContain('"outcome":"created"');
+  });
+
+  it("the wizard's status says 'created' (restart next, no create link) right after the callback (fix round, item 1)", async () => {
+    await cleanup(h);
+    const dir = await mkdtemp(join(tmpdir(), "rocky-setup-"));
+    const file = join(dir, "rocky", "github-app.env");
+    const token = randomBytes(32).toString("base64url");
+    const sessions = createSetupSessions({ token, publicUrl: PUBLIC_URL });
+    const app = buildApp({
+      checkDatabase: async () => true,
+      githubAppSetup: {
+        token,
+        sessions,
+        publicUrl: PUBLIC_URL,
+        webhookUrl: WEBHOOK_URL,
+        appName: "Rocky Reviews",
+        endpoints: githubEndpoints({}),
+        credentialsFile: file,
+        fetch: (async () =>
+          new Response(JSON.stringify(conversion()), {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
+      },
+      setupWizard: {
+        sessions,
+        mode: "setup",
+        checks: createSetupChecks({
+          pool: { connect: async () => Promise.reject(new Error("no database here")) },
+          env: {},
+          adapters: recordingAdapters({ ok: true }).factories,
+          endpoints: githubEndpoints({}),
+          credentialsFile: file,
+          appConfigured: false,
+          credentialsWritten: () => pathExists(file),
+          manifest: { webhookUrl: WEBHOOK_URL },
+        }),
+      },
+    });
+    h = { ...h, app, dir, file, token };
+    await app.ready();
+    const cookie = await login();
+    const status = async () =>
+      SetupStatusResponse.parse(
+        (await app.inject({ method: "GET", url: "/api/setup/status", headers: { cookie } })).json(),
+      ).githubApp;
+    expect(await status()).toMatchObject({ state: "not_created", createPath: "/setup/github-app" });
+    const { state } = await page(cookie);
+    expect((await callback(cookie, `code=${CODE}&state=${state}`)).statusCode).toBe(200);
+    expect(await status()).toMatchObject({ state: "created", createPath: null });
   });
 
   it("disables every setup route once the app is created", async () => {
@@ -740,7 +800,7 @@ describe("review round 1", () => {
       expect(parseEnv(await readFile(harness.file, "utf8"))["GITHUB_APP_SLUG"]).toBe(
         "rocky_reviews-dev",
       );
-      expect(res.body).toContain("https://github.com/apps/rocky_reviews-dev/installations/new");
+      expect(res.body).not.toContain("GITHUB_APP_SLUG");
     } finally {
       await cleanup(harness);
     }
@@ -823,7 +883,7 @@ describe("review round 1", () => {
     expect(String(res.headers["content-security-policy"])).toContain(`style-src 'sha256-${hash}';`);
   });
 
-  it("item 13: org success path writes the file and links the org's install page", async () => {
+  it("item 13: org success path writes the file and sends the person to the wizard", async () => {
     const body = conversion();
     const harness = await build({ respond: created(body) });
     try {
@@ -834,7 +894,7 @@ describe("review round 1", () => {
       );
       const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
       expect(res.statusCode).toBe(200);
-      expect(res.body).toContain("https://github.com/apps/rocky-reviews-h3/installations/new");
+      expect(res.body).toContain('href="/setup"');
       const env = parseEnv(await readFile(harness.file, "utf8"));
       expect(env["GITHUB_APP_ID"]).toBe("98765");
       expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(PEM);

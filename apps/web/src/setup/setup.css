@@ -1,0 +1,230 @@
+/*
+ * The setup wizard (P10-2). Not in the POC: built from the inbox's page frame, the shell's top
+ * bar, cards, status pills and buttons. Colours only through tokens.css. A step's state is
+ * carried by its pill and its number badge; text on a tint uses --text (WCAG AA).
+ */
+
+.setup-main {
+  max-width: 820px;
+}
+
+.setup-intro,
+.setup-finish {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.setup-intro-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.setup-note,
+.setup-hint {
+  margin: 0;
+  color: var(--muted);
+  max-width: 75ch;
+}
+.setup-hint {
+  font-size: var(--text-base);
+}
+.setup-controls,
+.setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.setup-actions .btn,
+.setup-controls .btn {
+  min-height: 32px;
+  color: var(--text);
+  text-decoration: none;
+}
+.setup-actions .btn-primary {
+  color: var(--on-you);
+}
+/* Busy or unavailable: `aria-disabled` keeps the button focusable (fix round, item 4). */
+.setup-app .btn[aria-disabled="true"] {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* ---------- steps ---------- */
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.setup-step {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.setup-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.setup-step-title {
+  font-size: var(--text-md);
+  font-weight: 650;
+  flex: 1;
+  min-width: 0;
+}
+.setup-ai {
+  color: var(--ai);
+}
+.setup-num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  display: inline-grid;
+  place-items: center;
+  font-size: var(--text-base);
+  font-weight: 700;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.setup-step.tone-ok .setup-num {
+  background: var(--ok-bg);
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.setup-step.tone-failed .setup-num {
+  background: var(--crit-bg);
+  color: var(--crit-tint-text);
+  border-color: var(--crit);
+}
+.setup-step.tone-action .setup-num {
+  background: var(--you-bg);
+  color: var(--text);
+  border-color: var(--you);
+}
+.status-pill.tone-action {
+  background: var(--you-bg);
+  color: var(--text);
+}
+.status-pill.tone-failed {
+  background: var(--crit-bg);
+  color: var(--crit-tint-text);
+}
+.status-pill.tone-waiting {
+  background: var(--low-bg);
+  color: var(--text);
+}
+.setup-step-body {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding-left: calc(26px + var(--space-3));
+}
+.setup-step-body p {
+  margin: 0;
+  max-width: 75ch;
+  overflow-wrap: anywhere;
+}
+.setup-step code,
+.setup-finish code {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  background: var(--panel-2);
+  border-radius: var(--radius-xs);
+  padding: 0 var(--space-1);
+  overflow-wrap: anywhere;
+}
+.setup-details,
+.setup-targets,
+.setup-installations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.setup-target,
+.setup-installation {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  min-width: 0;
+}
+.setup-target-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.setup-target-meta {
+  font-weight: 400;
+  color: var(--muted);
+}
+.setup-installation-counts {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+/* The text stays --text (--ok on --panel-2 is under 4.5:1 in light mode); the mark carries the
+   colour. */
+.setup-outcome {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+}
+.setup-outcome.is-ok .setup-mark {
+  color: var(--ok);
+}
+.setup-outcome.is-failed .setup-mark {
+  color: var(--crit);
+}
+.setup-details-label {
+  font-weight: 600;
+}
+.setup-commands {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  /* Wrapped, not scrolled: a scrolling block would have to be focusable (axe). */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.setup-step .setup-commands code {
+  background: none;
+  padding: 0;
+}
+.setup-config-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.setup-problem {
+  color: var(--crit);
+  font-weight: 600;
+}
+
+/* Links in text: the shell's link colour (the browser default ignores the theme). */
+.setup-app a:not(.btn) {
+  color: var(--you);
+}
+
+@media (max-width: 560px) {
+  .setup-step-body {
+    padding-left: 0;
+  }
+}

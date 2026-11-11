@@ -41,6 +41,8 @@ export {
   createGitHubInstallationReader,
   INSTALLATION_READ_TIMEOUT_MS,
   MAX_INSTALLATION_RESPONSE_BYTES,
+  SETUP_INSTALLATIONS_PAGE,
+  type GitHubInstallationReader,
   type GitHubInstallationReaderOptions,
 } from "./installations.js";
 export {

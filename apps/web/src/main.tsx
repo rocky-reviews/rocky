@@ -11,6 +11,7 @@ import "./finish/finish.css";
 import "./change-tree/change-tree.css";
 import "./memory/memory.css";
 import "./ask/ask.css";
+import "./setup/setup.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -29,6 +30,8 @@ import type { MemoryRef } from "./lib/review-path.js";
 import { createHttpMemorySource, type MemorySource } from "./memory/memory-source.js";
 import { MemoryPage } from "./memory/MemoryPage.js";
 import { pageFor } from "./route.js";
+import { createHttpSetupSource } from "./setup/setup-source.js";
+import { SetupPage } from "./setup/SetupPage.js";
 
 const root = document.querySelector("#app");
 // H4-2 (review S2): the fixture switches work only in the Vite dev server and in builds made with
@@ -97,6 +100,13 @@ if (page.kind === "home") {
   // P6-7: the inbox fixture (development and tests only).
   void import("./inbox/inbox-source.js").then(({ createFixtureInboxSource }) =>
     renderInbox(root, createFixtureInboxSource()),
+  );
+} else if (page.kind === "setup") {
+  // P10-2: the setup wizard, from the server (Playwright answers its API itself).
+  createRoot(root).render(
+    <StrictMode>
+      <SetupPage source={createHttpSetupSource()} />
+    </StrictMode>,
   );
 } else if (page.kind === "inbox") {
   renderInbox(root, createHttpInboxSource());

@@ -20,18 +20,25 @@ import {
  * 3. the `x-rocky-csrf` header carries the synchronizer token of the session cookie it came with
  *    (HMAC of that cookie's token under the server secret; constant-time).
  *
- * SameSite=Lax on the session cookie is a further layer, not the control. The only exemption is a
+ * SameSite=Lax on the session cookie is a further layer, not the control. Two exemptions exist: a
  * route that declares `config: { csrfExempt: "hmac_signature" }`, which authenticates every
- * request by a signature over its body and reads no cookie (the GitHub webhook receiver). Without
- * a session secret (login not configured), every non-exempt state-changing request is refused.
+ * request by a signature over its body and reads no cookie (the GitHub webhook receiver), and
+ * `csrfExempt: "setup_session"`, the setup wizard's requests (P10-2, ADR 0044), which have no
+ * login session yet and run the same three checks against the setup session in their own
+ * handler (`setup/session.ts`, `checkCsrf`). Without a session secret (login not configured),
+ * every non-exempt state-changing request is refused.
  */
 
 export const CSRF_EXEMPT_HMAC = "hmac_signature";
+export const CSRF_EXEMPT_SETUP = "setup_session";
 
 declare module "fastify" {
   interface FastifyContextConfig {
-    /** Only for routes authenticated by a body signature and never by a cookie. */
-    csrfExempt?: typeof CSRF_EXEMPT_HMAC;
+    /**
+     * `hmac_signature`: only for routes authenticated by a body signature and never by a cookie.
+     * `setup_session`: only for setup wizard routes that call `SetupSessions.checkCsrf` first.
+     */
+    csrfExempt?: typeof CSRF_EXEMPT_HMAC | typeof CSRF_EXEMPT_SETUP;
   }
 }
 
@@ -81,12 +88,23 @@ export const csrfRefusal = (
   return undefined;
 };
 
+/** The only routes that may declare the setup exemption (ADR 0044). */
+export const SETUP_EXEMPT_PREFIX = "/api/setup/";
+
 export const registerCsrfGuard = (app: FastifyInstance, policy: CsrfPolicy | undefined): void => {
+  // A route elsewhere cannot borrow the setup exemption: it fails to register (boot fails).
+  app.addHook("onRoute", (route) => {
+    const exempt = (route.config as { csrfExempt?: unknown } | undefined)?.csrfExempt;
+    if (exempt === CSRF_EXEMPT_SETUP && !route.url.startsWith(SETUP_EXEMPT_PREFIX)) {
+      throw new Error(`csrfExempt "${CSRF_EXEMPT_SETUP}" is only for ${SETUP_EXEMPT_PREFIX}*`);
+    }
+  });
   app.addHook("onRequest", async (request, reply) => {
     if (SAFE_METHODS.has(request.method)) return undefined;
     // No route, no handler: the 404 changes nothing.
     if (request.is404) return undefined;
-    if (request.routeOptions.config.csrfExempt === CSRF_EXEMPT_HMAC) return undefined;
+    const exempt = request.routeOptions.config.csrfExempt;
+    if (exempt === CSRF_EXEMPT_HMAC || exempt === CSRF_EXEMPT_SETUP) return undefined;
     const refusal = csrfRefusal(request, policy);
     if (refusal === undefined) return undefined;
     request.log.warn({ csrf: { outcome: "refused", reason: refusal } }, "csrf check refused");

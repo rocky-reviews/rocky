@@ -6,13 +6,16 @@ section covers what you need to run it and keep it running.
 
 | Page                                        | What it covers                                                                                    |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Setup](setup.md)                           | A fresh VM to the first analysed pull request with the containers and the setup wizard            |
+| [Containers](../../deploy/README.md)        | The images, the compose file, how they are hardened and checked                                   |
 | [Configuration reference](configuration.md) | Every environment variable the server, worker and command-line tools read                         |
 | [Upgrades and migrations](upgrades.md)      | How migrations run, the database roles, backing up before an upgrade, rolling back                |
 | [Backups and restore](backups.md)           | What must be backed up, what can be rebuilt from GitHub, dump and restore with RLS                |
 | [Local models](local-models.md)             | Ollama, vLLM or any OpenAI-compatible server for each role and for embeddings, and what to expect |
 
-These pages cover the bare-metal path (Node and `pnpm` on a host you manage). The container images
-and the self-host compose file are documented separately in `deploy/README.md`.
+Start with [Setup](setup.md): it uses the container images and the compose file
+([deploy/README.md](../../deploy/README.md)), the quickest path. The rest of this page covers the
+bare-metal path (Node and `pnpm` on a host you manage); the reference pages apply to both.
 
 ## What you need
 
@@ -24,8 +27,8 @@ and the self-host compose file are documented separately in `deploy/README.md`.
   and pgvector 0.5 because the code index uses an HNSW index.
 - **A superuser on that cluster, once**, to provision the extensions, the roles and the revokes
   the tenant isolation depends on ([Provisioning](upgrades.md#provisioning-once-per-database)).
-- **A GitHub App** for your installation. The server can create one for you from its manifest
-  (`GITHUB_APP_SETUP=true`, see the [runbook](../runbooks/h3-create-github-app.md)).
+- **A GitHub App** for your installation. The setup wizard creates one for you from its manifest
+  (`ROCKY_SETUP=true`, see [Setup](setup.md); by hand: the [runbook](../runbooks/h3-create-github-app.md)).
 - **An LLM provider for the completion roles**: the Anthropic API (the default), Amazon Bedrock,
   Google Vertex AI, Microsoft Foundry, or an [OpenAI-compatible server](local-models.md).
   Embeddings (the repository index and Ask) are optional and off by default.

@@ -6,6 +6,14 @@ import { pageFor, pullRefFromPath, reviewPagePath } from "./route.js";
 const ON = { fixtures: true };
 
 describe("pageFor (H4-2): the server by default, fixtures behind an explicit switch", () => {
+  it("`/setup` is the setup wizard (P10-2), whatever the switches", () => {
+    for (const fixtures of [true, false]) {
+      expect(pageFor("/setup", "", { fixtures })).toEqual({ kind: "setup" });
+      expect(pageFor("/setup/", "?fixture=pr-847", { fixtures })).toEqual({ kind: "setup" });
+    }
+    expect(pageFor("/setup/start", "", { fixtures: false }).kind).not.toBe("setup");
+  });
+
   it("a real PR address reads the server", () => {
     expect(pageFor("/acme/rocky-app/pull/847", "", ON)).toEqual({
       kind: "pull",
