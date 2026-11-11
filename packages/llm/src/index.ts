@@ -23,10 +23,13 @@ export {
   type VertexSettings,
 } from "./config.js";
 export {
+  AWS_REGION_VARS,
   DEFAULT_EMBED_PROVIDER,
   DEFAULT_EMBED_TARGETS,
   DEFAULT_PROVIDER,
   DEFAULT_ROLE_TARGETS,
+  LLM_DEFAULT_KEY_ENVS,
+  LLM_ENV_VARS,
   llmConfigFromEnv,
 } from "./env.js";
 export {
@@ -52,6 +55,7 @@ export {
 } from "./registry.js";
 export {
   providerAdapters,
+  REFUSED_AMBIENT_VARS,
   type AdapterTransport,
   type VertexAuthSource,
 } from "./adapters/index.js";

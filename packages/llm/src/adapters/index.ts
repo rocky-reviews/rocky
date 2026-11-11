@@ -24,3 +24,4 @@ export const providerAdapters = (transport: AdapterTransport = {}): ProviderAdap
 });
 
 export type { AdapterTransport, VertexAuthSource } from "./transport.js";
+export { REFUSED_AMBIENT_VARS } from "./ambient.js";

@@ -22,6 +22,9 @@ const REFUSED: readonly { readonly name: string; readonly kinds: readonly Provid
   { name: "GOOGLE_SDK_NODE_LOGGING", kinds: ["vertex"] },
 ];
 
+/** Every refused variable's name, for the self-host config reference (P10-3). */
+export const REFUSED_AMBIENT_VARS: readonly string[] = REFUSED.map(({ name }) => name);
+
 /** The refused variables that are set (non-empty) for this provider kind. */
 export const refusedAmbient = (kind: ProviderKind, env: Env = process.env): string[] =>
   REFUSED.filter(({ name, kinds }) => kinds.includes(kind) && (env[name] ?? "") !== "").map(

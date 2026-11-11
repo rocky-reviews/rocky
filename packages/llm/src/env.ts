@@ -105,6 +105,17 @@ const KNOWN_VARS = new Set<string>([
   ),
 ]);
 
+/**
+ * Every `ROCKY_LLM_*` variable this module reads, for the self-host config reference
+ * (`docs/self-host/configuration.md`, P10-3), whose completeness test compares against it.
+ */
+export const LLM_ENV_VARS: readonly string[] = [...KNOWN_VARS].sort();
+
+/** The default names of the variables that hold provider keys (`*_API_KEY_ENV` unset). */
+export const LLM_DEFAULT_KEY_ENVS: readonly string[] = Object.values(PROVIDER_VARS)
+  .flatMap(({ defaults }) => ("apiKeyEnv" in defaults ? [defaults.apiKeyEnv] : []))
+  .sort();
+
 const valueOf = (env: Env, name: string): string | undefined => {
   const value = env[name];
   return value === undefined || value === "" ? undefined : value;
@@ -137,7 +148,7 @@ const labelFor =
   };
 
 /** Bedrock's region falls back to the AWS SDK's own variables (review N8). */
-const AWS_REGION_VARS = ["AWS_REGION", "AWS_DEFAULT_REGION"] as const;
+export const AWS_REGION_VARS = ["AWS_REGION", "AWS_DEFAULT_REGION"] as const;
 
 const completionRole = (env: Env, role: LlmCompletionRole, provider: string) => {
   const model = valueOf(env, roleVar(role, "MODEL"));

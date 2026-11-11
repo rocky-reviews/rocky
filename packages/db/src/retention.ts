@@ -63,6 +63,9 @@ const ENV_KEYS: Record<keyof RetentionConfig, string> = {
   memorySupersededDays: "RETENTION_MEMORY_SUPERSEDED_DAYS",
 };
 
+/** Every variable `retentionFromEnv` reads, for the self-host config reference (P10-3). */
+export const RETENTION_ENV_VARS: readonly string[] = Object.values(ENV_KEYS);
+
 const MIN_DAYS: Record<keyof RetentionConfig, number> = {
   analysesDays: 1,
   logsDays: 1,

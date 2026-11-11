@@ -75,6 +75,9 @@ const envName = (scope: RateLimitScope): string =>
   ENV_PREFIX + scope.toUpperCase().replaceAll(".", "_");
 const MAX_WINDOW_SECONDS = 86_400;
 
+/** Every `ROCKY_RATE_LIMIT_*` variable, for the self-host config reference (P10-3). */
+export const RATE_LIMIT_ENV_VARS: readonly string[] = RATE_LIMIT_SCOPES.map(envName);
+
 /**
  * `ROCKY_RATE_LIMIT_<SCOPE>=<max>/<window seconds>` (e.g. `ROCKY_RATE_LIMIT_AUTH_LOGIN=30/600`).
  * Malformed values and unknown scopes are refused: there is no way to turn a limit off.
