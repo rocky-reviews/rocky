@@ -22,7 +22,7 @@ import type { PullRef } from "../data/shell-data.js";
 import { useReview } from "../drafts/ReviewProvider.js";
 import { Kbd, useKeyShortcut } from "../keyboard/KeyboardContext.js";
 import { pullRequestUrl } from "../lib/github-url.js";
-import { signInHref } from "../session.js";
+import { SignIn } from "../SignIn.js";
 import { DiffBody } from "./DiffBody.js";
 import { type DiffLoadReason, useDiff } from "./DiffProvider.js";
 import { Prose } from "./Prose.js";
@@ -425,8 +425,7 @@ const DiffProblem = ({
     case "signed_out":
       return (
         <>
-          Your session ended. <a href={signInHref(returnTo)}>Sign in with GitHub</a> again to see
-          the diff.
+          Your session ended. <SignIn returnTo={returnTo} rest="again to see the diff." />
         </>
       );
     case "failed":

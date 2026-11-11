@@ -179,6 +179,18 @@ pills and buttons (indigo for the person's actions, the AI mark on the LLM step)
 - [x] Fix round: a failed check keeps the last status with an inline alert; the refusal pages — [setup-check-failed-1440-dark](../../apps/web/e2e/__screenshots__/setup-check-failed-1440-dark.png), [setup-no-session-375-light](../../apps/web/e2e/__screenshots__/setup-no-session-375-light.png), [setup-closed-1024-dark](../../apps/web/e2e/__screenshots__/setup-closed-1024-dark.png), [setup-load-failed-1440-light](../../apps/web/e2e/__screenshots__/setup-load-failed-1440-light.png)
 - [x] Fix round: announcements go to a hidden live region that clears itself, so the steps never move (`setup.e2e.spec.ts` "the announcement does not move the steps"); focus stays on busy buttons and lands on the finished message ("the keyboard alone…", Tab only)
 
+## Token mode (P10-4, not in the POC)
+
+The POC has none of these; they follow the inbox's frame and the setup wizard's cards, pills,
+buttons and the inbox's confirmation modal (indigo for the person's actions, warnings on the
+medium tint with text in `--text`).
+
+- [x] App-mode wizard: "Create the GitHub App" first, the personal-token alternative collapsed under it, with its trade-offs and how to switch — [setup-app-token-alternative-1440-light](../../apps/web/e2e/__screenshots__/setup-app-token-alternative-1440-light.png), [setup-app-token-alternative-375-dark](../../apps/web/e2e/__screenshots__/setup-app-token-alternative-375-dark.png)
+- [x] Token-mode wizard: how to create a fine-grained token, a password field that is emptied on submit, refusals by code; then the saved token (owner, kind, expiry, warnings) and "Add repositories" — [setup-token-required-1024-light](../../apps/web/e2e/__screenshots__/setup-token-required-1024-light.png), [setup-token-required-375-dark](../../apps/web/e2e/__screenshots__/setup-token-required-375-dark.png), [setup-token-connected-1440-light](../../apps/web/e2e/__screenshots__/setup-token-connected-1440-light.png), [setup-token-connected-375-dark](../../apps/web/e2e/__screenshots__/setup-token-connected-375-dark.png)
+- [x] Connection page: token card (replace, remove with confirmation), followed repositories (stop following with confirmation), repository picker with a filter, Sync now with its outcome — [connection-1440-light](../../apps/web/e2e/__screenshots__/connection-1440-light.png), [connection-1024-dark](../../apps/web/e2e/__screenshots__/connection-1024-dark.png), [connection-classic-empty-375-dark](../../apps/web/e2e/__screenshots__/connection-classic-empty-375-dark.png), [connection-picker-1440-light](../../apps/web/e2e/__screenshots__/connection-picker-1440-light.png), [connection-picker-375-dark](../../apps/web/e2e/__screenshots__/connection-picker-375-dark.png)
+- [x] Inbox sync bar: last synced, Sync, syncing (re-checked every 3 s, at most 10 times), problems as an alert with the way to replace the token — [inbox-sync-running-1440-light](../../apps/web/e2e/__screenshots__/inbox-sync-running-1440-light.png), [inbox-sync-running-375-dark](../../apps/web/e2e/__screenshots__/inbox-sync-running-375-dark.png), [inbox-sync-rate-limited-1024-light](../../apps/web/e2e/__screenshots__/inbox-sync-rate-limited-1024-light.png), [inbox-sync-rate-limited-375-light](../../apps/web/e2e/__screenshots__/inbox-sync-rate-limited-375-light.png)
+- [x] Keyboard path (picker add, sync, replace, remove with confirm; dialogs close on Escape and give focus back), the token never in the DOM, axe 0 serious at 375/1024/1440 × light/dark — `connection.e2e.spec.ts`
+
 ## Known POC defects (do NOT copy)
 
 Found while capturing the P0-8 screenshots.

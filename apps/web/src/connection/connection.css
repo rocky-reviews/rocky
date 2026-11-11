@@ -1,0 +1,315 @@
+/*
+ * Token mode (P10-4): the connection page, the token field (also in the setup wizard) and the
+ * inbox's sync bar. Not in the POC: built from the inbox's page frame, cards, pills, buttons and
+ * confirmation dialog. Colours only through tokens.css; text on a tint uses --text (WCAG AA).
+ */
+
+/* ---------- the token field ---------- */
+.token-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+.token-field {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+  flex: 1;
+  min-width: min(260px, 100%);
+}
+.token-field input {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--muted);
+  border-radius: 7px;
+  padding: 5px var(--space-2);
+  min-width: 0;
+  min-height: 32px;
+}
+.token-field input[type="search"] {
+  font-family: var(--font-ui);
+}
+.token-form .btn {
+  min-height: 32px;
+}
+.token-form .btn-primary,
+.connection-app .btn-primary {
+  color: var(--on-you);
+}
+.token-hint,
+.token-problem {
+  flex-basis: 100%;
+  margin: 0;
+}
+.token-hint {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.token-problem {
+  color: var(--crit);
+  font-weight: 600;
+}
+.token-form .btn[aria-disabled="true"],
+.connection-app .btn[aria-disabled="true"],
+.sync-bar .btn[aria-disabled="true"] {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* ---------- a saved token ---------- */
+.token-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+.token-facts dt {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.token-facts dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.token-warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.token-warnings li {
+  max-width: 75ch;
+}
+.status-pill.tone-warn {
+  background: var(--med-bg);
+  color: var(--text);
+  border: 1px solid var(--med);
+}
+
+/* ---------- the connection page ---------- */
+.connection-main {
+  max-width: 820px;
+}
+.connection-card {
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.connection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.connection-title {
+  font-size: var(--text-md);
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.connection-title:focus:not(:focus-visible) {
+  outline: none;
+}
+.connection-note {
+  margin: 0;
+  color: var(--muted);
+  max-width: 75ch;
+}
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.connection-actions .btn,
+.connection-back {
+  min-height: 32px;
+  color: var(--text);
+  text-decoration: none;
+}
+.connection-actions .btn-primary {
+  color: var(--on-you);
+}
+.connection-actions .btn-danger-ghost {
+  color: var(--crit);
+}
+.connection-when {
+  color: var(--muted);
+}
+.connection-repos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.connection-repo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  min-width: 0;
+}
+.connection-repo-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.connection-repo-meta {
+  color: var(--muted);
+  font-size: var(--text-base);
+  flex: 1;
+  min-width: 0;
+}
+.connection-repo .btn {
+  min-height: 28px;
+}
+/* The live regions take no room while they are empty. */
+.connection-card .connection-notice {
+  margin: 0;
+  max-width: 75ch;
+  overflow-wrap: anywhere;
+}
+/* Out of the grid while empty (no row, no gap), still in the accessibility tree. */
+.connection-card {
+  position: relative;
+}
+.connection-card .connection-notice:empty {
+  position: absolute;
+}
+.connection-notice.is-alert {
+  color: var(--crit);
+  font-weight: 600;
+}
+.connection-app a:not(.btn) {
+  color: var(--you);
+}
+.connection-app a.brand {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- the repository picker ---------- */
+.picker-dialog .modal-section {
+  display: grid;
+  gap: var(--space-2);
+}
+.picker-dialog .modal-section p {
+  margin: 0;
+}
+.picker-note {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  min-height: 40px;
+}
+.picker-row + .picker-row {
+  border-top: 1px solid var(--border);
+}
+.picker-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.picker-added {
+  color: var(--muted);
+  font-size: var(--text-base);
+}
+.picker-dialog .btn-primary {
+  color: var(--on-you);
+}
+
+/* ---------- the inbox's sync bar ---------- */
+.sync-bar {
+  padding: var(--space-2) var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.sync-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+.sync-when {
+  margin: 0;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sync-row .btn {
+  min-height: 28px;
+}
+.sync-link {
+  margin-left: auto;
+  color: var(--you);
+  font-size: var(--text-base);
+}
+.sync-alert {
+  margin: 0;
+  color: var(--crit);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.sync-alert a {
+  color: var(--you);
+}
+.sync-spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--border);
+  border-top-color: var(--ai);
+  animation: sync-spin 0.9s linear infinite;
+}
+@keyframes sync-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sync-spinner {
+    animation: none;
+  }
+}

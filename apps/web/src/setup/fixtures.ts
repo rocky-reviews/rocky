@@ -24,6 +24,7 @@ const TARGETS = [SMALL, LARGE];
 /** A fresh server in setup mode: database ready, nothing else yet. */
 export const SETUP_FRESH: Status = {
   mode: "setup",
+  connection: "app",
   csrfToken: CSRF,
   database: { state: "ok", details: [] },
   githubApp: {
@@ -33,6 +34,7 @@ export const SETUP_FRESH: Status = {
     createBlocked: null,
     credentialsFile: "/setup/github-app.env",
     installUrl: null,
+    token: null,
   },
   llm: { state: "not_tested", configError: null, targets: TARGETS, results: null },
   repositories: { state: "waiting_for_app", error: null, installations: [] },
@@ -75,6 +77,7 @@ export const SETUP_INSTALLED: Status = {
     createBlocked: null,
     credentialsFile: "/setup/github-app.env",
     installUrl: INSTALL_URL,
+    token: null,
   },
   repositories: {
     state: "installed",
@@ -146,6 +149,45 @@ export const SETUP_ACCOUNTS: Status = {
   },
 };
 
+/** Token mode (P10-4), before a token is saved: the GitHub step asks for one. */
+export const SETUP_TOKEN_REQUIRED: Status = {
+  ...SETUP_CREATED,
+  mode: "full",
+  connection: "token",
+  githubApp: {
+    state: "token_required",
+    error: null,
+    createPath: null,
+    createBlocked: null,
+    credentialsFile: "",
+    installUrl: null,
+    token: null,
+  },
+  repositories: { state: "waiting_for_token", error: null, installations: [] },
+};
+
+/** Token mode, a classic token saved (with its warnings), one repository being analysed. */
+export const SETUP_TOKEN_CONNECTED: Status = {
+  ...SETUP_TOKEN_REQUIRED,
+  githubApp: {
+    ...SETUP_TOKEN_REQUIRED.githubApp,
+    state: "token_connected",
+    token: {
+      login: "sam-r",
+      forgeUserId: 5_120_331,
+      kind: "classic",
+      expiresAt: null,
+      savedAt: "2026-10-25T12:02:00.000Z",
+      warnings: ["classic_token", "no_expiry"],
+    },
+  },
+  repositories: {
+    state: "installed",
+    error: null,
+    installations: [{ ...INSTALLATION, account: "sam-r", kind: "user" }],
+  },
+};
+
 export const SETUP_FIXTURES = {
   fresh: SETUP_FRESH,
   created: SETUP_CREATED,
@@ -155,4 +197,6 @@ export const SETUP_FIXTURES = {
   done: SETUP_DONE,
   failures: SETUP_FAILURES,
   "invalid-llm": SETUP_INVALID_LLM,
+  "token-required": SETUP_TOKEN_REQUIRED,
+  "token-connected": SETUP_TOKEN_CONNECTED,
 } as const;

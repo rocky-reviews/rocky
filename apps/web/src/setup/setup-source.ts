@@ -4,15 +4,19 @@
  * it). The two POSTs carry the setup session's CSRF token from the last status.
  */
 import {
+  SaveTokenResponse,
   SetupProbeResponse,
   SetupStatusResponse,
   type SetupProbeResult,
 } from "@rocky-reviews/core";
+import { refusalOf, type Answer } from "../connection/connection-source.js";
 import { CSRF_HEADER } from "../session.js";
 
 export const STATUS_PATH = "/api/setup/status";
 export const LLM_TEST_PATH = "/api/setup/llm-test";
 export const FINISH_PATH = "/api/setup/finish";
+/** Token mode (P10-4): saves the token and signs the operator in to Rocky. */
+export const SETUP_TOKEN_PATH = "/api/setup/token";
 
 export type LlmTestResult =
   | { readonly kind: "done"; readonly results: readonly SetupProbeResult[] }
@@ -22,6 +26,8 @@ export interface SetupSource {
   load(options?: { signal?: AbortSignal }): Promise<unknown>;
   testLlm(csrfToken: string): Promise<LlmTestResult>;
   finish(csrfToken: string): Promise<boolean>;
+  /** Token mode: sends the token once; the answer describes it without its value. */
+  saveToken(csrfToken: string, token: string): Promise<Answer<SaveTokenResponse>>;
 }
 
 export class SetupLoadError extends Error {
@@ -78,6 +84,25 @@ export const createHttpSetupSource = (): SetupSource => ({
       return (await post(FINISH_PATH, csrfToken)).ok;
     } catch {
       return false;
+    }
+  },
+  saveToken: async (csrfToken, token) => {
+    try {
+      const response = await fetch(SETUP_TOKEN_PATH, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          [CSRF_HEADER]: csrfToken,
+        },
+        body: JSON.stringify({ token }),
+      });
+      if (!response.ok) return await refusalOf(response);
+      const parsed = SaveTokenResponse.safeParse(await response.json().catch(() => null));
+      return parsed.success ? { kind: "ok", value: parsed.data } : { kind: "error" };
+    } catch {
+      return { kind: "error" };
     }
   },
 });

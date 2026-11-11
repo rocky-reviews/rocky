@@ -1,6 +1,6 @@
 import type { MemoryListResponse } from "@rocky-reviews/core";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { signInHref } from "../session.js";
+import { SignIn } from "../SignIn.js";
 import { useTheme } from "../shell/use-theme.js";
 import { Memory } from "./Memory.js";
 import {
@@ -85,8 +85,7 @@ export const MemoryPage = ({
     <main className="status-page" id="main">
       {state.kind === "signed_out" ? (
         <p>
-          <a href={signInHref(returnTo)}>Sign in with GitHub</a> to see this repository&rsquo;s
-          project memory.
+          <SignIn returnTo={returnTo} rest="to see this repository’s project memory." />
         </p>
       ) : state.kind === "not_found" ? (
         <p role="alert">

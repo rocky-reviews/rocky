@@ -7,6 +7,9 @@
  */
 import type { SetupStatusResponse } from "@rocky-reviews/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { tokenRefusalText } from "../connection/connection-model.js";
+import { TokenForm } from "../connection/TokenForm.js";
+import { TokenSummary } from "../connection/TokenSummary.js";
 import { BrandMark } from "../shell/BrandMark.js";
 import type { Mode } from "../theme.js";
 import {
@@ -16,7 +19,9 @@ import {
   databaseTone,
   githubAppError,
   githubAppTone,
+  githubStepTitle,
   llmTone,
+  NEW_TOKEN_URL,
   outcomeOk,
   outcomeText,
   plural,
@@ -24,6 +29,7 @@ import {
   repositoriesTone,
   rolesLabel,
   TONE_LABEL,
+  TOKEN_DOCS_URL,
   type Tone,
 } from "./setup-model.js";
 import type { LlmTestResult, SetupSource } from "./setup-source.js";
@@ -250,7 +256,15 @@ export const Setup = ({
             )}
           </Step>
 
-          <Step n={2} id="setup-app" title="GitHub App" tone={githubAppTone(githubApp)}>
+          <Step
+            n={2}
+            id="setup-app"
+            title={githubStepTitle(status)}
+            tone={githubAppTone(githubApp)}
+          >
+            {status.connection === "token" && (
+              <TokenStep status={status} source={source} onReload={onReload} announce={announce} />
+            )}
             {githubApp.state === "not_created" && githubApp.createBlocked !== null && (
               <p>
                 GitHub must reach Rocky&rsquo;s webhook receiver over https. Set an https{" "}
@@ -294,6 +308,10 @@ export const Setup = ({
               <p>GitHub accepts the app&rsquo;s key. Install it on a repository in step 4.</p>
             )}
             {githubApp.state === "check_failed" && <p>{githubAppError(githubApp.error)}</p>}
+            {status.connection === "app" &&
+              (githubApp.state === "not_created" || githubApp.state === "check_failed") && (
+                <TokenAlternative />
+              )}
           </Step>
 
           <Step n={3} id="setup-llm" title="LLM provider" tone={llmTone(llm)} ai>
@@ -371,7 +389,11 @@ export const Setup = ({
             title="First repository"
             tone={repositoriesTone(repositories)}
           >
-            <Repositories status={status} />
+            {status.connection === "token" ? (
+              <TokenRepositories status={status} />
+            ) : (
+              <Repositories status={status} />
+            )}
           </Step>
         </ol>
 
@@ -409,6 +431,9 @@ export const Setup = ({
     </div>
   );
 };
+
+const countsText = (i: Status["repositories"]["installations"][number]): string =>
+  `${plural(i.repositories, "repository", "repositories")} · ${plural(i.pullRequests, "pull request", "pull requests")} · ${plural(i.analyses.done, "analysis", "analyses")} done${i.analyses.running + i.analyses.queued > 0 ? ` · ${i.analyses.running + i.analyses.queued}\u00a0in progress` : ""}${i.analyses.failed > 0 ? ` · ${i.analyses.failed}\u00a0failed` : ""}`;
 
 const Repositories = ({ status }: { status: Status }) => {
   const { repositories, githubApp } = status;
@@ -465,12 +490,165 @@ const Repositories = ({ status }: { status: Status }) => {
                 ? "Suspended on GitHub"
                 : !i.ready
                   ? "Waiting for GitHub's installation event"
-                  : `${plural(i.repositories, "repository", "repositories")} · ${plural(i.pullRequests, "pull request", "pull requests")} · ${plural(i.analyses.done, "analysis", "analyses")} done${i.analyses.running + i.analyses.queued > 0 ? ` · ${i.analyses.running + i.analyses.queued}\u00a0in progress` : ""}${i.analyses.failed > 0 ? ` · ${i.analyses.failed}\u00a0failed` : ""}`}
+                  : countsText(i)}
             </span>
           </li>
         ))}
       </ul>
       {install !== null && <div className="setup-actions">{install}</div>}
+    </>
+  );
+};
+
+/** App mode (P10-4): the way out when a GitHub App cannot be installed, collapsed and secondary. */
+const TokenAlternative = () => (
+  <details className="setup-alt">
+    <summary>Can&rsquo;t install a GitHub App? Use a personal token instead</summary>
+    <div className="setup-alt-body">
+      <p>
+        Rocky can read and post with one person&rsquo;s fine-grained personal access token instead
+        of the app. What changes:
+      </p>
+      <ul className="setup-tradeoffs">
+        <li>Reviews are posted as you, not as a Rocky bot.</li>
+        <li>Only you can sign in to Rocky: it is a single-user setup.</li>
+        <li>
+          No automatic updates: pull requests are read from GitHub when you open the inbox or press
+          Sync. There are no webhooks, so no public URL is needed.
+        </li>
+        <li>Self-hosting only: Rocky Cloud refuses token mode.</li>
+      </ul>
+      <p>
+        To switch, set <code>ROCKY_GITHUB_CONNECTION=token</code> in <code>deploy/rocky.env</code>,
+        leave the GitHub App variables unset, restart Rocky and open the new setup link from the
+        server&rsquo;s log. The guide: <a href={TOKEN_DOCS_URL}>Plan B: a personal access token</a>.
+      </p>
+    </div>
+  </details>
+);
+
+/** Token mode (P10-4): create a fine-grained token, paste it once, see what Rocky saved. */
+const TokenStep = ({
+  status,
+  source,
+  onReload,
+  announce,
+}: {
+  status: Status;
+  source: SetupSource;
+  onReload: () => Promise<boolean>;
+  announce: (text: string) => void;
+}) => {
+  const token = status.githubApp.token;
+  if (status.githubApp.state === "token_connected" && token !== null)
+    return (
+      <>
+        <p>GitHub accepted the token. Rocky reads and posts as this user:</p>
+        <TokenSummary token={token} now={Date.now()} />
+        <div className="setup-actions">
+          <a className="btn btn-primary" href="/connection">
+            Add repositories
+          </a>
+          <span className="setup-hint">Replace or remove the token there too.</span>
+        </div>
+      </>
+    );
+  const save = async (value: string): Promise<string | null> => {
+    const answer = await source.saveToken(status.csrfToken, value);
+    if (answer.kind === "ok") {
+      announce("GitHub accepted the token.");
+      await onReload();
+      return null;
+    }
+    return answer.kind === "refused"
+      ? tokenRefusalText(answer.error, answer.retryAt)
+      : "Rocky could not save the token. Try again.";
+  };
+  return (
+    <>
+      <p>
+        Rocky reads pull requests and posts the reviews you submit with your own personal access
+        token. Create a fine-grained token on GitHub with:
+      </p>
+      <ul className="setup-tradeoffs">
+        <li>
+          <b>Resource owner:</b> you, or the organization whose repositories Rocky reviews.
+        </li>
+        <li>
+          <b>Repository access:</b> only the repositories Rocky should review.
+        </li>
+        <li>
+          <b>Permissions:</b> Contents: Read, Pull requests: Read and write (GitHub adds Metadata:
+          Read).
+        </li>
+        <li>
+          <b>Expiration:</b> a date; Rocky warns two weeks before it.
+        </li>
+      </ul>
+      <div className="setup-actions">
+        <a className="btn" href={NEW_TOKEN_URL}>
+          Create a token on GitHub <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+      <p className="setup-hint">
+        A classic token (<code>ghp_…</code>) works too, but Rocky accepts it with a warning: it
+        reaches every repository you can.
+      </p>
+      {status.githubApp.error !== null && <p>{githubAppError(status.githubApp.error)}</p>}
+      <TokenForm
+        label="Personal access token"
+        submitLabel="Connect"
+        busyLabel="Connecting…"
+        hint="Sent once to Rocky, which checks it with GitHub and stores it encrypted. It is never shown again."
+        onSubmit={save}
+      />
+    </>
+  );
+};
+
+/** Token mode (P10-4): the repositories Rocky follows on the token are added on /connection. */
+const TokenRepositories = ({ status }: { status: Status }) => {
+  const { repositories } = status;
+  if (repositories.state === "waiting_for_token") return <p>Connect a token first (step 2).</p>;
+  if (repositories.state === "check_failed") return <p>{githubAppError(repositories.error)}</p>;
+  const first = repositories.installations.find((i) => i.latestDone !== null)?.latestDone ?? null;
+  const path = first === null ? null : pullPath(first.fullName, first.number);
+  return (
+    <>
+      {first !== null ? (
+        <p>
+          Rocky analysed{" "}
+          <b>
+            <bdi>{first.fullName}</bdi> #{first.number}
+          </b>
+          . {path !== null && <a href={path}>Open it in Rocky</a>}
+        </p>
+      ) : (
+        <p>
+          Choose the repositories Rocky follows, then press Sync: Rocky reads their open pull
+          requests from GitHub. With <code>ROCKY_ANALYSIS_AUTO=on</code> it analyses them within a
+          minute or two; otherwise open one in Rocky and choose Analyze.
+        </p>
+      )}
+      {repositories.installations.length > 0 && (
+        <ul className="setup-installations">
+          {repositories.installations.map((i) => (
+            <li key={`${i.kind}/${i.account}`} className="setup-installation">
+              <span className="setup-target-name">
+                <bdi>{i.account}</bdi>
+                <span className="setup-target-meta"> · personal token</span>
+              </span>
+              <span className="setup-installation-counts">{countsText(i)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="setup-actions">
+        {/* Step 2's "Add repositories" is the primary action; this one is the way back later. */}
+        <a className="btn" href="/connection">
+          Repositories and sync
+        </a>
+      </div>
     </>
   );
 };

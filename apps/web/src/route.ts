@@ -11,6 +11,7 @@
  *                                 (`&repo=<owner>/<name>`) and `?diff=newer-push` (P6-2…P6-5)
  *   /                             without a switch (or in production): the inbox
  *   /setup                        the setup wizard (P10-2), from the server
+ *   /connection                   token mode's token and repositories (P10-4), from the server
  *
  * Which fixture PR a fixture address names is read by `diff-fixture-source.ts`, loaded only
  * when fixtures are on, so production builds carry none of them. Names in an address are checked
@@ -44,6 +45,8 @@ export type Page =
   | { readonly kind: "home" }
   /** The setup wizard (P10-2); the server serves this page only while setup is open. */
   | { readonly kind: "setup" }
+  /** Token mode's connection page (P10-4); the server answers its API only in token mode. */
+  | { readonly kind: "connection" }
   | { readonly kind: "not_found" };
 
 /** Query parameters that ask for a fixture PR page. */
@@ -57,6 +60,7 @@ export const pageFor = (
   const params = new URLSearchParams(search);
   const fixture = options.fixtures;
   if (pathname === "/setup" || pathname === "/setup/") return { kind: "setup" };
+  if (pathname === "/connection" || pathname === "/connection/") return { kind: "connection" };
   if (pathname === "/inbox" || pathname === "/inbox/")
     return {
       kind: "inbox",

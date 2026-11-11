@@ -39,7 +39,7 @@ export const DATABASE_DETAILS_LABEL: Readonly<Record<Status["database"]["state"]
 };
 
 export const githubAppTone = (g: Status["githubApp"]): Tone =>
-  g.state === "configured"
+  g.state === "configured" || g.state === "token_connected"
     ? "ok"
     : g.state === "created"
       ? "waiting" // for the restart with the new credentials
@@ -101,7 +101,7 @@ export const repositoriesTone = (r: Status["repositories"]): Tone =>
     ? "ok"
     : r.state === "check_failed"
       ? "failed"
-      : r.state === "waiting_for_app"
+      : r.state === "waiting_for_app" || r.state === "waiting_for_token"
         ? "waiting"
         : "action";
 
@@ -118,9 +118,18 @@ export const pullPath = (fullName: string, number: number): string | null => {
   return `/${owner}/${name}/pull/${number}`;
 };
 
+/** The GitHub step's title: the App, or (P10-4) one person's token. */
+export const githubStepTitle = (s: Status): string =>
+  s.connection === "token" ? "Connect GitHub with a personal token" : "GitHub App";
+
+/** GitHub's page for a new fine-grained token, and the self-host guide's Plan B section. */
+export const NEW_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+export const TOKEN_DOCS_URL =
+  "https://github.com/rocky-reviews/rocky/blob/main/docs/self-host/setup.md#plan-b-a-personal-access-token";
+
 /** Every step done: the person may close setup. */
 export const allDone = (s: Status): boolean =>
   s.database.state === "ok" &&
-  s.githubApp.state === "configured" &&
+  (s.githubApp.state === "configured" || s.githubApp.state === "token_connected") &&
   s.llm.state === "ok" &&
   s.repositories.state === "analysed";

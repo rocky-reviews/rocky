@@ -9,7 +9,7 @@ import type { ReviewPostingSource } from "./data/posting-data.js";
 import type { ReviewSource } from "./data/review-data.js";
 import type { AskSource } from "./ask/ask-data.js";
 import { ShellLoadError, type ShellLoadReason } from "./data/shell-http-source.js";
-import { signInHref } from "./session.js";
+import { SignIn } from "./SignIn.js";
 import { Shell } from "./shell/Shell.js";
 
 type Props = {
@@ -51,7 +51,7 @@ export const LoadProblem = ({
       return (
         <main className="status-page" id="main">
           <p>
-            <a href={signInHref(returnTo)}>Sign in with GitHub</a> to see this pull request.
+            <SignIn returnTo={returnTo} rest="to see this pull request." />
           </p>
         </main>
       );
