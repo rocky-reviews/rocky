@@ -87,6 +87,19 @@ describe("readUser", () => {
         scopes: ["repo", "read:org"],
       },
     });
+    // Read leniently: spacing, unknown or odd entries are dropped, `repo` is still seen.
+    const loose = `ghp_${"q".repeat(36)}`;
+    github.addUser(
+      { id: 3, login: "three" },
+      { token: loose, scopes: "repo,  admin:org_hook,Weird-Scope ,, workflow" },
+    );
+    const looseRead = await client.readUser(loose);
+    expect(looseRead.ok && looseRead.value.scopes).toEqual(["repo", "admin:org_hook", "workflow"]);
+    // No header at all: the scopes are unknown (null), not "none".
+    const silent = `ghp_${"s".repeat(36)}`;
+    github.addUser({ id: 4, login: "four" }, { token: silent });
+    const silentRead = await client.readUser(silent);
+    expect(silentRead.ok && silentRead.value.scopes).toBeNull();
     // An unreadable expiry header is "unknown", never a crash or a wrong date.
     github.addUser(
       { id: 2, login: "two" },
@@ -244,6 +257,63 @@ describe("repositories on the token", () => {
       ok: false,
       reason: "not_a_personal_token",
     });
+  });
+
+  it("a rate limit on the diff read is rate_limited with the reset time, not 'forbidden'", async () => {
+    const { client, github } = setup();
+    github.addUser(OWNER, { token: FINE });
+    github.putDiff(77, { baseSha: BASE, headSha: HEAD }, "diff --git a/x b/x\n+1\n");
+    const opened = await client.openRepository(FINE, 77);
+    if (!opened.ok || opened.value === null) throw new Error("expected a session");
+    const reset = Date.parse("2026-11-11T10:30:00Z");
+    github.exhaustRateLimit(reset);
+    const error = await failure(
+      opened.value.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 1024 }),
+    );
+    expect(error.reason).toBe("rate_limited");
+    expect(error.retryAt).toEqual(new Date(reset));
+  });
+
+  it("GitHub's secondary limits (retry-after, a bare 429) are rate_limited on every read", async () => {
+    const { github } = setup();
+    github.addUser(OWNER, { token: FINE });
+    github.putDiff(77, { baseSha: BASE, headSha: HEAD }, "diff --git a/x b/x\n+1\n");
+    let limit: { status: number; retryAfter?: string } | undefined;
+    const fetchWithLimit: typeof fetch = async (input, init) => {
+      if (limit === undefined) return github.fetch(input, init);
+      const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
+      if (limit.retryAfter !== undefined) headers.set("retry-after", limit.retryAfter);
+      return new Response(
+        JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
+        {
+          status: limit.status,
+          headers,
+        },
+      );
+    };
+    const client = createGitHubTokenClient({ api, fetch: fetchWithLimit });
+    const opened = await client.openRepository(FINE, 77);
+    if (!opened.ok || opened.value === null) throw new Error("expected a session");
+    const session = opened.value;
+    const diff = () => session.getDiff({ baseSha: BASE, headSha: HEAD }, { maxBytes: 1024 });
+
+    limit = { status: 403, retryAfter: "60" };
+    const before = Date.now();
+    for (const read of [diff(), session.getPullRequest(847), client.readUser(FINE)]) {
+      const error = await failure(read);
+      expect(error.reason).toBe("rate_limited");
+      const at = error.retryAt?.getTime() ?? 0;
+      expect(at).toBeGreaterThanOrEqual(before + 60_000);
+      expect(at).toBeLessThan(Date.now() + 61_000);
+    }
+    limit = { status: 429 };
+    expect((await failure(diff())).reason).toBe("rate_limited");
+    expect((await failure(session.getPullRequest(847))).reason).toBe("rate_limited");
+    // A plain 403 (no limit headers) stays GitHub's refusal.
+    limit = { status: 403 };
+    const refused = await failure(diff());
+    expect(refused.reason).toBe("http_status");
+    expect(refused.status).toBe(403);
   });
 
   it("a rejected token in a session surfaces as a 401 read failure, without the token", async () => {

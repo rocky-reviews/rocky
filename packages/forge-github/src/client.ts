@@ -180,6 +180,8 @@ export interface GitHubHttp {
   /** The JSON body of an answer that must be JSON within its cap. */
   json(answer: Exchange): unknown;
   isNotFound(answer: Exchange): boolean;
+  /** `rateLimitOf` when this client maps rate limits (`rateLimits`), else undefined. */
+  rateLimited(response: Response): ForgeReadError | undefined;
 }
 
 export interface GitHubHttpOptions {
@@ -191,6 +193,8 @@ export interface GitHubHttpOptions {
   readonly authorization: (credential: Credential) => string;
   /** Turn an exhausted rate limit into `rate_limited` (P10-4; off for installation tokens). */
   readonly rateLimits?: boolean;
+  /** For `retry-after` (tests). */
+  readonly now?: () => number;
 }
 
 /** GitHub's reset epoch (seconds) as a date, when it is one. */
@@ -200,9 +204,41 @@ const resetAt = (headers: Headers): Date | undefined => {
   return new Date(Number(raw) * 1000);
 };
 
+/** Longest `retry-after` taken at its word; a larger value is GitHub's or a proxy's mistake. */
+const MAX_RETRY_AFTER_SECONDS = 86_400;
+
+/**
+ * A rate-limit answer as `rate_limited`, or undefined: the primary limit (403/429 with
+ * `x-ratelimit-remaining: 0`, retry at `x-ratelimit-reset`) and the secondary one (403/429 with
+ * `retry-after`, or any 429). Applied to every answer that is not a success, whichever way it
+ * was read (`exchange`, or a streamed read such as the diff).
+ */
+export const rateLimitOf = (response: Response, now: number): ForgeReadError | undefined => {
+  if (response.status !== 403 && response.status !== 429) return undefined;
+  const headers = response.headers;
+  if (headers.get("x-ratelimit-remaining") === "0") {
+    const at = resetAt(headers);
+    return new ForgeReadError(
+      "rate_limited",
+      response.status,
+      at === undefined ? {} : { retryAt: at },
+    );
+  }
+  const retryAfter = headers.get("retry-after");
+  if (retryAfter !== null && /^[0-9]{1,9}$/.test(retryAfter)) {
+    const seconds = Math.min(Number(retryAfter), MAX_RETRY_AFTER_SECONDS);
+    return new ForgeReadError("rate_limited", response.status, {
+      retryAt: new Date(now + seconds * 1000),
+    });
+  }
+  if (response.status === 429) return new ForgeReadError("rate_limited", 429);
+  return undefined;
+};
+
 export const createGitHubHttp = (options: GitHubHttpOptions): GitHubHttp => {
   if (options.api.protocol !== "https:") throw new Error("GitHub API base must be https");
   const doFetch = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
 
   const open: GitHubHttp["open"] = async (method, path, credential, init) => {
     const url = new URL(path, options.api);
@@ -231,6 +267,9 @@ export const createGitHubHttp = (options: GitHubHttpOptions): GitHubHttp => {
     }
   };
 
+  const rateLimited: GitHubHttp["rateLimited"] = (response) =>
+    options.rateLimits === true ? rateLimitOf(response, now()) : undefined;
+
   const exchange: GitHubHttp["exchange"] = async (method, path, credential, cap, init = {}) => {
     const { response, signal } = await open(method, path, credential, init);
     let bytes: Buffer | undefined;
@@ -240,18 +279,8 @@ export const createGitHubHttp = (options: GitHubHttpOptions): GitHubHttp => {
       if (signal.aborted || isAbort(error)) throw new ForgeReadError("timeout");
       throw new ForgeReadError("network");
     }
-    if (
-      options.rateLimits === true &&
-      (response.status === 403 || response.status === 429) &&
-      response.headers.get("x-ratelimit-remaining") === "0"
-    ) {
-      const at = resetAt(response.headers);
-      throw new ForgeReadError(
-        "rate_limited",
-        response.status,
-        at === undefined ? {} : { retryAt: at },
-      );
-    }
+    const limited = rateLimited(response);
+    if (limited !== undefined) throw limited;
     return {
       status: response.status,
       contentType: response.headers.get("content-type") ?? "",
@@ -273,7 +302,7 @@ export const createGitHubHttp = (options: GitHubHttpOptions): GitHubHttp => {
     return true;
   };
 
-  return { api: options.api, open, exchange, json, isNotFound };
+  return { api: options.api, open, exchange, json, isNotFound, rateLimited };
 };
 
 export const decodePullRequest = (
@@ -418,6 +447,8 @@ export const createRepositorySession = (options: RepositorySessionOptions): Repo
         return reading(bytes.subarray(0, bytes.lastIndexOf(0x0a) + 1), "max_bytes");
       }
       const bytes = await readCapped(response, MAX_TOKEN_RESPONSE_BYTES);
+      const limited = http.rateLimited(response);
+      if (limited !== undefined) throw limited;
       const answer: Exchange = {
         status: response.status,
         contentType,

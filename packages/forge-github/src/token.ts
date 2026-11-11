@@ -59,8 +59,10 @@ const ListedJson = z.object({
 });
 const RepositoryListJson = z.array(ListedJson).max(PAGE);
 const RepositoryWithPermissionsJson = RepositoryJson.extend({ permissions: Permissions });
-/** A classic token's scopes, as `x-oauth-scopes` lists them: a short comma-separated list. */
-const SCOPES = /^[a-z_:]{1,40}(?:, ?[a-z_:]{1,40}){0,40}$/;
+/** One scope as `x-oauth-scopes` lists them (`repo`, `admin:org_hook`); others are ignored. */
+const SCOPE = /^[a-z_:]{1,40}$/;
+/** Longest `x-oauth-scopes` header read; GitHub's full list is far shorter. */
+const MAX_SCOPES_HEADER = 4_096;
 
 export interface TokenIdentity {
   readonly id: number;
@@ -68,8 +70,11 @@ export interface TokenIdentity {
   readonly kind: GitHubTokenKind;
   /** GitHub's expiry for the token; `null` when it reported none (a token that never expires). */
   readonly expiresAt: Date | null;
-  /** A classic token's scopes (shown as a warning, never stored); empty for a fine-grained one. */
-  readonly scopes: readonly string[];
+  /**
+   * A classic token's scopes (shown as a warning, never stored); empty for a fine-grained one;
+   * `null` when GitHub sent no readable `x-oauth-scopes` (unknown, not "none").
+   */
+  readonly scopes: readonly string[] | null;
 }
 
 /** Why a token is not accepted. Fixed codes. */
@@ -119,8 +124,15 @@ const expiryOf = (header: string | null): Date | null => {
   return Number.isFinite(at) ? new Date(at) : null;
 };
 
-const scopesOf = (header: string | null): string[] =>
-  header === null || !SCOPES.test(header) ? [] : header.split(",").map((s) => s.trim());
+/** Lenient: split on commas, trim, keep what looks like a scope, ignore the rest. */
+const scopesOf = (header: string | null): string[] | null =>
+  header === null || header.length > MAX_SCOPES_HEADER
+    ? null
+    : header
+        .split(",")
+        .map((scope) => scope.trim())
+        .filter((scope) => SCOPE.test(scope))
+        .slice(0, 100);
 
 const permissionsOf = (value: z.infer<typeof Permissions>) => ({
   pull: value?.pull === true,
