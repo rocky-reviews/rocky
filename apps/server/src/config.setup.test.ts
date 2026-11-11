@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConfigError, githubAppSetupFromEnv } from "./config.js";
+import { ConfigError, githubAppSetupFromEnv, setupFromEnv } from "./config.js";
 
 let home: string;
 beforeEach(async () => {
@@ -26,13 +26,30 @@ describe("githubAppSetupFromEnv (P3-1)", () => {
     });
   });
 
-  it("refuses to boot when requested in production", () => {
+  it("runs in production only behind an explicit https public URL (P10-2)", () => {
+    // No public URL, or the loopback default: refused (the browser and GitHub need https).
     expect(() => githubAppSetupFromEnv({ ...ON, NODE_ENV: "production" }, home)).toThrow(
-      ConfigError,
+      /ROCKY_PUBLIC_URL is required in production/,
     );
-    expect(() => githubAppSetupFromEnv({ ...ON, FLY_APP_NAME: "rocky" }, home)).toThrow(
-      ConfigError,
+    expect(() =>
+      githubAppSetupFromEnv(
+        { ...ON, FLY_APP_NAME: "rocky", ROCKY_PUBLIC_URL: "http://127.0.0.1:4310" },
+        home,
+      ),
+    ).toThrow(/https in production/);
+    const setup = githubAppSetupFromEnv(
+      { ...ON, NODE_ENV: "production", ROCKY_PUBLIC_URL: "https://rocky.example.com" },
+      home,
     );
+    expect(setup.enabled && setup.config.webhookUrl?.href).toBe(
+      "https://rocky.example.com/webhooks/github",
+    );
+  });
+
+  it("is opened by ROCKY_SETUP=true as well as its older name (P10-2)", () => {
+    const rest = { HOST: ON.HOST, PORT: ON.PORT };
+    expect(githubAppSetupFromEnv({ ...rest, ROCKY_SETUP: "true" }, home).enabled).toBe(true);
+    expect(githubAppSetupFromEnv({ ...rest, ROCKY_SETUP: "yes" }, home).enabled).toBe(false);
   });
 
   it("is off once an app is configured (env or credentials file)", async () => {
@@ -116,5 +133,57 @@ describe("githubAppSetupFromEnv (P3-1)", () => {
         ConfigError,
       );
     }
+  });
+});
+
+describe("setupFromEnv (P10-2)", () => {
+  const PROD = {
+    ROCKY_SETUP: "true",
+    NODE_ENV: "production",
+    ROCKY_PUBLIC_URL: "https://rocky.example.com",
+  };
+
+  it("is off unless requested", () => {
+    expect(setupFromEnv({}, home)).toStrictEqual({ enabled: false });
+    expect(setupFromEnv({ ROCKY_SETUP: "1" }, home)).toStrictEqual({ enabled: false });
+  });
+
+  it("before any app: production, the manifest flow and where the credentials go", () => {
+    const setup = setupFromEnv(PROD, home);
+    expect(setup.enabled).toBe(true);
+    if (!setup.enabled) return;
+    expect(setup.production).toBe(true);
+    expect(setup.appConfigured).toBe(false);
+    expect(setup.credentialsWritten).toBe(false);
+    expect(setup.credentialsFile).toBe(join(home, ".rocky", "github-app.env"));
+    expect(setup.githubApp.enabled).toBe(true);
+    expect(setup.publicUrl.href).toBe("https://rocky.example.com/");
+  });
+
+  it("after the app was created: the file exists, the manifest flow is closed", async () => {
+    const file = join(home, "creds.env");
+    await writeFile(file, "X=1\n");
+    const setup = setupFromEnv({ ...PROD, GITHUB_APP_CREDENTIALS_FILE: file }, home);
+    expect(setup.enabled && setup.credentialsWritten).toBe(true);
+    expect(setup.enabled && setup.githubApp.enabled).toBe(false);
+    expect(setup.enabled && setup.appConfigured).toBe(false);
+  });
+
+  it("with the app configured: the wizard stays open beside the full server", () => {
+    const setup = setupFromEnv(
+      { ...PROD, GITHUB_APP_ID: "42", GITHUB_URL: "https://ghe.example" },
+      home,
+    );
+    expect(setup.enabled && setup.appConfigured).toBe(true);
+    expect(setup.enabled && setup.endpoints.web.href).toBe("https://ghe.example/");
+    expect(() =>
+      setupFromEnv({ ...PROD, GITHUB_APP_ID: "42", GITHUB_URL: "http://x" }, home),
+    ).toThrow(ConfigError);
+    expect(() =>
+      setupFromEnv(
+        { ...PROD, GITHUB_APP_ID: "42", ROCKY_PUBLIC_URL: "http://rocky.example.com" },
+        home,
+      ),
+    ).toThrow(ConfigError);
   });
 });

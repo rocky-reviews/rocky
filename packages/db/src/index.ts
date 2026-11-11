@@ -298,3 +298,10 @@ export {
   type ReviewSubmissionRecord,
   type ReviewSubmissionStatus,
 } from "./reviews.js";
+export {
+  checkDatabaseSetup,
+  loadOrgSetupProgress,
+  REQUIRED_EXTENSIONS,
+  type DatabaseSetupCheck,
+  type OrgSetupProgress,
+} from "./setup.js";

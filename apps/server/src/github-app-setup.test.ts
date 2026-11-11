@@ -245,7 +245,8 @@ describe("setup token (one-time, from the server terminal)", () => {
     expect(cookie).toMatch(new RegExp(`^${SETUP_COOKIE}=[A-Za-z0-9_-]{43};`));
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Lax");
-    expect(cookie).toContain("Path=/setup/github-app");
+    // P10-2: one setup session for the manifest flow and the wizard (ADR 0044).
+    expect(cookie).toContain("Path=/;");
     expect(cookie).toContain(`Max-Age=${SETUP_SESSION_TTL_MS / 1000}`);
     // The cookie is not the token.
     expect(cookie).not.toContain(h.token);
@@ -416,9 +417,13 @@ describe("callback", () => {
     expect(env["GITHUB_APP_CLIENT_SECRET"]).toBe(body.client_secret);
     expect(env["GITHUB_WEBHOOK_SECRET"]).toBe(body.webhook_secret);
 
-    // The page: where the file is and how to install. Deliberately no secret, no id, no code.
+    // The page: where the file is and what comes next (P10-2: restart, then install from the
+    // wizard; no install link before Rocky can receive the installation event). Deliberately no
+    // secret, no id, no code.
     expect(res.body).toContain(h.file);
-    expect(res.body).toContain("https://github.com/apps/rocky-reviews-h3/installations/new");
+    expect(res.body).toContain('href="/setup"');
+    expect(res.body).toContain("only after the restart");
+    expect(res.body).not.toContain("installations/new");
     const everything = res.body + JSON.stringify(res.headers) + h.logs.join("\n");
     for (const secret of [
       body.client_secret,
@@ -740,7 +745,7 @@ describe("review round 1", () => {
       expect(parseEnv(await readFile(harness.file, "utf8"))["GITHUB_APP_SLUG"]).toBe(
         "rocky_reviews-dev",
       );
-      expect(res.body).toContain("https://github.com/apps/rocky_reviews-dev/installations/new");
+      expect(res.body).not.toContain("GITHUB_APP_SLUG");
     } finally {
       await cleanup(harness);
     }
@@ -823,7 +828,7 @@ describe("review round 1", () => {
     expect(String(res.headers["content-security-policy"])).toContain(`style-src 'sha256-${hash}';`);
   });
 
-  it("item 13: org success path writes the file and links the org's install page", async () => {
+  it("item 13: org success path writes the file and sends the person to the wizard", async () => {
     const body = conversion();
     const harness = await build({ respond: created(body) });
     try {
@@ -834,7 +839,7 @@ describe("review round 1", () => {
       );
       const res = await callback(cookie, `code=${CODE}&state=${state}`, harness);
       expect(res.statusCode).toBe(200);
-      expect(res.body).toContain("https://github.com/apps/rocky-reviews-h3/installations/new");
+      expect(res.body).toContain('href="/setup"');
       const env = parseEnv(await readFile(harness.file, "utf8"));
       expect(env["GITHUB_APP_ID"]).toBe("98765");
       expect(env["GITHUB_APP_PRIVATE_KEY"]).toBe(PEM);

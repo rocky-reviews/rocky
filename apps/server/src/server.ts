@@ -3,12 +3,19 @@ import type { RepositoryAccessCheck } from "@rocky-reviews/core";
 import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
 import {
   createGitHubForge,
+  createGitHubInstallationReader,
   createGitHubLogin,
   createGitHubReviewPoster,
   createGitHubUserAccessReader,
   createGitHubWebhookIngress,
 } from "@rocky-reviews/forge-github";
-import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
+import {
+  createLlmRoles,
+  envSecrets,
+  providerAdapters,
+  usageTargetsFor,
+  type ProviderAdapters,
+} from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
 import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
@@ -22,12 +29,17 @@ import {
   authFromEnv,
   ConfigError,
   githubAppAuthFromEnv,
-  githubAppSetupFromEnv,
   githubAppIdFromEnv,
   isProduction,
+  setupFromEnv,
   webhookSecretFromEnv,
+  type AskConfig,
+  type AuthSetup,
 } from "./config.js";
-import { SETUP_PATH, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import type { GitHubAppSetupDeps } from "./github-app-setup.js";
+import { createSetupChecks } from "./setup/checks.js";
+import { WIZARD_START, type SetupWizardDeps } from "./setup/routes.js";
+import { createSetupSessions } from "./setup/session.js";
 import { createPullRequestDiffReader, type PullRequestDiffReader } from "./pulls/diff-reader.js";
 import { cacheMembershipDenials, createRepositoryAccess } from "./repository-access.js";
 import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
@@ -123,6 +135,13 @@ export interface RunningServer {
   readonly auth: boolean;
   /** Whether the GitHub App manifest setup routes are registered (P3-1). */
   readonly githubAppSetup: boolean;
+  /** Whether the setup wizard is open (P10-2, `ROCKY_SETUP=true`). */
+  readonly setupWizard: boolean;
+  /**
+   * Setup mode (P10-2, ADR 0044): production before a GitHub App is configured. Only health, the
+   * wizard and the web app are served; webhooks, login and every tenant route are off.
+   */
+  readonly setupMode: boolean;
   /**
    * Whether the repository access check (P3-6) is built (H4-1): login plus the app's key.
    * Without it every route that reads a repository's data answers 503.
@@ -138,6 +157,8 @@ export interface StartOptions {
    * credential (ADR 0008).
    */
   announce?: (text: string) => void;
+  /** The LLM adapters the setup wizard's test call uses (tests pass fakes). */
+  llmAdapters?: ProviderAdapters;
 }
 
 const announceToTerminal = (text: string): void => {
@@ -153,15 +174,18 @@ export const startServer = async (
   log: Logger,
   options: StartOptions = {},
 ): Promise<RunningServer> => {
-  const webhookSecret = webhookSecretFromEnv(env);
-  const setup = githubAppSetupFromEnv(env, homedir());
-  const authSetup = authFromEnv(env);
+  const setup = setupFromEnv(env, homedir());
+  // P10-2 (ADR 0044): production without an app yet runs the wizard only, so what only the app,
+  // login and webhooks need is not required (nor read) until the app is configured.
+  const setupMode = setup.enabled && setup.production && !setup.appConfigured;
+  const webhookSecret = setupMode ? undefined : webhookSecretFromEnv(env);
+  const authSetup: AuthSetup = setupMode ? { enabled: false } : authFromEnv(env);
   // P7-3 (ADR 0025): limits and the trusted proxy are checked before anything opens.
   const trustProxy = trustProxyFromEnv(env);
   const rateLimits = createRateLimits({ rules: rateLimitRulesFromEnv(env), trustProxy });
-  const appId = githubAppIdFromEnv(env);
-  const appAuth = githubAppAuthFromEnv(env);
-  const askConfig = askConfigFromEnv(env);
+  const appId = setupMode ? undefined : githubAppIdFromEnv(env);
+  const appAuth = setupMode ? undefined : githubAppAuthFromEnv(env);
+  const askConfig: AskConfig = setupMode ? { enabled: false } : askConfigFromEnv(env);
   const webDir = env["ROCKY_WEB_DIR"];
   const web: WebApp | undefined =
     webDir === undefined || webDir === "" ? undefined : loadWebApp(webDir);
@@ -176,11 +200,18 @@ export const startServer = async (
       );
     }
   }
+  const setupToken = setup.enabled ? randomBytes(32).toString("base64url") : undefined;
+  const setupSessions =
+    setup.enabled && setupToken !== undefined
+      ? createSetupSessions({ token: setupToken, publicUrl: setup.publicUrl })
+      : undefined;
   let githubAppSetup: GitHubAppSetupDeps | undefined;
-  if (setup.enabled) {
-    githubAppSetup = { ...setup.config, token: randomBytes(32).toString("base64url") };
-  } else if (setup.reason === "configured" && env["GITHUB_APP_SETUP"] === "true") {
-    log.warn("GITHUB_APP_SETUP ignored: a GitHub App is already configured");
+  if (setup.enabled && setup.githubApp.enabled && setupToken !== undefined) {
+    githubAppSetup = {
+      ...setup.githubApp.config,
+      token: setupToken,
+      ...(setupSessions === undefined ? {} : { sessions: setupSessions }),
+    };
   }
   // The mode only: which header (if any) names the client. Never an address.
   log.info({ trustProxy: describeTrustProxy(trustProxy) }, "rate limits count per client address");
@@ -198,8 +229,45 @@ export const startServer = async (
     log.warn({ errorCode: errorCode(error) ?? "unknown" }, "database unreachable at boot");
   }
 
+  let setupWizard: SetupWizardDeps | undefined;
+  if (setup.enabled && setupSessions !== undefined) {
+    const clock = { now: () => new Date() };
+    const app =
+      appAuth === undefined
+        ? undefined
+        : createGitHubInstallationReader({ auth: appAuth, api: setup.endpoints.api, clock });
+    setupWizard = {
+      sessions: setupSessions,
+      mode: setupMode ? "setup" : "full",
+      ...(web === undefined ? {} : { page: web.index }),
+      checks: createSetupChecks({
+        pool,
+        env,
+        adapters: options.llmAdapters ?? providerAdapters(),
+        endpoints: setup.endpoints,
+        credentialsFile: setup.credentialsFile,
+        appConfigured: setup.appConfigured,
+        credentialsWritten: setup.credentialsWritten,
+        manifest: setup.githubApp.enabled
+          ? { webhookUrl: setup.githubApp.config.webhookUrl }
+          : undefined,
+        ...(app === undefined ? {} : { app }),
+        ...(setup.appConfigured ? { db: createDb({ pool }) } : {}),
+      }),
+    };
+    if (setupMode) {
+      log.warn(
+        "setup mode: no GitHub App is configured yet; serving the setup wizard only (webhooks and login are off)",
+      );
+    } else {
+      log.warn("ROCKY_SETUP is on: the setup wizard is open; remove it once setup is finished");
+    }
+  }
+
   let webhooks: WebhookDeps | undefined;
-  if (webhookSecret === undefined) {
+  if (setupMode) {
+    // Nothing to receive before the app exists (ADR 0044).
+  } else if (webhookSecret === undefined) {
     log.warn("GITHUB_WEBHOOK_SECRET is not set: webhook receiver disabled (development only)");
   } else {
     const db = createDb({ pool });
@@ -300,7 +368,7 @@ export const startServer = async (
     // Posting as the user (P3-5): the one poster in the process, held by the review routes only.
     // They answer 503 without the repository access check above.
     reviewPosting = { poster: createGitHubReviewPoster({ api: config.endpoints.api }), keys };
-  } else {
+  } else if (!setupMode) {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
   }
 
@@ -312,6 +380,7 @@ export const startServer = async (
     ...(web === undefined ? {} : { web }),
     ...(webhooks === undefined ? {} : { webhooks }),
     ...(githubAppSetup === undefined ? {} : { githubAppSetup }),
+    ...(setupWizard === undefined ? {} : { setupWizard }),
     ...(auth === undefined ? {} : { auth }),
     ...(reviewPosting === undefined ? {} : { reviewPosting }),
     ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
@@ -335,16 +404,18 @@ export const startServer = async (
       webhooks: webhooks !== undefined,
       auth: auth !== undefined,
       githubAppSetup: githubAppSetup !== undefined,
+      setupWizard: setupWizard !== undefined,
+      setupMode,
       repositoryAccess: repositoryAccess !== undefined,
       web: web !== undefined,
     },
     "server listening",
   );
-  if (githubAppSetup !== undefined) {
-    const url = new URL(SETUP_PATH, githubAppSetup.publicUrl);
-    url.searchParams.set("token", githubAppSetup.token);
+  if (setup.enabled && setupToken !== undefined) {
+    const url = new URL(WIZARD_START, setup.publicUrl);
+    url.searchParams.set("token", setupToken);
     (options.announce ?? announceToTerminal)(
-      `\nGitHub App setup is open. Open this one-time URL in your browser (do not share it):\n  ${url.href}\n`,
+      `\nRocky setup is open. Open this one-time URL in your browser (do not share it):\n  ${url.href}\n`,
     );
   }
 
@@ -357,6 +428,8 @@ export const startServer = async (
     webhooks: webhooks !== undefined,
     auth: auth !== undefined,
     githubAppSetup: githubAppSetup !== undefined,
+    setupWizard: setupWizard !== undefined,
+    setupMode,
     repositoryAccess: repositoryAccess !== undefined,
     close: () => {
       closing ??= (async () => {

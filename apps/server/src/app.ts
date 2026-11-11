@@ -7,6 +7,7 @@ import { registerCsrfGuard } from "./auth/csrf.js";
 import { publicRoute, registerAccessPolicy, type PolicyEntry } from "./auth/policy.js";
 import { registerAuth, type AuthDeps, type SessionAuth } from "./auth/routes.js";
 import { registerGitHubAppSetup, type GitHubAppSetupDeps } from "./github-app-setup.js";
+import { registerSetupWizard, type SetupWizardDeps } from "./setup/routes.js";
 import { registerAskRoutes, type AskDeps } from "./ask/routes.js";
 import { registerInboxRoutes } from "./inbox/routes.js";
 import { registerMemoryRoutes } from "./memory/routes.js";
@@ -39,8 +40,10 @@ export interface AppDeps {
   log?: Logger;
   /** Forge webhook receiver (P3-2). Omitted when no webhook secret is configured (development). */
   webhooks?: WebhookDeps;
-  /** GitHub App manifest setup (P3-1). Only when requested, outside production, unconfigured. */
+  /** GitHub App manifest setup (P3-1). Only when setup is requested and no app is configured. */
   githubAppSetup?: GitHubAppSetupDeps;
+  /** The setup wizard (P10-2, ADR 0044). Only while `ROCKY_SETUP=true`. */
+  setupWizard?: SetupWizardDeps;
   /**
    * GitHub login and sessions (P7-1, ADR 0020). Without it no session can exist, so every
    * state-changing route except the signed webhook receiver is refused by the CSRF guard.
@@ -152,6 +155,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
 
   if (deps.webhooks !== undefined) registerWebhooks(app, deps.webhooks);
   if (deps.githubAppSetup !== undefined) registerGitHubAppSetup(app, deps.githubAppSetup);
+  if (deps.setupWizard !== undefined) registerSetupWizard(app, deps.setupWizard);
   if (deps.auth !== undefined) {
     app.decorate("sessionAuth", registerAuth(app, deps.auth));
     registerRoleRoutes(app, {

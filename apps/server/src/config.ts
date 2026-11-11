@@ -122,45 +122,71 @@ export type GitHubAppSetup =
   | { enabled: true; config: GitHubAppSetupConfig };
 
 /**
- * GitHub App manifest setup (P3-1, ADR 0008). Off unless `GITHUB_APP_SETUP=true`; refused in
- * production (a ConfigError, so the server does not boot); off once an app is configured
- * (`GITHUB_APP_ID` set, or the credentials file exists). Every URL is validated here, so the
- * routes only ever see https endpoints and a public URL that is https or http on loopback.
+ * Whether the setup wizard (P10-2, ADR 0044) is requested: `ROCKY_SETUP=true`, or its older
+ * name `GITHUB_APP_SETUP=true` (P3-1). Exactly `true`; anything else is off.
+ */
+export const setupRequested = (env: Env): boolean =>
+  env["ROCKY_SETUP"] === "true" || env["GITHUB_APP_SETUP"] === "true";
+
+const credentialsFileFrom = (env: Env, homedir: string): string => {
+  const file =
+    nonEmpty(env, "GITHUB_APP_CREDENTIALS_FILE") ?? join(homedir, ".rocky", "github-app.env");
+  if (!isAbsolute(file)) {
+    throw new ConfigError("GITHUB_APP_CREDENTIALS_FILE must be an absolute path");
+  }
+  return file;
+};
+
+/**
+ * Where browsers reach the setup pages. In production it must be set and https (behind the
+ * operator's TLS proxy, as login needs anyway); elsewhere it defaults to `http://HOST:PORT`,
+ * accepted on a loopback address only.
+ */
+const setupPublicUrl = (env: Env): URL => {
+  const production = isProduction(env);
+  const host = env["HOST"] ?? "0.0.0.0";
+  const publicRaw =
+    nonEmpty(env, "ROCKY_PUBLIC_URL") ??
+    (production
+      ? undefined
+      : `http://${host.includes(":") ? `[${host}]` : host}:${env["PORT"] ?? "4310"}`);
+  if (publicRaw === undefined) {
+    throw new ConfigError("ROCKY_PUBLIC_URL is required in production (setup)");
+  }
+  const publicUrl = urlFrom(publicRaw, "ROCKY_PUBLIC_URL");
+  const loopbackHttp = publicUrl.protocol === "http:" && LOOPBACK.has(publicUrl.hostname);
+  if (publicUrl.protocol !== "https:") {
+    if (production) throw new ConfigError("ROCKY_PUBLIC_URL must be https in production");
+    if (!loopbackHttp) {
+      throw new ConfigError(
+        "ROCKY_PUBLIC_URL must be https, or http on 127.0.0.1/localhost (set it explicitly when HOST is 0.0.0.0)",
+      );
+    }
+  }
+  if (publicUrl.pathname !== "/") throw new ConfigError("ROCKY_PUBLIC_URL must not have a path");
+  return publicUrl;
+};
+
+/**
+ * GitHub App manifest setup (P3-1, ADR 0008; production since P10-2, ADR 0044). Off unless setup
+ * is requested (`setupRequested`); off once an app is configured (`GITHUB_APP_ID` set, or the
+ * credentials file exists). Every URL is validated here, so the routes only ever see https
+ * endpoints and a public URL that is https (in production, always) or http on loopback.
  */
 export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup => {
-  if (env["GITHUB_APP_SETUP"] !== "true") return { enabled: false, reason: "not_requested" };
-  if (isProduction(env)) {
-    throw new ConfigError(
-      "GITHUB_APP_SETUP is for creating the app from a workstation; it is refused in production",
-    );
-  }
+  if (!setupRequested(env)) return { enabled: false, reason: "not_requested" };
   if (process.platform === "win32") {
     // The credentials file is protected by POSIX modes (0600/0700), which Windows does not apply.
     throw new ConfigError(
-      "GITHUB_APP_SETUP is not supported on Windows (file modes cannot protect the credentials); run it under WSL, macOS or Linux",
+      "ROCKY_SETUP is not supported on Windows (file modes cannot protect the credentials); run it under WSL, macOS or Linux",
     );
   }
-  const credentialsFile =
-    nonEmpty(env, "GITHUB_APP_CREDENTIALS_FILE") ?? join(homedir, ".rocky", "github-app.env");
-  if (!isAbsolute(credentialsFile)) {
-    throw new ConfigError("GITHUB_APP_CREDENTIALS_FILE must be an absolute path");
-  }
+  const credentialsFile = credentialsFileFrom(env, homedir);
   if (nonEmpty(env, "GITHUB_APP_ID") !== undefined || pathExists(credentialsFile)) {
     return { enabled: false, reason: "configured" };
   }
 
-  const host = env["HOST"] ?? "0.0.0.0";
-  const publicRaw =
-    nonEmpty(env, "ROCKY_PUBLIC_URL") ??
-    `http://${host.includes(":") ? `[${host}]` : host}:${env["PORT"] ?? "4310"}`;
-  const publicUrl = urlFrom(publicRaw, "ROCKY_PUBLIC_URL");
-  const loopbackHttp = publicUrl.protocol === "http:" && LOOPBACK.has(publicUrl.hostname);
-  if (publicUrl.protocol !== "https:" && !loopbackHttp) {
-    throw new ConfigError(
-      "ROCKY_PUBLIC_URL must be https, or http on 127.0.0.1/localhost (set it explicitly when HOST is 0.0.0.0)",
-    );
-  }
-  if (publicUrl.pathname !== "/") throw new ConfigError("ROCKY_PUBLIC_URL must not have a path");
+  const publicUrl = setupPublicUrl(env);
 
   const webhookRaw = nonEmpty(env, "GITHUB_APP_WEBHOOK_URL");
   let webhookUrl: URL | undefined;
@@ -215,6 +241,59 @@ export const githubAppSetupFromEnv = (env: Env, homedir: string): GitHubAppSetup
       endpoints,
       credentialsFile,
     },
+  };
+};
+
+export type SetupConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly publicUrl: URL;
+      readonly production: boolean;
+      /** `GITHUB_APP_ID` is set: the server runs in full, with the wizard beside it. */
+      readonly appConfigured: boolean;
+      /** The credentials file exists (the app was created; its values are not loaded yet). */
+      readonly credentialsWritten: boolean;
+      readonly credentialsFile: string;
+      readonly endpoints: GitHubEndpoints;
+      /** The manifest flow, when no app exists yet. */
+      readonly githubApp: GitHubAppSetup;
+    };
+
+/**
+ * The setup wizard (P10-2, ADR 0044): requested by `ROCKY_SETUP=true`. Allowed in production,
+ * where the server then needs only the database login and an https `ROCKY_PUBLIC_URL` until a
+ * GitHub App is configured (`startServer` runs in setup mode). Every value is validated here.
+ */
+export const setupFromEnv = (env: Env, homedir: string): SetupConfig => {
+  if (!setupRequested(env)) return { enabled: false };
+  const githubApp = githubAppSetupFromEnv(env, homedir);
+  const credentialsFile = credentialsFileFrom(env, homedir);
+  const publicUrl = githubApp.enabled ? githubApp.config.publicUrl : setupPublicUrl(env);
+  let endpoints: GitHubEndpoints;
+  if (githubApp.enabled) {
+    endpoints = githubApp.config.endpoints;
+  } else {
+    const webUrl = nonEmpty(env, "GITHUB_URL");
+    const apiUrl = nonEmpty(env, "GITHUB_API_URL");
+    try {
+      endpoints = githubEndpoints({
+        ...(webUrl === undefined ? {} : { webUrl }),
+        ...(apiUrl === undefined ? {} : { apiUrl }),
+      });
+    } catch (error) {
+      throw new ConfigError(`GITHUB_URL/GITHUB_API_URL: ${(error as Error).message}`);
+    }
+  }
+  return {
+    enabled: true,
+    publicUrl,
+    production: isProduction(env),
+    appConfigured: nonEmpty(env, "GITHUB_APP_ID") !== undefined,
+    credentialsWritten: pathExists(credentialsFile),
+    credentialsFile,
+    endpoints,
+    githubApp,
   };
 };
 

@@ -441,3 +441,13 @@ export {
   type AskSelection,
   type CheckedCitations,
 } from "./ask.js";
+export {
+  SETUP_DATABASE_STATES,
+  SETUP_GITHUB_APP_STATES,
+  SETUP_LLM_STATES,
+  SETUP_REPOSITORY_STATES,
+  SetupInstallation,
+  SetupProbeResponse,
+  SetupProbeResult,
+  SetupStatusResponse,
+} from "./setup.js";

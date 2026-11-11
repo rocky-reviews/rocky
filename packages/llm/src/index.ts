@@ -79,3 +79,13 @@ export {
   type ProviderPrices,
   type TokenRates,
 } from "./prices.js";
+export {
+  PROBE_MAX_OUTPUT_TOKENS,
+  PROBE_TIMEOUT_MS,
+  probeLlmConfig,
+  probeTargets,
+  type ProbeOptions,
+  type ProbeOutcome,
+  type ProbeResult,
+  type ProbeTarget,
+} from "./probe.js";
