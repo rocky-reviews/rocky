@@ -1,11 +1,12 @@
 import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
-import type { RepositoryAccessCheck } from "@rocky-reviews/core";
+import type { OrgId, RepositoryAccessCheck } from "@rocky-reviews/core";
 import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
 import {
   createGitHubForge,
   createGitHubInstallationReader,
   createGitHubLogin,
   createGitHubReviewPoster,
+  createGitHubTokenClient,
   createGitHubUserAccessReader,
   createGitHubWebhookIngress,
 } from "@rocky-reviews/forge-github";
@@ -17,22 +18,25 @@ import {
   type ProviderAdapters,
 } from "@rocky-reviews/llm";
 import type { Logger } from "@rocky-reviews/log";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import pg from "pg";
 import { buildApp, type ReviewPostingDeps } from "./app.js";
 import type { AskDeps } from "./ask/routes.js";
-import type { AuthDeps } from "./auth/routes.js";
+import { createOneTimeLink } from "./auth/one-time-link.js";
+import { TOKEN_LOGIN_PATH, type AuthDeps } from "./auth/routes.js";
 import {
   askConfigFromEnv,
   authFromEnv,
   ConfigError,
+  connectionModeFromEnv,
   githubAppAuthFromEnv,
   githubAppIdFromEnv,
   isProduction,
   pathExists,
   setupFromEnv,
+  tokenModeFromEnv,
   webhookSecretFromEnv,
   type AskConfig,
   type AuthSetup,
@@ -46,6 +50,10 @@ import { cacheMembershipDenials, createRepositoryAccess } from "./repository-acc
 import { describeTrustProxy, trustProxyFromEnv } from "./security/client-ip.js";
 import { createRateLimits, rateLimitRulesFromEnv } from "./security/rate-limit.js";
 import { authRateLimit, webhookRateLimit } from "./security/route-limits.js";
+import {
+  createTokenConnectionService,
+  type TokenConnectionService,
+} from "./token-mode/connection.js";
 import { loadWebApp, type WebApp } from "./web-app.js";
 import type { WebhookDeps } from "./webhooks.js";
 
@@ -134,6 +142,8 @@ export interface RunningServer {
   readonly webhooks: boolean;
   /** Whether GitHub login and the session API are registered (P7-1). */
   readonly auth: boolean;
+  /** How the server connects to GitHub (P10-4): the App, or one person's token. */
+  readonly connection: "app" | "token";
   /** Whether the GitHub App manifest setup routes are registered (P3-1). */
   readonly githubAppSetup: boolean;
   /** Whether the setup wizard is open (P10-2, `ROCKY_SETUP=true`). */
@@ -175,29 +185,39 @@ export const startServer = async (
   log: Logger,
   options: StartOptions = {},
 ): Promise<RunningServer> => {
+  // P10-4 (ADR 0045): the App (default) or one person's token; token mode reads none of the
+  // App's variables (it refuses them) and is refused on Fly.io, where Rocky Cloud runs.
+  const connection = connectionModeFromEnv(env);
+  const tokenConfig = connection === "token" ? tokenModeFromEnv(env) : undefined;
   const setup = setupFromEnv(env, homedir());
   // P10-2 (ADR 0044): production without an app yet runs the wizard only, so what only the app,
-  // login and webhooks need is not required (nor read) until the app is configured.
-  const setupMode = setup.enabled && setup.production && !setup.appConfigured;
-  const webhookSecret = setupMode ? undefined : webhookSecretFromEnv(env);
-  const authSetup: AuthSetup = setupMode ? { enabled: false } : authFromEnv(env);
+  // login and webhooks need is not required (nor read) until the app is configured. A token-mode
+  // server always runs in full: the wizard's token step needs the database and the sign-in.
+  const setupMode =
+    tokenConfig === undefined && setup.enabled && setup.production && !setup.appConfigured;
+  const appless = setupMode || tokenConfig !== undefined;
+  const webhookSecret = appless ? undefined : webhookSecretFromEnv(env);
+  const authSetup: AuthSetup = appless ? { enabled: false } : authFromEnv(env);
   // P7-3 (ADR 0025): limits and the trusted proxy are checked before anything opens.
   const trustProxy = trustProxyFromEnv(env);
   const rateLimits = createRateLimits({ rules: rateLimitRulesFromEnv(env), trustProxy });
-  const appId = setupMode ? undefined : githubAppIdFromEnv(env);
-  const appAuth = setupMode ? undefined : githubAppAuthFromEnv(env);
-  const askConfig: AskConfig = setupMode ? { enabled: false } : askConfigFromEnv(env);
+  const appId = appless ? undefined : githubAppIdFromEnv(env);
+  const appAuth = appless ? undefined : githubAppAuthFromEnv(env);
+  // Ask reads code through the App's installation tokens (P9-2): off in token mode for now.
+  const askConfig: AskConfig = appless ? { enabled: false } : askConfigFromEnv(env);
   const webDir = env["ROCKY_WEB_DIR"];
   const web: WebApp | undefined =
     webDir === undefined || webDir === "" ? undefined : loadWebApp(webDir);
   let keys;
-  if (authSetup.enabled) {
+  if (authSetup.enabled || tokenConfig !== undefined) {
     try {
       keys = localKeyWrapperFromEnv(env);
     } catch (error) {
       if (!(error instanceof CryptoError)) throw error;
       throw new ConfigError(
-        "GitHub login stores user tokens encrypted: set ROCKY_KEK_KEYS (and ROCKY_KEK_CURRENT) (ADR 0006)",
+        tokenConfig === undefined
+          ? "GitHub login stores user tokens encrypted: set ROCKY_KEK_KEYS (and ROCKY_KEK_CURRENT) (ADR 0006)"
+          : "token mode stores the personal access token encrypted: set ROCKY_KEK_KEYS (and ROCKY_KEK_CURRENT) (ADR 0006)",
       );
     }
   }
@@ -231,6 +251,26 @@ export const startServer = async (
     log.warn({ errorCode: errorCode(error) ?? "unknown" }, "database unreachable at boot");
   }
 
+  // P10-4: the token connection, shared by the wizard's token step, the connection API, the
+  // syncs on open, the diff reader and the access check. The token never leaves it but to GitHub.
+  let tokenService: TokenConnectionService | undefined;
+  /** After a token is stored or cleared: the access check's cached answers for the member. */
+  let onTokenChanged: ((orgId: OrgId, memberId: string) => void) | undefined;
+  if (tokenConfig !== undefined && keys !== undefined) {
+    tokenService = createTokenConnectionService({
+      db: createDb({ pool }),
+      keys,
+      client: createGitHubTokenClient({ api: tokenConfig.endpoints.api }),
+      log,
+      forge: "github",
+      analysisAuto: tokenConfig.analysisAuto,
+      onMemberTokenChanged: (orgId, memberId) => onTokenChanged?.(orgId, memberId),
+    });
+    log.warn(
+      "ROCKY_GITHUB_CONNECTION=token: connected through one person's personal access token (no webhooks; pull requests are read when the inbox opens or on Sync)",
+    );
+  }
+
   let setupWizard: SetupWizardDeps | undefined;
   if (setup.enabled && setupSessions !== undefined) {
     const clock = { now: () => new Date() };
@@ -257,7 +297,26 @@ export const startServer = async (
           : undefined,
         ...(app === undefined ? {} : { app }),
         ...(setup.appConfigured ? { db: createDb({ pool }) } : {}),
+        ...(tokenService === undefined
+          ? {}
+          : {
+              tokenMode: {
+                db: createDb({ pool }),
+                describeToken: (orgId: OrgId) => tokenService.describeToken(orgId),
+              },
+            }),
       }),
+      ...(tokenService === undefined
+        ? {}
+        : {
+            tokenMode: {
+              save: (token: string) => tokenService.saveToken(token),
+              // The login session for the token's owner (P10-4): `registerAuth` decorates the
+              // app with it, so it is read per request, after the app is built.
+              signIn: async (request: FastifyRequest) =>
+                (await request.server.sessionAuth?.issueTokenOwnerSession(request)) ?? null,
+            },
+          }),
     };
     if (setupMode) {
       log.warn(
@@ -286,6 +345,8 @@ export const startServer = async (
   }
 
   let auth: AuthDeps | undefined;
+  /** Token mode: the one-time sign-in link's token, printed once the server listens. */
+  let signInToken: string | undefined;
   let reviewPosting: ReviewPostingDeps | undefined;
   let repositoryAccess: RepositoryAccessCheck | undefined;
   let pullRequestDiffs: PullRequestDiffReader | undefined;
@@ -372,6 +433,58 @@ export const startServer = async (
     // Posting as the user (P3-5): the one poster in the process, held by the review routes only.
     // They answer 503 without the repository access check above.
     reviewPosting = { poster: createGitHubReviewPoster({ api: config.endpoints.api }), keys };
+  } else if (tokenConfig !== undefined && tokenService !== undefined && keys !== undefined) {
+    // P10-4 (ADR 0045): one user, signed in through a one-time link printed at boot; the access
+    // check asks GitHub as that user with the stored token (no installation, no membership step),
+    // the diff is read on the token, and reviews post as the token's owner.
+    const db = createDb({ pool });
+    const service = tokenService;
+    if (tokenConfig.sessionSecret === undefined) {
+      log.warn("ROCKY_SESSION_SECRET is not set: generated for this process (development only)");
+    }
+    if (!tokenConfig.cookieSecure) {
+      log.warn("ROCKY_PUBLIC_URL is http on loopback: session cookies are not Secure");
+    }
+    const secret =
+      tokenConfig.sessionSecret === undefined
+        ? randomBytes(32)
+        : Buffer.from(tokenConfig.sessionSecret, "utf8");
+    const clock = { now: () => new Date() };
+    const access = createRepositoryAccess({
+      db,
+      keys,
+      tokenMode: true,
+      reader: createGitHubUserAccessReader({
+        api: tokenConfig.endpoints.api,
+        // Never asked: a token-mode locator has no installation (membership is the App's step).
+        collaborators: {
+          isCollaborator: () => Promise.reject(new Error("token mode: no installation")),
+        },
+      }),
+      log,
+    });
+    repositoryAccess = access;
+    onTokenChanged = (orgId, memberId) => access.invalidateMember(orgId, memberId);
+    pullRequestDiffs = createPullRequestDiffReader({
+      openByOrg: (orgId, repositoryId) => service.openRepository(orgId as OrgId, repositoryId),
+      clock,
+    });
+    signInToken = randomBytes(32).toString("base64url");
+    auth = {
+      publicUrl: tokenConfig.publicUrl,
+      cookieSecure: tokenConfig.cookieSecure,
+      secret,
+      tokenMode: { link: createOneTimeLink(signInToken), forge: "github" },
+      db,
+      keys,
+      rateLimit: authRateLimit(rateLimits, { secret, cookieSecure: tokenConfig.cookieSecure }),
+      onMemberTokenChanged: (orgId, memberId) => access.invalidateMember(orgId, memberId),
+    };
+    reviewPosting = {
+      poster: createGitHubReviewPoster({ api: tokenConfig.endpoints.api }),
+      keys,
+    };
+    log.info("ROCKY_GITHUB_CONNECTION=token: Ask is off (it reads code through the GitHub App)");
   } else if (!setupMode) {
     log.warn("GITHUB_APP_CLIENT_ID is not set: GitHub login disabled (development only)");
   }
@@ -390,6 +503,7 @@ export const startServer = async (
     ...(repositoryAccess === undefined ? {} : { repositoryAccess }),
     ...(pullRequestDiffs === undefined ? {} : { pullRequestDiffs }),
     ...(ask === undefined ? {} : { ask }),
+    ...(tokenService === undefined ? {} : { tokenMode: { connection: tokenService } }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.
@@ -412,14 +526,25 @@ export const startServer = async (
       setupMode,
       repositoryAccess: repositoryAccess !== undefined,
       web: web !== undefined,
+      connection,
     },
     "server listening",
   );
+
   if (setup.enabled && setupToken !== undefined) {
     const url = new URL(WIZARD_START, setup.publicUrl);
     url.searchParams.set("token", setupToken);
     (options.announce ?? announceToTerminal)(
       `\nRocky setup is open. Open this one-time URL in your browser (do not share it):\n  ${url.href}\n`,
+    );
+  }
+  if (signInToken !== undefined && tokenConfig !== undefined) {
+    // Token mode's sign-in (P10-4, ADR 0045 §3): to the terminal, never the logger, like the
+    // setup link. One use; every restart prints a new one.
+    const url = new URL(TOKEN_LOGIN_PATH, tokenConfig.publicUrl);
+    url.searchParams.set("token", signInToken);
+    (options.announce ?? announceToTerminal)(
+      `\nRocky sign-in (personal token mode). Open this one-time URL in your browser (do not share it; restart the server for a new one):\n  ${url.href}\n`,
     );
   }
 
@@ -431,6 +556,7 @@ export const startServer = async (
     pool,
     webhooks: webhooks !== undefined,
     auth: auth !== undefined,
+    connection,
     githubAppSetup: githubAppSetup !== undefined,
     setupWizard: setupWizard !== undefined,
     setupMode,

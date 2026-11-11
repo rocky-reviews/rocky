@@ -111,6 +111,7 @@ describe("GitHub App check (P10-2)", () => {
       createBlocked: null,
       credentialsFile: "/setup/github-app.env",
       installUrl: null,
+      token: null,
     });
     const blocked = await createSetupChecks(
       base({ manifest: { webhookUrl: undefined } }),
@@ -169,6 +170,81 @@ describe("GitHub App check (P10-2)", () => {
     expect(other).toMatchObject({ state: "check_failed", error: "internal_error" });
     const noKey = await createSetupChecks(base({ appConfigured: true })).githubApp();
     expect(noKey).toMatchObject({ state: "check_failed", error: "private_key_missing" });
+  });
+});
+
+describe("token mode (P10-4)", () => {
+  const ORG = "0fd9c2a0-5e1f-4b1e-9f3a-8d7c6b5a4e3d" as OrgId;
+  const described = {
+    login: "solo-dev",
+    forgeUserId: 7001,
+    kind: "fine_grained" as const,
+    expiresAt: null,
+    savedAt: "2026-11-11T10:00:00.000Z",
+    warnings: ["no_expiry" as const],
+  };
+  const progress = {
+    repositories: 1,
+    pullRequests: 3,
+    analyses: { queued: 0, running: 1, awaitingApproval: 0, done: 2, failed: 0 },
+    latestDone: { fullName: "solo-dev/notes", number: 4 },
+  };
+  const tokenMode = (org: OrgId | null, token: typeof described | null, failing = false) =>
+    base({
+      tokenMode: {
+        db: {
+          tokenOrg: async () => {
+            if (failing) throw new Error("connection refused");
+            return org === null ? null : { orgId: org, accountId: 7001 };
+          },
+          withOrg: (async () => progress) as never,
+        },
+        describeToken: async () => token,
+      },
+    });
+
+  it("asks for a token, then describes the saved one (never its value), offering no App flow", async () => {
+    expect(await createSetupChecks(tokenMode(null, null)).githubApp()).toEqual({
+      state: "token_required",
+      error: null,
+      createPath: null,
+      createBlocked: null,
+      credentialsFile: "/setup/github-app.env",
+      installUrl: null,
+      token: null,
+    });
+    // An org whose token was removed asks again.
+    expect(await createSetupChecks(tokenMode(ORG, null)).githubApp()).toMatchObject({
+      state: "token_required",
+    });
+    expect(await createSetupChecks(tokenMode(ORG, described)).githubApp()).toMatchObject({
+      state: "token_connected",
+      createPath: null,
+      token: described,
+    });
+    expect(await createSetupChecks(tokenMode(null, null, true)).githubApp()).toMatchObject({
+      state: "check_failed",
+      error: "database",
+    });
+  });
+
+  it("reports the token org's progress as the first repository step", async () => {
+    expect(await createSetupChecks(tokenMode(null, null)).repositories()).toEqual({
+      state: "waiting_for_token",
+      error: null,
+      installations: [],
+    });
+    expect(await createSetupChecks(tokenMode(ORG, described)).repositories()).toEqual({
+      state: "analysed",
+      error: null,
+      installations: [
+        { account: "solo-dev", kind: "user", suspended: false, ready: true, ...progress },
+      ],
+    });
+    expect(await createSetupChecks(tokenMode(null, null, true)).repositories()).toMatchObject({
+      state: "check_failed",
+      error: "database",
+    });
   });
 });
 

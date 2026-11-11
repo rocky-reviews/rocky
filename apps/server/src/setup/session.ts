@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import type { FastifyRequest } from "fastify";
 import {
   cookieName,
@@ -11,6 +11,9 @@ import {
   serializeCookie,
   sha256,
 } from "../auth/cookies.js";
+import { createOneTimeLink } from "../auth/one-time-link.js";
+
+export { MAX_TOKEN_FAILURES, MAX_TRACKED_CLIENTS } from "../auth/one-time-link.js";
 
 /**
  * The setup session (P3-1, extended by P10-2; ADR 0008 and 0044). The server prints a one-time
@@ -34,10 +37,6 @@ import {
 export const SETUP_COOKIE = "rocky_setup";
 /** A setup session lasts one hour (GitHub's manifest code also lives one hour). */
 export const SETUP_SESSION_TTL_MS = 60 * 60 * 1000;
-/** Wrong setup tokens tolerated per client address before it is locked until a restart. */
-export const MAX_TOKEN_FAILURES = 20;
-/** Client addresses whose failures are remembered; the oldest is forgotten first. */
-export const MAX_TRACKED_CLIENTS = 1000;
 
 export type RedeemResult =
   | { readonly ok: true; readonly cookie: string }
@@ -86,20 +85,8 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
   const secure = options.publicUrl.protocol === "https:";
   const name = cookieName(SETUP_COOKIE, secure);
   const origin = options.publicUrl.origin;
-  const tokenHash = sha256(options.token);
+  const link = createOneTimeLink(options.token);
   const csrfKey = randomBytes(32);
-  let tokenUsed = false;
-  /** Client address key → wrong tokens; insertion order is age (oldest first). */
-  const failures = new Map<string, number>();
-  const fail = (client: string): void => {
-    const count = (failures.get(client) ?? 0) + 1;
-    failures.delete(client);
-    if (failures.size >= MAX_TRACKED_CLIENTS) {
-      const oldest = failures.keys().next().value;
-      if (oldest !== undefined) failures.delete(oldest);
-    }
-    failures.set(client, count);
-  };
   let closed = false;
   /** sha256(cookie) hex → expiry; the cookie value itself is never stored. */
   const sessions = new Map<string, number>();
@@ -120,16 +107,8 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
 
   return {
     redeem: (token, client) => {
-      // Hash both sides to a fixed length, then compare in constant time. The token is 256-bit,
-      // so guessing is hopeless; the per-client lockout and the rate limit still bound attempts.
-      const locked = (failures.get(client) ?? 0) >= MAX_TOKEN_FAILURES;
-      if (locked) return { ok: false, reason: "token_locked" };
-      if (token === null) return { ok: false, reason: "bad_token" };
-      if (tokenUsed || !timingSafeEqual(sha256(token), tokenHash)) {
-        fail(client);
-        return { ok: false, reason: "bad_token" };
-      }
-      tokenUsed = true;
+      const outcome = link.redeem(token, client);
+      if (outcome !== "redeemed") return { ok: false, reason: outcome };
       const session = randomToken();
       sessions.set(sha256(session).toString("hex"), now() + SETUP_SESSION_TTL_MS);
       return {
@@ -165,7 +144,7 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
     },
     close: () => {
       sessions.clear();
-      tokenUsed = true;
+      link.burn();
       closed = true;
     },
     get closed() {

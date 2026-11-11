@@ -25,7 +25,8 @@ import type { ActiveMember, SessionAuth, SessionContext } from "./routes.js";
  * session, never from the request. Denials are fixed JSON answers and a log line with the reason
  * and permission only:
  *
- *   401 { error: "unauthenticated" }  no live session
+ *   401 { error: "unauthenticated" }  no live session (token mode, P10-4, adds
+ *                                     `signIn: "token_link"`: there is no GitHub login to offer)
  *   409 { error: "no_active_org" }    a session, but no org chosen (or it was cut from it)
  *   403 { error: "not_a_member" }     the active org's member row is gone, removed, or the org is
  *                                     being deleted
@@ -96,6 +97,7 @@ const deny = (
   status: 401 | 403 | 409,
   error: "unauthenticated" | "no_active_org" | "not_a_member" | "forbidden",
   permission?: Permission,
+  signIn?: SessionAuth["signIn"],
 ) => {
   request.log.info(
     {
@@ -110,7 +112,11 @@ const deny = (
   return reply
     .code(status)
     .header("cache-control", "no-store")
-    .send(status === 401 ? { error, authenticated: false } : { error });
+    .send(
+      status === 401
+        ? { error, authenticated: false, ...(signIn === undefined ? {} : { signIn }) }
+        : { error },
+    );
 };
 
 const asArray = <T>(value: T | readonly T[] | undefined): T[] =>
@@ -134,7 +140,9 @@ export const registerAccessPolicy = (
       const auth = sessionAuth();
       if (policy.kind === "session") {
         const session = auth === undefined ? null : await auth.authenticate(request);
-        if (session === null) return deny(request, reply, 401, "unauthenticated");
+        if (session === null) {
+          return deny(request, reply, 401, "unauthenticated", undefined, auth?.signIn);
+        }
         request.access = { session };
         return undefined;
       }

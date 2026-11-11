@@ -1,4 +1,9 @@
-import { ForgeReadError, type SetupStatusResponse } from "@rocky-reviews/core";
+import {
+  ForgeReadError,
+  type ConnectionToken,
+  type OrgId,
+  type SetupStatusResponse,
+} from "@rocky-reviews/core";
 import { checkDatabaseSetup, loadOrgSetupProgress, type Db } from "@rocky-reviews/db";
 import type { GitHubEndpoints, GitHubInstallationReader } from "@rocky-reviews/forge-github";
 import {
@@ -50,6 +55,14 @@ export interface SetupCheckOptions {
   readonly app?: GitHubInstallationReader;
   /** The application database, once the app is configured (installations → orgs → progress). */
   readonly db?: Pick<Db, "withOrg" | "sessions">;
+  /**
+   * Token mode (P10-4, ADR 0045): the GitHub step is the personal token, described without its
+   * value, and the first repository step reads the token org's progress.
+   */
+  readonly tokenMode?: {
+    readonly db: Pick<Db, "withOrg" | "tokenOrg">;
+    readonly describeToken: (orgId: OrgId) => Promise<ConnectionToken | null>;
+  };
 }
 
 const MAX_DETAILS = 20;
@@ -108,7 +121,33 @@ export const createSetupChecks = (options: SetupCheckOptions): SetupChecks => {
     credentialsFile: options.credentialsFile,
   });
 
+  /** Token mode: the token org and its saved token, or `null` before the first save. */
+  const tokenState = async (): Promise<{ orgId: OrgId; token: ConnectionToken | null } | null> => {
+    const mode = options.tokenMode;
+    if (mode === undefined) return null;
+    const org = await mode.db.tokenOrg("github");
+    if (org === null) return null;
+    return { orgId: org.orgId, token: await mode.describeToken(org.orgId) };
+  };
+
   const githubApp: SetupChecks["githubApp"] = async () => {
+    if (options.tokenMode !== undefined) {
+      const base = {
+        error: null,
+        createPath: null,
+        createBlocked: null,
+        credentialsFile: options.credentialsFile,
+        installUrl: null,
+      };
+      try {
+        const state = await tokenState();
+        return state?.token == null
+          ? { state: "token_required", ...base, token: null }
+          : { state: "token_connected", ...base, token: state.token };
+      } catch {
+        return { ...base, state: "check_failed", error: "database", token: null };
+      }
+    }
     if (!options.appConfigured) {
       if (options.credentialsWritten()) {
         // The manifest routes are closed now: the next step is the restart, not a create link.
@@ -119,14 +158,22 @@ export const createSetupChecks = (options: SetupCheckOptions): SetupChecks => {
           createBlocked: null,
           credentialsFile: options.credentialsFile,
           installUrl: null,
+          token: null,
         };
       }
-      return { state: "not_created", error: null, ...createFields(), installUrl: null };
+      return {
+        state: "not_created",
+        error: null,
+        ...createFields(),
+        installUrl: null,
+        token: null,
+      };
     }
     const base = {
       createPath: null,
       createBlocked: null,
       credentialsFile: options.credentialsFile,
+      token: null,
     };
     if (options.app === undefined) {
       return { state: "check_failed", error: "private_key_missing", ...base, installUrl: null };
@@ -177,6 +224,34 @@ export const createSetupChecks = (options: SetupCheckOptions): SetupChecks => {
     probeLlmConfig(llmConfigFromEnv(options.env), options.adapters, envSecrets(options.env));
 
   const repositories: SetupChecks["repositories"] = async () => {
+    if (options.tokenMode !== undefined) {
+      const mode = options.tokenMode;
+      try {
+        const state = await tokenState();
+        if (state?.token == null) {
+          return { state: "waiting_for_token", error: null, installations: [] };
+        }
+        const progress = await mode.db.withOrg(state.orgId, loadOrgSetupProgress);
+        return {
+          state: progress.latestDone === null ? "installed" : "analysed",
+          error: null,
+          installations: [
+            {
+              account: state.token.login,
+              kind: "user",
+              suspended: false,
+              ready: true,
+              repositories: progress.repositories,
+              pullRequests: progress.pullRequests,
+              analyses: progress.analyses,
+              latestDone: progress.latestDone,
+            },
+          ],
+        };
+      } catch {
+        return { state: "check_failed", error: "database", installations: [] };
+      }
+    }
     if (!options.appConfigured) {
       return { state: "waiting_for_app", error: null, installations: [] };
     }

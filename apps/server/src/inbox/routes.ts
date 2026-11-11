@@ -5,6 +5,7 @@ import {
   type BulkApproveRefusal,
   type InboxFacts,
   type InboxItem,
+  type InboxSync,
   MAX_INBOX_ITEMS,
   type PullRequestApprover,
   readInboxDocument,
@@ -52,7 +53,20 @@ export interface InboxRoutesDeps {
   readonly db: Pick<Db, "withOrg">;
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
   readonly approver?: PullRequestApprover;
+  /**
+   * Token mode (P10-4, ADR 0045 §5): opening the inbox syncs the org's repositories with GitHub
+   * first (at most once a minute, waiting a few seconds), and the answer says how that went.
+   */
+  readonly syncOnOpen?: (orgId: ActiveMember["orgId"]) => Promise<InboxSync>;
 }
+
+/** A sync that threw (a database error, not GitHub's answer): the inbox still answers. */
+const SYNC_FAILED: InboxSync = {
+  state: "failed",
+  lastSyncedAt: null,
+  problem: "failed",
+  retryAt: null,
+};
 
 /** Access checks run at once at most (each may cost GitHub requests on a cache miss). */
 const ACCESS_CONCURRENCY = 4;
@@ -162,6 +176,15 @@ export const registerInboxRoutes = (app: FastifyInstance, deps: InboxRoutesDeps)
           request.log.warn({ inbox: { outcome: "access_check_unavailable" } }, "inbox");
           return json(reply, 503, { error: "access_check_unavailable" });
         }
+        let sync: InboxSync | undefined;
+        if (deps.syncOnOpen !== undefined) {
+          try {
+            sync = await deps.syncOnOpen(me.orgId);
+          } catch {
+            request.log.warn({ inbox: { outcome: "sync_failed", orgId: me.orgId } }, "inbox");
+            sync = SYNC_FAILED;
+          }
+        }
         const { rows, truncated, viewer } = await db.withOrg(me.orgId, async (tx) => ({
           ...(await listInboxRows(tx, { limit: MAX_INBOX_ITEMS })),
           viewer: await memberLogin(tx, me.memberId),
@@ -183,7 +206,11 @@ export const registerInboxRoutes = (app: FastifyInstance, deps: InboxRoutesDeps)
           },
           "inbox",
         );
-        return json(reply, 200, { items: sortInbox(items), truncated });
+        return json(reply, 200, {
+          items: sortInbox(items),
+          truncated,
+          ...(sync === undefined ? {} : { sync }),
+        });
       },
     );
 

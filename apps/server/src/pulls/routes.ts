@@ -46,6 +46,14 @@ export interface PullRequestPageRoutesDeps {
   readonly db: Pick<Db, "withOrg">;
   /** The repository access check (P3-6); without it the route answers 503. */
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
+  /**
+   * Token mode (P10-4, ADR 0045 §5): opening a pull request re-reads it from GitHub first (at
+   * most once a minute per pull request; failures leave the mirror as it is).
+   */
+  readonly syncPullRequest?: (
+    orgId: ActiveMember["orgId"],
+    target: { readonly forgeRepoId: number; readonly number: number },
+  ) => Promise<void>;
 }
 
 /** `analyses.error_code`'s shape (ADR 0019 §3 amendment). */
@@ -188,9 +196,11 @@ export const registerPullRequestPageRoutes = (
           log(request, "access_check_unavailable", { orgId: me.orgId });
           return json(reply, 503, { error: "access_check_unavailable" });
         }
-        const row = await db.withOrg(me.orgId, (tx) =>
-          loadPullRequestPage(tx, { ...target, memberId: me.memberId }),
-        );
+        const load = () =>
+          db.withOrg(me.orgId, (tx) =>
+            loadPullRequestPage(tx, { ...target, memberId: me.memberId }),
+          );
+        let row = await load();
         if (row === null) {
           log(request, "not_found", { orgId: me.orgId });
           return json(reply, 404, { error: "not_found" });
@@ -205,6 +215,14 @@ export const registerPullRequestPageRoutes = (
           log(request, "repository_access_denied", ids);
           // The same answer as an unknown pull request: nothing about a repository they cannot read.
           return json(reply, 404, { error: "not_found" });
+        }
+        if (deps.syncPullRequest !== undefined) {
+          // Only a pull request the mirror holds, of a repository the member may read.
+          await deps.syncPullRequest(me.orgId, {
+            forgeRepoId: row.forgeRepoId,
+            number: target.number,
+          });
+          row = (await load()) ?? row;
         }
         const view = pullRequestPageView(row);
         if (view === null) {

@@ -1,5 +1,8 @@
 import rateLimit from "@fastify/rate-limit";
 import {
+  ConnectionErrorResponse,
+  SaveTokenRequest,
+  SaveTokenResponse,
   SetupProbeResponse,
   SetupStatusResponse,
   type SetupProbeResult,
@@ -28,6 +31,8 @@ import type { SetupSessions } from "./session.js";
  *   GET  /api/setup/status     every step's state (database, GitHub App, LLM, first repository)
  *   POST /api/setup/llm-test   the provider test call (`probeLlmConfig`), one at a time
  *   POST /api/setup/finish     closes setup until the server restarts
+ *   POST /api/setup/token      token mode (P10-4, ADR 0045): validates and stores the personal
+ *                              token, then signs the operator in (a login session cookie)
  *
  * Every route but the page needs the setup session; the POSTs also pass the setup session's CSRF
  * check (same origin, synchronizer token). Answers are validated against the core schemas before
@@ -39,6 +44,7 @@ export const WIZARD_PAGE = "/setup";
 export const STATUS_PATH = "/api/setup/status";
 export const LLM_TEST_PATH = "/api/setup/llm-test";
 export const FINISH_PATH = "/api/setup/finish";
+export const TOKEN_PATH = "/api/setup/token";
 /** A test call spends a little money: at most one per this interval. */
 export const LLM_TEST_INTERVAL_MS = 10_000;
 
@@ -46,6 +52,11 @@ export interface SetupWizardDeps {
   readonly sessions: SetupSessions;
   readonly checks: SetupChecks;
   readonly mode: Status["mode"];
+  /**
+   * Token mode (P10-4): saving the token (validated with GitHub, stored encrypted; never echoed)
+   * and the login session for its owner that the save opens (`Set-Cookie` value).
+   */
+  readonly tokenMode?: SetupTokenDeps;
   /** The built web app's shell, served at `/setup`; absent in development (Vite serves it). */
   readonly page?: WebFile;
   /**
@@ -55,6 +66,20 @@ export interface SetupWizardDeps {
   readonly clientKey?: (request: FastifyRequest) => string;
   readonly now?: () => number;
 }
+
+export interface SetupTokenDeps {
+  readonly save: (
+    token: string,
+  ) => Promise<
+    | { readonly ok: true; readonly token: SaveTokenResponse["token"] }
+    | { readonly ok: false; readonly reason: string; readonly retryAt?: Date }
+  >;
+  readonly signIn: (request: FastifyRequest) => Promise<string | null>;
+}
+
+/** HTTP status per refusal of a token save (shared with the connection routes). */
+export const tokenRefusalStatus = (reason: string): number =>
+  reason === "rate_limited" ? 429 : reason === "forge_unavailable" ? 502 : 422;
 
 const NOT_FOUND = { error: "not_found" } as const;
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -160,6 +185,8 @@ export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps)
       const failed = lastResults?.some((r) => r.outcome !== "ok" && r.outcome !== "answered");
       const body: Status = {
         mode: deps.mode,
+        // P10-4: the wizard leads with the App; with `tokenMode` its GitHub step is the token.
+        connection: deps.tokenMode === undefined ? "app" : "token",
         csrfToken,
         database,
         githubApp,
@@ -224,6 +251,48 @@ export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps)
         }
       },
     );
+
+    const tokenMode = deps.tokenMode;
+    if (tokenMode !== undefined) {
+      /** One save at a time: each one asks GitHub twice. */
+      let saving = false;
+      scope.post(
+        TOKEN_PATH,
+        { config: { policy, csrfExempt: CSRF_EXEMPT_SETUP } },
+        async (request, reply) => {
+          const refused = guard(request, reply, true);
+          if (refused !== undefined) return refused;
+          const parsed = SaveTokenRequest.safeParse(request.body);
+          if (!parsed.success) {
+            return json(reply, 400, { error: "invalid_request", retryAt: null });
+          }
+          if (saving) return json(reply, 409, { error: "busy" });
+          saving = true;
+          try {
+            const result = await tokenMode.save(parsed.data.token);
+            if (!result.ok) {
+              // The reason only: never the token, never GitHub's message.
+              log(request, "info", "token_refused", { reason: result.reason });
+              const body = ConnectionErrorResponse.safeParse({
+                error: result.reason,
+                retryAt: result.retryAt?.toISOString() ?? null,
+              });
+              if (!body.success) return json(reply, 500, { error: "internal", retryAt: null });
+              return json(reply, tokenRefusalStatus(result.reason), body.data);
+            }
+            const checked = SaveTokenResponse.safeParse({ token: result.token });
+            if (!checked.success) return json(reply, 500, { error: "internal", retryAt: null });
+            log(request, "info", "token_saved", { kind: result.token.kind });
+            // The operator proved the setup link; the token's owner is the only user: sign in.
+            const cookie = await tokenMode.signIn(request);
+            if (cookie !== null) void reply.header("set-cookie", cookie);
+            return json(reply, 200, checked.data);
+          } finally {
+            saving = false;
+          }
+        },
+      );
+    }
 
     scope.post(
       FINISH_PATH,
