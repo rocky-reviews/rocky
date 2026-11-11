@@ -50,6 +50,11 @@ export interface WorkerConfig {
   readonly analysis: AnalysisConfig;
   /** The repository index (P9-1, ADR 0040). */
   readonly index: IndexConfig;
+  /**
+   * Token mode (P10-4, ADR 0045): the API base the token orgs' repositories are read from.
+   * Undefined in App mode. The KEK (`ROCKY_KEK_KEYS`) is then required (`main.ts`).
+   */
+  readonly token: { readonly api: URL } | undefined;
 }
 
 export interface IndexConfig {
@@ -146,6 +151,48 @@ export const indexConfigFromEnv = (env: Env, llm: LlmConfig): IndexConfig => {
   };
 };
 
+/** The GitHub App's variables: none may be set in token mode (the server's rule too). */
+const GITHUB_APP_VARIABLES = [
+  "GITHUB_APP_ID",
+  "GITHUB_APP_PRIVATE_KEY",
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_WEBHOOK_SECRET",
+] as const;
+
+/**
+ * `ROCKY_GITHUB_CONNECTION` (P10-4, ADR 0045), as the server reads it: `app` (default) or
+ * `token`, which is refused on Fly.io (Rocky Cloud runs there) and with any App variable set.
+ */
+export const tokenModeFromEnv = (env: Env): { readonly api: URL } | undefined => {
+  const raw = nonEmpty(env, "ROCKY_GITHUB_CONNECTION");
+  if (raw === undefined || raw === "app") return undefined;
+  if (raw !== "token") throw new ConfigError("ROCKY_GITHUB_CONNECTION must be app or token");
+  if ((env["FLY_APP_NAME"] ?? "") !== "") {
+    throw new ConfigError(
+      "ROCKY_GITHUB_CONNECTION=token is for self-hosting only and is refused on Fly.io, where Rocky Cloud runs (FLY_APP_NAME is set)",
+    );
+  }
+  for (const name of GITHUB_APP_VARIABLES) {
+    if (nonEmpty(env, name) !== undefined) {
+      throw new ConfigError(
+        `${name} must be unset with ROCKY_GITHUB_CONNECTION=token: a server connects through the GitHub App or through a token, not both`,
+      );
+    }
+  }
+  const webUrl = nonEmpty(env, "GITHUB_URL");
+  const apiUrl = nonEmpty(env, "GITHUB_API_URL");
+  try {
+    const { api } = githubEndpoints({
+      ...(webUrl === undefined ? {} : { webUrl }),
+      ...(apiUrl === undefined ? {} : { apiUrl }),
+    });
+    return { api };
+  } catch (error) {
+    throw new ConfigError(`GITHUB_URL/GITHUB_API_URL: ${(error as Error).message}`);
+  }
+};
+
 export const githubAppFromEnv = (env: Env): GitHubAppConfig | undefined => {
   const appId = nonEmpty(env, "GITHUB_APP_ID");
   const privateKey = nonEmpty(env, "GITHUB_APP_PRIVATE_KEY");
@@ -196,9 +243,11 @@ export const workerConfigFromEnv = (env: Env): WorkerConfig => {
     if (error instanceof LlmConfigError) throw new ConfigError(error.message);
     throw new ConfigError("ROCKY_LLM_*: invalid LLM configuration");
   }
+  const token = tokenModeFromEnv(env);
   return {
     databaseUrl,
-    githubApp: githubAppFromEnv(env),
+    githubApp: token === undefined ? githubAppFromEnv(env) : undefined,
+    token,
     llm,
     analysis: analysisConfigFromEnv(env),
     index: indexConfigFromEnv(env, llm),

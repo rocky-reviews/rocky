@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { nothingStoredYet, type LlmRoles, type OrgErasers, type OrgId } from "@rocky-reviews/core";
 import { createDb, WORKER_ROLE } from "@rocky-reviews/db";
-import { createGitHubForge } from "@rocky-reviews/forge-github";
+import { CryptoError, localKeyWrapperFromEnv, type KeyWrapper } from "@rocky-reviews/crypto";
+import { createGitHubForge, createGitHubTokenClient } from "@rocky-reviews/forge-github";
 import { createTreeSitterChunker } from "@rocky-reviews/indexer";
 import { createLlmRoles, envSecrets, providerAdapters, usageTargetsFor } from "@rocky-reviews/llm";
 import { createLogger } from "@rocky-reviews/log";
@@ -10,6 +11,7 @@ import { unitKeySaltFor } from "./analysis.js";
 import { ConfigError, databaseLoginHint, loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { heartbeatFileFromEnv, startHeartbeat } from "./heartbeat.js";
 import { startJobs } from "./jobs.js";
+import { createTokenRepositories } from "./token-repositories.js";
 
 const log = createLogger("worker");
 
@@ -21,9 +23,21 @@ const errorCode = (error: unknown): string => {
 
 let config: WorkerConfig;
 let heartbeatFile: string | undefined;
+/** Token mode (P10-4): unwraps the token orgs' data keys to read their stored token. */
+let keys: KeyWrapper | undefined;
 try {
   // Also removes GITHUB_APP_PRIVATE_KEY from process.env once parsed (L6).
   config = loadWorkerConfig(process.env);
+  if (config.token !== undefined) {
+    try {
+      keys = localKeyWrapperFromEnv(process.env);
+    } catch (error) {
+      if (!(error instanceof CryptoError)) throw error;
+      throw new ConfigError(
+        "ROCKY_GITHUB_CONNECTION=token: the worker reads the stored token, set ROCKY_KEK_KEYS (and ROCKY_KEK_CURRENT) as on the server",
+      );
+    }
+  }
   // The container healthcheck's liveness file (P10-1, ADR 0043); unset in development.
   heartbeatFile = heartbeatFileFromEnv(process.env);
 } catch (error) {
@@ -113,6 +127,15 @@ const jobs = startJobs({
       }
     : {}),
   ...(index === undefined ? {} : { index }),
+  ...(config.token === undefined || keys === undefined
+    ? {}
+    : {
+        tokenRepositories: createTokenRepositories({
+          db,
+          keys,
+          client: createGitHubTokenClient({ api: config.token.api }),
+        }),
+      }),
   forge:
     config.githubApp === undefined
       ? undefined
@@ -126,7 +149,9 @@ log.info(
   {
     installationEvents: config.githubApp !== undefined,
     pullRequestEvents: config.githubApp !== undefined,
-    analyses: config.githubApp !== undefined && config.analysis.auto,
+    analyses:
+      (config.githubApp !== undefined || config.token !== undefined) && config.analysis.auto,
+    connection: config.token === undefined ? "app" : "token",
     analysisConcurrency: config.analysis.concurrency,
     analysisOrgConcurrency: config.analysis.orgConcurrency,
     tokenLimit: config.analysis.tokenLimit,
