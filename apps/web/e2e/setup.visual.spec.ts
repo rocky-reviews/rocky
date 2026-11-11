@@ -24,17 +24,58 @@ type State = {
 const STATES: State[] = [
   { id: "setup-fresh", open: (page) => openSetup(page, SETUP_FIXTURES.fresh) },
   { id: "setup-created", open: (page) => openSetup(page, SETUP_FIXTURES.created) },
+  { id: "setup-not-installed", open: (page) => openSetup(page, SETUP_FIXTURES["not-installed"]) },
   { id: "setup-installed", open: (page) => openSetup(page, SETUP_FIXTURES.installed) },
+  { id: "setup-accounts", open: (page) => openSetup(page, SETUP_FIXTURES.accounts) },
   { id: "setup-done", open: (page) => openSetup(page, SETUP_FIXTURES.done) },
   { id: "setup-failures", open: (page) => openSetup(page, SETUP_FIXTURES.failures) },
+  { id: "setup-invalid-llm", open: (page) => openSetup(page, SETUP_FIXTURES["invalid-llm"]) },
+  {
+    id: "setup-testing",
+    open: (page) => openSetup(page, SETUP_FIXTURES.fresh, { holdLlmTest: true }),
+    run: async (page) => {
+      await page.getByRole("button", { name: "Run the test call" }).click();
+      await expect(page.getByRole("button", { name: "Testing…" })).toBeVisible();
+    },
+  },
+  {
+    id: "setup-too-soon",
+    open: (page) => openSetup(page, SETUP_FIXTURES.created, { llmTestStatus: 429 }),
+    run: async (page) => {
+      await page.getByRole("button", { name: "Test again" }).click();
+      await expect(page.getByRole("alert")).toBeVisible();
+    },
+  },
+  {
+    id: "setup-finish-failed",
+    open: (page) => openSetup(page, SETUP_FIXTURES.done, { finishStatus: 500 }),
+    run: async (page) => {
+      await page.getByRole("button", { name: "Finish setup" }).click();
+      await expect(page.getByRole("alert")).toBeVisible();
+    },
+  },
+  {
+    id: "setup-check-failed",
+    open: async (page) => {
+      const api = await openSetup(page, SETUP_FIXTURES.installed);
+      api.setStatus(500);
+    },
+    run: async (page) => {
+      await page.getByRole("button", { name: "Check again" }).click();
+      await expect(page.getByRole("alert")).toBeVisible();
+    },
+  },
   {
     id: "setup-finished",
-    open: (page) => openSetup(page, SETUP_FIXTURES.done),
+    open: (page) => openSetup(page, SETUP_FIXTURES.fresh),
     run: async (page) => {
       await page.getByRole("button", { name: "Finish setup" }).click();
       await expect(page.getByText("Setup is closed.")).toBeVisible();
     },
   },
+  { id: "setup-no-session", open: (page) => openSetup(page, 403) },
+  { id: "setup-closed", open: (page) => openSetup(page, 404) },
+  { id: "setup-load-failed", open: (page) => openSetup(page, 500) },
 ];
 
 for (const state of STATES) {

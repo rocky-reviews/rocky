@@ -6,11 +6,12 @@
  * the AI mark. Every string from the server is a React text child (escaped).
  */
 import type { SetupStatusResponse } from "@rocky-reviews/core";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { BrandMark } from "../shell/BrandMark.js";
 import type { Mode } from "../theme.js";
 import {
   allDone,
+  DATABASE_DETAILS_LABEL,
   DATABASE_TEXT,
   databaseTone,
   githubAppError,
@@ -34,11 +35,21 @@ type Props = {
   mode: Mode;
   onToggleMode: () => void;
   source: SetupSource;
-  /** Loads the status again; resolves once the new one is shown. */
-  onReload: () => Promise<void>;
+  /** Loads the status again; resolves once the new one is shown (`false`: the check failed). */
+  onReload: () => Promise<boolean>;
   /** Setup was closed: the page shows what to do last. */
   onFinished: () => void;
+  /** The last check failed: the steps show the status before it (fix round, item 6). */
+  loadProblem?: boolean;
 };
+
+const COMPOSE_RESTART = [
+  "sudo cat deploy/setup/github-app.env >> deploy/rocky.env",
+  "sudo rm deploy/setup/github-app.env",
+  "docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.setup.yml up -d",
+  "docker compose -f deploy/docker-compose.yml logs server | grep /setup/start | tail -1",
+  "",
+].join("\n");
 
 const DOCS = "https://github.com/rocky-reviews/rocky/blob/main/docs/self-host/setup.md";
 
@@ -85,42 +96,67 @@ const LLM_PROBLEM: Readonly<Record<Exclude<LlmTestResult["kind"], "done">, strin
   error: "The test call could not be started. Try again.",
 };
 
-export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished }: Props) => {
+/** How long an announcement stays in the live region before it is cleared. */
+export const ANNOUNCE_MS = 5_000;
+
+/** `aria-disabled` rather than `disabled`: a disabled button drops focus to the page. */
+const unavailable = (busy: boolean) => (busy ? { "aria-disabled": true as const } : {});
+
+export const Setup = ({
+  status,
+  mode,
+  onToggleMode,
+  source,
+  onReload,
+  onFinished,
+  loadProblem = false,
+}: Props) => {
   const [testing, setTesting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [message, setMessage] = useState("");
   const [problem, setProblem] = useState<{ step: "llm" | "finish"; text: string } | null>(null);
+  const clearTimer = useRef<number | undefined>(undefined);
   const nextMode = mode === "dark" ? "light" : "dark";
   const { database, githubApp, llm, repositories } = status;
 
+  useEffect(() => () => window.clearTimeout(clearTimer.current), []);
+
+  /** Says `text` to screen readers, then clears it (the region is not shown, fix round item 5). */
+  const announce = (text: string) => {
+    window.clearTimeout(clearTimer.current);
+    setMessage(text);
+    if (text !== "") clearTimer.current = window.setTimeout(() => setMessage(""), ANNOUNCE_MS);
+  };
+
   const runTest = async () => {
-    if (testing) return;
+    if (testing || finishing) return;
     setTesting(true);
     setProblem(null);
-    setMessage("Testing the LLM provider…");
+    announce("Testing the LLM provider…");
     const result = await source.testLlm(status.csrfToken);
     await onReload();
     setTesting(false);
     if (result.kind === "done") {
       const ok = result.results.every((r) => outcomeOk(r.outcome));
-      setMessage(ok ? "The LLM provider answered." : "The LLM provider test failed.");
+      announce(ok ? "The LLM provider answered." : "The LLM provider test failed.");
     } else {
-      setMessage("");
+      announce("");
       setProblem({ step: "llm", text: LLM_PROBLEM[result.kind] });
     }
   };
 
   const refresh = async () => {
-    if (refreshing) return;
+    if (refreshing || testing || finishing) return;
     setRefreshing(true);
-    await onReload();
+    const loaded = await onReload();
     setRefreshing(false);
-    setMessage("Status updated.");
+    // A failed check shows its own alert (`loadProblem`).
+    if (loaded) announce("Status updated.");
   };
 
   const finish = async () => {
-    if (finishing) return;
+    if (finishing || testing) return;
     setFinishing(true);
     setProblem(null);
     const ok = await source.finish(status.csrfToken);
@@ -172,28 +208,45 @@ export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished
               type="button"
               className="btn"
               onClick={() => void refresh()}
-              disabled={refreshing}
+              {...unavailable(refreshing || testing || finishing)}
             >
-              <span aria-hidden="true">↻</span> Check again
+              <span aria-hidden="true">↻</span> {refreshing ? "Checking…" : "Check again"}
             </button>
           </div>
+          {loadProblem && (
+            <p className="setup-problem" role="alert">
+              Rocky did not answer the last check; the steps show its last answer. The page keeps
+              checking on its own.
+            </p>
+          )}
+          <p role="status" className="sr-only">
+            {message}
+          </p>
         </section>
-
-        <p role="status" className="inbox-status setup-status">
-          {message}
-        </p>
 
         <ol className="setup-steps">
           <Step n={1} id="setup-db" title="Database" tone={databaseTone(database)}>
             <p>{DATABASE_TEXT[database.state]}</p>
+            {database.state === "migrations_pending" && (
+              <p>
+                Apply them with <code>pnpm db:migrate</code> or, with Docker Compose,{" "}
+                <code>docker compose -f deploy/docker-compose.yml run --rm migrate</code>, then
+                check again.
+              </p>
+            )}
             {database.details.length > 0 && (
-              <ul className="setup-details" aria-label="Details">
-                {database.details.map((d) => (
-                  <li key={d}>
-                    <code>{d}</code>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <p className="setup-details-label" id="setup-db-missing">
+                  {DATABASE_DETAILS_LABEL[database.state]}
+                </p>
+                <ul className="setup-details" aria-labelledby="setup-db-missing">
+                  {database.details.map((d) => (
+                    <li key={d}>
+                      <code>{d}</code>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
           </Step>
 
@@ -226,16 +279,15 @@ export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished
             {githubApp.state === "created" && (
               <>
                 <p>
-                  The app exists and its credentials are in <code>{githubApp.credentialsFile}</code>
-                  . Add them to Rocky&rsquo;s configuration, delete the file, and restart Rocky.
-                  Then open a new setup link from the server&rsquo;s log.
+                  The app exists and its credentials are in <code>{githubApp.credentialsFile}</code>{" "}
+                  (with Docker Compose, that is <code>deploy/setup/github-app.env</code> on the
+                  host). Add them to Rocky&rsquo;s configuration, delete the file and restart Rocky,
+                  then open the new setup link from the server&rsquo;s log. With Docker Compose:
                 </p>
-                <p className="setup-hint">
-                  With Docker Compose:{" "}
-                  <code>sudo cat deploy/setup/github-app.env &gt;&gt; deploy/rocky.env</code>, then{" "}
-                  <code>sudo rm deploy/setup/github-app.env</code> and start the stack again. Do not
-                  install the app before the restart.
-                </p>
+                <pre className="setup-commands">
+                  <code>{COMPOSE_RESTART}</code>
+                </pre>
+                <p className="setup-hint">Do not install the app before the restart.</p>
               </>
             )}
             {githubApp.state === "configured" && (
@@ -255,8 +307,8 @@ export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished
             ) : (
               <>
                 <p>
-                  One short test call per model, with a fixed prompt and a small output limit (a
-                  fraction of a cent). No code is sent.
+                  One short test call per model, with a fixed prompt and a small output limit (about
+                  a cent or two with the default models). No code is sent.
                 </p>
                 <ul className="setup-targets">
                   {llm.targets.map((t) => {
@@ -295,7 +347,7 @@ export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void runTest()}
-                    disabled={testing}
+                    {...unavailable(testing || finishing)}
                   >
                     {testing
                       ? "Testing…"
@@ -328,18 +380,23 @@ export const Setup = ({ status, mode, onToggleMode, source, onReload, onFinished
             Finish
           </h2>
           <p className="setup-note">
-            {allDone(status)
-              ? "Everything works. Close setup: this page and its API stop answering until a restart."
-              : "You can close setup at any time; open it again later with ROCKY_SETUP=true and a restart."}
+            {allDone(status) ? (
+              "Everything works. Close setup: this page and its API stop answering until a restart."
+            ) : (
+              <>
+                You can close setup at any time; open it again later with{" "}
+                <code>ROCKY_SETUP=true</code> and a restart.
+              </>
+            )}
           </p>
           <div className="setup-actions">
             <button
               type="button"
               className={`btn${allDone(status) ? " btn-primary" : ""}`}
               onClick={() => void finish()}
-              disabled={finishing}
+              {...unavailable(finishing || testing)}
             >
-              Finish setup
+              {finishing ? "Finishing…" : "Finish setup"}
             </button>
           </div>
           {problem?.step === "finish" && (
@@ -408,7 +465,7 @@ const Repositories = ({ status }: { status: Status }) => {
                 ? "Suspended on GitHub"
                 : !i.ready
                   ? "Waiting for GitHub's installation event"
-                  : `${plural(i.repositories, "repository", "repositories")} · ${plural(i.pullRequests, "pull request", "pull requests")} · ${plural(i.analyses.done, "analysis", "analyses")} done${i.analyses.running + i.analyses.queued > 0 ? ` · ${i.analyses.running + i.analyses.queued} in progress` : ""}${i.analyses.failed > 0 ? ` · ${i.analyses.failed} failed` : ""}`}
+                  : `${plural(i.repositories, "repository", "repositories")} · ${plural(i.pullRequests, "pull request", "pull requests")} · ${plural(i.analyses.done, "analysis", "analyses")} done${i.analyses.running + i.analyses.queued > 0 ? ` · ${i.analyses.running + i.analyses.queued}\u00a0in progress` : ""}${i.analyses.failed > 0 ? ` · ${i.analyses.failed}\u00a0failed` : ""}`}
             </span>
           </li>
         ))}

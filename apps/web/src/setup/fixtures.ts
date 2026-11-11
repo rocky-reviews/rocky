@@ -126,10 +126,32 @@ export const SETUP_INVALID_LLM: Status = {
   },
 };
 
+/** Restarted with the app, not installed anywhere yet. */
+export const SETUP_NOT_INSTALLED: Status = {
+  ...SETUP_INSTALLED,
+  repositories: { state: "not_installed", error: null, installations: [] },
+};
+
+/** Several accounts: one ready, one whose installation event has not arrived, one suspended. */
+export const SETUP_ACCOUNTS: Status = {
+  ...SETUP_INSTALLED,
+  repositories: {
+    state: "installed",
+    error: null,
+    installations: [
+      INSTALLATION,
+      { ...INSTALLATION, account: "octo-labs", ready: false, repositories: 0, pullRequests: 0 },
+      { ...INSTALLATION, account: "old-team", kind: "user", suspended: true },
+    ],
+  },
+};
+
 export const SETUP_FIXTURES = {
   fresh: SETUP_FRESH,
   created: SETUP_CREATED,
+  "not-installed": SETUP_NOT_INSTALLED,
   installed: SETUP_INSTALLED,
+  accounts: SETUP_ACCOUNTS,
   done: SETUP_DONE,
   failures: SETUP_FAILURES,
   "invalid-llm": SETUP_INVALID_LLM,

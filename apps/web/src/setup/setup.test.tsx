@@ -25,15 +25,16 @@ const source: SetupSource = {
   finish: () => Promise.resolve(true),
 };
 
-const render = (status = SETUP_FRESH) =>
+const render = (status = SETUP_FRESH, loadProblem = false) =>
   renderToStaticMarkup(
     <Setup
       status={status}
       mode="light"
       onToggleMode={() => undefined}
       source={source}
-      onReload={() => Promise.resolve()}
+      onReload={() => Promise.resolve(true)}
       onFinished={() => undefined}
+      loadProblem={loadProblem}
     />,
   );
 
@@ -87,11 +88,52 @@ describe("the setup page (P10-2)", () => {
     expect(html).not.toContain("installations/new");
   });
 
+  it("after creating the app: Waiting (for the restart), the host path, the commands in a block (fix round)", () => {
+    const html = render(SETUP_FIXTURES.created);
+    expect(html).toMatch(
+      /aria-labelledby="setup-app-title"[\s\S]*?status-pill setup-pill tone-waiting">Waiting</,
+    );
+    expect(html).toContain("<code>deploy/setup/github-app.env</code> on the host");
+    expect(html).toMatch(
+      /<pre class="setup-commands"><code>sudo cat deploy\/setup\/github-app.env &gt;&gt; deploy\/rocky.env\nsudo rm deploy\/setup\/github-app.env\n/,
+    );
+  });
+
+  it("the test call's cost is stated as about a cent or two (fix round)", () => {
+    expect(render()).toContain("about a cent or two");
+  });
+
+  it("pending migrations: the list is labelled and the command named (fix round)", () => {
+    const html = render(SETUP_FIXTURES.failures);
+    expect(html).toContain('<p class="setup-details-label" id="setup-db-missing">Missing:</p>');
+    expect(html).toContain('aria-labelledby="setup-db-missing"');
+    expect(html).toContain("<code>pnpm db:migrate</code>");
+    expect(html).toContain("docker compose -f deploy/docker-compose.yml run --rm migrate");
+  });
+
+  it("names ROCKY_SETUP=true as code in the finish note (fix round)", () => {
+    expect(render()).toContain("<code>ROCKY_SETUP=true</code>");
+  });
+
   it("installed: the install link and the counts per account", () => {
     const html = render(SETUP_FIXTURES.installed);
     expect(html).toContain('href="https://github.com/apps/rocky-reviews/installations/new"');
-    expect(html).toContain("1 repository · 1 pull request · 0 analyses done · 1 in progress");
+    // Non-breaking spaces keep each count with its noun (fix round).
+    expect(html).toContain("1 repository · 1 pull request · 0 analyses done · 1 in progress");
     expect(html).toContain("ROCKY_ANALYSIS_AUTO=on");
+  });
+
+  it("a failed check keeps the last status and says so inline (fix round, item 6)", () => {
+    const html = render(SETUP_FRESH, true);
+    expect(html).toContain("Set up Rocky");
+    expect(html).toMatch(/role="alert"[^>]*>Rocky did not answer the last check/);
+    expect(render()).not.toContain("did not answer the last check");
+  });
+
+  it("accounts: waiting for the installation event, and suspended", () => {
+    const html = render(SETUP_FIXTURES.accounts);
+    expect(html).toContain("Waiting for GitHub&#x27;s installation event");
+    expect(html).toContain("Suspended on GitHub");
   });
 
   it("done: links the first analysed pull request and offers to finish", () => {

@@ -315,7 +315,8 @@ describe("GitHub App setup at boot (P3-1)", () => {
         headers: { "x-forwarded-for": address },
       });
     let last = 0;
-    for (let i = 0; i <= SETUP_RATE_LIMIT_PER_MINUTE; i++) last = (await get("203.0.113.9")).statusCode;
+    for (let i = 0; i <= SETUP_RATE_LIMIT_PER_MINUTE; i++)
+      last = (await get("203.0.113.9")).statusCode;
     expect(last).toBe(429);
     expect((await get("198.51.100.7")).statusCode).toBe(403);
   });

@@ -9,8 +9,31 @@ type State =
   | { kind: "ready"; status: SetupStatusResponse }
   | { kind: "no_session" }
   | { kind: "closed" }
-  | { kind: "finished" }
+  | { kind: "finished"; setupMode: boolean }
   | { kind: "failed" };
+
+/** The last words after Finish: focused, so keyboard and screen reader users land on them. */
+const Finished = ({ setupMode }: { setupMode: boolean }) => {
+  const ref = useRef<HTMLParagraphElement>(null);
+  useEffect(() => ref.current?.focus(), []);
+  return (
+    <p role="status" className="setup-finished" tabIndex={-1} ref={ref}>
+      {setupMode ? (
+        <>
+          Setup is closed. Start Rocky again without the setup overlay (
+          <code>docker compose -f deploy/docker-compose.yml up -d</code>; on bare metal, remove{" "}
+          <code>ROCKY_SETUP</code> and restart). Rocky then serves the inbox and GitHub sign-in.
+        </>
+      ) : (
+        <>
+          Setup is closed. Remove <code>ROCKY_SETUP</code> from Rocky&rsquo;s configuration (with
+          Docker Compose, start without <code>docker-compose.setup.yml</code>) and restart.{" "}
+          <a href="/inbox">Go to your inbox</a>.
+        </>
+      )}
+    </p>
+  );
+};
 
 /** While setup is open the page checks again on its own, so installs and analyses show up. */
 export const SETUP_REFRESH_MS = 15_000;
@@ -22,16 +45,27 @@ export const SETUP_REFRESH_MS = 15_000;
 export const SetupPage = ({ source }: { source: SetupSource }) => {
   const { mode, toggle } = useTheme();
   const [state, setState] = useState<State>({ kind: "loading" });
+  const [loadProblem, setLoadProblem] = useState(false);
   const live = useRef(true);
+  /** A status was shown: a failed check keeps it (fix round, item 6). */
+  const shown = useRef(false);
 
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal?: AbortSignal): Promise<boolean> => {
       try {
         const status = parseSetupStatus(await source.load(signal === undefined ? {} : { signal }));
-        if (live.current && signal?.aborted !== true) setState({ kind: "ready", status });
+        if (!live.current || signal?.aborted === true) return false;
+        shown.current = true;
+        setLoadProblem(false);
+        setState({ kind: "ready", status });
+        return true;
       } catch (error) {
-        if (live.current && signal?.aborted !== true)
-          setState({ kind: error instanceof SetupLoadError ? error.reason : "failed" });
+        if (!live.current || signal?.aborted === true) return false;
+        const reason = error instanceof SetupLoadError ? error.reason : "failed";
+        // Only a lost session or a closed setup replaces the wizard; anything else is inline.
+        if (reason === "failed" && shown.current) setLoadProblem(true);
+        else setState({ kind: reason });
+        return false;
       }
     },
     [source],
@@ -62,7 +96,8 @@ export const SetupPage = ({ source }: { source: SetupSource }) => {
         onToggleMode={toggle}
         source={source}
         onReload={() => load()}
-        onFinished={() => setState({ kind: "finished" })}
+        onFinished={() => setState({ kind: "finished", setupMode: state.status.mode === "setup" })}
+        loadProblem={loadProblem}
       />
     );
   return (
@@ -80,11 +115,7 @@ export const SetupPage = ({ source }: { source: SetupSource }) => {
           restart Rocky.
         </p>
       ) : state.kind === "finished" ? (
-        <p role="status">
-          Setup is closed. Remove <code>ROCKY_SETUP</code> from Rocky&rsquo;s configuration (with
-          Docker Compose, start without <code>docker-compose.setup.yml</code>) and restart.{" "}
-          <a href="/inbox">Go to your inbox</a>.
-        </p>
+        <Finished setupMode={state.setupMode} />
       ) : (
         <p role="alert">The setup status could not be loaded. Reload the page to try again.</p>
       )}

@@ -26,16 +26,26 @@ export const DATABASE_TEXT: Readonly<Record<Status["database"]["state"], string>
     "DATABASE_URL logs in with more rights than the server may have (the owner, a superuser, or the worker's login). Give the server its own plain application login.",
   extension_missing:
     "The pgvector extension is not installed in this database. A superuser installs it once (see the provisioning steps).",
-  migrations_pending:
-    "Some migrations have not been applied. Run the migration step (with Docker Compose it runs before the server starts).",
+  migrations_pending: "Some migrations have not been applied.",
+};
+
+/** What the list under the database step is (fix round: the list had no label). */
+export const DATABASE_DETAILS_LABEL: Readonly<Record<Status["database"]["state"], string>> = {
+  ok: "Details:",
+  unreachable: "Details:",
+  login_refused: "Refused because:",
+  extension_missing: "Missing:",
+  migrations_pending: "Missing:",
 };
 
 export const githubAppTone = (g: Status["githubApp"]): Tone =>
   g.state === "configured"
     ? "ok"
-    : g.state === "check_failed" || g.createBlocked !== null
-      ? "failed"
-      : "action";
+    : g.state === "created"
+      ? "waiting" // for the restart with the new credentials
+      : g.state === "check_failed" || g.createBlocked !== null
+        ? "failed"
+        : "action";
 
 export const GITHUB_APP_ERROR: Readonly<Record<string, string>> = {
   private_key_missing: "GITHUB_APP_PRIVATE_KEY is not set, so Rocky cannot act as the app.",
@@ -96,7 +106,7 @@ export const repositoriesTone = (r: Status["repositories"]): Tone =>
         : "action";
 
 export const plural = (n: number, one: string, many: string): string =>
-  `${n} ${n === 1 ? one : many}`;
+  `${n}\u00a0${n === 1 ? one : many}`;
 
 /** Where Rocky shows a pull request: GitHub's own path shape (`/owner/repo/pull/7`). */
 export const pullPath = (fullName: string, number: number): string | null => {
