@@ -9,7 +9,12 @@ import { LlmConfigError } from "@rocky-reviews/llm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { CSRF_EXEMPT_SETUP } from "../auth/csrf.js";
 import { publicRoute } from "../auth/policy.js";
-import { sendSetupPage, STYLE, SETUP_RATE_LIMIT_PER_MINUTE } from "../github-app-setup.js";
+import {
+  peerAddress,
+  sendSetupPage,
+  STYLE,
+  SETUP_RATE_LIMIT_PER_MINUTE,
+} from "../github-app-setup.js";
 import { pageCsp } from "../security/headers.js";
 import type { WebFile } from "../web-app.js";
 import type { SetupChecks } from "./checks.js";
@@ -43,6 +48,11 @@ export interface SetupWizardDeps {
   readonly mode: Status["mode"];
   /** The built web app's shell, served at `/setup`; absent in development (Vite serves it). */
   readonly page?: WebFile;
+  /**
+   * The client address key (`RateLimits.clientKey`: `ROCKY_TRUST_PROXY` decides which address);
+   * defaults to the socket's peer. Keys the rate limit and the token lockout.
+   */
+  readonly clientKey?: (request: FastifyRequest) => string;
   readonly now?: () => number;
 }
 
@@ -51,6 +61,7 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 
 export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps): void => {
   const now = deps.now ?? Date.now;
+  const clientKey = deps.clientKey ?? peerAddress;
   let probing = false;
   let lastProbeAt = -Infinity;
   let lastResults: SetupProbeResult[] | null = null;
@@ -79,7 +90,11 @@ export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps)
   };
 
   void app.register(async (scope) => {
-    await scope.register(rateLimit, { max: SETUP_RATE_LIMIT_PER_MINUTE, timeWindow: 60_000 });
+    await scope.register(rateLimit, {
+      max: SETUP_RATE_LIMIT_PER_MINUTE,
+      timeWindow: 60_000,
+      keyGenerator: clientKey,
+    });
     scope.addHook("onRequest", async (_request, reply) => {
       if (deps.sessions.closed) return reply.code(404).send(NOT_FOUND);
       return undefined;
@@ -94,7 +109,7 @@ export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps)
       const query = request.query as Record<string, unknown>;
       const raw = query["token"];
       const token = typeof raw === "string" && TOKEN.test(raw) ? raw : null;
-      const redeemed = deps.sessions.redeem(token);
+      const redeemed = deps.sessions.redeem(token, clientKey(request));
       if (!redeemed.ok) {
         log(request, "warn", redeemed.reason);
         return sendSetupPage(
@@ -113,7 +128,18 @@ export const registerSetupWizard = (app: FastifyInstance, deps: SetupWizardDeps)
     });
 
     scope.get(WIZARD_PAGE, { config: { policy } }, async (_request, reply) => {
-      if (deps.page === undefined) return reply.code(404).send(NOT_FOUND);
+      if (deps.page === undefined) {
+        // Development: Vite serves the page. Reached here, the link pointed at the server itself.
+        void reply
+          .header("content-security-policy", pageCsp({ style: STYLE }))
+          .header("cache-control", "no-store");
+        return sendSetupPage(
+          reply,
+          404,
+          "The setup page is served by Vite",
+          "<p>This server has no built web app (<code>ROCKY_WEB_DIR</code>). Under <code>pnpm dev</code>, set <code>ROCKY_PUBLIC_URL=http://127.0.0.1:5173</code> (the Vite origin, which proxies the setup routes here), restart the server and open the new link it prints.</p>",
+        );
+      }
       return reply
         .header("content-type", deps.page.contentType)
         .header("cache-control", "no-store")

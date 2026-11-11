@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSetupSessions,
   MAX_TOKEN_FAILURES,
+  MAX_TRACKED_CLIENTS,
   SETUP_SESSION_TTL_MS,
   type SetupSessions,
 } from "./session.js";
@@ -63,13 +64,41 @@ describe("setup sessions (P10-2)", () => {
     expect(sessions.sessionOf(request({ cookie: `__Host-rocky_setup=${value}` }))).toBeDefined();
   });
 
-  it("locks redemption after too many wrong tokens", () => {
+  it("locks redemption for a client after too many wrong tokens from it", () => {
     const sessions = createSetupSessions({ token, publicUrl: HTTP });
     for (let i = 0; i < MAX_TOKEN_FAILURES; i++) {
-      expect(sessions.redeem(randomBytes(32).toString("base64url")).ok).toBe(false);
+      expect(sessions.redeem(randomBytes(32).toString("base64url"), "203.0.113.9").ok).toBe(false);
     }
-    expect(sessions.redeem(token)).toEqual({ ok: false, reason: "token_locked" });
-    expect(sessions.redeem(null)).toEqual({ ok: false, reason: "token_locked" });
+    expect(sessions.redeem(token, "203.0.113.9")).toEqual({ ok: false, reason: "token_locked" });
+    expect(sessions.redeem(null, "203.0.113.9")).toEqual({ ok: false, reason: "token_locked" });
+  });
+
+  it("does not lock out another client (fix round: no global lockout)", () => {
+    const sessions = createSetupSessions({ token, publicUrl: HTTP });
+    for (let i = 0; i < MAX_TOKEN_FAILURES * 2; i++) {
+      sessions.redeem(randomBytes(32).toString("base64url"), "203.0.113.9");
+    }
+    expect(sessions.redeem(token, "198.51.100.7").ok).toBe(true);
+  });
+
+  it("does not count a missing or malformed token as a failure (crawlers)", () => {
+    const sessions = createSetupSessions({ token, publicUrl: HTTP });
+    for (let i = 0; i < MAX_TOKEN_FAILURES * 2; i++) {
+      expect(sessions.redeem(null, "203.0.113.9")).toEqual({ ok: false, reason: "bad_token" });
+    }
+    expect(sessions.redeem(token, "203.0.113.9").ok).toBe(true);
+  });
+
+  it("bounds the clients it remembers (the oldest is forgotten first)", () => {
+    const sessions = createSetupSessions({ token, publicUrl: HTTP });
+    for (let i = 0; i < MAX_TOKEN_FAILURES; i++) {
+      sessions.redeem(randomBytes(32).toString("base64url"), "203.0.113.9");
+    }
+    for (let i = 0; i < MAX_TRACKED_CLIENTS; i++) {
+      sessions.redeem(randomBytes(32).toString("base64url"), `client-${i}`);
+    }
+    // The rate limit still bounds a forgotten client's tries; the token is 256-bit.
+    expect(sessions.redeem(token, "203.0.113.9").ok).toBe(true);
   });
 
   it("expires sessions after an hour", () => {

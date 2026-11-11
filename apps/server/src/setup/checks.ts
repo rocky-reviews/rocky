@@ -10,6 +10,7 @@ import {
   type ProbeResult,
   type ProviderAdapters,
 } from "@rocky-reviews/llm";
+import { scrubSecrets } from "@rocky-reviews/log";
 import type pg from "pg";
 
 /**
@@ -38,7 +39,11 @@ export interface SetupCheckOptions {
   readonly endpoints: GitHubEndpoints;
   readonly credentialsFile: string;
   readonly appConfigured: boolean;
-  readonly credentialsWritten: boolean;
+  /**
+   * Whether the credentials file exists, checked on every status request: the manifest flow
+   * writes it while the server runs (fix round, item 1).
+   */
+  readonly credentialsWritten: () => boolean;
   /** The manifest flow is registered (no app yet). */
   readonly manifest: { readonly webhookUrl: URL | undefined } | undefined;
   /** The app's reader (its key), once configured; absent in development without a key. */
@@ -105,12 +110,18 @@ export const createSetupChecks = (options: SetupCheckOptions): SetupChecks => {
 
   const githubApp: SetupChecks["githubApp"] = async () => {
     if (!options.appConfigured) {
-      return {
-        state: options.credentialsWritten ? "created" : "not_created",
-        error: null,
-        ...createFields(),
-        installUrl: null,
-      };
+      if (options.credentialsWritten()) {
+        // The manifest routes are closed now: the next step is the restart, not a create link.
+        return {
+          state: "created",
+          error: null,
+          createPath: null,
+          createBlocked: null,
+          credentialsFile: options.credentialsFile,
+          installUrl: null,
+        };
+      }
+      return { state: "not_created", error: null, ...createFields(), installUrl: null };
     }
     const base = {
       createPath: null,
@@ -149,8 +160,11 @@ export const createSetupChecks = (options: SetupCheckOptions): SetupChecks => {
         })),
       };
     } catch (error) {
-      const message =
-        error instanceof LlmConfigError ? error.message : "ROCKY_LLM_* could not be read";
+      // The config check already refuses credential-shaped values in any field (a key pasted into
+      // ROCKY_LLM_*_MODEL); scrubbing the message again is the safety net for the page.
+      const message = scrubSecrets(
+        error instanceof LlmConfigError ? error.message : "ROCKY_LLM_* could not be read",
+      );
       return {
         state: "invalid_config",
         configError: message.slice(0, MAX_CONFIG_ERROR),

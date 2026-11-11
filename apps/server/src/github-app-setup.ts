@@ -73,9 +73,17 @@ export interface GitHubAppSetupDeps extends GitHubAppSetupConfig {
   token: string;
   /** The wizard's sessions (P10-2); without them the flow keeps its own, from `token`. */
   sessions?: SetupSessions;
+  /**
+   * The client address key (`RateLimits.clientKey`, which follows `ROCKY_TRUST_PROXY`); defaults
+   * to the socket's peer. Keys the rate limit and the token lockout (fix round, items 2 and 3).
+   */
+  clientKey?: (request: FastifyRequest) => string;
   fetch?: typeof fetch;
   now?: () => number;
 }
+
+/** Without a trusted-proxy rule: the socket's peer (Fastify's `request.ip` without trustProxy). */
+export const peerAddress = (request: FastifyRequest): string => request.ip;
 
 const sha256 = (value: string): Buffer => createHash("sha256").update(value, "utf8").digest();
 const randomToken = (): string => randomBytes(32).toString("base64url");
@@ -130,6 +138,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
   const now = deps.now ?? Date.now;
   const sessions =
     deps.sessions ?? createSetupSessions({ token: deps.token, publicUrl: deps.publicUrl, now });
+  const clientKey = deps.clientKey ?? peerAddress;
   let done = false;
   let exchanging = false;
   /** Keyed by sha256(state) hex. */
@@ -171,6 +180,7 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
     await scope.register(rateLimit, {
       max: SETUP_RATE_LIMIT_PER_MINUTE,
       timeWindow: 60_000,
+      keyGenerator: clientKey,
     });
     scope.addHook("onRequest", async (_request, reply) => {
       securityHeaders(reply, formOrigin);
@@ -194,7 +204,8 @@ export const registerGitHubAppSetup = (app: FastifyInstance, deps: GitHubAppSetu
       }
 
       if (token !== undefined) {
-        const redeemed = sessions.redeem(token);
+        const shaped = token !== null && TOKEN_SHAPE.test(token) ? token : null;
+        const redeemed = sessions.redeem(shaped, clientKey(request));
         if (!redeemed.ok) {
           log(request, "warn", redeemed.reason);
           return forbidden(reply);

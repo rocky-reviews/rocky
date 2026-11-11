@@ -17,12 +17,14 @@ import {
  * token to its terminal at boot (never through the logger); presenting it once trades it for a
  * session cookie, and every setup route (the manifest flow and the wizard) needs that session.
  *
- * - The token is 256-bit and compared as sha256 in constant time; it works once, and after
- *   `MAX_TOKEN_FAILURES` wrong ones redemption locks until the server restarts.
- * - The cookie is HttpOnly, SameSite=Lax (GitHub's redirect back is a cross-site top-level
- *   navigation), `Path=/`, Secure with the `__Host-` prefix on https (ADR 0020 §3: no sibling
- *   subdomain can plant it). Only sha256 of the cookie is kept, in memory: a restart ends every
- *   session.
+ * - The token is 256-bit and compared as sha256 in constant time; it works once. After
+ *   `MAX_TOKEN_FAILURES` wrong ones from one client address, redemption locks for that address
+ *   until the server restarts. A missing or malformed token (a crawler on a new public host)
+ *   counts for nothing, and one client's failures never lock out another (fix round, item 2).
+ * - The cookie is HttpOnly, SameSite=Lax, `Path=/`, Secure with the `__Host-` prefix on https
+ *   (ADR 0020 §3: no sibling subdomain can plant it). Lax, not Strict: GitHub's redirect back to
+ *   the manifest callback is a cross-site top-level navigation, which a Strict cookie would not
+ *   ride. Only sha256 of the cookie is kept, in memory: a restart ends every session.
  * - State-changing wizard requests carry a synchronizer token (HMAC of the cookie under a key
  *   generated per process) and must come from Rocky's own origin (`checkCsrf`), as the login's
  *   CSRF guard requires (ADR 0020 §5), which these routes are exempt from (they have no login
@@ -32,8 +34,10 @@ import {
 export const SETUP_COOKIE = "rocky_setup";
 /** A setup session lasts one hour (GitHub's manifest code also lives one hour). */
 export const SETUP_SESSION_TTL_MS = 60 * 60 * 1000;
-/** Wrong setup tokens tolerated before token redemption locks until the server restarts. */
+/** Wrong setup tokens tolerated per client address before it is locked until a restart. */
 export const MAX_TOKEN_FAILURES = 20;
+/** Client addresses whose failures are remembered; the oldest is forgotten first. */
+export const MAX_TRACKED_CLIENTS = 1000;
 
 export type RedeemResult =
   | { readonly ok: true; readonly cookie: string }
@@ -42,8 +46,12 @@ export type RedeemResult =
 export type CsrfRefusal = "cross_site" | "origin" | "no_origin" | "token";
 
 export interface SetupSessions {
-  /** Trades the one-time token for a new session (`Set-Cookie` value), at most once. */
-  redeem(token: string | null): RedeemResult;
+  /**
+   * Trades the one-time token for a new session (`Set-Cookie` value), at most once. `token` is
+   * null when the request carried none of the right shape; `client` is the client address key
+   * the rate limits use.
+   */
+  redeem(token: string | null, client?: string): RedeemResult;
   /** sha256 hex of the request's live session cookie, or `undefined`. */
   sessionOf(request: FastifyRequest): string | undefined;
   /** The synchronizer token for the request's session (the wizard reads it from its status). */
@@ -81,7 +89,17 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
   const tokenHash = sha256(options.token);
   const csrfKey = randomBytes(32);
   let tokenUsed = false;
-  let tokenFailures = 0;
+  /** Client address key → wrong tokens; insertion order is age (oldest first). */
+  const failures = new Map<string, number>();
+  const fail = (client: string): void => {
+    const count = (failures.get(client) ?? 0) + 1;
+    failures.delete(client);
+    if (failures.size >= MAX_TRACKED_CLIENTS) {
+      const oldest = failures.keys().next().value;
+      if (oldest !== undefined) failures.delete(oldest);
+    }
+    failures.set(client, count);
+  };
   let closed = false;
   /** sha256(cookie) hex → expiry; the cookie value itself is never stored. */
   const sessions = new Map<string, number>();
@@ -101,15 +119,15 @@ export const createSetupSessions = (options: SetupSessionOptions): SetupSessions
   };
 
   return {
-    redeem: (token) => {
+    redeem: (token, client = "") => {
       // Hash both sides to a fixed length, then compare in constant time. The token is 256-bit,
-      // so guessing is hopeless; the lockout still bounds attempts.
-      const locked = tokenFailures >= MAX_TOKEN_FAILURES;
-      const ok =
-        token !== null && !tokenUsed && !locked && timingSafeEqual(sha256(token), tokenHash);
-      if (!ok) {
-        if (!locked) tokenFailures += 1;
-        return { ok: false, reason: locked ? "token_locked" : "bad_token" };
+      // so guessing is hopeless; the per-client lockout and the rate limit still bound attempts.
+      const locked = (failures.get(client) ?? 0) >= MAX_TOKEN_FAILURES;
+      if (locked) return { ok: false, reason: "token_locked" };
+      if (token === null) return { ok: false, reason: "bad_token" };
+      if (tokenUsed || !timingSafeEqual(sha256(token), tokenHash)) {
+        fail(client);
+        return { ok: false, reason: "bad_token" };
       }
       tokenUsed = true;
       const session = randomToken();

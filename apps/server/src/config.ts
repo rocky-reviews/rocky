@@ -125,8 +125,18 @@ export type GitHubAppSetup =
  * Whether the setup wizard (P10-2, ADR 0044) is requested: `ROCKY_SETUP=true`, or its older
  * name `GITHUB_APP_SETUP=true` (P3-1). Exactly `true`; anything else is off.
  */
-export const setupRequested = (env: Env): boolean =>
-  env["ROCKY_SETUP"] === "true" || env["GITHUB_APP_SETUP"] === "true";
+export const setupRequested = (env: Env): boolean => {
+  if (env["ROCKY_SETUP"] === "true") return true;
+  if (env["GITHUB_APP_SETUP"] !== "true") return false;
+  // The P3-1 name stays a workstation switch: production refused it before P10-2, and a leftover
+  // must not open the wizard on a server now (fix round, security note a).
+  if (isProduction(env)) {
+    throw new ConfigError(
+      "GITHUB_APP_SETUP is for creating the app from a workstation and is refused in production; use ROCKY_SETUP=true to open the setup wizard",
+    );
+  }
+  return true;
+};
 
 const credentialsFileFrom = (env: Env, homedir: string): string => {
   const file =
@@ -298,7 +308,7 @@ export const setupFromEnv = (env: Env, homedir: string): SetupConfig => {
 };
 
 /** Anything at the path (file, directory, even a dangling symlink) counts as configured. */
-const pathExists = (path: string): boolean => {
+export const pathExists = (path: string): boolean => {
   if (existsSync(path)) return true;
   try {
     lstatSync(path);

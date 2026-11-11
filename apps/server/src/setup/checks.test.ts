@@ -41,7 +41,7 @@ const base = (overrides: Partial<SetupCheckOptions> = {}): SetupCheckOptions => 
   endpoints,
   credentialsFile: "/setup/github-app.env",
   appConfigured: false,
-  credentialsWritten: false,
+  credentialsWritten: () => false,
   manifest: { webhookUrl: new URL("https://rocky.example.com/webhooks/github") },
   ...overrides,
 });
@@ -120,9 +120,25 @@ describe("GitHub App check (P10-2)", () => {
 
   it("asks for the restart once the credentials file was written", async () => {
     const check = await createSetupChecks(
-      base({ credentialsWritten: true, manifest: undefined }),
+      base({ credentialsWritten: () => true, manifest: undefined }),
     ).githubApp();
     expect(check).toMatchObject({ state: "created", createPath: null });
+  });
+
+  it("checks the credentials file on every call: written while running → created, no create link", async () => {
+    let written = false;
+    // The manifest flow is still registered (it closed itself after writing the file).
+    const checks = createSetupChecks(base({ credentialsWritten: () => written }));
+    expect(await checks.githubApp()).toMatchObject({
+      state: "not_created",
+      createPath: "/setup/github-app",
+    });
+    written = true;
+    expect(await checks.githubApp()).toMatchObject({
+      state: "created",
+      createPath: null,
+      createBlocked: null,
+    });
   });
 
   it("checks a configured app with GitHub and builds its install link", async () => {
@@ -179,6 +195,26 @@ describe("LLM check (P10-2)", () => {
     expect(check.configError).toMatch(/ROCKY_LLM_PROVIDER|provider/);
     expect(check.configError).not.toContain("sk-ant-secret");
     expect(check.targets).toEqual([]);
+  });
+
+  it("never shows a key pasted into a model variable, as a target or in the error (fix round, d)", () => {
+    const key = `sk-proj-${"Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z".repeat(2)}`;
+    const compatible = {
+      ROCKY_LLM_PROVIDER: "openai-compatible",
+      ROCKY_LLM_OPENAI_BASE_URL: "http://127.0.0.1:11434/v1",
+      ROCKY_LLM_EMBED_MODEL: "nomic-embed-text",
+      ROCKY_LLM_EMBED_DIMENSIONS: "768",
+    };
+    for (const env of [
+      { ...compatible, ROCKY_LLM_REVIEW_MODEL: key },
+      { ...compatible, ROCKY_LLM_REVIEW_MODEL: key, ROCKY_LLM_REVIEW_EFFORT: "high" },
+      { ...compatible, ROCKY_LLM_EMBED_MODEL: key, ROCKY_LLM_EMBED_DIMENSIONS: "7" },
+      { ROCKY_LLM_REVIEW_MODEL: key, ROCKY_LLM_REVIEW_EFFORT: "high" },
+    ]) {
+      const check = createSetupChecks(base({ env })).llm();
+      expect(JSON.stringify(check), JSON.stringify(Object.keys(env))).not.toContain(key);
+      expect(JSON.stringify(check)).not.toContain(key.slice(0, 24));
+    }
   });
 
   it("runs the test call through the configured adapters", async () => {

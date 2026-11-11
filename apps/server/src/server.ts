@@ -31,6 +31,7 @@ import {
   githubAppAuthFromEnv,
   githubAppIdFromEnv,
   isProduction,
+  pathExists,
   setupFromEnv,
   webhookSecretFromEnv,
   type AskConfig,
@@ -210,6 +211,7 @@ export const startServer = async (
     githubAppSetup = {
       ...setup.githubApp.config,
       token: setupToken,
+      clientKey: rateLimits.clientKey,
       ...(setupSessions === undefined ? {} : { sessions: setupSessions }),
     };
   }
@@ -238,6 +240,8 @@ export const startServer = async (
         : createGitHubInstallationReader({ auth: appAuth, api: setup.endpoints.api, clock });
     setupWizard = {
       sessions: setupSessions,
+      // ROCKY_TRUST_PROXY decides the client address, as for every other limit (ADR 0025).
+      clientKey: rateLimits.clientKey,
       mode: setupMode ? "setup" : "full",
       ...(web === undefined ? {} : { page: web.index }),
       checks: createSetupChecks({
@@ -247,7 +251,7 @@ export const startServer = async (
         endpoints: setup.endpoints,
         credentialsFile: setup.credentialsFile,
         appConfigured: setup.appConfigured,
-        credentialsWritten: setup.credentialsWritten,
+        credentialsWritten: () => pathExists(setup.credentialsFile),
         manifest: setup.githubApp.enabled
           ? { webhookUrl: setup.githubApp.config.webhookUrl }
           : undefined,

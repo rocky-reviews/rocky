@@ -7,8 +7,13 @@ import { buildGitHubAppManifest, githubEndpoints } from "@rocky-reviews/forge-gi
 import { createLogger } from "@rocky-reviews/log";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SetupStatusResponse } from "@rocky-reviews/core";
+import { recordingAdapters } from "@rocky-reviews/llm/testing";
 import { buildApp } from "./app.js";
 import { createHash } from "node:crypto";
+import { pathExists } from "./config.js";
+import { createSetupChecks } from "./setup/checks.js";
+import { createSetupSessions } from "./setup/session.js";
 import {
   MAX_TOKEN_FAILURES,
   SETUP_RATE_LIMIT_PER_MINUTE,
@@ -440,6 +445,56 @@ describe("callback", () => {
     // The app id as a whole number: log timestamps (epoch ms) can contain its digits.
     expect(everything).not.toMatch(/(?<!\d)98765(?!\d)/);
     expect(h.logs.join("\n")).toContain('"outcome":"created"');
+  });
+
+  it("the wizard's status says 'created' (restart next, no create link) right after the callback (fix round, item 1)", async () => {
+    await cleanup(h);
+    const dir = await mkdtemp(join(tmpdir(), "rocky-setup-"));
+    const file = join(dir, "rocky", "github-app.env");
+    const token = randomBytes(32).toString("base64url");
+    const sessions = createSetupSessions({ token, publicUrl: PUBLIC_URL });
+    const app = buildApp({
+      checkDatabase: async () => true,
+      githubAppSetup: {
+        token,
+        sessions,
+        publicUrl: PUBLIC_URL,
+        webhookUrl: WEBHOOK_URL,
+        appName: "Rocky Reviews",
+        endpoints: githubEndpoints({}),
+        credentialsFile: file,
+        fetch: (async () =>
+          new Response(JSON.stringify(conversion()), {
+            status: 201,
+            headers: { "content-type": "application/json" },
+          })) as typeof fetch,
+      },
+      setupWizard: {
+        sessions,
+        mode: "setup",
+        checks: createSetupChecks({
+          pool: { connect: async () => Promise.reject(new Error("no database here")) },
+          env: {},
+          adapters: recordingAdapters({ ok: true }).factories,
+          endpoints: githubEndpoints({}),
+          credentialsFile: file,
+          appConfigured: false,
+          credentialsWritten: () => pathExists(file),
+          manifest: { webhookUrl: WEBHOOK_URL },
+        }),
+      },
+    });
+    h = { ...h, app, dir, file, token };
+    await app.ready();
+    const cookie = await login();
+    const status = async () =>
+      SetupStatusResponse.parse(
+        (await app.inject({ method: "GET", url: "/api/setup/status", headers: { cookie } })).json(),
+      ).githubApp;
+    expect(await status()).toMatchObject({ state: "not_created", createPath: "/setup/github-app" });
+    const { state } = await page(cookie);
+    expect((await callback(cookie, `code=${CODE}&state=${state}`)).statusCode).toBe(200);
+    expect(await status()).toMatchObject({ state: "created", createPath: null });
   });
 
   it("disables every setup route once the app is created", async () => {

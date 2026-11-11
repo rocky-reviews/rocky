@@ -4,6 +4,7 @@ import { testAppKeys } from "@rocky-reviews/forge-github/testing";
 import { createLogger } from "@rocky-reviews/log";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigError } from "./config.js";
+import { SETUP_RATE_LIMIT_PER_MINUTE } from "./github-app-setup.js";
 import {
   createServerPool,
   POOL_TIMEOUTS,
@@ -292,6 +293,31 @@ describe("GitHub App setup at boot (P3-1)", () => {
     expect(routes).not.toContain("/webhooks/github");
     expect(routes.some((r) => r.startsWith("/api/inbox"))).toBe(false);
     expect(routes).toContain("/api/setup/status");
+  });
+
+  it("counts the setup routes' limits per client address under ROCKY_TRUST_PROXY (fix round, item 3)", async () => {
+    running = await startServer(
+      {
+        ...BASE_ENV,
+        NODE_ENV: "production",
+        ROCKY_SETUP: "true",
+        ROCKY_PUBLIC_URL: "https://rocky.example.com",
+        ROCKY_TRUST_PROXY: "xff:1",
+        GITHUB_APP_CREDENTIALS_FILE: "/nonexistent-rocky-test/github-app.env",
+      },
+      capture().log,
+      { announce: () => undefined },
+    );
+    const get = (address: string) =>
+      running!.app.inject({
+        method: "GET",
+        url: "/api/setup/status",
+        headers: { "x-forwarded-for": address },
+      });
+    let last = 0;
+    for (let i = 0; i <= SETUP_RATE_LIMIT_PER_MINUTE; i++) last = (await get("203.0.113.9")).statusCode;
+    expect(last).toBe(429);
+    expect((await get("198.51.100.7")).statusCode).toBe(403);
   });
 
   it("generates a different token on every boot", async () => {

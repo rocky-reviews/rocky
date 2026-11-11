@@ -3,9 +3,11 @@ import { githubEndpoints } from "@rocky-reviews/forge-github";
 import { createLogger } from "@rocky-reviews/log";
 import { SetupStatusResponse } from "@rocky-reviews/core";
 import { LlmConfigError, type ProbeResult } from "@rocky-reviews/llm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp, type AppDeps } from "../app.js";
+import { SETUP_RATE_LIMIT_PER_MINUTE } from "../github-app-setup.js";
+import { createRateLimits, DEFAULT_RATE_LIMITS } from "../security/rate-limit.js";
 import type { SetupChecks } from "./checks.js";
 import {
   FINISH_PATH,
@@ -82,8 +84,14 @@ afterEach(async () => {
 });
 
 const build = async (
-  options: { probe?: () => Promise<ProbeResult[]>; extra?: Partial<AppDeps>; page?: boolean } = {},
+  options: {
+    probe?: () => Promise<ProbeResult[]>;
+    extra?: Partial<AppDeps>;
+    page?: boolean;
+    clientKey?: (request: FastifyRequest) => string;
+  } = {},
 ): Promise<Harness> => {
+  const clientKey = options.clientKey === undefined ? {} : { clientKey: options.clientKey };
   const logs: string[] = [];
   const log = createLogger("setup-wizard-test", {
     destination: { write: (line: string) => void logs.push(line) },
@@ -103,9 +111,11 @@ const build = async (
       appName: "Rocky Reviews",
       endpoints: githubEndpoints({}),
       credentialsFile: "/nonexistent-rocky-test/github-app.env",
+      ...clientKey,
     },
     setupWizard: {
       sessions,
+      ...clientKey,
       mode: "setup",
       checks: fakeChecks(harness, options.probe ?? (async () => OK)),
       now: () => clock.now,
@@ -203,7 +213,73 @@ describe("setup wizard: the session (P10-2)", () => {
     expect(res.headers["cache-control"]).toBe("no-store");
     await h.app.close();
     h = await build({ page: false });
-    expect((await h.app.inject({ method: "GET", url: WIZARD_PAGE })).statusCode).toBe(404);
+    const dev = await h.app.inject({ method: "GET", url: WIZARD_PAGE });
+    expect(dev.statusCode).toBe(404);
+    // `pnpm dev` (fix round nit): say where the page is instead of a bare 404.
+    expect(dev.body).toContain("ROCKY_PUBLIC_URL=http://127.0.0.1:5173");
+  });
+});
+
+describe("setup wizard: client addresses behind a proxy (fix round, items 2 and 3)", () => {
+  // The server passes the rate limits' client key: ROCKY_TRUST_PROXY decides the address.
+  const behindProxy = () =>
+    build({
+      clientKey: createRateLimits({
+        rules: DEFAULT_RATE_LIMITS,
+        trustProxy: { kind: "xff", hops: 1 },
+      }).clientKey,
+    });
+  const from = (address: string) => ({ "x-forwarded-for": address });
+
+  it("rate-limits each client address, not the proxy's", async () => {
+    h = await behindProxy();
+    for (let i = 0; i < SETUP_RATE_LIMIT_PER_MINUTE; i++) {
+      await h.app.inject({ method: "GET", url: STATUS_PATH, headers: from("203.0.113.9") });
+    }
+    const abuser = await h.app.inject({
+      method: "GET",
+      url: STATUS_PATH,
+      headers: from("203.0.113.9"),
+    });
+    expect(abuser.statusCode).toBe(429);
+    const operator = await h.app.inject({
+      method: "GET",
+      url: STATUS_PATH,
+      headers: from("198.51.100.7"),
+    });
+    expect(operator.statusCode).toBe(403);
+    const manifest = await h.app.inject({
+      method: "GET",
+      url: `/setup/github-app?token=${h.token}`,
+      headers: from("198.51.100.7"),
+    });
+    expect(manifest.statusCode).toBe(303);
+  });
+
+  it("crawlers without a token and another client's wrong tokens do not lock out the operator", async () => {
+    h = await behindProxy();
+    for (let i = 0; i < 40; i++) {
+      await h.app.inject({ method: "GET", url: WIZARD_START, headers: from("203.0.113.9") });
+    }
+    for (let i = 0; i < 20; i++) {
+      await h.app.inject({
+        method: "GET",
+        url: `${WIZARD_START}?token=${randomBytes(32).toString("base64url")}`,
+        headers: from("203.0.113.9"),
+      });
+    }
+    const abuser = await h.app.inject({
+      method: "GET",
+      url: `${WIZARD_START}?token=${h.token}`,
+      headers: from("203.0.113.9"),
+    });
+    expect(abuser.statusCode).toBe(403);
+    const operator = await h.app.inject({
+      method: "GET",
+      url: `${WIZARD_START}?token=${h.token}`,
+      headers: from("198.51.100.7"),
+    });
+    expect(operator.statusCode).toBe(303);
   });
 });
 

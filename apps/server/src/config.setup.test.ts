@@ -27,18 +27,19 @@ describe("githubAppSetupFromEnv (P3-1)", () => {
   });
 
   it("runs in production only behind an explicit https public URL (P10-2)", () => {
+    const PROD_ON = { ROCKY_SETUP: "true", HOST: ON.HOST, PORT: ON.PORT };
     // No public URL, or the loopback default: refused (the browser and GitHub need https).
-    expect(() => githubAppSetupFromEnv({ ...ON, NODE_ENV: "production" }, home)).toThrow(
+    expect(() => githubAppSetupFromEnv({ ...PROD_ON, NODE_ENV: "production" }, home)).toThrow(
       /ROCKY_PUBLIC_URL is required in production/,
     );
     expect(() =>
       githubAppSetupFromEnv(
-        { ...ON, FLY_APP_NAME: "rocky", ROCKY_PUBLIC_URL: "http://127.0.0.1:4310" },
+        { ...PROD_ON, FLY_APP_NAME: "rocky", ROCKY_PUBLIC_URL: "http://127.0.0.1:4310" },
         home,
       ),
     ).toThrow(/https in production/);
     const setup = githubAppSetupFromEnv(
-      { ...ON, NODE_ENV: "production", ROCKY_PUBLIC_URL: "https://rocky.example.com" },
+      { ...PROD_ON, NODE_ENV: "production", ROCKY_PUBLIC_URL: "https://rocky.example.com" },
       home,
     );
     expect(setup.enabled && setup.config.webhookUrl?.href).toBe(
@@ -50,6 +51,16 @@ describe("githubAppSetupFromEnv (P3-1)", () => {
     const rest = { HOST: ON.HOST, PORT: ON.PORT };
     expect(githubAppSetupFromEnv({ ...rest, ROCKY_SETUP: "true" }, home).enabled).toBe(true);
     expect(githubAppSetupFromEnv({ ...rest, ROCKY_SETUP: "yes" }, home).enabled).toBe(false);
+  });
+
+  it("still refuses the older name in production, as P3-1 did (fix round, security note a)", () => {
+    const production = {
+      ...ON,
+      NODE_ENV: "production",
+      ROCKY_PUBLIC_URL: "https://rocky.example.com",
+    };
+    expect(() => githubAppSetupFromEnv(production, home)).toThrow(ConfigError);
+    expect(() => setupFromEnv(production, home)).toThrow(/use ROCKY_SETUP=true/);
   });
 
   it("is off once an app is configured (env or credentials file)", async () => {
