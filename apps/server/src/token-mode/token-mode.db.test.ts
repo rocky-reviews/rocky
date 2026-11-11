@@ -280,6 +280,19 @@ describe("before a token is saved", () => {
     ).toBe(404);
   });
 
+  it("warns at boot when the sign-in link cannot work (no token, no wizard) or http leaves the loopback", async () => {
+    lines.length = 0;
+    await boot({ ROCKY_SETUP: undefined });
+    expect(lines.some((l) => l.includes('"warning":"no_token_connected"'))).toBe(true);
+    expect(lines.some((l) => l.includes('"warning":"plain_http_beyond_loopback"'))).toBe(false);
+    lines.length = 0;
+    await boot({ HOST: "0.0.0.0" });
+    expect(lines.some((l) => l.includes('"warning":"plain_http_beyond_loopback"'))).toBe(true);
+    // With the wizard open there is a way to connect a token: no warning about that.
+    expect(lines.some((l) => l.includes('"warning":"no_token_connected"'))).toBe(false);
+    await boot();
+  });
+
   it("a signed-out browser is told to use the boot link, and the wizard asks for a token", async () => {
     const res = await app().inject({ method: "GET", url: "/api/session" });
     expect(res.statusCode).toBe(401);
@@ -303,6 +316,12 @@ describe("before a token is saved", () => {
       createPath: null,
     });
     expect(status["repositories"]).toMatchObject({ state: "waiting_for_token" });
+    // The sign-in link before any token: refused, and still usable once one is saved.
+    for (let i = 0; i < 2; i++) {
+      const early = await app().inject({ method: "GET", url: linkOf("/auth/token/start") });
+      expect(early.statusCode).toBe(404);
+      expect(cookieValue(early, SESSION)).toBeUndefined();
+    }
   });
 });
 
@@ -408,6 +427,10 @@ describe("saving the token in the wizard", () => {
     ).json() as Record<string, Record<string, unknown>>;
     expect(status["githubApp"]).toMatchObject({ state: "token_connected" });
     expect(status["repositories"]).toMatchObject({ state: "installed" });
+    // The boot link the early visits did not burn now signs the owner in.
+    const late = await app().inject({ method: "GET", url: linkOf("/auth/token/start") });
+    expect(late.statusCode).toBe(303);
+    expect(cookieValue(late, SESSION)).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   it("refuses another person's token for this instance", async () => {
@@ -620,6 +643,36 @@ describe("the connection API", () => {
     expect(
       (await call(owner, "PUT", "/api/connection/token", { token: ownerToken })).statusCode,
     ).toBe(200);
+  });
+
+  it("a replacement bound to another org is refused before GitHub is asked or anything is written", async () => {
+    const service = createTokenConnectionService({
+      db,
+      keys: localKeyWrapperFromEnv({ ROCKY_KEK_KEYS: `v1=${KEK}` }),
+      client: createGitHubTokenClient({ api: githubEndpoints({}).api, fetch: github.fetch }),
+      log: { info: () => undefined, warn: () => undefined },
+      forge: "github",
+      analysisAuto: false,
+    });
+    const state = async () =>
+      (
+        await superuser.query<{ c: string; n: string }>(
+          `select (select encode(forge_token_ciphertext, 'escape') from members where org_id = $1) as c,
+                  (select count(*)::text from audit_events where org_id = $1) as n`,
+          [orgId],
+        )
+      ).rows[0];
+    const before = await state();
+    const requests = github.requests.length;
+    const elsewhere = "00000000-0000-4000-8000-000000000001" as OrgId;
+    expect(await service.saveToken(ownerToken, { orgId: elsewhere })).toEqual({
+      ok: false,
+      reason: "not_found",
+    });
+    expect(github.requests.length).toBe(requests);
+    expect(await state()).toEqual(before);
+    // The caller's own org: saved as usual.
+    expect((await service.saveToken(ownerToken, { orgId: orgId as OrgId })).ok).toBe(true);
   });
 });
 

@@ -103,7 +103,9 @@ export interface TokenConnectionDeps {
 
 export type SaveTokenResult =
   | { readonly ok: true; readonly orgId: OrgId; readonly token: ConnectionToken }
-  | { readonly ok: false; readonly reason: TokenSaveRefusal; readonly retryAt?: Date };
+  | { readonly ok: false; readonly reason: TokenSaveRefusal; readonly retryAt?: Date }
+  /** A replacement for an org that is not the token org (`saveToken`'s `orgId`). */
+  | { readonly ok: false; readonly reason: "not_found" };
 
 export type AddRepositoryResult =
   | { readonly ok: true; readonly repository: ConnectionRepository; readonly sync: SyncResponse }
@@ -114,8 +116,12 @@ export type AvailableResult =
   | { readonly ok: false; readonly reason: AddRepositoryRefusal; readonly retryAt?: Date };
 
 export interface TokenConnectionService {
-  /** Validates with GitHub, creates the org on the first save, stores the token encrypted. */
-  saveToken(token: string): Promise<SaveTokenResult>;
+  /**
+   * Validates with GitHub, creates the org on the first save, stores the token encrypted. With
+   * `orgId` (a replacement by a signed-in member) it only replaces that org's token: anything
+   * else is `not_found`, before GitHub is asked or anything is written.
+   */
+  saveToken(token: string, options?: { readonly orgId?: OrgId }): Promise<SaveTokenResult>;
   /** Deletes the stored token; the org and its data stay. `false` without a token. */
   removeToken(orgId: OrgId): Promise<boolean>;
   /** The connection page's data: the token described (never its value), the repositories. */
@@ -274,11 +280,18 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
     }
   };
 
-  const saveToken: TokenConnectionService["saveToken"] = async (token) => {
+  const saveToken: TokenConnectionService["saveToken"] = async (token, options = {}) => {
     const kind = personalTokenKind(token);
     if (kind === null) {
       log("info", "token_refused", { reason: "not_a_personal_token" });
       return { ok: false, reason: "not_a_personal_token" };
+    }
+    if (options.orgId !== undefined) {
+      const bound = await db.tokenOrg(deps.forge);
+      if (bound === null || bound.orgId !== options.orgId) {
+        log("warn", "token_refused", { reason: "not_found", orgId: options.orgId });
+        return { ok: false, reason: "not_found" };
+      }
     }
     let identity;
     try {
@@ -289,9 +302,11 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
       }
       identity = read.value;
       // A classic token reaches repositories only through `repo` (or `public_repo` for public
-      // ones): without either it can read nothing Rocky needs.
+      // ones): without either it can read nothing Rocky needs. Refused only when GitHub listed
+      // the scopes; unknown scopes fall through to the listing probe below.
       if (
         identity.kind === "classic" &&
+        identity.scopes !== null &&
         !identity.scopes.some((scope) => scope === "repo" || scope === "public_repo")
       ) {
         log("info", "token_refused", { reason: "missing_permissions" });
@@ -315,6 +330,10 @@ export const createTokenConnectionService = (deps: TokenConnectionDeps): TokenCo
 
     let orgId: OrgId;
     const existing = await db.tokenOrg(deps.forge);
+    if (options.orgId !== undefined && existing?.orgId !== options.orgId) {
+      // Checked again after GitHub's answer: the token org is created once and never rebound.
+      return { ok: false, reason: "not_found" };
+    }
     if (existing !== null) {
       // Replacing: the same person's token, or nothing (the org is bound to the owner's id).
       if (existing.accountId !== identity.id) {

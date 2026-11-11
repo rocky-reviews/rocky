@@ -809,8 +809,18 @@ export const registerAuth = (app: FastifyInstance, deps: AuthDeps): SessionAuth 
               "<p>Open the one-time sign-in link printed in the server's log. If you already used it, restart the server to get a new one.</p>",
             );
           }
-          const issued = await issueTokenOwnerSession(request);
+          // Redeeming reserves the link (a second request is refused meanwhile); it is spent
+          // only when a session was issued, so a visit before the token is saved, or a failure,
+          // leaves it usable instead of dead until a restart.
+          let issued: string | null;
+          try {
+            issued = await issueTokenOwnerSession(request);
+          } catch (error) {
+            mode.link.release();
+            throw error;
+          }
           if (issued === null) {
+            mode.link.release();
             log(request, "info", "no_token_org");
             return page(
               reply,

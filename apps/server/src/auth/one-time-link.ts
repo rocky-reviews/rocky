@@ -28,12 +28,18 @@ export interface OneTimeLink {
   redeem(token: string | null, client: string): RedeemOutcome;
   /** Refuses every later redemption (setup finished, or a restart would print a new one). */
   burn(): void;
+  /**
+   * Makes a redeemed token usable again: what it was redeemed for could not complete (token
+   * mode before a token is saved, or a failure). No effect after `burn`.
+   */
+  release(): void;
   readonly used: boolean;
 }
 
 export const createOneTimeLink = (token: string): OneTimeLink => {
   const tokenHash = sha256(token);
   let used = false;
+  let burnt = false;
   /** Client address key → wrong tokens; insertion order is age (oldest first). */
   const failures = new Map<string, number>();
   const fail = (client: string): void => {
@@ -60,6 +66,10 @@ export const createOneTimeLink = (token: string): OneTimeLink => {
     },
     burn: () => {
       used = true;
+      burnt = true;
+    },
+    release: () => {
+      if (!burnt) used = false;
     },
     get used() {
       return used;

@@ -172,6 +172,9 @@ export interface StartOptions {
   llmAdapters?: ProviderAdapters;
 }
 
+/** HOST values that keep the listener on this machine. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
 const announceToTerminal = (text: string): void => {
   process.stderr.write(`${text}\n`);
 };
@@ -546,6 +549,28 @@ export const startServer = async (
     (options.announce ?? announceToTerminal)(
       `\nRocky sign-in (personal token mode). Open this one-time URL in your browser (do not share it; restart the server for a new one):\n  ${url.href}\n`,
     );
+  }
+  if (tokenConfig !== undefined) {
+    // Plain http is only safe on the loopback: a non-loopback HOST would serve the session
+    // cookie and the sign-in link in clear to the network (bare metal, HOST=0.0.0.0).
+    if (!tokenConfig.cookieSecure && !LOOPBACK_HOSTS.has(host)) {
+      log.warn(
+        { tokenMode: { warning: "plain_http_beyond_loopback" } },
+        "ROCKY_PUBLIC_URL is http but HOST is not a loopback address: Rocky is reachable in plain http from the network; set HOST=127.0.0.1 or use https",
+      );
+    }
+    // Without the wizard there is no way to save a token, and the sign-in link signs nobody in.
+    if (!setup.enabled) {
+      const existing = await createDb({ pool })
+        .tokenOrg("github")
+        .catch(() => undefined);
+      if (existing === null) {
+        log.warn(
+          { tokenMode: { warning: "no_token_connected" } },
+          "no personal token is connected and the setup wizard is off: the sign-in link cannot sign anyone in; start once with ROCKY_SETUP=true to connect a token",
+        );
+      }
+    }
   }
 
   // Idempotent: a second signal (or caller) awaits the same shutdown instead of ending the pool

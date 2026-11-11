@@ -17,6 +17,21 @@ describe("createOneTimeLink", () => {
     expect(link.redeem(value, "b")).toBe("bad_token");
   });
 
+  it("a released redemption is usable again (its sign-in could not complete); burn is final", () => {
+    const value = token();
+    const link = createOneTimeLink(value);
+    expect(link.redeem(value, "a")).toBe("redeemed");
+    // While a redemption is pending, nobody else gets in with it.
+    expect(link.redeem(value, "b")).toBe("bad_token");
+    link.release();
+    expect(link.used).toBe(false);
+    expect(link.redeem(value, "a")).toBe("redeemed");
+    link.burn();
+    link.release();
+    expect(link.used).toBe(true);
+    expect(link.redeem(value, "a")).toBe("bad_token");
+  });
+
   it("refuses another token, and nothing at all without counting it", () => {
     const value = token();
     const link = createOneTimeLink(value);

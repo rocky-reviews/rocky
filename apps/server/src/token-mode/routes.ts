@@ -125,13 +125,13 @@ export const registerConnectionRoutes = (
       const me = callerOf(request);
       const parsed = SaveTokenRequest.safeParse(request.body);
       if (!parsed.success) return refuse(reply, 400, "invalid_request");
-      const result = await connection.saveToken(parsed.data.token);
+      // Bound to the caller's org: another org's (or no) token org is refused before any write.
+      const result = await connection.saveToken(parsed.data.token, { orgId: me.orgId });
       if (!result.ok) {
         log(request, "token_refused", { orgId: me.orgId, reason: result.reason });
+        if (result.reason === "not_found") return refuse(reply, 404, "not_found");
         return refuse(reply, tokenRefusalStatus(result.reason), result.reason, result.retryAt);
       }
-      // The save binds to the org of the token's owner, which is the caller's (one token org).
-      if (result.orgId !== me.orgId) return refuse(reply, 404, "not_found");
       log(request, "token_replaced", { orgId: me.orgId, kind: result.token.kind });
       return send(reply, 200, SaveTokenResponse, { token: result.token });
     });
