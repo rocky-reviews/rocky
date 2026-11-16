@@ -46,7 +46,7 @@
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.64.1",
+    "@playwright/test": "1.65.0",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/evals": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
