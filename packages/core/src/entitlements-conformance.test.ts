@@ -22,6 +22,7 @@ const harnessFor = (
   unavailable?: Entitlements,
 ): EntitlementsHarness => ({
   entitlements,
+  readsState: unavailable !== undefined,
   orgs: [
     { label: "basic", org: orgA, features: OSS },
     { label: "full", org: orgB, features: FEATURES },
@@ -52,9 +53,16 @@ describe("entitlements conformance suite", () => {
   it("rejects a malformed harness", async () => {
     const run = byName("answers every known feature").run;
     const bad: EntitlementsHarness[] = [
-      { entitlements: reference(), orgs: [] },
+      { entitlements: reference(), readsState: false, orgs: [] },
+      // Declares that it reads state but gives no way to check the unreadable case.
       {
         entitlements: reference(),
+        readsState: true,
+        orgs: [{ label: "x", org: orgA, features: OSS }],
+      },
+      {
+        entitlements: reference(),
+        readsState: false,
         orgs: [
           { label: "x", org: orgA, features: [] },
           { label: "x", org: orgB, features: [] },
@@ -62,6 +70,7 @@ describe("entitlements conformance suite", () => {
       },
       {
         entitlements: reference(),
+        readsState: false,
         orgs: [{ label: "x", org: orgA, features: ["review.nope" as Feature] }],
       },
     ];

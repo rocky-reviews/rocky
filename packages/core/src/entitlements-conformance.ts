@@ -10,7 +10,8 @@
  * - each org gets exactly the features the harness says it has, and nothing else;
  * - unknown features (typos, prototype keys, case or whitespace variants) are `false`;
  * - answers do not depend on call order, concurrency or other orgs' queries;
- * - when the backing state cannot be read, nothing is granted (reject or `false`).
+ * - when the backing state cannot be read, nothing is granted (reject or `false`); a harness
+ *   that declares `readsState` must supply that unreadable variant.
  */
 import { FEATURES, isFeature, type Entitlements, type Feature, type OrgId } from "./ports.js";
 
@@ -27,10 +28,12 @@ export interface EntitlementsHarness {
   /** At least one org; cover every distinct answer set the implementation can give. */
   readonly orgs: readonly EntitlementsHarnessOrg[];
   /**
-   * The same implementation with its backing state unreadable, when its answers depend on that
-   * state. Omit it for a configuration whose answers never read state (self-host, or one that
-   * only observes state without enforcing it).
+   * Whether this configuration's answers depend on backing state (a database, a billing store).
+   * When true, `unavailable` is required. False for self-host, or for one that only observes
+   * state without enforcing it.
    */
+  readonly readsState: boolean;
+  /** The same implementation with its backing state unreadable; required when `readsState`. */
   readonly unavailable?: Entitlements;
 }
 
@@ -73,6 +76,9 @@ const checkHarness = (harness: EntitlementsHarness): void => {
     for (const feature of features) {
       if (!isFeature(feature)) fail(`harness: ${label} lists an unknown feature`);
     }
+  }
+  if (harness.readsState && harness.unavailable === undefined) {
+    fail("harness: readsState needs an unavailable variant");
   }
 };
 

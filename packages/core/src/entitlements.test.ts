@@ -36,6 +36,7 @@ const harnesses: readonly (readonly [string, () => EntitlementsHarness])[] = [
   [
     "without a licence",
     () => ({
+      readsState: false,
       entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
       orgs: [
         { label: "org 1", org, features: OSS },
@@ -46,6 +47,7 @@ const harnesses: readonly (readonly [string, () => EntitlementsHarness])[] = [
   [
     "with a licence",
     () => ({
+      readsState: false,
       entitlements: selfHostEntitlements({ hasEnterpriseLicence: true }),
       orgs: [
         { label: "org 1", org, features: FEATURES },
