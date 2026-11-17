@@ -11,17 +11,32 @@ export interface Clock {
 }
 
 /** Features that can be switched per plan. `ee:*` features need an Enterprise licence. */
-export type Feature =
-  | "review.triage"
-  | "review.drafts"
-  | "review.change-map"
-  | "review.ask"
-  | "review.memory"
-  | "ee:sso"
-  | "ee:audit-log-ui"
-  | "ee:org-policies"
-  | "ee:insights";
+export const FEATURES = Object.freeze([
+  "review.triage",
+  "review.drafts",
+  "review.change-map",
+  "review.ask",
+  "review.memory",
+  "ee:sso",
+  "ee:audit-log-ui",
+  "ee:org-policies",
+  "ee:insights",
+] as const);
 
+export type Feature = (typeof FEATURES)[number];
+
+const FEATURE_SET: ReadonlySet<string> = new Set(FEATURES);
+
+/** Whether `value` is a known feature; a typo or a value read from elsewhere is not. */
+export const isFeature = (value: unknown): value is Feature =>
+  typeof value === "string" && FEATURE_SET.has(value);
+
+/**
+ * Which features an org may use. Implementations (self-host below, Rocky Cloud's plans) must
+ * pass the shared conformance suite (`@rocky-reviews/core/entitlements-conformance`, C-8):
+ * answers are booleans, unknown features are `false`, answers for one org never depend on
+ * another, and state that cannot be read never grants.
+ */
 export interface Entitlements {
   can(org: OrgId, feature: Feature): Promise<boolean>;
 }
