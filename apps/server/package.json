@@ -13,7 +13,7 @@
     "dev": "tsx watch --env-file=../../.env src/main.ts"
   },
   "dependencies": {
-    "@fastify/rate-limit": "11.2.1",
+    "@fastify/rate-limit": "11.2.2",
     "@rocky-reviews/core": "workspace:*",
     "@rocky-reviews/crypto": "workspace:*",
     "@rocky-reviews/db": "workspace:*",
@@ -22,7 +22,7 @@
     "@rocky-reviews/log": "workspace:*",
     "@rocky-reviews/mirror": "workspace:*",
     "fastify": "5.12.8",
-    "parse5": "8.1.0",
+    "parse5": "8.1.1",
     "pg": "8.23.1"
   },
   "devDependencies": {
