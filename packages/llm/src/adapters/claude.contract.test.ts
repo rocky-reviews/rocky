@@ -1,5 +1,6 @@
 import {
   isLlmCallError,
+  LlmCallError,
   rockyInstructions,
   type LlmEffort,
   type LlmErrorKind,
@@ -1273,6 +1274,21 @@ describe("credentials passed in code beat ambient ones; ambient ones can be refu
     const error = await rejection(complete(provider));
     expect(isLlmCallError(error) && error.kind).toBe("auth");
     expect(requests).toHaveLength(0);
+  });
+
+  it("Bedrock: an LlmCallError from the credential source keeps its kind, from the resolver or the provider", async () => {
+    for (const bedrockCredentials of [
+      () => Promise.reject(new LlmCallError("auth")),
+      () => Promise.resolve(() => Promise.reject(new LlmCallError("auth"))),
+    ]) {
+      const { provider, requests } = bare(BEDROCK, {
+        ambientCredentials: false,
+        bedrockCredentials,
+      });
+      const error = await rejection(complete(provider));
+      expect(isLlmCallError(error) && error.kind).toBe("auth");
+      expect(requests).toHaveLength(0);
+    }
   });
 
   it("ambientCredentials: false — with the hooks set, both platforms run on them only", async () => {

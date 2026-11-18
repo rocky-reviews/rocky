@@ -142,10 +142,10 @@ export const bedrockAdapter =
             ...hardenedClientOptions(transport, fetch),
             awsRegion: settings.region,
             baseURL: `https://bedrock-mantle.${settings.region}.api.aws/anthropic`,
-            // A source passed in code is the only credential: `apiKey: null` stops the client
-            // from reading AWS_BEARER_TOKEN_BEDROCK, which it would otherwise prefer over the
-            // source (amendment C-5). `awsAccessKey`/`awsSecretAccessKey` are not used: the
-            // SDK's signer does not read them back and falls through to the default chain.
+            // A source passed in code is the only credential: `apiKey: null` alone stops the
+            // client from reading AWS_BEARER_TOKEN_BEDROCK, which it would otherwise prefer over
+            // the source (amendment C-5). `awsAccessKey`/`awsSecretAccessKey` are not needed:
+            // the source is passed as the resolver, which the signer calls per request.
             ...(credentials === undefined
               ? {}
               : { apiKey: null, providerChainResolver: credentials }),
