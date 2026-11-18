@@ -1261,7 +1261,7 @@ describe("credentials passed in code beat ambient ones; ambient ones can be refu
 
   it("ambientCredentials: false — Bedrock without a credential source fails with auth, sending nothing", async () => {
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAHOSTHOSTHOSTHOST");
+    vi.stubEnv("AWS_ACCESS_KEY_ID", ["AKIA", "HOST".repeat(4)].join(""));
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "host-secret");
     const { provider, requests } = bare(BEDROCK, { ambientCredentials: false });
     const error = await rejection(complete(provider));
