@@ -1,4 +1,11 @@
-export type { Clock, Entitlements, Feature, OrgId } from "./ports.js";
+export {
+  FEATURES,
+  isFeature,
+  type Clock,
+  type Entitlements,
+  type Feature,
+  type OrgId,
+} from "./ports.js";
 export { selfHostEntitlements } from "./entitlements.js";
 export {
   ASSIGNABLE_ROLES,
