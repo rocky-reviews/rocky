@@ -985,7 +985,10 @@ describe("Claude platform details", () => {
   it("Bedrock in bearer mode (AWS_BEARER_TOKEN_BEDROCK): Haiku 4.5 keeps 2023-06-01 and the token goes only to the configured host", async () => {
     const bearer = ["bedrock", "bearer", "fixture"].join("-");
     vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", bearer);
-    const { provider, requests } = providerFor(PLATFORMS[1]!, [sse("end-turn.sse")]);
+    // Bearer mode is the self-host path with no credential source in the transport: a source
+    // passed in code always wins over the variable (amendment C-5).
+    const noSource = { bedrockCredentials: undefined } as unknown as AdapterTransport;
+    const { provider, requests } = providerFor(PLATFORMS[1]!, [sse("end-turn.sse")], noSource);
     expect(
       (await complete(provider, { model: "claude-haiku-4-5", effort: undefined })).status,
     ).toBe("ok");
@@ -1222,6 +1225,68 @@ describe("platform credentials are not cached after a failure (review round 1, S
     expect(requests).toHaveLength(0);
     expect((await complete(provider)).status).toBe("ok");
     expect(lookups).toBe(2);
+  });
+});
+
+describe("credentials passed in code beat ambient ones; ambient ones can be refused (C-5)", () => {
+  const HOST_BEARER = ["host", "bedrock", "bearer", "token"].join("-");
+  const BEDROCK = PLATFORMS[1]!;
+  const VERTEX = PLATFORMS[2]!;
+
+  /** Adapters with only the transport fields given: no default credential hooks. */
+  const bare = (platform: Platform, transport: AdapterTransport) => {
+    const fake = fakeFetch(sse("end-turn.sse"));
+    const factory = providerAdapters({ fetch: fake.fetch, maxRetries: 0, ...transport })[
+      platform.kind
+    ] as (settings: ProviderSettings, secrets: ReturnType<typeof envSecrets>) => LlmProvider;
+    return { provider: factory(platform.settings, envSecrets({})), requests: fake.requests };
+  };
+
+  it("Bedrock: AWS_BEARER_TOKEN_BEDROCK never replaces the transport's credential source", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
+    const { provider, requests } = providerFor(BEDROCK, [sse("end-turn.sse")]);
+    expect((await complete(provider)).status).toBe("ok");
+    expect(requests).toHaveLength(1);
+    BEDROCK.checkAuth(requests[0]!);
+    expect(JSON.stringify(requests[0]!.headers)).not.toContain(HOST_BEARER);
+  });
+
+  it("Bedrock without a credential source keeps the documented ambient behaviour (self-host)", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
+    const { provider, requests } = bare(BEDROCK, {});
+    expect((await complete(provider)).status).toBe("ok");
+    expect(requests[0]!.headers["authorization"]).toBe(`Bearer ${HOST_BEARER}`);
+  });
+
+  it("ambientCredentials: false — Bedrock without a credential source fails with auth, sending nothing", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
+    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIAHOSTHOSTHOSTHOST");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "host-secret");
+    const { provider, requests } = bare(BEDROCK, { ambientCredentials: false });
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("auth");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("ambientCredentials: false — Vertex without an auth source fails with auth, sending nothing", async () => {
+    const { provider, requests } = bare(VERTEX, { ambientCredentials: false });
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("auth");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("ambientCredentials: false — with the hooks set, both platforms run on them only", async () => {
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
+    for (const platform of [BEDROCK, VERTEX]) {
+      const { provider, requests } = bare(platform, {
+        ambientCredentials: false,
+        bedrockCredentials,
+        vertexAuth: () => Promise.resolve(vertexAuthSource),
+      });
+      expect((await complete(provider)).status).toBe("ok");
+      platform.checkAuth(requests[0]!);
+      expect(JSON.stringify(requests[0]!.headers)).not.toContain(HOST_BEARER);
+    }
   });
 });
 

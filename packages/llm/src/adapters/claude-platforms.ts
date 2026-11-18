@@ -130,17 +130,25 @@ export const bedrockAdapter =
       {
         kind: "bedrock",
         modelId: (model) => `anthropic.${model}`,
-        // AWS credentials come from the default chain (or AWS_BEARER_TOKEN_BEDROCK); Rocky holds
-        // none. The client resolves them per request, so a failed lookup is not cached.
+        // AWS credentials come from the default chain (or AWS_BEARER_TOKEN_BEDROCK) unless the
+        // transport supplies a credential source. The client resolves them per request, so a
+        // failed lookup is not cached.
         client: async (fetch) => {
+          const credentials = transport.bedrockCredentials;
+          if (credentials === undefined && transport.ambientCredentials === false)
+            throw new LlmCallError("auth");
           const { AnthropicBedrockMantle } = await load(() => import("@anthropic-ai/bedrock-sdk"));
           return new AnthropicBedrockMantle({
             ...hardenedClientOptions(transport, fetch),
             awsRegion: settings.region,
             baseURL: `https://bedrock-mantle.${settings.region}.api.aws/anthropic`,
-            ...(transport.bedrockCredentials === undefined
+            // A source passed in code is the only credential: `apiKey: null` stops the client
+            // from reading AWS_BEARER_TOKEN_BEDROCK, which it would otherwise prefer over the
+            // source (amendment C-5). `awsAccessKey`/`awsSecretAccessKey` are not used: the
+            // SDK's signer does not read them back and falls through to the default chain.
+            ...(credentials === undefined
               ? {}
-              : { providerChainResolver: transport.bedrockCredentials }),
+              : { apiKey: null, providerChainResolver: credentials }),
           });
         },
         serverFallbacks: never,
@@ -175,6 +183,9 @@ const applicationDefault = async (): Promise<VertexAuthSource> => {
   return new GoogleAuth({ scopes: GOOGLE_CLOUD_SCOPE }).getClient();
 };
 
+/** `ambientCredentials: false` without `vertexAuth`: no Google credentials at all. */
+const refuseAmbient = (): Promise<VertexAuthSource> => Promise.reject(new LlmCallError("auth"));
+
 /**
  * One auth client per adapter, built on first use and reused (it caches its token). A failed
  * lookup is dropped, not cached: the Vertex client would otherwise keep the rejected promise for
@@ -198,7 +209,10 @@ export const vertexAdapter =
   (transport: AdapterTransport): ProviderAdapterFactory<"vertex"> =>
   (settings) => {
     assertAmbientAtBoot("vertex");
-    const auth = vertexAuthOnce(transport.vertexAuth ?? applicationDefault);
+    const auth = vertexAuthOnce(
+      transport.vertexAuth ??
+        (transport.ambientCredentials === false ? refuseAmbient : applicationDefault),
+    );
     return claudeProvider(
       {
         kind: "vertex",

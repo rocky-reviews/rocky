@@ -8,7 +8,9 @@
 - **Amended by:** H4-4 (the sent schema versus the validating schema, a prompt-mode delivery for
   the graph, and a content-free failure diagnostic; "Amendment (H4-4)" below); H4-5 (the graph
   asks for lanes, nodes and edges only and is an enforced output again; "Amendment (H4-5)" below);
-  deps-anthropic-sdk-1x (the 1.x SDKs and API version `2026-10-21`; "Amendment (1.x SDKs)" below)
+  deps-anthropic-sdk-1x (the 1.x SDKs and API version `2026-10-21`; "Amendment (1.x SDKs)" below);
+  C-5 (a credential source passed in code beats `AWS_BEARER_TOKEN_BEDROCK`, and
+  `ambientCredentials: false` refuses ambient platform credentials; "Amendment (C-5)" below)
 
 ## Context
 
@@ -551,3 +553,36 @@ API-version guide (`2026-10-21`) supplied the platform rules.
   is documented in `.env.example`.
 - The `claude-api` skill cache (2026-10-06) predates the 1.x releases; the changelogs and source
   of the installed packages were the reference for every change above.
+
+## Amendment (C-5): credentials passed in code win; ambient ones can be refused
+
+**Context.** A host that runs calls on per-tenant credentials (Rocky Cloud's bring-your-own-key
+orgs) passes them through `AdapterTransport.bedrockCredentials` and `vertexAuth`. Two gaps let
+the host's own credentials stand in for the tenant's:
+
+- The 1.x Bedrock Mantle client resolves auth as `apiKey` > explicit AWS keys > `awsProfile` >
+  `AWS_BEARER_TOKEN_BEDROCK` > the credential chain. A `providerChainResolver` does not count as
+  explicit, so with `AWS_BEARER_TOKEN_BEDROCK` set the request went out as `Bearer <host token>`
+  and the transport's source was never called. The contract suite stubbed the variable to empty,
+  which hid it.
+- A missing hook silently meant ambient credentials (the AWS default chain, including instance
+  metadata; Google application default credentials).
+
+**Decision.**
+
+1. When `bedrockCredentials` is set, the Bedrock client gets `apiKey: null` with it, so
+   `AWS_BEARER_TOKEN_BEDROCK` is never read and the source is the only credential. The SDK's
+   `awsAccessKey`/`awsSecretAccessKey` options are not used: in 1.1.0 its signer checks
+   `awsSecretKey`, not the field the client passes, and falls through to the default chain.
+2. New transport field `ambientCredentials` (default `true`, so self-host is unchanged). With
+   `false`, a Bedrock call without `bedrockCredentials` and a Vertex call without `vertexAuth`
+   fail with `auth` before anything is imported or sent.
+3. Without a source and with ambient credentials allowed, behaviour is as before: bearer mode
+   (`AWS_BEARER_TOKEN_BEDROCK`) and the default chains keep working for self-host.
+
+**Tests** (`claude.contract.test.ts`, "credentials passed in code beat ambient ones"): the
+variable set to a host token while a source is given produces a SigV4 request with the source's
+key id and no trace of the token; without a source, bearer mode is unchanged; with
+`ambientCredentials: false`, missing hooks fail with `auth` and zero requests even with
+`AWS_BEARER_TOKEN_BEDROCK` and `AWS_ACCESS_KEY_ID` planted; with the hooks set, both platforms
+run on them only. The bearer-mode test now builds its adapter without a source.
