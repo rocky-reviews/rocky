@@ -1,0 +1,13 @@
+# osv-scanner configuration (read from the lockfile's directory by scripts/security/osv-scan.sh).
+# Every ignore needs a reason and an expiry; an expired ignore fails the scan again.
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-17T00:00:00Z
+reason = """
+picomatch ReDoS through single-branch repeated extglobs. No fixed release exists (last affected
+4.0.7, the latest). picomatch is a dev-only dependency here (vite, vitest, tinyglobby, fdir;
+`pnpm why picomatch --prod` finds nothing), so it is not in the production images, and the glob
+patterns it compiles come from this repository's own config, never from users or PR content.
+Upgrade and remove this entry when a fixed version is published.
+"""
