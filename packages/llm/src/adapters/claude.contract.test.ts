@@ -1363,7 +1363,7 @@ describe("credentials passed in code beat ambient ones; ambient ones can be refu
     expect(requests[0]!.headers["x-amz-security-token"]).toBe(session);
   });
 
-  it("teeth: without an auth source and with ambient credentials allowed, Vertex consults GOOGLE_APPLICATION_CREDENTIALS", async () => {
+  it("teeth: without an auth source and with ambient credentials allowed, Vertex sends nothing (it falls back to Google default credentials, which the planted environment cannot satisfy)", async () => {
     // The planted path does not exist, so application default credentials fail on it before
     // any token exchange: a `network` failure with nothing sent, where the hook case is `ok`.
     plantAmbientChain();
