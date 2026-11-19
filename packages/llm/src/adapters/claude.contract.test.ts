@@ -1291,8 +1291,38 @@ describe("credentials passed in code beat ambient ones; ambient ones can be refu
     }
   });
 
-  it("ambientCredentials: false — with the hooks set, both platforms run on them only", async () => {
-    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", HOST_BEARER);
+  /**
+   * Every variable through which the AWS credential chain or Google application default
+   * credentials could hand a BYOK call the host's credential instead of the tenant's. Values are
+   * built at runtime (no literal key shapes); the Google path points inside the planted config
+   * directory at a file that does not exist, so a client that consults it fails on that file
+   * instead of reaching a token endpoint.
+   */
+  const plantAmbientChain = () => {
+    const accessKeyId = ["AKIA", "HOST".repeat(4)].join("");
+    const secret = ["host", "secret", "access", "key"].join("-");
+    const session = ["host", "session", "token"].join("-");
+    const planted: Record<string, string> = {
+      AWS_BEARER_TOKEN_BEDROCK: HOST_BEARER,
+      AWS_ACCESS_KEY_ID: accessKeyId,
+      AWS_SECRET_ACCESS_KEY: secret,
+      AWS_SESSION_TOKEN: session,
+      AWS_PROFILE: "host-profile",
+      AWS_DEFAULT_PROFILE: "host-default-profile",
+      AWS_SHARED_CREDENTIALS_FILE: join(plantedConfigDir, "aws-credentials"),
+      AWS_CONFIG_FILE: join(plantedConfigDir, "aws-config"),
+      AWS_WEB_IDENTITY_TOKEN_FILE: join(plantedConfigDir, "aws-web-identity-token"),
+      AWS_ROLE_ARN: "arn:aws:iam::000000000000:role/host-role",
+      AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/host/container/credentials",
+      AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.2/host/container/credentials",
+      GOOGLE_APPLICATION_CREDENTIALS: join(plantedConfigDir, "google-application-credentials.json"),
+    };
+    for (const [name, value] of Object.entries(planted)) vi.stubEnv(name, value);
+    return { accessKeyId, secret, session, values: Object.values(planted) };
+  };
+
+  it("ambientCredentials: false — with the hooks set, both platforms run on them only, with every ambient credential variable planted", async () => {
+    const { values } = plantAmbientChain();
     for (const platform of [BEDROCK, VERTEX]) {
       const { provider, requests } = bare(platform, {
         ambientCredentials: false,
@@ -1300,9 +1330,47 @@ describe("credentials passed in code beat ambient ones; ambient ones can be refu
         vertexAuth: () => Promise.resolve(vertexAuthSource),
       });
       expect((await complete(provider)).status).toBe("ok");
-      platform.checkAuth(requests[0]!);
-      expect(JSON.stringify(requests[0]!.headers)).not.toContain(HOST_BEARER);
+      // One request, to the configured host, authenticated by the hook alone.
+      expect(requests).toHaveLength(1);
+      const request = requests[0]!;
+      expect(request.url.toString()).toBe(platform.url("claude-opus-5-5"));
+      platform.checkAuth(request);
+      const authorization = request.headers["authorization"] ?? "";
+      if (platform === BEDROCK) {
+        // SigV4 scoped to the hook's key id; no session token from the chain, no bearer.
+        expect(authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=test-access-key-id\//);
+        expect(authorization).not.toContain("Bearer");
+        expect(request.headers["x-amz-security-token"]).toBeUndefined();
+      } else {
+        expect(authorization).toBe("Bearer vertex-test-token");
+      }
+      const shown = JSON.stringify(request.headers) + JSON.stringify(request.body);
+      for (const value of values) expect(shown).not.toContain(value);
     }
+  });
+
+  it("teeth: without a source and with ambient credentials allowed, the planted AWS chain is what signs a Bedrock request", async () => {
+    // Proves the chain planted above is live, so the assertions above are not vacuous: a bare
+    // client with no source and no bearer token signs with the planted key and session token.
+    const { accessKeyId, session } = plantAmbientChain();
+    vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+    const { provider, requests } = bare(BEDROCK, {});
+    expect((await complete(provider)).status).toBe("ok");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.headers["authorization"]).toMatch(
+      new RegExp(`^AWS4-HMAC-SHA256 Credential=${accessKeyId}/`),
+    );
+    expect(requests[0]!.headers["x-amz-security-token"]).toBe(session);
+  });
+
+  it("teeth: without an auth source and with ambient credentials allowed, Vertex sends nothing (it falls back to Google default credentials, which the planted environment cannot satisfy)", async () => {
+    // The planted path does not exist, so application default credentials fail on it before
+    // any token exchange: a `network` failure with nothing sent, where the hook case is `ok`.
+    plantAmbientChain();
+    const { provider, requests } = bare(VERTEX, {});
+    const error = await rejection(complete(provider));
+    expect(isLlmCallError(error) && error.kind).toBe("network");
+    expect(requests).toHaveLength(0);
   });
 });
 
