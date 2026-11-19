@@ -335,6 +335,10 @@ export const toCallError = (error: unknown, state: CallState): LlmCallError => {
   // hostile, and a status it sent (401, 400) is not trusted to classify the failure (T9).
   if (state.budget?.exceeded === true) return new LlmCallError("server_error");
   if (state.deadline?.aborted === true) return new LlmCallError("timeout");
+  // A transport hook of Rocky's (a credential source) failed with its own kind, and the SDK
+  // wrapped it (a connection error for a provider, a middleware error for a resolver): keep the
+  // kind, so a refused credential stays `auth` instead of a retryable `network` (amendment C-5).
+  if (error instanceof AnthropicError && isLlmCallError(error.cause)) return error.cause;
   if (error instanceof APIUserAbortError) return new LlmCallError("cancelled");
   if (error instanceof APIConnectionTimeoutError) return new LlmCallError("timeout");
   if (error instanceof APIConnectionError) return new LlmCallError("network");

@@ -18,10 +18,20 @@ export interface AdapterTransport {
   readonly maxResponseBytes?: number;
   /** Delimiter ids for untrusted content (default: 96 random bits). */
   readonly nonce?: () => string;
-  /** Bedrock: replaces the AWS default credential chain. */
+  /**
+   * Bedrock: replaces the AWS default credential chain. When set it is the only credential the
+   * client uses: `AWS_BEARER_TOKEN_BEDROCK` is not read either (ADR 0013, amendment C-5).
+   */
   readonly bedrockCredentials?: BedrockMantleClientOptions["providerChainResolver"];
   /** Vertex: replaces Google application default credentials (a google-auth-library client). */
   readonly vertexAuth?: () => Promise<VertexAuthSource>;
+  /**
+   * `false`: never fall back to ambient platform credentials (the AWS default chain and
+   * `AWS_BEARER_TOKEN_BEDROCK`, Google application default credentials). A Bedrock or Vertex call
+   * without `bedrockCredentials` / `vertexAuth` then fails with `auth` before anything is sent.
+   * For hosts that run calls on someone else's credentials (per-tenant keys). Default `true`.
+   */
+  readonly ambientCredentials?: boolean;
 }
 
 /** The part of a google-auth-library `AuthClient` the Vertex client uses. */
