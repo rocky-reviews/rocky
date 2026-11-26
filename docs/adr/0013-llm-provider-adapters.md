@@ -645,5 +645,5 @@ One copy of the core SDK resolves (`sdk-instance.test.ts`).
 **Residual risk.** Enforced enums make the compiled grammar larger. The grammar-size limit has no
 offline oracle (H4-4, limit 3), and the graph's H4-5 evidence was a run with enums as prose. A
 rejection would be `llm_invalid_request` on the graph or flows call (fatal, visible, nothing
-sent twice). The evidence is a completed real analysis on the dogfooding pull request on 1.8.0
-(`docs/progress.md`, `needs-human`).
+sent twice). The evidence on 1.8.0 (`docs/progress.md`, D-93): the pr-847 live eval completed and one
+direct call per graph-role output (graph, flows, walkthrough) returned `ok`.
