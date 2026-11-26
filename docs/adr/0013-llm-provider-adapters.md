@@ -664,7 +664,7 @@ each depends on `@anthropic-ai/sdk >=1.0.0 <2`, so one copy of the core SDK reso
 the repo; the installed tarball's integrity matches the diffed one), and the two transforms were
 run over every role schema (`STAGE_CALLS`, `ASK_OUTPUT`, `REVIEW_MEMORY_OUTPUT`).
 
-**What changed on the wire.** One thing. Zod emits `$schema` at the root of every role schema;
+**What changed on the wire.** One thing, besides the SDK version header. Zod emits `$schema` at the root of every role schema;
 1.8.0's `transformJSONSchema` folded it into the root description as
 `{$schema: "https://json-schema.org/draft/2020-12/schema"}`, and 1.9.0 ("keep $schema out of the
 transformed schema description") drops it. Every role's sent schema is 63 bytes smaller and its
@@ -700,5 +700,6 @@ appears anywhere in the sent schema. The eight cases fail on 1.8.0 and pass on 1
 
 **Residual risk.** The only wire change removes a line of prose the model read for nothing, so
 the grammar-size question of the previous amendment does not arise again; the live check on
-1.10.0 (one direct call per structured output, all six `ok`) is the evidence that nothing else
+1.10.0 (one direct call per pipeline stage output, all six `ok`; `ask` and `memory` were not called
+live and rest on the offline test) is the evidence that nothing else
 moved, recorded in `docs/progress.md` (D-95).
