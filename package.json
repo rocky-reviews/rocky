@@ -46,7 +46,7 @@
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.65.0",
+    "@playwright/test": "1.65.1",
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/evals": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
@@ -54,15 +54,15 @@
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.1.0",
     "esbuild": "0.28.2",
-    "eslint": "10.14.0",
+    "eslint": "10.15.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.14.0",
     "pg": "8.23.1",
-    "prettier": "3.9.10",
+    "prettier": "3.10.1",
     "simple-git-hooks": "2.14.0",
     "tsx": "4.23.15",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1",
+    "typescript-eslint": "8.72.2",
     "vitest": "5.1.0",
     "yaml": "2.9.1"
   }

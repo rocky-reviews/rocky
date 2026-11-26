@@ -39,6 +39,59 @@ const optionalCount = (sent: unknown): number => {
   return optional;
 };
 
+/** Keywords the provider reads as text, not as grammar. */
+const PROSE = new Set(["description", "title", "examples", "$schema"]);
+
+/**
+ * A description-free size of a sent schema: one per property name, `type`, and `enum` or `const`
+ * literal. A proxy for the compiled grammar (ADR 0013 H4-4, limit 3, has no offline oracle), used
+ * only to compare schemas with each other. It does not follow `$ref` or weigh combinators: the
+ * flows and walkthrough schemas it is used on are checked above to have no `$defs`, so nothing
+ * they contain is hidden behind a reference.
+ */
+const grammarWeight = (sent: unknown): number => {
+  let weight = 0;
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (typeof node !== "object" || node === null) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (PROSE.has(key)) continue;
+      if (key === "properties" && typeof value === "object" && value !== null) {
+        weight += Object.keys(value).length;
+        Object.values(value).forEach(walk);
+      } else if (key === "enum" && Array.isArray(value)) weight += value.length;
+      else if (key === "type" || key === "const") weight += 1;
+      else walk(value);
+    }
+  };
+  walk(sent);
+  return weight;
+};
+
+/**
+ * Every `enum` and primitive `const` (as a one-value list) in a schema, in document order (property
+ * maps walked by key). Zod emits `const` for `z.literal`, which the SDK keeps since 1.7.0 as well.
+ */
+const enumsIn = (schema: unknown): unknown[][] => {
+  const found: unknown[][] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(walk);
+    if (typeof node !== "object" || node === null) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (PROSE.has(key)) continue;
+      // A property may itself be named `title` or `description`: walk the map's values.
+      if (key === "properties" && typeof value === "object" && value !== null)
+        Object.values(value).forEach(walk);
+      else if (key === "enum" && Array.isArray(value)) found.push(value);
+      else if (key === "const" && (value === null || typeof value !== "object"))
+        found.push([value]);
+      else walk(value);
+    }
+  };
+  walk(schema);
+  return found;
+};
+
 describe("every role's output schema goes through the SDK's structured-output transform (H4-4)", () => {
   it.each(STAGES)("%s", (_stage, template) => {
     expect(() => jsonSchemaOutputFormat(template.output.jsonSchema as never)).not.toThrow();
@@ -159,11 +212,42 @@ describe("which roles the provider enforces (H4-4, H4-5)", () => {
     expect(JSON.stringify(walkthrough)).not.toMatch(/"stage"|"messages"|"lanes"|"\$defs"|anyOf/);
     expect(JSON.stringify(walkthrough)).toMatch(/"heading"/);
     // Each is a fraction of the graph's grammar, which compiled on the real provider (H4-5).
-    const graphBytes = JSON.stringify(
+    // Measured on what the provider compiles, not on the JSON's length: descriptions (and the
+    // constraints the SDK folds into them) are prose, so rewording one, or an SDK moving a
+    // keyword between the prose and the schema, must not move the comparison.
+    const graph = grammarWeight(
       jsonSchemaOutputFormat(STAGE_CALLS.graph.output.jsonSchema as never).schema,
-    ).length;
-    expect(JSON.stringify(flows).length).toBeLessThan(graphBytes);
-    expect(JSON.stringify(walkthrough).length).toBeLessThan(graphBytes / 4);
+    );
+    expect(grammarWeight(flows)).toBeLessThan(graph);
+    expect(grammarWeight(walkthrough)).toBeLessThan(graph / 4);
+  });
+});
+
+describe("enums reach the provider as constraints (SDK 1.7+)", () => {
+  // `@anthropic-ai/sdk` 1.7.0 ("keep const and enum in structured output schemas") sends a
+  // primitive `enum` as is, where 1.6.0 dropped it to `type: "string"` plus `{enum: [...]}` in
+  // the description. The provider now enforces the values; the Zod validator is unchanged.
+  const ROLES: [string, LlmOutputSchema<unknown>][] = [
+    ...STAGES.map(([stage, template]): [string, LlmOutputSchema<unknown>] => [
+      stage,
+      template.output,
+    ]),
+    ["ask", ASK_OUTPUT],
+    ["memory", REVIEW_MEMORY_OUTPUT],
+  ];
+
+  it.each(ROLES)(
+    "%s: every enum and const Zod emits is sent as such, none as prose",
+    (_role, output) => {
+      const sent = jsonSchemaOutputFormat(output.jsonSchema as never).schema;
+      expect(enumsIn(sent)).toEqual(enumsIn(output.jsonSchema));
+      expect(JSON.stringify(sent)).not.toMatch(/[{,] ?(enum|const): /);
+    },
+  );
+
+  it("the triage, review, graph and flows schemas carry enums, so the check above has teeth", () => {
+    for (const stage of ["triage", "review", "graph", "flows"] as const)
+      expect(enumsIn(STAGE_CALLS[stage].output.jsonSchema).length, stage).toBeGreaterThan(0);
   });
 });
 

@@ -10,7 +10,9 @@
   asks for lanes, nodes and edges only and is an enforced output again; "Amendment (H4-5)" below);
   deps-anthropic-sdk-1x (the 1.x SDKs and API version `2026-10-21`; "Amendment (1.x SDKs)" below);
   C-5 (a credential source passed in code beats `AWS_BEARER_TOKEN_BEDROCK`, and
-  `ambientCredentials: false` refuses ambient platform credentials; "Amendment (C-5)" below)
+  `ambientCredentials: false` refuses ambient platform credentials; "Amendment (C-5)" below);
+  deps #93 (`@anthropic-ai/sdk` 1.8.0 sends enums as enforced constraints; "Amendment (SDK 1.8)"
+  below)
 
 ## Context
 
@@ -227,20 +229,23 @@ strict: true } }` (Ollama and vLLM support it) plus the schema in the system mes
 ### 6. Dependencies
 
 Exact versions, each past the workspace's 7-day `minimumReleaseAge` (the 1.x rows since the
-amendment "1.x SDKs" below; P4-2 shipped on 0.135.0 / 0.35.0 / 0.21.0 / 0.6.0):
+amendment "1.x SDKs" below, bumped since by Dependabot; the latest wire change is the
+amendment "SDK 1.8"; P4-2 shipped on 0.135.0 / 0.35.0 / 0.21.0 / 0.6.0):
 
 | Package                     | Version | Why                                                                                      |
 | --------------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `@anthropic-ai/sdk`         | 1.3.0   | Official SDK: streaming accumulation, typed errors, schema transform, beta params        |
-| `@anthropic-ai/bedrock-sdk` | 1.1.0   | `AnthropicBedrockMantle`: SigV4 signing and the AWS credential chain (pulls the AWS SDK) |
-| `@anthropic-ai/vertex-sdk`  | 1.1.0   | `AnthropicVertex`: Vertex URL rewriting and Google ADC (pulls `google-auth-library`)     |
-| `@anthropic-ai/foundry-sdk` | 1.1.0   | `AnthropicFoundry`: resource URL and Foundry auth headers                                |
-| `google-auth-library`       | 10.9.1  | Google ADC, built by Rocky so a failed lookup is retried (already in the Vertex tree)    |
+| `@anthropic-ai/sdk`         | 1.8.0   | Official SDK: streaming accumulation, typed errors, schema transform, beta params        |
+| `@anthropic-ai/bedrock-sdk` | 1.1.2   | `AnthropicBedrockMantle`: SigV4 signing and the AWS credential chain (pulls the AWS SDK) |
+| `@anthropic-ai/vertex-sdk`  | 1.1.3   | `AnthropicVertex`: Vertex URL rewriting and Google ADC (pulls `google-auth-library`)     |
+| `@anthropic-ai/foundry-sdk` | 1.1.1   | `AnthropicFoundry`: resource URL and Foundry auth headers                                |
+| `google-auth-library`       | 11.3.4  | Google ADC built by Rocky (a failed lookup is retried), passed as Vertex's `authClient`  |
 
 The 1.x majors send API version `2026-10-21` and are Apache-2.0. **The four Anthropic packages
 move together:** each platform package depends on `@anthropic-ai/sdk >=1.0.0 <2`, so one bumped
 alone resolves a second copy of the core SDK with its own types and its own `APIError` class
-(amendment "1.x SDKs"). Rocky sends no sampling parameters, so its requests fit that version.
+(amendment "1.x SDKs"). `google-auth-library` resolves twice: `vertex-sdk` 1.1.3 depends on
+`^10.2.0` (10.9.1) while Rocky pins 11.x. Rocky builds the auth client from its own copy and passes
+it as `authClient`, so the 10.x copy is installed but never builds credentials. Rocky sends no sampling parameters, so its requests fit that version.
 `pnpm security:scan` (osv-scanner) is clean for the added tree.
 
 ### 7. Wire-up
@@ -592,3 +597,53 @@ key id and no trace of the token; without a source, bearer mode is unchanged; wi
 `AWS_BEARER_TOKEN_BEDROCK` and `AWS_ACCESS_KEY_ID` planted; with the hooks set, both platforms
 run on them only; an `LlmCallError("auth")` from the resolver or from the provider it returns
 stays `auth` with zero requests. The bearer-mode test now builds its adapter without a source.
+
+## Amendment (SDK 1.8): enums are enforced by the provider
+
+**Context.** Dependabot's group PR #93 (`@anthropic-ai/sdk` 1.6.0 → 1.8.0, `bedrock-sdk` 1.1.2,
+`vertex-sdk` 1.1.3; `foundry-sdk` has no newer release than 1.1.1, so it stays) failed one test:
+the H4-7 check that the walkthrough's sent schema is under a quarter of the graph's, measured in
+JSON bytes. Cause, from the installed source: 1.7.0 ("helpers: keep const and enum in
+structured output schemas") changed `transformJSONSchema`. A primitive `enum` (or `const`) is now
+sent as is and its `type` dropped; 1.6.0 sent `type: "string"` and folded the values into the
+description as `{enum: [...]}`. The graph has enums, the walkthrough none, so the graph's JSON
+shrank (6334 → 6114 bytes) while the walkthrough stayed at 1549, crossing the byte threshold.
+Every other difference between the two transforms' output for every role (`STAGE_CALLS`,
+`ASK_OUTPUT`, `REVIEW_MEMORY_OUTPUT`) is this enum rewrite; nothing else moved.
+
+**What changed on the wire.** Each enum field of the triage, review, graph, flows, briefing and
+memory schemas reaches the provider as `enum: [...]` with no `type`, so the grammar now forces one
+of the listed values where it used to allow any string. H4-7 still holds: the flows and
+walkthrough schemas are still separate calls with no recursion, no `$defs` and the same optional
+counts (9 and 2). Validation is unchanged: `parse` is still the Zod schema (S2, S3).
+
+**Decision.**
+
+1. Take the new transform. It is stricter: an out-of-set value is now impossible instead of an
+   `invalid_output` and a repair round. Pinning 1.6.0's shape (folding enums in core) would
+   discard that for no safety gain.
+2. The H4-7 size comparison measures the grammar, not the bytes: `grammarWeight` in
+   `wire-schema.test.ts` counts property names, `type`s and `enum`/`const` literals and ignores
+   descriptions, so rewording prose or an SDK moving a constraint between prose and schema does
+   not move it. The ratios are unchanged (flows < graph, walkthrough < graph / 4); today 60 and
+   18 against 114 (under 1.6.0: 51 and 18 against 81).
+3. New test "enums reach the provider as constraints (SDK 1.7+)": every enum Zod emits is in the
+   sent schema, none survives as `{enum: ...}` prose, for every role.
+
+**Unchanged.** The environment variables the four Anthropic packages read (every upper-case
+identifier literal in the published `.mjs`, compared between the old and new tarball sets: same
+47; `google-auth-library` 11.3.4: same 37), so no new ambient variable needs a policy. Retries,
+timeouts, error mapping, `logLevel: "off"` and `openTelemetry: false`. The SDK's debug log of a
+failed response already carried a non-JSON error body as text; 1.7.0 adds the parsed JSON body as
+well, which can echo request content. Rocky's SDK logging stays off: `logLevel: "off"` and a
+silent logger (T1; `hygiene.test.ts` runs echoing 429/500 bodies with `ANTHROPIC_LOG=debug`, and
+"the SDK client options keep logging off" pins both options and that the logger never reads its
+arguments). The platform packages
+add OpenTelemetry span attributes (off for Rocky) and refuse or encode `;` in path parameters.
+One copy of the core SDK resolves (`sdk-instance.test.ts`).
+
+**Residual risk.** Enforced enums make the compiled grammar larger. The grammar-size limit has no
+offline oracle (H4-4, limit 3), and the graph's H4-5 evidence was a run with enums as prose. A
+rejection would be `llm_invalid_request` on the graph or flows call (fatal, visible, nothing
+sent twice). The evidence on 1.8.0 (`docs/progress.md`, D-93): the pr-847 live eval completed and one
+direct call per graph-role output (graph, flows, walkthrough) returned `ok`.

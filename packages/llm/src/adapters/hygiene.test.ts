@@ -1,3 +1,4 @@
+import type { ClientOptions } from "@anthropic-ai/sdk";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +14,7 @@ import type { ProviderSettings } from "../config.js";
 import type { ProviderKind } from "../providers.js";
 import { envSecrets } from "../registry.js";
 import { providerAdapters } from "./index.js";
+import { hardenedClientOptions } from "./transport.js";
 import {
   fakeFetch,
   fixture,
@@ -230,6 +232,39 @@ describe.each(Object.keys(SETTINGS) as CompletionKind[])("key hygiene: %s", (kin
     // The adapters log nothing at all, with SDK debug logging requested by the environment.
     expect(consoleCalls).toEqual([]);
     assertClean(inspect(provider, { depth: 10, showHidden: true }), "adapter inspect after calls");
+  });
+});
+
+describe("the SDK client options keep logging off (T1)", () => {
+  // SDK 1.7.0 also writes a failed response's parsed JSON body to its debug log, and such a body
+  // can echo request content. The console checks above miss a logger that writes elsewhere (a
+  // file, a pino instance), so the options themselves are pinned: level off, and a logger that
+  // never even reads what it is handed.
+  it("sets logLevel off, OpenTelemetry off, and a logger whose methods are no-ops", () => {
+    const options = hardenedClientOptions({}, fetch);
+    expect(options.logLevel).toBe("off");
+    expect(options.openTelemetry).toBe(false);
+    const touched: string[] = [];
+    const tripwire = new Proxy(
+      {},
+      {
+        get: (_target, key) => {
+          touched.push(String(key));
+          return undefined;
+        },
+        ownKeys: () => {
+          touched.push("ownKeys");
+          return [];
+        },
+      },
+    );
+    // Called as the SDK calls it: through its own `Logger` type.
+    const logger: NonNullable<ClientOptions["logger"]> = options.logger;
+    for (const method of ["error", "warn", "info", "debug"] as const) {
+      expect(logger[method](PR_SECRET_TEXT, tripwire)).toBeUndefined();
+    }
+    expect(touched).toEqual([]);
+    expect(consoleCalls).toEqual([]);
   });
 });
 
