@@ -14,7 +14,7 @@
     "@rocky-reviews/schema": "workspace:*"
   },
   "devDependencies": {
-    "fast-check": "4.10.2",
+    "fast-check": "4.10.3",
     "saxes": "6.0.0"
   }
 }

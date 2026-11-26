@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@rocky-reviews/crypto": "workspace:*",
-    "@testcontainers/postgresql": "12.2.1",
+    "@testcontainers/postgresql": "12.2.2",
     "@types/pg": "8.23.1"
   }
 }
