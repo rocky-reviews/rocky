@@ -251,6 +251,33 @@ describe("enums reach the provider as constraints (SDK 1.7+)", () => {
   });
 });
 
+describe("the dialect marker stays off the wire (SDK 1.9+)", () => {
+  // Zod emits `$schema` at the root. `@anthropic-ai/sdk` 1.9.0 ("keep $schema out of the
+  // transformed schema description") drops it; 1.8.0 appended it to the root description as
+  // `{$schema: "https://json-schema.org/draft/2020-12/schema"}`, prose the model read for nothing.
+  const ROLES: [string, LlmOutputSchema<unknown>][] = [
+    ...STAGES.map(([stage, template]): [string, LlmOutputSchema<unknown>] => [
+      stage,
+      template.output,
+    ]),
+    ["ask", ASK_OUTPUT],
+    ["memory", REVIEW_MEMORY_OUTPUT],
+  ];
+
+  it.each(ROLES)(
+    "%s: the root description is sent as written and the dialect URL does not appear",
+    (_role, output) => {
+      const source = output.jsonSchema as { $schema?: unknown; description?: unknown };
+      // The check has teeth only if Zod still emits the marker.
+      expect(source.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+      expect(typeof source.description).toBe("string");
+      const sent = jsonSchemaOutputFormat(output.jsonSchema as never).schema;
+      expect(sent["description"]).toBe(source.description);
+      expect(JSON.stringify(sent)).not.toMatch(/\$schema|json-schema\.org/);
+    },
+  );
+});
+
 describe("the briefing's TL;DR schema (H4-8)", () => {
   it("compiles through the SDK's transform with the TL;DR required, the summary gone and the limits kept", () => {
     const sent = jsonSchemaOutputFormat(STAGE_CALLS.briefing.output.jsonSchema as never).schema as {

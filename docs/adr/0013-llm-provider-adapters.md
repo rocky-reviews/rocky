@@ -12,7 +12,8 @@
   C-5 (a credential source passed in code beats `AWS_BEARER_TOKEN_BEDROCK`, and
   `ambientCredentials: false` refuses ambient platform credentials; "Amendment (C-5)" below);
   deps #93 (`@anthropic-ai/sdk` 1.8.0 sends enums as enforced constraints; "Amendment (SDK 1.8)"
-  below)
+  below); deps #95 (`@anthropic-ai/sdk` 1.10.0 keeps the `$schema` marker out of the root
+  description; "Amendment (SDK 1.10)" below)
 
 ## Context
 
@@ -230,11 +231,11 @@ strict: true } }` (Ollama and vLLM support it) plus the schema in the system mes
 
 Exact versions, each past the workspace's 7-day `minimumReleaseAge` (the 1.x rows since the
 amendment "1.x SDKs" below, bumped since by Dependabot; the latest wire change is the
-amendment "SDK 1.8"; P4-2 shipped on 0.135.0 / 0.35.0 / 0.21.0 / 0.6.0):
+amendment "SDK 1.10"; P4-2 shipped on 0.135.0 / 0.35.0 / 0.21.0 / 0.6.0):
 
 | Package                     | Version | Why                                                                                      |
 | --------------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| `@anthropic-ai/sdk`         | 1.8.0   | Official SDK: streaming accumulation, typed errors, schema transform, beta params        |
+| `@anthropic-ai/sdk`         | 1.10.0  | Official SDK: streaming accumulation, typed errors, schema transform, beta params        |
 | `@anthropic-ai/bedrock-sdk` | 1.1.2   | `AnthropicBedrockMantle`: SigV4 signing and the AWS credential chain (pulls the AWS SDK) |
 | `@anthropic-ai/vertex-sdk`  | 1.1.3   | `AnthropicVertex`: Vertex URL rewriting and Google ADC (pulls `google-auth-library`)     |
 | `@anthropic-ai/foundry-sdk` | 1.1.1   | `AnthropicFoundry`: resource URL and Foundry auth headers                                |
@@ -647,3 +648,58 @@ offline oracle (H4-4, limit 3), and the graph's H4-5 evidence was a run with enu
 rejection would be `llm_invalid_request` on the graph or flows call (fatal, visible, nothing
 sent twice). The evidence on 1.8.0 (`docs/progress.md`, D-93): the pr-847 live eval completed and one
 direct call per graph-role output (graph, flows, walkthrough) returned `ok`.
+
+## Amendment (SDK 1.10): the `$schema` marker stays off the wire
+
+**Context.** Dependabot's group PR #95 bumped `@anthropic-ai/sdk` 1.8.0 → 1.10.0 alone (with
+`vitest`, `@vitest/coverage-v8`, `typescript-eslint`, `fast-check` and `@testcontainers/postgresql`).
+Its CI was green, but §6 requires the Anthropic packages to move together and every SDK change
+to be checked on the wire, so it was replaced (branch `task/deps-95-sdk-1-10`). Versions, against
+the 7-day `minimumReleaseAge` on 2026-11-26: 1.10.0 (published 2026-11-17) is the newest core SDK
+past it; 1.11.0 (2026-11-19, 19:29 UTC) missed it by about ninety minutes, and 1.12.0–1.14.0 are
+younger. `bedrock-sdk` 1.1.3 (2026-11-20) is too young as well, so the platform packages stay at
+`bedrock-sdk` 1.1.2, `vertex-sdk` 1.1.3 and `foundry-sdk` 1.1.1 (the last two are the latest);
+each depends on `@anthropic-ai/sdk >=1.0.0 <2`, so one copy of the core SDK resolves
+(`sdk-instance.test.ts`). The published 1.8.0 and 1.10.0 tarballs were diffed (`npm pack`, outside
+the repo; the installed tarball's integrity matches the diffed one), and the two transforms were
+run over every role schema (`STAGE_CALLS`, `ASK_OUTPUT`, `REVIEW_MEMORY_OUTPUT`).
+
+**What changed on the wire.** One thing, besides the SDK version header. Zod emits `$schema` at the root of every role schema;
+1.8.0's `transformJSONSchema` folded it into the root description as
+`{$schema: "https://json-schema.org/draft/2020-12/schema"}`, and 1.9.0 ("keep $schema out of the
+transformed schema description") drops it. Every role's sent schema is 63 bytes smaller and its
+root description is the Zod description verbatim; no other leaf of any role's sent schema moved.
+Prose only: the grammar (`grammarWeight`) is unchanged, so H4-7's comparison is unaffected, and
+the validating schema is untouched (S2, S3). The provider never saw the dialect, since the SDK
+sends no `$schema` keyword; it now stops seeing a line of prose about it.
+
+**Changes that are off Rocky's path, checked and left alone.**
+
+- `PaymentRequiredError`: a 402 now has its own `APIError` subclass. `toCallError` branches on
+  `instanceof APIError` and the status, so a 402 is still `billing` (contract test
+  `402-billing.json`).
+- The vendored partial-JSON parser refuses non-JSON characters and words instead of skipping them
+  (1.9.0, "reject characters that aren't JSON in streamed tool input"). It is called only from
+  `withLazyInput`, the lazy `input` of a streamed `tool_use` block. Rocky sends no tools (T6), so
+  no `tool_use` block arrives; structured output comes back as text and is parsed by the port.
+- `beta.messages.batches` no longer adds `message-batches-2024-09-24`; Rocky uses no batches.
+- Eleven error-code classes were added (billing, user profile, RBAC, Claude Tag), and the agent
+  toolset (`tools/agent-toolset`, `lib/tools`) gained hardening around `rg`, `tar`, `unzip` and
+  memory paths; none of it is imported by the adapters.
+
+**Unchanged.** The upper-case identifier literals in the published `.mjs` (the D-93 method; the
+same 48 in the core SDK), so no new environment variable needs a policy; the hosts named in the
+published code (one new `https://example.com` string, in a webhook doc comment); no install
+scripts, the same dependencies and the same `zod` peer range. Retries, timeouts, error mapping,
+`logLevel: "off"`, `openTelemetry: false`, the stream accumulation and the refusal fallbacks.
+
+**Decision.** Take 1.10.0. New test in `wire-schema.test.ts`, "the dialect marker stays off the
+wire (SDK 1.9+)": for every role, the source schema carries `$schema` (so the check has teeth),
+the sent root description equals the Zod description, and neither `$schema` nor `json-schema.org`
+appears anywhere in the sent schema. The eight cases fail on 1.8.0 and pass on 1.10.0.
+
+**Residual risk.** The only wire change removes a line of prose the model read for nothing, so
+the grammar-size question of the previous amendment does not arise again; the live check on
+1.10.0 (one direct call per pipeline stage output, all six `ok`; `ask` and `memory` were not called
+live and rest on the offline test) is the evidence that nothing else
+moved, recorded in `docs/progress.md` (D-95).
