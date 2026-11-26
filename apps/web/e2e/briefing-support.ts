@@ -15,6 +15,7 @@ export const STATE_PULLS = {
   outOfDate: 856,
   noTour: 857,
   summaryOnly: 858,
+  entitlementDenied: 859,
 } as const;
 
 /** Opens the shell on a fixture PR with a fixed clock and no saved theme choice. */

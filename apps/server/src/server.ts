@@ -1,5 +1,5 @@
 import { APP_ROLE, checkServerLogin, createDb, SERVER_FORBIDDEN_ROLES } from "@rocky-reviews/db";
-import type { OrgId, RepositoryAccessCheck } from "@rocky-reviews/core";
+import type { Entitlements, OrgId, RepositoryAccessCheck } from "@rocky-reviews/core";
 import { CryptoError, localKeyWrapperFromEnv } from "@rocky-reviews/crypto";
 import {
   createGitHubForge,
@@ -170,6 +170,11 @@ export interface StartOptions {
   announce?: (text: string) => void;
   /** The LLM adapters the setup wizard's test call uses (tests pass fakes). */
   llmAdapters?: ProviderAdapters;
+  /**
+   * Which features an org may use (C-8, ADR 0046). Default: the self-host implementation
+   * (every `review.*` feature on). Rocky Cloud passes its plan-backed one here.
+   */
+  entitlements?: Entitlements;
 }
 
 const announceToTerminal = (text: string): void => {
@@ -504,6 +509,7 @@ export const startServer = async (
     ...(pullRequestDiffs === undefined ? {} : { pullRequestDiffs }),
     ...(ask === undefined ? {} : { ask }),
     ...(tokenService === undefined ? {} : { tokenMode: { connection: tokenService } }),
+    ...(options.entitlements === undefined ? {} : { entitlements: options.entitlements }),
   });
 
   // 0.0.0.0 in containers (Fly.io); .env.example binds 127.0.0.1 for local development.

@@ -2,11 +2,24 @@ export {
   FEATURES,
   isFeature,
   type Clock,
+  type EntitlementDecision,
   type Entitlements,
   type Feature,
   type OrgId,
 } from "./ports.js";
-export { selfHostEntitlements } from "./entitlements.js";
+export {
+  ANALYSIS_FEATURES,
+  checkEntitlement,
+  DENIED_REASON,
+  ENTITLEMENT_DEADLINE_MS,
+  ENTITLEMENT_DENIED,
+  isEntitlementReason,
+  selfHostEntitlements,
+  UNAVAILABLE_REASON,
+  UNKNOWN_FEATURE_REASON,
+  type EntitlementDenial,
+  type EntitlementVerdict,
+} from "./entitlements.js";
 export {
   ASSIGNABLE_ROLES,
   can,

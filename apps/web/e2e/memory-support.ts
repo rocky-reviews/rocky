@@ -31,7 +31,11 @@ export interface MemoryApiMock {
  */
 export const openMemoryApi = async (
   page: Page,
-  options: { readonly list?: unknown; readonly answer?: (request: Request) => number } = {},
+  options: {
+    readonly list?: unknown;
+    /** A status (200 is `{}`, anything else `already_superseded`), or a status with its body. */
+    readonly answer?: (request: Request) => number | { status: number; body: unknown };
+  } = {},
 ): Promise<MemoryApiMock> => {
   const changes: MemoryApiMock["changes"] = [];
   await page.route("**/api/session", (route) =>
@@ -72,14 +76,25 @@ export const openMemoryApi = async (
       csrf: (await request.headerValue("x-rocky-csrf")) ?? null,
       body: request.postData() === null ? null : request.postDataJSON(),
     });
-    const status = options.answer?.(request) ?? 200;
-    await route.fulfill({ status, json: status === 200 ? {} : { error: "already_superseded" } });
+    const answer = options.answer?.(request) ?? 200;
+    if (typeof answer === "number") {
+      await route.fulfill({
+        status: answer,
+        json: answer === 200 ? {} : { error: "already_superseded" },
+      });
+    } else await route.fulfill({ status: answer.status, json: answer.body });
   });
   await page.clock.setFixedTime(FIXTURE_NOW);
   await page.goto(MEMORY_PAGE);
   await page.locator("#memory-page-title").waitFor();
   return { changes, loads: () => loads };
 };
+
+/** C-8 (ADR 0046): the server's answer for an org whose plan lacks project memory. */
+export const MEMORY_DENIED = {
+  status: 403,
+  body: { error: "entitlement_denied", feature: "review.memory", reason: "no-plan" },
+} as const;
 
 /** The list item of one fixture entry. */
 export const entryItem = (page: Page, n: number) =>

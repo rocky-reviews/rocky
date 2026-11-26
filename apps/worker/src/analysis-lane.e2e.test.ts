@@ -1,6 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
-import type { Forge, ForgeDiff, RepositorySession } from "@rocky-reviews/core";
+import {
+  selfHostEntitlements,
+  type Forge,
+  type ForgeDiff,
+  type RepositorySession,
+} from "@rocky-reviews/core";
 import { scriptedRoles, type Script, type ScriptedCall } from "@rocky-reviews/core/testing";
 import {
   approveAnalysisOverLimit,
@@ -298,6 +303,7 @@ const setup = (options: {
     unitKeySalt: "lane-e2e",
     version: "0.0.0",
     usageTargets: usageTargetsFor(llmConfigFromEnv({})),
+    entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
   };
   const outcomes: AnalysisRun[] = [];
   // Claim order: the lane starts runs in the order the claim handed them out. Forge reads come

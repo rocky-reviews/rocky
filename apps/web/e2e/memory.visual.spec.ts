@@ -1,15 +1,23 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { entryItem, MEMORY_FIXTURE, openMemory, openMemoryApi } from "./memory-support.js";
+import { seriousViolations } from "./axe.js";
+import {
+  entryItem,
+  MEMORY_DENIED,
+  MEMORY_FIXTURE,
+  openMemory,
+  openMemoryApi,
+} from "./memory-support.js";
 import { MODES, settle, WIDTHS } from "./support.js";
 
 /**
  * P8-3 acceptance (screenshots): the project memory page at 375/1024/1440 px x light/dark, as an
  * admin and as a member, with earlier versions shown, editing an entry, the delete confirmation,
  * memory switched off for the repository, and a repository with no memory yet. Baselines in
- * e2e/__screenshots__/, copies for the PR in artifacts/screenshots/P8-3/. The POC has no memory
- * page: these follow its shell, tokens, card style, memory mark and modal.
+ * e2e/__screenshots__/, copies for the PR in artifacts/screenshots/P8-3/ (C-8's plan denial,
+ * `memory-edit-denied`, in artifacts/screenshots/C-8/). The POC has no memory page: these follow
+ * its shell, tokens, card style, memory mark and modal.
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -17,6 +25,8 @@ const OUT = join(ROOT, "artifacts/screenshots/P8-3");
 
 type State = {
   id: string;
+  /** Whose copies these are (default P8-3). */
+  task?: "C-8";
   open?: (page: Page) => Promise<unknown>;
   /** A modal's backdrop covers the viewport only, so dialog states are not full-page. */
   dialog?: boolean;
@@ -61,6 +71,22 @@ const STATES: State[] = [
     open: (page) => openMemoryApi(page, { list: { ...MEMORY_FIXTURE, entries: [] } }),
     run: async () => {},
   },
+  {
+    // C-8 (ADR 0046): the organisation's plan lacks project memory: saving an edit is refused
+    // with a 403 and the problem line points to billing; the list is unchanged. Axe-clean.
+    id: "memory-edit-denied",
+    task: "C-8",
+    open: (page) => openMemoryApi(page, { answer: () => MEMORY_DENIED }),
+    run: async (page) => {
+      await entryItem(page, 1).getByRole("button", { name: "Edit" }).click();
+      await page.getByRole("textbox", { name: "Text" }).fill("Retries cover swallowed errors.");
+      await page.getByRole("button", { name: "Save" }).click();
+      const problem = page.locator(".memory-problem");
+      await expect(problem).toContainText("plan doesn't include project memory");
+      await page.mouse.move(0, 0);
+      expect(await seriousViolations(page)).toEqual([]);
+    },
+  },
 ];
 
 for (const state of STATES) {
@@ -76,8 +102,10 @@ for (const state of STATES) {
         await expect(page.locator("html")).toHaveAttribute("data-mode", mode);
         const fullPage = state.dialog !== true;
         await expect(page).toHaveScreenshot(`${name}.png`, { fullPage });
-        await mkdir(OUT, { recursive: true });
-        await page.screenshot({ path: join(OUT, `${name}.png`), fullPage });
+        const out =
+          state.task === undefined ? OUT : join(ROOT, "artifacts/screenshots", state.task);
+        await mkdir(out, { recursive: true });
+        await page.screenshot({ path: join(out, `${name}.png`), fullPage });
       });
     }
   }

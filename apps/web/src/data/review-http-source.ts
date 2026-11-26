@@ -81,9 +81,12 @@ export const createHttpReviewSource = (
         `${base(analysisId)}/drafts/${encodeURIComponent(findingId)}`,
         actionBody(action),
       );
-      if (response.status === 400) {
+      if (response.status === 400 || response.status === 403) {
         const answer = (await response.json().catch(() => ({}))) as { error?: unknown };
-        if (answer.error === "comment_too_long") return { kind: "too_long" };
+        if (response.status === 400 && answer.error === "comment_too_long")
+          return { kind: "too_long" };
+        if (response.status === 403 && answer.error === "entitlement_denied")
+          return { kind: "not_entitled" };
         throw new ReviewRequestError("draft", response.status);
       }
       if (response.status !== 200 && response.status !== 409)

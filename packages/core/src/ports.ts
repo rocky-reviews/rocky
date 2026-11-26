@@ -39,4 +39,16 @@ export const isFeature = (value: unknown): value is Feature =>
  */
 export interface Entitlements {
   can(org: OrgId, feature: Feature): Promise<boolean>;
+  /**
+   * Optional: the same answer with a fixed reason code (Rocky Cloud's `decide`: `no-plan`,
+   * `not-in-plan`, `state-unavailable`, …). The app reads it only after `can` denied, to tell
+   * the person why; the reason must be a short kebab-case code (`isEntitlementReason`), or it
+   * is replaced by `denied`. `can` stays the authority: `decide` can never grant.
+   */
+  decide?(org: OrgId, feature: Feature): Promise<EntitlementDecision>;
+}
+
+export interface EntitlementDecision {
+  readonly granted: boolean;
+  readonly reason?: string;
 }

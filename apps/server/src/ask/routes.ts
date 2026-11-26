@@ -2,12 +2,14 @@ import {
   answerQuestion,
   AskSpaceError,
   checkAskRequest,
+  checkEntitlement,
   isLlmCallError,
   isLlmMeteringError,
   isSameSpace,
   type AskRequest,
   type CodeReader,
   type EmbeddingSpace,
+  type Entitlements,
   type LlmRoles,
   type LlmUsageRecord,
   type OrgId,
@@ -28,6 +30,11 @@ import { limits, RepoName, RepoOwner } from "@rocky-reviews/schema";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { requires } from "../auth/policy.js";
 import type { ActiveMember } from "../auth/routes.js";
+import {
+  ENTITLEMENT_DENIED_STATUS,
+  entitlementDeniedBody,
+  entitlementDeniedFields,
+} from "../entitlements.js";
 import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.js";
 
 /**
@@ -54,6 +61,8 @@ import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.
  *                                               is the model's), `uncited` (it cited nothing
  *                                               it was shown)
  *   400 invalid_question                        the body is not a question Rocky asks
+ *   403 entitlement_denied                      the org's plan does not include Ask (C-8, ADR
+ *                                               0046): `feature`, `reason` are fixed codes
  *   404 not_found                               as the PR page (unknown, disabled repository,
  *                                               another org's, GitHub access denied)
  *   409 not_indexed | indexing                  nothing to search yet (as GET says)
@@ -68,7 +77,9 @@ import { createAskExcerptReader, type AskExcerptReader } from "./excerpt-reader.
  *
  * Order (POST): policy, the member's minute and day limits (before anything is read), the
  * address, the body, the deps that must exist, the row inside `withOrg` (ids only), the P3-6
- * access check, the index's state, then the org's two budgets (before anything is spent; each
+ * access check, the org's entitlement to `review.ask` (C-8: a denial, or an `Entitlements` that
+ * throws, is 403 before the index is looked at or anything is spent; GET is a read and stays
+ * open), the index's state, then the org's two budgets (before anything is spent; each
  * counted atomically, so concurrent questions cannot overshoot), then the flow
  * (`answerQuestion`, packages/core): the question is embedded by the metered embed
  * role, the search runs inside `withOrg` with the org, repository and space filter
@@ -105,6 +116,8 @@ export interface AskDeps {
 
 export interface AskRoutesDeps {
   readonly db: Pick<Db, "withOrg">;
+  /** Which features the org may use (C-8): `review.ask` is asked before a question is answered. */
+  readonly entitlements: Entitlements;
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
   /** Without it (no embedding model configured) Ask is `off`. */
   readonly ask?: AskDeps;
@@ -308,6 +321,12 @@ export const registerAskRoutes = (app: FastifyInstance, deps: AskRoutesDeps): vo
         if (row.installationId === null) {
           log(request, "no_installation", ids);
           return json(reply, 404, { error: "not_found" });
+        }
+        // C-8 (ADR 0046 §2): the plan, before the index is looked at and before anything is spent.
+        const verdict = await checkEntitlement(deps.entitlements, me.orgId, "review.ask");
+        if (!verdict.granted) {
+          log(request, "entitlement_denied", { ...ids, ...entitlementDeniedFields(verdict) });
+          return json(reply, ENTITLEMENT_DENIED_STATUS, entitlementDeniedBody(verdict));
         }
         const index = askIndexView(row.index, ask.space);
         if (index.status !== "ready") {

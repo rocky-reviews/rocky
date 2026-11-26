@@ -19,6 +19,8 @@ export const BRIEFING_FIXTURE_PULLS = {
   outOfDate: 856,
   noTour: 857,
   summaryOnly: 858,
+  /** C-8 (ADR 0046): the organisation's plan did not include AI analysis when the run started. */
+  entitlementDenied: 859,
 } as const;
 
 /** A push after the analysed commit: the PR's head in the re-analysing and out-of-date states. */
@@ -148,6 +150,12 @@ export const briefingFixtures = (base: object): RawShellData[] => {
       myReview: null,
       analysis: null,
       analysisRun: { status: "failed", code: "superseded" },
+    },
+    {
+      pull: pull(n.entitlementDenied),
+      myReview: null,
+      analysis: null,
+      analysisRun: { status: "failed", code: "entitlement_denied" },
     },
   ];
 };

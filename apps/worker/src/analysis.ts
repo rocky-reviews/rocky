@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import {
+  ANALYSIS_FEATURES,
   analyzePullRequest,
+  checkEntitlement,
   DEFAULT_ANALYSIS_TOKEN_LIMIT,
   estimateAnalysisTokens,
   ForgeReadError,
   isLlmCallError,
   type AnalysisDiagnostic,
   type Clock,
+  type EntitlementDenial,
+  type Entitlements,
   type Forge,
   type ForgeDiff,
   type LlmRoles,
@@ -59,6 +63,14 @@ import type { Logger } from "@rocky-reviews/log";
  *   org's tenant transaction) go to the pipeline, which sends the relevant ones to each review
  *   as untrusted text; the entries the stored document cites get `last_used_at` in the same
  *   transaction that stores it. Logs carry their counts only.
+ * - Entitlements (C-8, ADR 0046): before the forge is read and before any model call, the run
+ *   asks `deps.entitlements` for every feature the pipeline needs (`ANALYSIS_FEATURES`). A
+ *   denial, or an implementation that throws, ends the row as `failed` with the fixed code
+ *   `entitlement_denied` (not retried: the plan, not the run, has to change; the next push or
+ *   an explicit re-run asks again). Checked here, at claim time, not at enqueue time: a plan can
+ *   lapse while the row waits in the queue. `review.memory` is asked separately: denied, the
+ *   run goes ahead without project memory (nothing loaded, nothing sent, nothing touched).
+ *   Self-hosted instances pass `selfHostEntitlements`, which grants every `review.*` feature.
  * - Metering (P4-5, ADR 0016): the pipeline only ever sees the roles wrapped by `meterRoles`, so
  *   every call writes its `llm_usage` rows (in its own short tenant transaction, before its result
  *   is used) for this org and analysis. A usage write that fails for good stops the run: the
@@ -96,6 +108,11 @@ export interface AnalysisRunnerDeps {
   readonly llm: LlmRoles;
   /** From `usageTargetsFor(config)`: names provider and model for calls that never answered. */
   readonly usageTargets: LlmUsageTargets;
+  /**
+   * Which features the org may use (C-8, ADR 0046): `selfHostEntitlements` on a self-hosted
+   * instance, Rocky Cloud's plans on Cloud. Asked before any forge read or model call.
+   */
+  readonly entitlements: Entitlements;
   readonly clock: Clock;
   readonly log: Logger;
   /** From `unitKeySaltFor(config)`: a role-config change re-analyses every file. */
@@ -184,9 +201,12 @@ export const runAnalysis = async (
 ): Promise<AnalysisRun> => {
   const { db, log } = deps;
   const { orgId, analysisId } = claim;
-  // Fail closed: no run without metering.
+  // Fail closed: no run without metering, none without an entitlements check.
   if (typeof deps.usageTargets !== "object" || deps.usageTargets === null) {
     throw new TypeError("runAnalysis needs usageTargets (metering, P4-5)");
+  }
+  if (typeof deps.entitlements?.can !== "function") {
+    throw new TypeError("runAnalysis needs entitlements (C-8)");
   }
   const target = await db.withOrg(orgId, (tx) => loadAnalysisTarget(tx, claim));
   if (target === undefined) return { outcome: "lease_lost" };
@@ -220,6 +240,21 @@ export const runAnalysis = async (
     );
     return { outcome: "failed", code };
   };
+  /** C-8: the row ends as `entitlement_denied`; the feature and the reason are fixed codes. */
+  const denied = async (denial: EntitlementDenial): Promise<AnalysisRun> => {
+    if (!(await db.withOrg(orgId, (tx) => failAnalysis(tx, claim, denial.code)))) return lost();
+    log.warn(
+      {
+        analysisId,
+        errorCode: denial.code,
+        attempt: claim.attempts,
+        feature: denial.feature,
+        reason: denial.reason,
+      },
+      "analysis failed",
+    );
+    return { outcome: "failed", code: denial.code };
+  };
   const stopping = (): boolean =>
     options.signal?.aborted === true && options.signal.reason instanceof WorkerStopping;
   const release = async (): Promise<AnalysisRun> => {
@@ -245,6 +280,19 @@ export const runAnalysis = async (
     // Review round 1, SF3: a revision a later push replaced, or of a pull request that is no
     // longer open, is not analysed at all (no forge read, no estimate, no model call).
     if (target.superseded) throw new RunFailed("superseded");
+    // C-8 (ADR 0046 §2): the plan is asked at claim time, before the forge read and before any
+    // model call. Every feature the pipeline draws into the document, or nothing starts.
+    for (const feature of ANALYSIS_FEATURES) {
+      const verdict = await checkEntitlement(deps.entitlements, orgId, feature);
+      if (!verdict.granted) return await denied(verdict);
+    }
+    const memoryVerdict = await checkEntitlement(deps.entitlements, orgId, "review.memory");
+    if (!memoryVerdict.granted) {
+      log.info(
+        { analysisId, feature: memoryVerdict.feature, reason: memoryVerdict.reason },
+        "analysis memory skipped",
+      );
+    }
     const org = await db.withOrg(orgId, (tx) =>
       tx.query<{ installation_id: string | null; connection: string }>(
         "select installation_id, connection from orgs where id = $1",
@@ -287,9 +335,10 @@ export const runAnalysis = async (
     const text = decode(diff);
     if (text === undefined) throw new RunFailed("diff_not_utf8");
 
+    // Without `review.memory` nothing is loaded: no entry can reach a prompt or be touched.
     const { previous, memory } = await db.withOrg(orgId, async (tx) => ({
       previous: await loadPreviousAnalysis(tx, target.pullRequestId, analysisId),
-      memory: await loadAnalysisMemory(tx, target.repoId),
+      memory: memoryVerdict.granted ? await loadAnalysisMemory(tx, target.repoId) : [],
     }));
 
     // The per-PR token limit, before any model call. A truncated diff is refused by the pipeline

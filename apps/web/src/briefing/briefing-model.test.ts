@@ -249,6 +249,7 @@ describe("failureText", () => {
     ["diff_unavailable", "diff"],
     ["repository_inaccessible", "can no longer read"],
     ["metering_failed", "usage"],
+    ["entitlement_denied", "plan"],
     ["internal_error", "on Rocky's side"],
     ["something_new", "on Rocky's side"],
   ])("explains %s in plain words", (code, words) => {

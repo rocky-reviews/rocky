@@ -65,6 +65,8 @@ const PROBLEM_TEXT: Readonly<Record<AskProblem, string>> = {
   indexing: "Rocky is still indexing this repository. Ask again once the index is ready.",
   rate_limited: "You’ve asked a lot in a short time. Wait a moment, then ask again.",
   org_rate_limited: "Your organisation has reached its Ask limit for now. Try again later.",
+  not_entitled:
+    "Your organisation’s plan doesn’t include Ask right now. Check the organisation’s billing.",
   model_unavailable: "The AI model didn’t answer. Try again.",
   answer_failed: "The AI model’s answer couldn’t be used. Try asking another way.",
   forge_unavailable: "GitHub didn’t answer while Rocky read the code. Try again.",
@@ -196,7 +198,8 @@ export const Reply = ({
           <p className="ask-text">{problemText(reply)}</p>
           {reply.problem !== "signed_out" &&
             reply.problem !== "not_found" &&
-            reply.problem !== "invalid_question" && (
+            reply.problem !== "invalid_question" &&
+            reply.problem !== "not_entitled" && (
               <button
                 type="button"
                 className="btn btn-sm"

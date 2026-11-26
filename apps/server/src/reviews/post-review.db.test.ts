@@ -6,6 +6,7 @@ import {
   composePostedComment,
   ForgeReadError,
   type AccessDecision,
+  type Entitlements,
   type OrgId,
   type RepositoryAccessRequest,
 } from "@rocky-reviews/core";
@@ -138,7 +139,7 @@ const storeToken = async (org: SeededOrg, memberId: string, token: string) => {
   }
 };
 
-const build = (options: { withoutAccessCheck?: boolean } = {}) => {
+const build = (options: { withoutAccessCheck?: boolean; entitlements?: Entitlements } = {}) => {
   lines = [];
   const log = createLogger("review-test", {
     level: "debug",
@@ -155,6 +156,7 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   return buildApp({
     checkDatabase: () => Promise.resolve(true),
     log,
+    ...(options.entitlements === undefined ? {} : { entitlements: options.entitlements }),
     auth: {
       publicUrl: PUBLIC,
       cookieSecure: true,
@@ -1147,6 +1149,58 @@ describe("a posted review becomes project memory (P8-2)", () => {
     const all = lines.join("\n");
     for (const text of rows.map((r) => r.content)) expect(all).not.toContain(text);
     expect((await memoryOf(B)).rows).toEqual([]);
+  });
+
+  it("C-8: without review.memory the review posts as usual but teaches nothing, logging the fixed reason", async () => {
+    const asked: string[] = [];
+    const denying: Entitlements = {
+      can: (org, feature) => {
+        asked.push(`${org}:${feature}`);
+        return Promise.resolve(feature !== "review.memory");
+      },
+      decide: () => Promise.resolve({ granted: false, reason: "no-plan" }),
+    };
+    await app.close();
+    app = build({ entitlements: denying });
+    await app.ready();
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F2", { action: "dismiss", reason: "intentional" });
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    const posted = await post(alice, A.pullRequestId, click(plan));
+    expect(posted.statusCode).toBe(200);
+    expect(posted.json()).toMatchObject({ status: "posted", repeated: false });
+    expect((await memoryOf(A)).rows).toEqual([]);
+    // Asked once for learning (the draft decision above asked for `review.drafts`, its own gate).
+    expect(asked.filter((a) => a.endsWith(":review.memory"))).toEqual([`${A.orgId}:review.memory`]);
+    expect(learnedLog()).toEqual([
+      {
+        outcome: "memory_entitlement_denied",
+        orgId: A.orgId,
+        submissionId: expect.any(String),
+        feature: "review.memory",
+        reason: "no-plan",
+      },
+    ]);
+  });
+
+  it("C-8: an entitlements implementation that throws teaches nothing either (fail closed), and the review still posts", async () => {
+    await app.close();
+    // Only the memory question fails: the draft decision's own gate (`review.drafts`) is granted.
+    app = build({
+      entitlements: {
+        can: (_org, feature) =>
+          feature === "review.memory" ? Promise.reject(new Error("down")) : Promise.resolve(true),
+      },
+    });
+    await app.ready();
+    const alice = await sessionFor(A, A.memberId, ALICE_GH);
+    await draftAction(alice, A, "F2", { action: "dismiss", reason: "intentional" });
+    const plan = (await preview(alice, A.pullRequestId)).json() as Preview;
+    expect((await post(alice, A.pullRequestId, click(plan))).statusCode).toBe(200);
+    expect((await memoryOf(A)).rows).toEqual([]);
+    expect(learnedLog()).toEqual([
+      expect.objectContaining({ outcome: "memory_entitlement_denied", reason: "unavailable" }),
+    ]);
   });
 
   it("a review GitHub refused teaches nothing", async () => {

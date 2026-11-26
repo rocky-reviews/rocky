@@ -1,11 +1,13 @@
-import type {
-  Clock,
-  CodeReader,
-  EmbeddingSpace,
-  Forge,
-  LlmRoles,
-  OrgErasers,
-  OrgId,
+import {
+  selfHostEntitlements,
+  type Clock,
+  type CodeReader,
+  type EmbeddingSpace,
+  type Entitlements,
+  type Forge,
+  type LlmRoles,
+  type OrgErasers,
+  type OrgId,
 } from "@rocky-reviews/core";
 import { runMemoryDecay, runRetention, type Db } from "@rocky-reviews/db";
 import type { LlmUsageTargets } from "@rocky-reviews/llm";
@@ -84,6 +86,12 @@ export interface JobDeps {
    * push events are finished as `indexing_off` and nothing is claimed. Needs `forge`.
    */
   readonly index?: IndexJobConfig;
+  /**
+   * Which features an org may use (C-8, ADR 0046), asked by the analysis and index lanes before
+   * any model call. Default: `selfHostEntitlements` without an Enterprise licence (every
+   * `review.*` feature on). Rocky Cloud passes its plan-backed implementation here.
+   */
+  readonly entitlements?: Entitlements;
   readonly intervals?: Partial<JobIntervals>;
 }
 
@@ -128,6 +136,7 @@ const codeOf = (error: unknown): string => {
 
 export const startJobs = (deps: JobDeps): RunningJobs => {
   const intervals = { ...DEFAULT_INTERVALS, ...deps.intervals };
+  const entitlements = deps.entitlements ?? selfHostEntitlements({ hasEnterpriseLicence: false });
   let stopped = false;
   const timers = new Set<NodeJS.Timeout>();
   const running = new Set<Promise<void>>();
@@ -201,6 +210,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
               forge,
               ...(tokenRepositories === undefined ? {} : { tokenRepositories }),
               llm: analysis.llm,
+              entitlements,
               clock: deps.clock,
               log: deps.log,
               unitKeySalt: analysis.unitKeySalt,
@@ -302,6 +312,7 @@ export const startJobs = (deps: JobDeps): RunningJobs => {
                 forge,
                 llm: index.llm,
                 usageTargets: index.usageTargets,
+                entitlements,
                 space: index.space,
                 chunker: index.chunker,
                 log: deps.log,

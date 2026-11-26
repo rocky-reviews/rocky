@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { selfHostEntitlements } from "@rocky-reviews/core";
 import { scriptedRoles } from "@rocky-reviews/core/testing";
 import { localKeyWrapperFromEnv, generateLocalKek } from "@rocky-reviews/crypto";
 import { createDb, type ClaimedAnalysis, type Db } from "@rocky-reviews/db";
@@ -214,6 +215,7 @@ describe("token mode, end to end (P10-4)", () => {
         }),
         llm: roles.roles,
         usageTargets: usageTargetsFor(llmConfigFromEnv({})),
+        entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
         clock: { now: () => new Date() },
         log: createLogger("token-e2e-worker", {
           destination: { write: (c: string) => void lines.push(c) },

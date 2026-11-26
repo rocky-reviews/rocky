@@ -51,6 +51,8 @@ const CHANGE_PROBLEM: Readonly<Record<Exclude<MemoryChange["kind"], "ok">, strin
     "Rocky can't store that text: one line of at most 300 characters, without links or hidden characters.",
   conflict: "Someone changed this entry first. The list now shows the latest version.",
   forbidden: "Only admins and owners can change project memory.",
+  not_entitled:
+    "Your organisation's plan doesn't include project memory right now. Check the organisation's billing.",
   not_found: "This entry no longer exists. The list now shows what is left.",
   error: "That didn't work. Try again.",
 };

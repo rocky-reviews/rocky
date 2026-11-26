@@ -185,6 +185,9 @@ export const failureText = (code: string): string => {
     return "Rocky can no longer read this repository. Check that the GitHub App is still installed with access to it.";
   if (code === "metering_failed")
     return "Rocky could not record the AI usage for this run, so it stopped before spending more.";
+  // C-8 (ADR 0046): the org's plan did not include this when the worker picked the run up.
+  if (code === "entitlement_denied")
+    return "This organisation's plan does not include AI analysis right now. Check its billing, then push a new commit.";
   return "Something went wrong on Rocky's side.";
 };
 

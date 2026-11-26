@@ -1,5 +1,6 @@
 import {
   CHARS_PER_TOKEN,
+  checkEntitlement,
   classifyPath,
   embeddingInput,
   embeddingTokens,
@@ -13,6 +14,7 @@ import {
   type CodeSession,
   type EmbeddingRoleClient,
   type EmbeddingSpace,
+  type Entitlements,
   type IndexSkipReason,
   type IndexTreeEntry,
   type LlmRoles,
@@ -50,6 +52,9 @@ import { retryDelaySeconds } from "./inbox.js";
  * One repository index run (P9-1, ADR 0040), claimed from `code_indexes` by the index lane:
  *
  * 1. the lease's target (`loadCodeIndexTarget`); a repository whose reviews are off is not read;
+ *    then the org's entitlement to `review.ask` (C-8, ADR 0046): the index exists only to answer
+ *    Ask, so an org without it gets a `failed` run with the fixed code `entitlement_denied`
+ *    before a token is minted or anything is embedded (the next push asks again);
  * 2. a code session on the one repository (a `contents: read` token scoped to it, revoked at the
  *    end) and the default branch's head now: the event's commit is a hint, GitHub is the truth;
  * 3. the space check (`beginCodeIndexRun`): another embedding model than the stored one empties
@@ -87,6 +92,8 @@ export interface CodeIndexDeps {
   /** The configured roles; the run meters them per org. */
   readonly llm: LlmRoles;
   readonly usageTargets: LlmUsageTargets;
+  /** Which features the org may use (C-8): `review.ask` is asked before anything is spent. */
+  readonly entitlements: Entitlements;
   /** The embed role's space (`ROCKY_LLM_EMBED_*`). */
   readonly space: EmbeddingSpace;
   readonly chunker: FileChunker;
@@ -217,6 +224,15 @@ export const runCodeIndex = async (
   const target = await db.withOrg(orgId, (tx) => loadCodeIndexTarget(tx, claim));
   if (target === undefined) return report("lease_lost");
   if (!target.enabled) return finish({ kind: "failed", errorCode: "repository_disabled" });
+  // C-8 (ADR 0046 §2): before the token is minted and before any embedding call.
+  const verdict = await checkEntitlement(deps.entitlements, orgId, "review.ask");
+  if (!verdict.granted) {
+    log.warn(
+      { indexId, errorCode: verdict.code, feature: verdict.feature, reason: verdict.reason },
+      "code index denied",
+    );
+    return finish({ kind: "failed", errorCode: verdict.code });
+  }
 
   const embedder: EmbeddingRoleClient | undefined = meterRoles(deps.llm, {
     // Its own transaction per call: usage survives whatever happens to the run.

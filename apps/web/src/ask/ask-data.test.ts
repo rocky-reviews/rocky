@@ -161,6 +161,11 @@ describe("parseAskReply", () => {
       [502, { error: "answer_failed", reason: "refused" }, "answer_failed"],
       [502, { error: "forge_unavailable" }, "forge_unavailable"],
       [503, { error: "ask_unavailable" }, "unavailable"],
+      [
+        403,
+        { error: "entitlement_denied", feature: "review.ask", reason: "no-plan" },
+        "not_entitled",
+      ],
       [400, { error: "invalid_question" }, "invalid_question"],
       [400, { error: "constructor" }, "failed"],
       [500, undefined, "failed"],

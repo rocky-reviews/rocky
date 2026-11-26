@@ -1,9 +1,11 @@
 import {
   can,
+  checkEntitlement,
   MEMORY_EXPORT_FILENAME,
   parseMemoryEdit,
   parseMemorySwitch,
   renderMemoryContext,
+  type Entitlements,
   type MemoryEntry,
   type RepositoryAccessCheck,
 } from "@rocky-reviews/core";
@@ -26,6 +28,11 @@ import { RepoName, RepoOwner } from "@rocky-reviews/schema";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { requires } from "../auth/policy.js";
 import type { ActiveMember } from "../auth/routes.js";
+import {
+  ENTITLEMENT_DENIED_STATUS,
+  entitlementDeniedBody,
+  entitlementDeniedFields,
+} from "../entitlements.js";
 
 /**
  * The project memory page's API (P8-3, ADR 0039), per repository, by its GitHub name:
@@ -46,6 +53,12 @@ import type { ActiveMember } from "../auth/routes.js";
  * unknown one. An entry id names an entry **of the repository in the path**, or it is not found:
  * access to one repository never reaches another's entries.
  *
+ * Editing an entry writes new memory, so it is plan-gated (C-8, ADR 0046): after the access
+ * check the route asks the org's entitlement to `review.memory` and answers 403
+ * `entitlement_denied` (with `feature` and a fixed `reason`) when refused. Reading, exporting,
+ * switching off and deleting are not gated: they show or shrink what is stored, cost no AI, and
+ * a person must always be able to remove what Rocky learned.
+ *
  * The export is a download (`Content-Disposition: attachment; filename="context.md"`,
  * `text/markdown`): the person commits it themselves. Rocky writes no file on its disk and
  * nothing to the repository. The response gets the non-document CSP like any API answer.
@@ -64,6 +77,8 @@ export const MEMORY_ENTRY_DISABLED_PATH =
 
 export interface MemoryRoutesDeps {
   readonly db: Pick<Db, "withOrg">;
+  /** Which features the org may use (C-8): `review.memory` is asked before an entry is edited. */
+  readonly entitlements: Entitlements;
   /** The repository access check (P3-6); without it every route here answers 503. */
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
 }
@@ -298,6 +313,15 @@ export const registerMemoryRoutes = (app: FastifyInstance, deps: MemoryRoutesDep
         if (edit === null) return json(reply, 400, { error: "invalid_request" });
         const ok = await authorise(request, reply, "edit");
         if (ok === null) return reply;
+        // C-8 (ADR 0046 §2): the plan, after the access check and before anything is written.
+        const verdict = await checkEntitlement(deps.entitlements, ok.me.orgId, "review.memory");
+        if (!verdict.granted) {
+          log(request, "edit", "entitlement_denied", {
+            ...ok.ids,
+            ...entitlementDeniedFields(verdict),
+          });
+          return json(reply, ENTITLEMENT_DENIED_STATUS, entitlementDeniedBody(verdict));
+        }
         const result = await db.withOrg(ok.me.orgId, (tx) =>
           onEntry(tx, ok.repo, entryId, () =>
             editMemoryEntry(tx, { actorMemberId: ok.me.memberId, entryId, edit }),
