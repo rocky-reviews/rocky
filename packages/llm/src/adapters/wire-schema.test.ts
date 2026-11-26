@@ -45,7 +45,9 @@ const PROSE = new Set(["description", "title", "examples", "$schema"]);
 /**
  * A description-free size of a sent schema: one per property name, `type`, and `enum` or `const`
  * literal. A proxy for the compiled grammar (ADR 0013 H4-4, limit 3, has no offline oracle), used
- * only to compare schemas with each other.
+ * only to compare schemas with each other. It does not follow `$ref` or weigh combinators: the
+ * flows and walkthrough schemas it is used on are checked above to have no `$defs`, so nothing
+ * they contain is hidden behind a reference.
  */
 const grammarWeight = (sent: unknown): number => {
   let weight = 0;
@@ -66,7 +68,10 @@ const grammarWeight = (sent: unknown): number => {
   return weight;
 };
 
-/** Every `enum` in a schema, in document order (property maps walked by key). */
+/**
+ * Every `enum` and primitive `const` (as a one-value list) in a schema, in document order (property
+ * maps walked by key). Zod emits `const` for `z.literal`, which the SDK keeps since 1.7.0 as well.
+ */
 const enumsIn = (schema: unknown): unknown[][] => {
   const found: unknown[][] = [];
   const walk = (node: unknown): void => {
@@ -78,6 +83,8 @@ const enumsIn = (schema: unknown): unknown[][] => {
       if (key === "properties" && typeof value === "object" && value !== null)
         Object.values(value).forEach(walk);
       else if (key === "enum" && Array.isArray(value)) found.push(value);
+      else if (key === "const" && (value === null || typeof value !== "object"))
+        found.push([value]);
       else walk(value);
     }
   };
@@ -229,11 +236,14 @@ describe("enums reach the provider as constraints (SDK 1.7+)", () => {
     ["memory", REVIEW_MEMORY_OUTPUT],
   ];
 
-  it.each(ROLES)("%s: every enum Zod emits is sent as an enum, none as prose", (_role, output) => {
-    const sent = jsonSchemaOutputFormat(output.jsonSchema as never).schema;
-    expect(enumsIn(sent)).toEqual(enumsIn(output.jsonSchema));
-    expect(JSON.stringify(sent)).not.toMatch(/\{(default: [^,]*, )?enum: /);
-  });
+  it.each(ROLES)(
+    "%s: every enum and const Zod emits is sent as such, none as prose",
+    (_role, output) => {
+      const sent = jsonSchemaOutputFormat(output.jsonSchema as never).schema;
+      expect(enumsIn(sent)).toEqual(enumsIn(output.jsonSchema));
+      expect(JSON.stringify(sent)).not.toMatch(/[{,] ?(enum|const): /);
+    },
+  );
 
   it("the triage, review, graph and flows schemas carry enums, so the check above has teeth", () => {
     for (const stage of ["triage", "review", "graph", "flows"] as const)

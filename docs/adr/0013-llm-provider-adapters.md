@@ -238,12 +238,14 @@ amendment "SDK 1.8"; P4-2 shipped on 0.135.0 / 0.35.0 / 0.21.0 / 0.6.0):
 | `@anthropic-ai/bedrock-sdk` | 1.1.2   | `AnthropicBedrockMantle`: SigV4 signing and the AWS credential chain (pulls the AWS SDK) |
 | `@anthropic-ai/vertex-sdk`  | 1.1.3   | `AnthropicVertex`: Vertex URL rewriting and Google ADC (pulls `google-auth-library`)     |
 | `@anthropic-ai/foundry-sdk` | 1.1.1   | `AnthropicFoundry`: resource URL and Foundry auth headers                                |
-| `google-auth-library`       | 11.3.4  | Google ADC, built by Rocky so a failed lookup is retried (already in the Vertex tree)    |
+| `google-auth-library`       | 11.3.4  | Google ADC built by Rocky (a failed lookup is retried), passed as Vertex's `authClient`  |
 
 The 1.x majors send API version `2026-10-21` and are Apache-2.0. **The four Anthropic packages
 move together:** each platform package depends on `@anthropic-ai/sdk >=1.0.0 <2`, so one bumped
 alone resolves a second copy of the core SDK with its own types and its own `APIError` class
-(amendment "1.x SDKs"). Rocky sends no sampling parameters, so its requests fit that version.
+(amendment "1.x SDKs"). `google-auth-library` resolves twice: `vertex-sdk` 1.1.3 depends on
+`^10.2.0` (10.9.1) while Rocky pins 11.x. Rocky builds the auth client from its own copy and passes
+it as `authClient`, so the 10.x copy is installed but never builds credentials. Rocky sends no sampling parameters, so its requests fit that version.
 `pnpm security:scan` (osv-scanner) is clean for the added tree.
 
 ### 7. Wire-up
@@ -631,9 +633,12 @@ counts (9 and 2). Validation is unchanged: `parse` is still the Zod schema (S2, 
 **Unchanged.** The environment variables the four Anthropic packages read (every upper-case
 identifier literal in the published `.mjs`, compared between the old and new tarball sets: same
 47; `google-auth-library` 11.3.4: same 37), so no new ambient variable needs a policy. Retries,
-timeouts, error mapping, `logLevel: "off"` and `openTelemetry: false`. 1.7.0 adds the failed
-response's body to the SDK's debug log; the silent logger and `logLevel: "off"` keep it out (T1,
-`hygiene.test.ts` runs echoing 429/500 bodies with `ANTHROPIC_LOG=debug`). The platform packages
+timeouts, error mapping, `logLevel: "off"` and `openTelemetry: false`. The SDK's debug log of a
+failed response already carried a non-JSON error body as text; 1.7.0 adds the parsed JSON body as
+well, which can echo request content. Rocky's SDK logging stays off: `logLevel: "off"` and a
+silent logger (T1; `hygiene.test.ts` runs echoing 429/500 bodies with `ANTHROPIC_LOG=debug`, and
+"the SDK client options keep logging off" pins both options and that the logger never reads its
+arguments). The platform packages
 add OpenTelemetry span attributes (off for Rocky) and refuse or encode `;` in path parameters.
 One copy of the core SDK resolves (`sdk-instance.test.ts`).
 
