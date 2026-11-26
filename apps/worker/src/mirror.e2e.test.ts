@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { Forge, OrgId } from "@rocky-reviews/core";
+import { selfHostEntitlements, type Forge, type OrgId } from "@rocky-reviews/core";
 import { scriptedRoles } from "@rocky-reviews/core/testing";
 import { createDb, type Db } from "@rocky-reviews/db";
 import {
@@ -682,6 +682,7 @@ describe("pull request events: GitHub's answer, not the event, is what is mirror
           log,
           unitKeySalt: "",
           usageTargets: usageTargetsFor(llmConfigFromEnv({})),
+          entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
         },
         { ...lease, orgId: t.orgId, attempts: 1, leaseUntil: new Date(Date.now() + 600_000) },
       );

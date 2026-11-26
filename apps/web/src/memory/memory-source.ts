@@ -25,6 +25,8 @@ export type MemoryChange =
   /** Someone changed the entry first (it is no longer current). */
   | { readonly kind: "conflict" }
   | { readonly kind: "forbidden" }
+  /** The organisation's plan does not include project memory (C-8, `entitlement_denied`). */
+  | { readonly kind: "not_entitled" }
   | { readonly kind: "not_found" }
   | { readonly kind: "error" };
 
@@ -68,6 +70,7 @@ const changeOf = (status: number, body: unknown): MemoryChange => {
     typeof body === "object" && body !== null ? (body as { error?: unknown }).error : undefined;
   if (status === 400 && error === "invalid_entry_text") return { kind: "invalid_text" };
   if (status === 409) return { kind: "conflict" };
+  if (status === 403 && error === "entitlement_denied") return { kind: "not_entitled" };
   if (status === 403) return { kind: "forbidden" };
   if (status === 404) return { kind: "not_found" };
   return { kind: "error" };

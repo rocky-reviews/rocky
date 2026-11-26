@@ -1,5 +1,5 @@
-import type { RepositoryAccessCheck } from "@rocky-reviews/core";
-import { parseDraftAction } from "@rocky-reviews/core";
+import type { Entitlements, RepositoryAccessCheck } from "@rocky-reviews/core";
+import { checkEntitlement, parseDraftAction } from "@rocky-reviews/core";
 import {
   addOwnComment,
   analysisRepository,
@@ -13,6 +13,11 @@ import {
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { requires } from "../auth/policy.js";
 import type { ActiveMember } from "../auth/routes.js";
+import {
+  ENTITLEMENT_DENIED_STATUS,
+  entitlementDeniedBody,
+  entitlementDeniedFields,
+} from "../entitlements.js";
 
 /**
  * The drafts API (P6-4, ADR 0027): a reviewer's decisions about the AI drafts of one analysis and
@@ -33,6 +38,12 @@ import type { ActiveMember } from "../auth/routes.js";
  * Each draft and comment says whether a review attempt carries it (`posted`: `posting`,
  * `posted` or null, P3-5): the page shows such items as posted and read-only (P6-6).
  *
+ * Deciding an AI draft is plan-gated (C-8, ADR 0046): `POST …/drafts/:findingId` asks the org's
+ * entitlement to `review.drafts` after the access check and answers 403 `entitlement_denied`
+ * (with `feature` and a fixed `reason`) when refused, writing nothing. Reading the review and
+ * the reviewer's own comments are not gated: stored decisions stay visible, and a comment is the
+ * reviewer's own words.
+ *
  * Logs carry the action, a fixed outcome and ids; never a body, a title or a path.
  */
 
@@ -43,6 +54,8 @@ export const COMMENT_PATH = "/api/analyses/:analysisId/comments/:commentId";
 
 export interface ReviewRoutesDeps {
   readonly db: Pick<Db, "withOrg">;
+  /** Which features the org may use (C-8): `review.drafts` is asked before a draft decision. */
+  readonly entitlements: Entitlements;
   /** The repository access check (P3-6); without it every route here answers 503. */
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
 }
@@ -108,7 +121,7 @@ export const registerReviewRoutes = (app: FastifyInstance, deps: ReviewRoutesDep
     request: FastifyRequest,
     action: string,
     outcome: string,
-    ids: { orgId?: string; analysisId?: string } = {},
+    ids: { orgId?: string; analysisId?: string; feature?: string; reason?: string } = {},
   ) => request.log.info({ drafts: { action, outcome, ...ids } }, "drafts");
 
   /**
@@ -197,6 +210,15 @@ export const registerReviewRoutes = (app: FastifyInstance, deps: ReviewRoutesDep
         if (action === null) return json(reply, 400, { error: "invalid_action" });
         const ok = await authorise(request, reply, action.kind);
         if (ok === null) return reply;
+        // C-8 (ADR 0046 §2): the plan, after the access check and before anything is written.
+        const verdict = await checkEntitlement(deps.entitlements, ok.me.orgId, "review.drafts");
+        if (!verdict.granted) {
+          log(request, action.kind, "entitlement_denied", {
+            ...ok.ids,
+            ...entitlementDeniedFields(verdict),
+          });
+          return json(reply, ENTITLEMENT_DENIED_STATUS, entitlementDeniedBody(verdict));
+        }
         const result = await db.withOrg(ok.me.orgId, (tx) =>
           decideDraft(tx, {
             analysisId: ok.analysisId,

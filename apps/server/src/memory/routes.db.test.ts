@@ -3,6 +3,7 @@ import {
   MemoryListResponse,
   parseMemoryContext,
   type AccessDecision,
+  type Entitlements,
   type RepositoryAccessRequest,
 } from "@rocky-reviews/core";
 import { generateLocalKek, LocalKeyWrapper } from "@rocky-reviews/crypto";
@@ -57,7 +58,7 @@ let member: string;
 let adminB: string;
 let otherRepo: string;
 
-const build = (options: { withoutAccessCheck?: boolean } = {}) => {
+const build = (options: { withoutAccessCheck?: boolean; entitlements?: Entitlements } = {}) => {
   const log = createLogger("memory-routes-test", {
     level: "debug",
     destination: { write: (chunk: string) => void lines.push(chunk) },
@@ -65,6 +66,7 @@ const build = (options: { withoutAccessCheck?: boolean } = {}) => {
   return buildApp({
     checkDatabase: () => Promise.resolve(true),
     log,
+    ...(options.entitlements === undefined ? {} : { entitlements: options.entitlements }),
     auth: {
       publicUrl: PUBLIC,
       cookieSecure: true,
@@ -203,6 +205,68 @@ beforeEach(async () => {
   await app?.close();
   app = build();
   await app.ready();
+});
+
+describe("entitlements (C-8, ADR 0046)", () => {
+  const denying: Entitlements = {
+    can: (_org, feature) => Promise.resolve(feature !== "review.memory"),
+    decide: () => Promise.resolve({ granted: false, reason: "no-plan" }),
+  };
+
+  it("without review.memory an edit is 403 entitlement_denied and creates nothing; reading, exporting, disabling and deleting stay available", async () => {
+    const id = await entry(A);
+    await app.close();
+    app = build({ entitlements: denying });
+    await app.ready();
+    const refused = await send(admin, "POST", `${base(A)}/entries/${id}/edit`, {
+      kind: "dismissal",
+      text: "Edited while lapsed",
+      reason: "intentional",
+    });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toEqual({
+      error: "entitlement_denied",
+      feature: "review.memory",
+      reason: "no-plan",
+    });
+    const view = await list(admin);
+    expect(view.entries.find((e) => e.id === id)).toMatchObject({
+      text: SECRET_TEXT,
+      supersededBy: null,
+    });
+    expect(view.entries.some((e) => e.text === "Edited while lapsed")).toBe(false);
+    expect((await send(admin, "GET", `${base(A)}/export`)).statusCode).toBe(200);
+    // Controls that use less memory are not plan-gated: switching off and deleting.
+    expect(
+      (await send(admin, "PUT", `${base(A)}/entries/${id}/disabled`, { disabled: true }))
+        .statusCode,
+    ).toBe(200);
+    expect((await send(admin, "DELETE", `${base(A)}/entries/${id}`)).statusCode).toBe(200);
+    const logged = lines.map((l) => JSON.parse(l) as { memory?: Record<string, unknown> });
+    expect(
+      logged.find((l) => l.memory?.["outcome"] === "entitlement_denied")?.memory,
+    ).toMatchObject({
+      action: "edit",
+      feature: "review.memory",
+      reason: "no-plan",
+      orgId: A.orgId,
+    });
+    expect(lines.join("\n")).not.toContain("Edited while lapsed");
+  });
+
+  it("fails closed: an entitlements implementation that throws refuses the edit (`unavailable`)", async () => {
+    const id = await entry(A);
+    await app.close();
+    app = build({ entitlements: { can: () => Promise.reject(new Error("down")) } });
+    await app.ready();
+    const refused = await send(admin, "POST", `${base(A)}/entries/${id}/edit`, {
+      kind: "dismissal",
+      text: "Edited while down",
+      reason: "intentional",
+    });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toMatchObject({ error: "entitlement_denied", reason: "unavailable" });
+  });
 });
 
 describe("GET /api/repos/:owner/:repo/memory", () => {

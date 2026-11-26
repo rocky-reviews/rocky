@@ -1,5 +1,7 @@
 import {
+  checkEntitlement,
   ForgeReadError,
+  type Entitlements,
   type ForgeUserCredential,
   type OrgId,
   type RepositoryAccessCheck,
@@ -39,7 +41,10 @@ import { readMemberCredential } from "../member-token.js";
  * Once the forge took a review (answered, or found by reconciliation), the review's decisions
  * become project memory for the repository (P8-2, `learnFromReviewSubmission`), in a transaction
  * of its own: memory is derived data, so a failure there is logged as a count-free code and
- * never changes the answer about the review.
+ * never changes the answer about the review. Learning writes memory, so it is plan-gated (C-8,
+ * ADR 0046): the org's entitlement to `review.memory` is asked first, and a denial (or an
+ * `Entitlements` that throws) skips learning with a fixed code in the log. Posting itself is the
+ * person's act on GitHub and is never gated.
  *
  * No other code path reaches `ReviewPoster`: the worker never constructs one, and the
  * installation-token `Forge` has no posting method. Logs carry ids, counts and fixed codes.
@@ -57,6 +62,8 @@ export interface ReviewPostingDeps {
   readonly db: Pick<Db, "withOrg">;
   readonly keys: KeyWrapper;
   readonly poster: ReviewPoster;
+  /** Which features the org may use (C-8): `review.memory` is asked before learning. */
+  readonly entitlements: Entitlements;
   /** The P3-6 check. Without it every operation answers `unavailable` (fail closed). */
   readonly repositoryAccess?: Pick<RepositoryAccessCheck, "check">;
   readonly log: Pick<Logger, "info" | "warn">;
@@ -244,6 +251,16 @@ export const createReviewPostingService = (deps: ReviewPostingDeps): ReviewPosti
   /** P8-2: learn from a posted review. Best effort; logs counts and fixed codes only. */
   const learn = async (actor: ReviewActor, submissionId: string): Promise<void> => {
     const fields = { orgId: actor.orgId, submissionId };
+    // C-8 (ADR 0046 §2): no memory is written for an org whose plan does not include it.
+    const verdict = await checkEntitlement(deps.entitlements, actor.orgId, "review.memory");
+    if (!verdict.granted) {
+      log("info", "memory_entitlement_denied", {
+        ...fields,
+        feature: verdict.feature,
+        reason: verdict.reason,
+      });
+      return;
+    }
     try {
       const learned = await db.withOrg(actor.orgId, (tx) =>
         learnFromReviewSubmission(tx, submissionId),

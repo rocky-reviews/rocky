@@ -1,4 +1,10 @@
-import type { PullRequestApprover, RepositoryAccessCheck, ReviewPoster } from "@rocky-reviews/core";
+import {
+  selfHostEntitlements,
+  type Entitlements,
+  type PullRequestApprover,
+  type RepositoryAccessCheck,
+  type ReviewPoster,
+} from "@rocky-reviews/core";
 import type { KeyWrapper } from "@rocky-reviews/crypto";
 import type { Logger } from "@rocky-reviews/log";
 import { addRequestIdHeader, fastifyLoggerOptions } from "@rocky-reviews/log/fastify";
@@ -88,6 +94,14 @@ export interface AppDeps {
    * request page run when opened. Needs `auth` (its `tokenMode` sign-in).
    */
   tokenMode?: { readonly connection: TokenConnectionService };
+  /**
+   * Which features an org may use (C-8, ADR 0046), asked before work that costs AI or is
+   * plan-gated: Ask, a draft decision, a memory edit, learning from a posted review. Reads of
+   * stored reviews, findings, change maps and memory are never gated. Default:
+   * `selfHostEntitlements` without an Enterprise licence (every `review.*` feature on); Rocky
+   * Cloud passes its plan-backed implementation.
+   */
+  entitlements?: Entitlements;
   /** Overrides REQUEST_TIMEOUT_MS / TIMEOUT_CHECK_INTERVAL_MS (tests). */
   requestTimeoutMs?: number;
   timeoutCheckIntervalMs?: number;
@@ -116,6 +130,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
   // round 2; "cuts off a slow upload at the request timeout" proves the effective setting).
   const requestTimeout = deps.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   const headers = { hsts: deps.hsts ?? false };
+  const entitlements = deps.entitlements ?? selfHostEntitlements({ hasEnterpriseLicence: false });
   const options = {
     // Malformed URLs (`GET /%`) are refused before routing and without hooks (review round 1).
     frameworkErrors: frameworkErrors(headers),
@@ -182,6 +197,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     });
     registerReviewRoutes(app, {
       db: deps.auth.db,
+      entitlements,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
     // H4-2: the PR page's data, by repository and number.
@@ -202,12 +218,14 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
     // P9-2: Ask about the PR, answered from the repository's index.
     registerAskRoutes(app, {
       db: deps.auth.db,
+      entitlements,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
       ...(deps.ask === undefined ? {} : { ask: deps.ask }),
     });
     // P8-3: a repository's project memory (view, edit, delete, switch off, export).
     registerMemoryRoutes(app, {
       db: deps.auth.db,
+      entitlements,
       ...(deps.repositoryAccess === undefined ? {} : { repositoryAccess: deps.repositoryAccess }),
     });
     if (deps.reviewPosting !== undefined) {
@@ -218,6 +236,7 @@ export const buildApp = (deps: AppDeps): FastifyInstance => {
           db: deps.auth.db,
           keys,
           poster,
+          entitlements,
           log: deps.log ?? SILENT,
           ...(deps.repositoryAccess === undefined
             ? {}

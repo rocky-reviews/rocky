@@ -125,6 +125,24 @@ describe("http review source", () => {
     );
   });
 
+  it("reports a decision the organisation's plan refuses (C-8 `entitlement_denied`, 403) without throwing; any other 403 throws", async () => {
+    const denied = createHttpReviewSource({
+      fetch: fakeFetch(() => ({
+        status: 403,
+        body: { error: "entitlement_denied", feature: "review.drafts", reason: "no-plan" },
+      })).fetch,
+      csrfToken: async () => "tok",
+    });
+    expect(await denied.decide(ID, "F1", { kind: "accept" })).toEqual({ kind: "not_entitled" });
+    const other = createHttpReviewSource({
+      fetch: fakeFetch(() => ({ status: 403, body: { error: "forbidden" } })).fetch,
+      csrfToken: async () => "tok",
+    });
+    await expect(other.decide(ID, "F1", { kind: "accept" })).rejects.toBeInstanceOf(
+      ReviewRequestError,
+    );
+  });
+
   it("throws on any other status, with the status only", async () => {
     const { fetch } = fakeFetch(() => ({ status: 503, body: { error: "secret detail" } }));
     const source = createHttpReviewSource({ fetch, csrfToken: async () => "tok" });

@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import {
+  ENTITLEMENT_DENIED,
   ForgeReadError,
   LlmCallError,
+  selfHostEntitlements,
   type CompletionRoleClient,
   PROMPT_CANARY,
+  type Entitlements,
+  type Feature,
   type Forge,
   type ForgeDiff,
   type LlmCompletionRole,
@@ -138,7 +142,13 @@ const capture = () => {
 /** The default role targets (Claude API): what metering names for a call that never answered. */
 const TARGETS: LlmUsageTargets = usageTargetsFor(llmConfigFromEnv({}));
 
-const deps = (forge: Forge, script: Script = pr847Script, wrap?: (roles: LlmRoles) => LlmRoles) => {
+const deps = (
+  forge: Forge,
+  script: Script = pr847Script,
+  wrap?: (roles: LlmRoles) => LlmRoles,
+  // C-8: the self-host default unless a test plugs in a denying one.
+  entitlements: Entitlements = selfHostEntitlements({ hasEnterpriseLicence: false }),
+) => {
   const llm = scriptedRoles(script, {
     provider: "anthropic",
     model: (role) => TARGETS[role].model,
@@ -153,6 +163,7 @@ const deps = (forge: Forge, script: Script = pr847Script, wrap?: (roles: LlmRole
     log,
     unitKeySalt: "e2e",
     version: "0.0.0",
+    entitlements,
   };
   return { runner, calls: llm.calls, lines };
 };
@@ -807,6 +818,149 @@ describe("project memory in the analysis (P8-2)", () => {
     await superuser.query("delete from memory_entries where id = any($1::uuid[])", [
       [ours, theirs],
     ]);
+  });
+});
+
+describe("entitlements (C-8, ADR 0046)", () => {
+  /** Denies the given features, with a Cloud-style reason; grants the rest. */
+  const denying = (denied: readonly Feature[], reason = "no-plan"): Entitlements => ({
+    can: (_org, feature) => Promise.resolve(!denied.includes(feature)),
+    decide: (_org, feature) =>
+      Promise.resolve(denied.includes(feature) ? { granted: false, reason } : { granted: true }),
+  });
+  const plant = (org: SeededOrg, text: string) =>
+    superuser
+      .query<{ id: string }>(
+        `insert into memory_entries (org_id, repo_id, kind, origin, content, evidence_path,
+           evidence_sha, evidence_start, evidence_end, source_pr_number, confidence, reason)
+         values ($1, $2, 'dismissal', 'learned', $3, 'src/auth/invitations.ts', $4, 1, 1, 847, 80, 'intentional')
+         returning id`,
+        [org.orgId, org.repoId, text, "a".repeat(40)],
+      )
+      .then((r) => r.rows[0]!.id);
+  const failedLine = (lines: string[]) =>
+    JSON.parse(lines.find((l) => l.includes("analysis failed"))!) as Record<string, unknown>;
+
+  it("a denied feature ends the run as entitlement_denied before any forge read, model call or usage row", async () => {
+    for (const feature of ["review.triage", "review.change-map"] as const) {
+      const head = feature === "review.triage" ? "e1".repeat(20) : "e2".repeat(20);
+      const id = await newRevision(A, head);
+      const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+      const { runner, calls, lines } = deps(
+        forge.forge,
+        pr847Script,
+        undefined,
+        denying([feature]),
+      );
+      expect(await runAnalysis(runner, await claimed(A, id))).toEqual({
+        outcome: "failed",
+        code: ENTITLEMENT_DENIED,
+      });
+      expect(await stored(id)).toMatchObject({
+        status: "failed",
+        document: null,
+        error_code: "entitlement_denied",
+      });
+      expect(forge.calls).toEqual([]);
+      expect(calls).toEqual([]);
+      expect(await usageOf(id)).toMatchObject({ rows: "0", calls: "0" });
+      // Ids and fixed codes only, the feature and the reason among them.
+      expect(failedLine(lines)).toMatchObject({
+        analysisId: id,
+        errorCode: "entitlement_denied",
+        feature,
+        reason: "no-plan",
+      });
+      expect(lines.join("\n")).not.toContain("title-marker");
+    }
+  });
+
+  it("fails closed: an entitlements implementation that throws is a denial (`unavailable`), not a retry", async () => {
+    const head = "e3".repeat(20);
+    const id = await newRevision(A, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const broken: Entitlements = { can: () => Promise.reject(new Error("billing-marker-9f1")) };
+    const { runner, calls, lines } = deps(forge.forge, pr847Script, undefined, broken);
+    expect(await runAnalysis(runner, await claimed(A, id))).toEqual({
+      outcome: "failed",
+      code: ENTITLEMENT_DENIED,
+    });
+    expect(await stored(id)).toMatchObject({ status: "failed", error_code: "entitlement_denied" });
+    expect(calls).toEqual([]);
+    expect(forge.calls).toEqual([]);
+    expect(failedLine(lines)).toMatchObject({ feature: "review.triage", reason: "unavailable" });
+    expect(lines.join("\n")).not.toContain("billing-marker");
+  });
+
+  it("a row queued while entitled is re-checked when the worker claims it: a lapse in between denies it", async () => {
+    let entitled = true;
+    const lapsing: Entitlements = { can: () => Promise.resolve(entitled) };
+    const head = "e4".repeat(20);
+    // Queued while the plan was good (the mirror checks nothing at enqueue time).
+    const id = await newRevision(A, head);
+    entitled = false;
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const { runner, calls } = deps(forge.forge, pr847Script, undefined, lapsing);
+    expect(await runAnalysis(runner, await claimed(A, id))).toEqual({
+      outcome: "failed",
+      code: ENTITLEMENT_DENIED,
+    });
+    expect(calls).toEqual([]);
+    expect(await stored(id)).toMatchObject({ status: "failed", error_code: "entitlement_denied" });
+  });
+
+  it("without review.memory the run goes ahead, but no memory entry reaches a model or is touched", async () => {
+    const ours = await plant(A, "Dismissed as intentional: memory-marker-gated");
+    const head = "e5".repeat(20);
+    const id = await newRevision(A, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const { runner, calls, lines } = deps(
+      forge.forge,
+      pr847Script,
+      undefined,
+      denying(["review.memory"], "not-in-plan"),
+    );
+    expect(await runAnalysis(runner, await claimed(A, id))).toEqual({ outcome: "done" });
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.some((c) => c.labels.includes("memory"))).toBe(false);
+    for (const call of calls) {
+      for (const part of call.untrusted) expect(part.text).not.toContain("memory-marker");
+    }
+    const parsed = parseAnalysisDocument((await stored(id)).document);
+    if (!parsed.ok) throw new Error("document");
+    expect(parsed.value.briefing.memoryApplied).toEqual([]);
+    const used = await superuser.query<{ last_used_at: Date | null }>(
+      "select last_used_at from memory_entries where id = $1",
+      [ours],
+    );
+    expect(used.rows[0]!.last_used_at).toBeNull();
+    const skipped = JSON.parse(lines.find((l) => l.includes("analysis memory skipped"))!) as Record<
+      string,
+      unknown
+    >;
+    expect(skipped).toMatchObject({
+      analysisId: id,
+      feature: "review.memory",
+      reason: "not-in-plan",
+    });
+    expect(lines.join("\n")).not.toContain("memory-marker");
+    await superuser.query("delete from memory_entries where id = $1", [ours]);
+  });
+
+  it("the entitlements are asked about the analysis's own org only", async () => {
+    const asked = new Set<string>();
+    const recording: Entitlements = {
+      can: (org) => {
+        asked.add(org);
+        return Promise.resolve(true);
+      },
+    };
+    const head = "e6".repeat(20);
+    const id = await newRevision(B, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const { runner } = deps(forge.forge, pr847Script, undefined, recording);
+    expect(await runAnalysis(runner, await claimed(B, id))).toEqual({ outcome: "done" });
+    expect([...asked]).toEqual([B.orgId]);
   });
 });
 

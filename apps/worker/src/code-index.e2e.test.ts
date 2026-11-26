@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import {
   embeddingInput,
   LlmCallError,
+  selfHostEntitlements,
   type CodeReader,
   type EmbeddingSpace,
+  type Entitlements,
   type Forge,
   type LlmRoles,
   type OrgId,
@@ -187,6 +189,8 @@ const deps = (overrides: Partial<CodeIndexDeps> = {}): CodeIndexDeps => ({
   chunker,
   log,
   tokenLimit: 1_000_000,
+  // C-8: the self-host default unless a test plugs in a denying one.
+  entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
   ...overrides,
 });
 
@@ -467,6 +471,43 @@ describe("the index lane's edges", () => {
       [t.orgId],
     );
     expect(spaces.rows).toEqual([{ model: "deterministic-other" }]);
+  });
+
+  it("C-8: without review.ask the run is a failed entitlement_denied: no token minted, nothing read or embedded", async () => {
+    const t = await tenant();
+    github.putCode(t.repositoryId, HEAD_1, FILES_1, { branch: "main" });
+    await push(t, HEAD_1);
+    const c = await claim(t);
+    const mints = github.tokens.mints.length;
+    const requests = github.requests.length;
+    const embeds = embedder.calls;
+    const asked: string[] = [];
+    const denying: Entitlements = {
+      can: (org, feature) => {
+        asked.push(`${org}:${feature}`);
+        return Promise.resolve(feature !== "review.ask");
+      },
+      decide: () => Promise.resolve({ granted: false, reason: "no-plan" }),
+    };
+    expect(await runCodeIndex(deps({ entitlements: denying }), c)).toMatchObject({
+      outcome: "failed",
+      errorCode: "entitlement_denied",
+      chunksEmbedded: 0,
+      spentTokens: 0,
+    });
+    expect(asked).toEqual([`${t.orgId}:review.ask`]);
+    expect(github.tokens.mints.length).toBe(mints);
+    expect(github.requests.length).toBe(requests);
+    expect(embedder.calls).toBe(embeds);
+    expect(await indexedPaths(t)).toEqual([]);
+    // Fail closed: a throwing implementation is the same denial.
+    await requeue(t);
+    const broken: Entitlements = { can: () => Promise.reject(new Error("down")) };
+    expect(await runCodeIndex(deps({ entitlements: broken }), await claim(t))).toMatchObject({
+      outcome: "failed",
+      errorCode: "entitlement_denied",
+    });
+    expect(embedder.calls).toBe(embeds);
   });
 
   it("a repository the installation lost is a failed run (no token is minted)", async () => {

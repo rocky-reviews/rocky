@@ -76,6 +76,8 @@ export const TOAST = {
   posted: "This was already posted to GitHub, so it can no longer be changed.",
   tooLong:
     "This comment is longer than GitHub allows (65,536 characters with the title and suggestion), so it was not saved. Shorten it.",
+  notEntitled:
+    "Your organisation's plan doesn't include AI drafts right now, so this was not saved. Check the organisation's billing.",
 } as const;
 
 export type DraftMode =
@@ -355,9 +357,9 @@ export const ReviewProvider = ({
       busy(finding.id, true);
       try {
         const answer = await untilAborted(source.decide(analysisId, finding.id, action), scope);
-        if (answer.kind === "too_long") {
+        if (answer.kind === "too_long" || answer.kind === "not_entitled") {
           putDraft(finding.id, before);
-          toast(TOAST.tooLong);
+          toast(answer.kind === "too_long" ? TOAST.tooLong : TOAST.notEntitled);
           return;
         }
         // `posted`: this very draft, or its content from a re-run, is on GitHub: the server's
@@ -401,6 +403,10 @@ export const ReviewProvider = ({
           source.decide(analysisId, target.id, { kind: "restore" }),
           scope,
         );
+        if (answer.kind === "not_entitled") {
+          toast(TOAST.notEntitled);
+          return;
+        }
         if (answer.kind === "too_long") throw new Error("unexpected");
         putDraft(target.id, parseDraftRecord(answer.draft));
         setFocused(target.id);

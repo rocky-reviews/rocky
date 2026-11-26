@@ -245,6 +245,11 @@ describe("the HTTP source", () => {
       [400, { error: "invalid_entry_text" }, "invalid_text"],
       [409, { error: "already_superseded" }, "conflict"],
       [403, { error: "forbidden" }, "forbidden"],
+      [
+        403,
+        { error: "entitlement_denied", feature: "review.memory", reason: "no-plan" },
+        "not_entitled",
+      ],
       [404, { error: "not_found" }, "not_found"],
       [500, null, "error"],
     ] as const) {

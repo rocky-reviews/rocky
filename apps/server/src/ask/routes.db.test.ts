@@ -3,6 +3,7 @@ import type {
   AccessDecision,
   EmbeddingRoleClient,
   EmbeddingSpace,
+  Entitlements,
   ForgePullRequest,
   LlmRoles,
   LlmUsageRecord,
@@ -158,6 +159,8 @@ type BuildOptions = {
   space?: EmbeddingSpace;
   /** P9-3: a usage writer standing in for the `llm_usage` one. */
   recordUsage?: (orgId: OrgId, records: readonly LlmUsageRecord[]) => Promise<void>;
+  /** C-8: another `Entitlements` than the self-host default. */
+  entitlements?: Entitlements;
 };
 
 const build = (options: BuildOptions = {}) => {
@@ -212,6 +215,7 @@ const build = (options: BuildOptions = {}) => {
         return accessAnswer;
       },
     },
+    ...(options.entitlements === undefined ? {} : { entitlements: options.entitlements }),
     ...(options.withoutAsk === true
       ? {}
       : {
@@ -668,6 +672,70 @@ describe("POST …/ask: refusals", () => {
     accessAnswer = { allowed: false, reason: "no_read_permission", cached: false };
     expect((await post(dana, { question: "q" })).json()).toEqual({ error: "not_found" });
     expect(embedded).toEqual([]);
+  });
+
+  it("C-8: without review.ask a question is 403 entitlement_denied before any embedding, model call or usage row; the index state stays readable", async () => {
+    await indexRepository();
+    const asked: string[] = [];
+    const denying: Entitlements = {
+      can: (org, feature) => {
+        asked.push(`${org}:${feature}`);
+        return Promise.resolve(feature !== "review.ask");
+      },
+      decide: () => Promise.resolve({ granted: false, reason: "no-plan" }),
+    };
+    await app.close();
+    app = build({ entitlements: denying, askOrgLimit: 1 });
+    await app.ready();
+    const from = github.requests.length;
+    const refused = await post(dana, { question: `Who calls ${MARKER}?` });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toEqual({
+      error: "entitlement_denied",
+      feature: "review.ask",
+      reason: "no-plan",
+    });
+    expect(refused.headers["cache-control"]).toBe("no-store");
+    expect(asked).toEqual([`${A.orgId}:review.ask`]);
+    expect(embedded).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(githubCalls(from)).toEqual([]);
+    expect(await usageRows()).toEqual([]);
+    // Refused before the org's budget is counted: a second denial is still 403, not 429.
+    expect((await post(dana, { question: "again?" })).statusCode).toBe(403);
+    // Reads stay available: where the index stands is history, not AI work.
+    expect((await get(dana)).json()).toEqual({
+      index: { status: "ready", indexedSha: COMMIT, updating: false },
+    });
+    const line = lines.find((l) => l.includes('"entitlement_denied"'));
+    expect(line).toBeDefined();
+    expect(JSON.parse(line!)).toMatchObject({
+      ask_route: {
+        outcome: "entitlement_denied",
+        orgId: A.orgId,
+        feature: "review.ask",
+        reason: "no-plan",
+      },
+    });
+    noContentInLogs();
+  });
+
+  it("C-8: fails closed when the entitlements cannot be read (403, reason `unavailable`), and nothing is spent", async () => {
+    await indexRepository();
+    await app.close();
+    app = build({ entitlements: { can: () => Promise.reject(new Error(`db ${MARKER}`)) } });
+    await app.ready();
+    const refused = await post(dana, { question: "q?" });
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json()).toEqual({
+      error: "entitlement_denied",
+      feature: "review.ask",
+      reason: "unavailable",
+    });
+    expect(embedded).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(await usageRows()).toEqual([]);
+    noContentInLogs();
   });
 
   it("is 503 when Ask is off (no embedding model)", async () => {

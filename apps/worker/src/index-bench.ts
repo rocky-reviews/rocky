@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { parseArgs } from "node:util";
-import type {
-  ArchiveFile,
-  BlobRead,
-  CodeReader,
-  CodeSession,
-  ForgeTree,
-  LlmRoles,
-  OrgId,
+import {
+  selfHostEntitlements,
+  type ArchiveFile,
+  type BlobRead,
+  type CodeReader,
+  type CodeSession,
+  type ForgeTree,
+  type LlmRoles,
+  type OrgId,
 } from "@rocky-reviews/core";
 import { createDb, enqueueCodeIndex, type Db } from "@rocky-reviews/db";
 // The benchmark is a test harness, not production code: it runs on a throwaway Postgres
@@ -332,6 +333,7 @@ const main = async (): Promise<void> => {
       forge: memoryForge(commits, () => head),
       llm,
       usageTargets,
+      entitlements: selfHostEntitlements({ hasEnterpriseLicence: false }),
       space,
       chunker,
       log: createLogger("index-bench", { level: "warn" }),

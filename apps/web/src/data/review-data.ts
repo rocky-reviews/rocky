@@ -41,7 +41,9 @@ export interface ReviewSource {
    * `conflict`: another tab decided first; `draft` is the state the server has. `posted`: the
    * draft (or that content) was posted to GitHub (P3-5 refuses with `already_posted`), so
    * nothing can change it; `draft` is the server's state, marked posted. `too_long`: the
-   * comment would exceed GitHub's limit (`comment_too_long`); nothing changed.
+   * comment would exceed GitHub's limit (`comment_too_long`); nothing changed. `not_entitled`:
+   * the organisation's plan does not include AI drafts (C-8, `entitlement_denied`); nothing
+   * changed.
    */
   decide(
     analysisId: string,
@@ -50,6 +52,7 @@ export interface ReviewSource {
   ): Promise<
     | { readonly kind: "ok" | "conflict" | "posted"; readonly draft: unknown }
     | { readonly kind: "too_long" }
+    | { readonly kind: "not_entitled" }
   >;
   addComment(
     analysisId: string,

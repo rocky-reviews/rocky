@@ -41,12 +41,16 @@ export interface Citation {
   readonly url: string;
 }
 
-/** `rate_limited` is the member's own per-minute limit; `org_rate_limited` the org's Ask budget. */
+/**
+ * `rate_limited` is the member's own per-minute limit; `org_rate_limited` the org's Ask budget;
+ * `not_entitled` the org's plan (C-8, `entitlement_denied`).
+ */
 export type AskProblem =
   | "not_indexed"
   | "indexing"
   | "rate_limited"
   | "org_rate_limited"
+  | "not_entitled"
   | "model_unavailable"
   | "answer_failed"
   | "forge_unavailable"
@@ -190,6 +194,7 @@ const PROBLEMS: Readonly<Record<string, AskProblem>> = {
   ask_unavailable: "unavailable",
   access_check_unavailable: "unavailable",
   invalid_question: "invalid_question",
+  entitlement_denied: "not_entitled",
 };
 
 const errorOf = (body: unknown): string | null => {
