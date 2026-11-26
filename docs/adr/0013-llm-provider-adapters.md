@@ -700,5 +700,5 @@ appears anywhere in the sent schema. The eight cases fail on 1.8.0 and pass on 1
 
 **Residual risk.** The only wire change removes a line of prose the model read for nothing, so
 the grammar-size question of the previous amendment does not arise again; the live check on
-1.10.0 (one call per graph-role output, owner-run) is the evidence that nothing else moved,
-recorded in `docs/progress.md` (D-95).
+1.10.0 (one direct call per structured output, all six `ok`) is the evidence that nothing else
+moved, recorded in `docs/progress.md` (D-95).
