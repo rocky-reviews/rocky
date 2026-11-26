@@ -1,5 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { seriousViolations } from "./axe.js";
 import { openFile } from "./diff-support.js";
 import { MODES, openShell, settle, WIDTHS } from "./support.js";
 import { expect, type Page, test } from "./test.js";
@@ -9,7 +10,8 @@ import type { ReviewApi } from "./review-api.js";
  * P6-4: the AI drafts at 375/1024/1440 px x light/dark, against the POC's draft states
  * (docs/design/poc/02-file-critical-*, 03-draft-dismiss-*, 04-draft-accepted-*, 05-draft-edit-*).
  * Baselines in e2e/__screenshots__/, copies in artifacts/screenshots/P6-4/, and `compare/` puts
- * the POC and the app side by side.
+ * the POC and the app side by side. C-8's plan denial (`drafts-denied`) has no POC state: its
+ * copies go to artifacts/screenshots/C-8/.
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -20,6 +22,8 @@ const FILE = "src/auth/invitations.ts";
 type State = {
   id: string;
   poc: string;
+  /** Whose copies these are (default P6-4, beside the POC). */
+  task?: "C-8";
   /** Keep the toast in the picture (others hide it: it times out). */
   toast?: boolean;
   /** Decisions already stored when the page loads (as after an earlier visit). */
@@ -169,6 +173,23 @@ const STATES: State[] = [
     },
   },
   {
+    // C-8 (ADR 0046): the organisation's plan lacks AI drafts: Accept is refused with a 403,
+    // the card goes back to a draft and the toast points to billing. The state is axe-clean.
+    id: "drafts-denied",
+    poc: "04-draft-accepted",
+    task: "C-8",
+    toast: true,
+    stored: (api) => api.denyEntitlement(1),
+    run: async (page) => {
+      await atF1(page);
+      await card(page).getByRole("button", { name: "Accept", exact: true }).click();
+      await expect(page.locator(".toast")).toContainText("plan doesn't include AI drafts");
+      await expect(card(page).getByRole("button", { name: "Accept", exact: true })).toBeVisible();
+      await page.mouse.move(0, 0);
+      expect(await seriousViolations(page)).toEqual([]);
+    },
+  },
+  {
     id: "drafts-edit",
     poc: "05-draft-edit",
     run: async (page) => {
@@ -254,6 +275,12 @@ for (const state of STATES) {
         await expect(page.locator("html")).toHaveAttribute("data-mode", mode);
 
         await expect(page).toHaveScreenshot(`${name}.png`);
+        if (state.task !== undefined) {
+          const out = join(ROOT, "artifacts/screenshots", state.task);
+          await mkdir(out, { recursive: true });
+          await page.screenshot({ path: join(out, `${name}.png`) });
+          return;
+        }
         await mkdir(join(OUT, "compare"), { recursive: true });
         const app = await page.screenshot({ path: join(OUT, `${name}.png`) });
         const poc = await readFile(join(POC, `${state.poc}-${size.width}-${mode}.png`));

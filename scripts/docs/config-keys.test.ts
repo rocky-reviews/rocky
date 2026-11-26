@@ -63,6 +63,7 @@ const DYNAMIC_READS_COVERED_BY: Readonly<Record<string, string>> = {
   "apps/server/src/security/rate-limit.ts: Object.entries(env)": "RATE_LIMIT_ENV_VARS",
   "apps/worker/src/config.ts: (env, llm)":
     "indexConfigFromEnv(env, llm): passes the environment on",
+  "apps/worker/src/main.ts: (process.env, log)": "startWorker(env, log): passes the environment on",
   "apps/worker/src/config.ts: (env, name)":
     "onOff(), boundedInteger(): callers pass literals; tokenModeFromEnv() (P10-4): GITHUB_APP_VARIABLES",
   "apps/worker/src/config.ts: env[name]": "nonEmpty(): its callers pass literals",

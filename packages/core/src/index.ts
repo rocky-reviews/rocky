@@ -11,6 +11,7 @@ export {
   ANALYSIS_FEATURES,
   checkEntitlement,
   DENIED_REASON,
+  ENTITLEMENT_DEADLINE_MS,
   ENTITLEMENT_DENIED,
   isEntitlementReason,
   selfHostEntitlements,

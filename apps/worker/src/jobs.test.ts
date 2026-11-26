@@ -1,6 +1,11 @@
 import { llmConfigFromEnv, usageTargetsFor } from "@rocky-reviews/llm";
-import { ForgeReadError, nothingStoredYet, type OrgId } from "@rocky-reviews/core";
-import type { Db } from "@rocky-reviews/db";
+import {
+  ForgeReadError,
+  nothingStoredYet,
+  type Entitlements,
+  type OrgId,
+} from "@rocky-reviews/core";
+import type { ClaimedAnalysis, Db, TenantTx } from "@rocky-reviews/db";
 import { createLogger } from "@rocky-reviews/log";
 import { describe, expect, it } from "vitest";
 import { createAppCheck } from "./app-check.js";
@@ -208,6 +213,98 @@ describe("the analysis lane (P4-6)", () => {
     await expect.poll(() => claims.length).toBeGreaterThan(2);
     await jobs.stop();
     expect(claims[0]).toEqual({ limit: 3, leaseSeconds: 600, orgConcurrency: 2 });
+  });
+
+  it("C-8: an `Entitlements` passed to startJobs reaches the run: a denying one ends a claimed analysis as entitlement_denied before any forge read", async () => {
+    const orgId = "33333333-3333-4333-8333-333333333333" as OrgId;
+    const claim: ClaimedAnalysis = {
+      orgId,
+      analysisId: "44444444-4444-4444-8444-444444444444",
+      leaseId: "55555555-5555-4555-8555-555555555555",
+      attempts: 1,
+      leaseUntil: new Date(Date.now() + 600_000),
+    };
+    let handedOut = false;
+    const updates: { sql: string; values: readonly unknown[] }[] = [];
+    // The two statements `runAnalysis` makes before a denial: the lease's target, then the
+    // failure. A query that is neither (an org read, a forge read's prerequisite) is a bug here.
+    const tx = {
+      orgId,
+      query: (sql: string, values: readonly unknown[] = []) => {
+        if (sql.includes("from analyses a")) {
+          return Promise.resolve({
+            rowCount: 1,
+            rows: [
+              {
+                revision_id: "66666666-6666-4666-8666-666666666666",
+                pull_request_id: "77777777-7777-4777-8777-777777777777",
+                repo_id: "88888888-8888-4888-8888-888888888888",
+                number: 847,
+                title: "t",
+                head_sha: "a".repeat(40),
+                base_sha: "b".repeat(40),
+                forge_repo_id: "2001",
+                full_name: "acme/api",
+                diff_truncation: null,
+                approved_tokens: null,
+                superseded: false,
+              },
+            ],
+          });
+        }
+        if (sql.startsWith("update analyses set")) {
+          updates.push({ sql, values });
+          return Promise.resolve({ rowCount: 1, rows: [] });
+        }
+        return Promise.reject(new Error(`unexpected query: ${sql.slice(0, 40)}`));
+      },
+    } as unknown as TenantTx;
+    const { db } = stubDb({
+      claimAnalyses: () => {
+        if (handedOut) return Promise.resolve([]);
+        handedOut = true;
+        return Promise.resolve([claim]);
+      },
+      withOrg: <T>(_org: OrgId, fn: (tx: TenantTx) => Promise<T>) => fn(tx),
+    } as unknown as Partial<Db>);
+    const asked: string[] = [];
+    const denying: Entitlements = {
+      can: (org, feature) => {
+        asked.push(`${org}:${feature}`);
+        return Promise.resolve(false);
+      },
+    };
+    const forgeReads: string[] = [];
+    const recordingForge = {
+      ...forge,
+      openRepository: () => {
+        forgeReads.push("openRepository");
+        return Promise.resolve(null);
+      },
+    };
+    const { log, lines } = capture();
+    const intervals = { ...base.intervals, analysisMs: 5 };
+    const jobs = startJobs({
+      ...base,
+      intervals,
+      db,
+      log,
+      forge: recordingForge,
+      analysis,
+      entitlements: denying,
+    });
+    await expect.poll(() => updates.length).toBe(1);
+    await jobs.stop();
+    expect(asked).toEqual([`${orgId}:review.triage`]);
+    expect(updates[0]).toMatchObject({ sql: expect.stringContaining("status = 'failed'") });
+    expect(updates[0]!.values).toContain("entitlement_denied");
+    expect(forgeReads).toEqual([]);
+    expect(lines.find((l) => l["msg"] === "analysis failed")).toMatchObject({
+      analysisId: claim.analysisId,
+      errorCode: "entitlement_denied",
+      feature: "review.triage",
+      reason: "denied",
+    });
   });
 
   it("P9-1: claims index runs only with indexing configured and app credentials", async () => {

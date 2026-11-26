@@ -4,13 +4,14 @@
  * through the same checks, so every state of the panel can be shown and screenshotted:
  *
  *   ?ask=ready (default) | not-indexed | indexing | indexing-then-ready | off | index-error |
- *        no-answer | error | rate-limited | org-rate-limited | slow
+ *        no-answer | error | rate-limited | org-rate-limited | not-entitled | slow
  *
  * `slow` never answers a question (the "Reading the code…" state); `indexing-then-ready` is
  * indexing on the first check and ready from the next (the poll); `rate-limited` and
  * `org-rate-limited` (P9-3) answer every question with a 429 for the member's own limit (42 s)
- * and the org's budget (30 min). The answers are the POC's mocked ones (design-poc/index.html,
- * ANSWERS), with citations in the server's shape.
+ * and the org's budget (30 min); `not-entitled` (C-8) with the server's 403 `entitlement_denied`
+ * for an organisation whose plan lacks Ask. The answers are the POC's mocked ones
+ * (design-poc/index.html, ANSWERS), with citations in the server's shape.
  */
 import type { AskSource, RawAnswer } from "./ask-data.js";
 
@@ -25,6 +26,7 @@ export const ASK_SCENARIOS = [
   "error",
   "rate-limited",
   "org-rate-limited",
+  "not-entitled",
   "slow",
 ] as const;
 export type AskScenario = (typeof ASK_SCENARIOS)[number];
@@ -118,6 +120,15 @@ export const createFixtureAskSource = (scenario: AskScenario = "ready"): AskSour
         return later(
           300,
           { status: 429, body: { error: "rate_limited", limit: "org" }, retryAfterSeconds: 1800 },
+          signal,
+        );
+      if (scenario === "not-entitled")
+        return later(
+          300,
+          {
+            status: 403,
+            body: { error: "entitlement_denied", feature: "review.ask", reason: "no-plan" },
+          },
           signal,
         );
       if (scenario === "no-answer")

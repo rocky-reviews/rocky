@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+  ANALYSIS_FEATURES,
+  ENTITLEMENT_DEADLINE_MS,
   ENTITLEMENT_DENIED,
   ForgeReadError,
   LlmCallError,
@@ -22,6 +24,7 @@ import {
   ANALYSIS_MAX_ATTEMPTS,
   createDb,
   enqueueAnalysis,
+  releaseAnalysis,
   type ClaimedAnalysis,
   type Db,
 } from "@rocky-reviews/db";
@@ -842,8 +845,10 @@ describe("entitlements (C-8, ADR 0046)", () => {
     JSON.parse(lines.find((l) => l.includes("analysis failed"))!) as Record<string, unknown>;
 
   it("a denied feature ends the run as entitlement_denied before any forge read, model call or usage row", async () => {
-    for (const feature of ["review.triage", "review.change-map"] as const) {
-      const head = feature === "review.triage" ? "e1".repeat(20) : "e2".repeat(20);
+    // Every feature the pipeline needs (review fix round: `review.drafts` is the review stage).
+    expect(ANALYSIS_FEATURES).toEqual(["review.triage", "review.drafts", "review.change-map"]);
+    for (const [index, feature] of ANALYSIS_FEATURES.entries()) {
+      const head = `e${index + 1}`.repeat(20);
       const id = await newRevision(A, head);
       const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
       const { runner, calls, lines } = deps(
@@ -876,7 +881,7 @@ describe("entitlements (C-8, ADR 0046)", () => {
   });
 
   it("fails closed: an entitlements implementation that throws is a denial (`unavailable`), not a retry", async () => {
-    const head = "e3".repeat(20);
+    const head = "e7".repeat(20);
     const id = await newRevision(A, head);
     const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
     const broken: Entitlements = { can: () => Promise.reject(new Error("billing-marker-9f1")) };
@@ -894,20 +899,59 @@ describe("entitlements (C-8, ADR 0046)", () => {
 
   it("a row queued while entitled is re-checked when the worker claims it: a lapse in between denies it", async () => {
     let entitled = true;
-    const lapsing: Entitlements = { can: () => Promise.resolve(entitled) };
+    const asked: string[] = [];
+    const lapsing: Entitlements = {
+      can: (_org, feature) => {
+        asked.push(feature);
+        return Promise.resolve(entitled);
+      },
+    };
     const head = "e4".repeat(20);
-    // Queued while the plan was good (the mirror checks nothing at enqueue time).
+    // Queued the way the mirror queues it (`enqueueAnalysis`), while the plan was good: nothing
+    // asks the plan at enqueue time.
     const id = await newRevision(A, head);
+    expect(asked).toEqual([]);
+    expect(await stored(id)).toMatchObject({ status: "queued" });
+    // The plan lapses while the row waits.
     entitled = false;
+    // Claimed through the real claim (the lane's `Db.claimAnalyses`), not a planted lease.
+    const claims = await worker.claimAnalyses({ limit: 20, leaseSeconds: 600, orgConcurrency: 5 });
+    const mine = claims.find((c) => c.analysisId === id);
+    if (mine === undefined) throw new Error("expected the queued row to be claimed");
+    // Anything else the claim swept up goes straight back, so later tests find their rows.
+    for (const other of claims) {
+      if (other !== mine) await worker.withOrg(other.orgId, (tx) => releaseAnalysis(tx, other));
+    }
     const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
     const { runner, calls } = deps(forge.forge, pr847Script, undefined, lapsing);
+    expect(await runAnalysis(runner, mine)).toEqual({
+      outcome: "failed",
+      code: ENTITLEMENT_DENIED,
+    });
+    expect(asked).toEqual(["review.triage"]);
+    expect(calls).toEqual([]);
+    expect(forge.calls).toEqual([]);
+    expect(await stored(id)).toMatchObject({ status: "failed", error_code: "entitlement_denied" });
+  });
+
+  it("gives up on an entitlements implementation that never answers: `unavailable` after the deadline, the slot is freed", async () => {
+    const head = "e8".repeat(20);
+    const id = await newRevision(A, head);
+    const forge = recordingForge({ [head]: diffOf(pr847Diff()) });
+    const hanging: Entitlements = { can: () => new Promise<boolean>(() => undefined) };
+    const { runner, calls, lines } = deps(forge.forge, pr847Script, undefined, hanging);
+    const started = Date.now();
     expect(await runAnalysis(runner, await claimed(A, id))).toEqual({
       outcome: "failed",
       code: ENTITLEMENT_DENIED,
     });
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(ENTITLEMENT_DEADLINE_MS - 50);
+    expect(elapsed).toBeLessThan(ENTITLEMENT_DEADLINE_MS + 5_000);
     expect(calls).toEqual([]);
-    expect(await stored(id)).toMatchObject({ status: "failed", error_code: "entitlement_denied" });
-  });
+    expect(forge.calls).toEqual([]);
+    expect(failedLine(lines)).toMatchObject({ feature: "review.triage", reason: "unavailable" });
+  }, 20_000);
 
   it("without review.memory the run goes ahead, but no memory entry reaches a model or is touched", async () => {
     const ours = await plant(A, "Dismissed as intentional: memory-marker-gated");

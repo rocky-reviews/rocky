@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ask, openAsk, questionBox, selectDiffRows, showAskTab } from "./ask-support.js";
+import { seriousViolations } from "./axe.js";
 import { MODES, settle, WIDTHS } from "./support.js";
 import { expect, type Page, test } from "./test.js";
 
@@ -8,7 +9,8 @@ import { expect, type Page, test } from "./test.js";
  * P9-2: the Ask tab in every state at 375/1024/1440 px x light/dark, against the POC's Ask
  * (docs/design/poc/08-ask-*). Baselines in e2e/__screenshots__/, copies in
  * artifacts/screenshots/P9-2/, and `compare/` puts the POC and the app side by side.
- * P9-3's rate-limit states have no POC: their copies go to artifacts/screenshots/P9-3/ alone.
+ * P9-3's rate-limit states have no POC: their copies go to artifacts/screenshots/P9-3/ alone,
+ * as C-8's plan denial (`ask-not-entitled`) goes to artifacts/screenshots/C-8/.
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
@@ -19,7 +21,7 @@ type State = {
   id: string;
   scenario?: string;
   /** Whose copies these are; only P9-2's states are put beside the POC. */
-  task?: "P9-3";
+  task?: "P9-3" | "C-8";
   run: (page: Page) => Promise<void>;
 };
 
@@ -93,6 +95,21 @@ const STATES: State[] = [
       await ready(page);
       await ask(page, "Who calls acceptInvitation?");
       await page.locator(".chat-a.ask-error").waitFor();
+    },
+  },
+  {
+    // C-8 (ADR 0046): the organisation's plan lacks Ask: the error turn names billing, and there
+    // is no "Try again" (asking again would get the same answer). The state is axe-clean.
+    id: "ask-not-entitled",
+    scenario: "not-entitled",
+    task: "C-8",
+    run: async (page) => {
+      await ready(page);
+      await ask(page, "Who calls acceptInvitation?");
+      const error = page.locator(".chat-a.ask-error");
+      await expect(error).toContainText("plan doesn’t include Ask");
+      await expect(error.getByRole("button")).toHaveCount(0);
+      expect(await seriousViolations(page)).toEqual([]);
     },
   },
   {

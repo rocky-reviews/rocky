@@ -94,7 +94,11 @@ Task log for the project plan. Agents append a row when a task is merged.
 - A denied analysis is a `failed` row; after the plan is fixed the next push analyses again. A "Run again" action for a denied row (without a push) would help an org that just renewed.
 - The entitlement is asked once per analysis run and once per index run; a plan that lapses mid-run finishes that run (bounded by the token limit and Cloud's spend controls).
 - The web messages point to "the organisation's billing" in words only; Rocky Cloud may want a link to its billing page (the public app has no such route).
-- The ask-panel, draft-toast and memory-page texts for `entitlement_denied` have not had a ui-verifier pass (no layout change: one more string per existing error slot).
+- The setup wizard's LLM test call (operator only, `ROCKY_SETUP`, no org) is not gated; gate it if a hosted deployment ever exposes the wizard to tenants.
+- The self-host default is hard-wired in two places (`buildApp` and `startJobs`, both `selfHostEntitlements({ hasEnterpriseLicence: false })`), so `ee:*` features cannot be switched on yet; one shared factory fed by a licence setting is the place for that when `ee` code exists.
+- The denial log shapes are uneven across paths (the worker logs `errorCode`/`feature`/`reason` at the top level, the routes nest them under `ask_route`/`drafts`/`memory`, the posting service under `review`); a shared log helper would align them.
+- UI check (C-8): after a failed draft or memory save, focus falls to `<body>` (the toast and the problem line are announced, but the Accept/Save button loses focus). The same happens on `main` for a 503, so it is not new here; a follow-up should return focus to the button that was pressed.
+- The four denial states are committed as visual baselines (`brief-entitlement-denied`, `ask-not-entitled`, `drafts-denied`, `memory-edit-denied`, 375/1024/1440 x light/dark, axe-clean in the spec); the review fix round moved the ui-verifier pass from "pending" to done.
 
 ### P10-4 follow-ups
 

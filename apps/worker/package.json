@@ -5,6 +5,10 @@
   "description": "Background jobs: analysis, posting, retention, indexing.",
   "license": "AGPL-3.0-only",
   "type": "module",
+  "exports": {
+    "./worker": "./src/worker.ts",
+    "./jobs": "./src/jobs.ts"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/main.ts",
     "mirror:rebuild": "tsx --env-file=../../.env src/rebuild-mirror.ts",

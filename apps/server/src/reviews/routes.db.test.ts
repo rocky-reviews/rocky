@@ -189,7 +189,7 @@ describe("entitlements (C-8, ADR 0046)", () => {
     decide: () => Promise.resolve({ granted: false, reason }),
   });
 
-  it("without review.drafts a decision is 403 entitlement_denied and nothing is written; the review stays readable", async () => {
+  it("without review.drafts taking a draft in is 403 entitlement_denied and nothing is written; the review stays readable", async () => {
     const dana = await sessionFor("dana");
     // Decided while entitled: the stored decision stays readable after the plan lapses.
     expect((await act(dana, "F1", { action: "accept" })).statusCode).toBe(200);
@@ -203,6 +203,13 @@ describe("entitlements (C-8, ADR 0046)", () => {
       feature: "review.drafts",
       reason: "not-in-plan",
     });
+    for (const body of [
+      { action: "edit", body: "Needs `requireOrgRole`." },
+      { action: "send_to_agent" },
+      { action: "restore" },
+    ]) {
+      expect((await act(dana, "F2", body)).statusCode, JSON.stringify(body)).toBe(403);
+    }
     const review = await call(dana, "GET", `${base()}/review`);
     expect(review.statusCode).toBe(200);
     expect((review.json() as { drafts: { findingId: string }[] }).drafts).toEqual([
@@ -227,12 +234,33 @@ describe("entitlements (C-8, ADR 0046)", () => {
     expect(lines.join("\n")).not.toContain(PRIVATE_BODY);
   });
 
-  it("fails closed: an entitlements implementation that throws refuses the decision (`unavailable`)", async () => {
+  it("review fix round: a lapsed org can still take AI drafts out of its review (undo, dismiss are 200)", async () => {
+    const dana = await sessionFor("dana");
+    expect((await act(dana, "F1", { action: "accept" })).statusCode).toBe(200);
+    await app.close();
+    app = build({ entitlements: denying() });
+    await app.ready();
+    const undone = await act(dana, "F1", { action: "undo" });
+    expect(undone.statusCode).toBe(200);
+    expect(undone.json()).toMatchObject({ draft: { findingId: "F1", state: "draft" } });
+    const dismissed = await act(dana, "F3", { action: "dismiss", reason: "intentional" });
+    expect(dismissed.statusCode).toBe(200);
+    expect(dismissed.json()).toMatchObject({
+      draft: { state: "dismissed", reason: "intentional" },
+    });
+    expect((await act(dana, "F3", { action: "undo" })).statusCode).toBe(200);
+    // Nothing was asked of the plan for those: no denial in the log.
+    const logged = lines.map((l) => JSON.parse(l) as { drafts?: Record<string, unknown> });
+    expect(logged.some((l) => l.drafts?.["outcome"] === "entitlement_denied")).toBe(false);
+    expect((await reloadAs(dana)).drafts).toEqual([]);
+  });
+
+  it("fails closed: an entitlements implementation that throws refuses taking a draft in (`unavailable`)", async () => {
     const dana = await sessionFor("dana");
     await app.close();
     app = build({ entitlements: { can: () => Promise.reject(new Error("down")) } });
     await app.ready();
-    const refused = await act(dana, "F3", { action: "dismiss", reason: "intentional" });
+    const refused = await act(dana, "F3", { action: "accept" });
     expect(refused.statusCode).toBe(403);
     expect(refused.json()).toMatchObject({ error: "entitlement_denied", reason: "unavailable" });
     expect((await reloadAs(dana)).drafts).toEqual([]);

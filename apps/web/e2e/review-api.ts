@@ -89,6 +89,8 @@ export type ReviewApi = {
   set(findingId: string, decision: DraftDecision): void;
   /** Makes the next `n` state-changing requests fail with 503. */
   failNext(n: number): void;
+  /** C-8: the next `n` draft decisions are refused by the plan (403 `entitlement_denied`). */
+  denyEntitlement(n: number): void;
   /** Holds every load of the review until the returned function is called. */
   holdLoads(): () => void;
   /** Makes every load of the review fail with 503. */
@@ -158,6 +160,7 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
   const comments = new Map<string, Comment[]>();
   const requests: string[] = [];
   let failures = 0;
+  let denials = 0;
   let loadsFail = false;
   let loadsHeld: Promise<void> | null = null;
   let submitsHeld: Promise<void> | null = null;
@@ -402,6 +405,15 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
       if (finding === undefined) return json(route, 404, { error: "not_found" });
       const action = parseDraftAction(body);
       if (action === null) return json(route, 400, { error: "invalid_action" });
+      if (denials > 0) {
+        // C-8 (ADR 0046): as the server answers an org whose plan lacks `review.drafts`.
+        denials--;
+        return json(route, 403, {
+          error: "entitlement_denied",
+          feature: "review.drafts",
+          reason: "no-plan",
+        });
+      }
       const store = draftsOf(analysisId);
       if (hidden.has(id) && action.kind !== "restore" && !store.has(id))
         return json(route, 404, { error: "not_found" });
@@ -464,6 +476,9 @@ export const mockReviewApi = async (page: Page): Promise<ReviewApi> => {
     },
     failNext: (n) => {
       failures = n;
+    },
+    denyEntitlement: (n) => {
+      denials = n;
     },
     holdLoads: () => {
       let release!: () => void;

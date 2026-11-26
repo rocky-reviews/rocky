@@ -1,6 +1,7 @@
-import { expect, test } from "./test.js";
+import { expect, test, type Page } from "./test.js";
 import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { seriousViolations } from "./axe.js";
 import { MODES, settle, WIDTHS } from "./support.js";
 import { openBriefing, STATE_PULLS, unclipMain } from "./briefing-support.js";
 
@@ -8,13 +9,22 @@ import { openBriefing, STATE_PULLS, unclipMain } from "./briefing-support.js";
  * P6-2 acceptance: the briefing and each of its empty and failed states at 375/1024/1440 px x
  * light/dark. States with a document are taken at full length (the main column unclipped), so
  * the change map, memory and checks are all in the picture; the others at viewport size.
- * Baselines in e2e/__screenshots__/, copies in artifacts/screenshots/P6-2/.
+ * Baselines in e2e/__screenshots__/, copies in artifacts/screenshots/P6-2/ (C-8's plan denial,
+ * `brief-entitlement-denied`, in artifacts/screenshots/C-8/).
  */
 
 const ROOT = resolve(import.meta.dirname, "../../..");
 const OUT = join(ROOT, "artifacts/screenshots/P6-2");
 
-const STATES: { id: string; pr: number; full: boolean }[] = [
+const STATES: {
+  id: string;
+  pr: number;
+  full: boolean;
+  /** Whose copies these are (default P6-2). */
+  task?: "C-8";
+  /** What the state must show, before the screenshot. */
+  check?: (page: Page) => Promise<void>;
+}[] = [
   { id: "brief", pr: STATE_PULLS.main, full: true },
   { id: "brief-by-rocky", pr: STATE_PULLS.briefingUnavailable, full: true },
   { id: "brief-map-unavailable", pr: STATE_PULLS.graphUnavailable, full: true },
@@ -27,6 +37,18 @@ const STATES: { id: string; pr: number; full: boolean }[] = [
   { id: "brief-out-of-date", pr: STATE_PULLS.outOfDate, full: false },
   // H4-8: a document before schema 1.4 keeps its summary paragraph.
   { id: "brief-summary-only", pr: STATE_PULLS.summaryOnly, full: false },
+  // C-8 (ADR 0046): the run was refused by the organisation's plan: a failed state whose text
+  // points to billing and to pushing a new commit. Axe-clean.
+  {
+    id: "brief-entitlement-denied",
+    pr: STATE_PULLS.entitlementDenied,
+    full: false,
+    task: "C-8",
+    check: async (page) => {
+      await expect(page.locator(".brief-state")).toContainText("plan does not include AI analysis");
+      expect(await seriousViolations(page)).toEqual([]);
+    },
+  },
 ];
 
 for (const state of STATES) {
@@ -39,11 +61,14 @@ for (const state of STATES) {
         await openBriefing(page, state.pr);
         await settle(page);
         if (state.full) await unclipMain(page);
+        await state.check?.(page);
         await expect(page.locator("html")).toHaveAttribute("data-mode", mode);
 
         await expect(page).toHaveScreenshot(`${name}.png`, { fullPage: state.full });
-        await mkdir(OUT, { recursive: true });
-        await page.screenshot({ path: join(OUT, `${name}.png`), fullPage: state.full });
+        const out =
+          state.task === undefined ? OUT : join(ROOT, "artifacts/screenshots", state.task);
+        await mkdir(out, { recursive: true });
+        await page.screenshot({ path: join(out, `${name}.png`), fullPage: state.full });
       });
     }
   }

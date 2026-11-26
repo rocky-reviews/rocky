@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ANALYSIS_FEATURES,
   checkEntitlement,
+  ENTITLEMENT_DEADLINE_MS,
   ENTITLEMENT_DENIED,
   isEntitlementReason,
   selfHostEntitlements,
@@ -168,7 +169,41 @@ describe("checkEntitlement", () => {
     for (const feature of [...ANALYSIS_FEATURES, "review.ask", "review.memory"] as const) {
       expect(await checkEntitlement(e, org, feature)).toEqual({ granted: true });
     }
-    expect(ANALYSIS_FEATURES).toEqual(["review.triage", "review.change-map"]);
+    // Triage, the review that writes findings and drafts, and the change map: all or nothing.
+    expect(ANALYSIS_FEATURES).toEqual(["review.triage", "review.drafts", "review.change-map"]);
+  });
+
+  it("gives up on a `can` that never settles: `unavailable` after the deadline, no hang", async () => {
+    const hanging: Entitlements = { can: () => new Promise<boolean>(() => undefined) };
+    const started = Date.now();
+    expect(await checkEntitlement(hanging, org, "review.ask", { deadlineMs: 20 })).toEqual({
+      granted: false,
+      code: ENTITLEMENT_DENIED,
+      feature: "review.ask",
+      reason: "unavailable",
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(ENTITLEMENT_DEADLINE_MS).toBe(3_000);
+  });
+
+  it("gives up on a `decide` that never settles: the denial stands as `denied`", async () => {
+    const hanging: Entitlements = {
+      can: () => Promise.resolve(false),
+      decide: () => new Promise(() => undefined),
+    };
+    expect(await checkEntitlement(hanging, org, "review.ask", { deadlineMs: 20 })).toMatchObject({
+      granted: false,
+      reason: "denied",
+    });
+  });
+
+  it("a `can` that settles inside the deadline is read as usual", async () => {
+    const slow: Entitlements = {
+      can: () => new Promise((resolve) => setTimeout(() => resolve(true), 5)),
+    };
+    expect(await checkEntitlement(slow, org, "review.ask", { deadlineMs: 200 })).toEqual({
+      granted: true,
+    });
   });
 
   it("only asks about the org it was given", async () => {

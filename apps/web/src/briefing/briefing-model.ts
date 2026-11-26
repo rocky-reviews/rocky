@@ -187,7 +187,7 @@ export const failureText = (code: string): string => {
     return "Rocky could not record the AI usage for this run, so it stopped before spending more.";
   // C-8 (ADR 0046): the org's plan did not include this when the worker picked the run up.
   if (code === "entitlement_denied")
-    return "This organization's plan does not include AI analysis right now. Check its billing, then push again or re-run the analysis.";
+    return "This organisation's plan does not include AI analysis right now. Check its billing, then push a new commit.";
   return "Something went wrong on Rocky's side.";
 };
 
