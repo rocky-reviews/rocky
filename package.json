@@ -50,7 +50,7 @@
     "@rocky-reviews/db": "workspace:*",
     "@rocky-reviews/evals": "workspace:*",
     "@rocky-reviews/llm": "workspace:*",
-    "@types/node": "24.19.2",
+    "@types/node": "25.9.9",
     "@types/pg": "8.23.1",
     "@vitest/coverage-v8": "5.1.0",
     "esbuild": "0.28.2",
