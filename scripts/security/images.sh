@@ -20,7 +20,7 @@ ZAP_IMAGE="zaproxy/zap-stable@sha256:030d3df57735dacbb83464854758e674dd9ad01d79d
 # The dev database image (same digest as docker-compose.dev.yml and deploy/docker-compose.yml),
 # for the ZAP run's own database.
 # shellcheck disable=SC2034
-POSTGRES_IMAGE="pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d" # 0.8.7-pg17
+POSTGRES_IMAGE="pgvector/pgvector@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd" # 0.8.7-pg17 (Postgres 17.12, Debian 12)
 # Image scanner and SBOM generator for the Rocky images (P10-1, scripts/security/trivy.sh).
 # shellcheck disable=SC2034
 TRIVY_IMAGE="ghcr.io/aquasecurity/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb" # 0.76.2
