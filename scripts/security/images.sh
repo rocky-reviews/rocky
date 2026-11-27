@@ -30,7 +30,7 @@ TRIVY_IMAGE="ghcr.io/aquasecurity/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b51
 # shellcheck disable=SC2034
 NODE_BUILD_IMAGE="node@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d" # 24-trixie-slim
 # shellcheck disable=SC2034
-DISTROLESS_NODE_IMAGE="gcr.io/distroless/nodejs24-debian13@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78" # nonroot (Node 24.22.2)
+DISTROLESS_NODE_IMAGE="gcr.io/distroless/nodejs24-debian13@sha256:675c532423b908f9e56f9d60a4e62309b63cd2a3175acb90a46b96f7ee68e121" # nonroot (Node 24.22.3)
 
 # Lets git inside a root container read a checkout owned by another uid
 # (GitHub runners check out as uid 1001). Harmless where uids already match.

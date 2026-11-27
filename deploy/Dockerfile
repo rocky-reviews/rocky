@@ -34,7 +34,7 @@ RUN node deploy/bundle.mjs /out/app
 # image's ENTRYPOINT is /nodejs/bin/node; CMD is the script. Each HEALTHCHECK runs a small Node
 # script from deploy/healthcheck/.
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS server
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:675c532423b908f9e56f9d60a4e62309b63cd2a3175acb90a46b96f7ee68e121 AS server
 WORKDIR /app
 COPY --from=build --chown=0:0 /out/app/server /app/server
 COPY --from=build --chown=0:0 /out/web /app/web
@@ -49,7 +49,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD ["/nodejs/bin/node", "/app/healthcheck.mjs"]
 CMD ["/app/server/main.mjs"]
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS worker
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:675c532423b908f9e56f9d60a4e62309b63cd2a3175acb90a46b96f7ee68e121 AS worker
 WORKDIR /app
 COPY --from=build --chown=0:0 /out/app/worker /app/worker
 COPY --from=build --chown=0:0 /out/app/node_modules /app/node_modules
@@ -60,7 +60,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD ["/nodejs/bin/node", "/app/healthcheck.mjs"]
 CMD ["/app/worker/main.mjs"]
 
-FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:088a01637f22908632ba09018be2e0b516f2fa6f7869c191d29491139db43c78 AS migrate
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:675c532423b908f9e56f9d60a4e62309b63cd2a3175acb90a46b96f7ee68e121 AS migrate
 WORKDIR /app
 COPY --from=build --chown=0:0 /out/app/migrate /app/migrate
 COPY --from=build --chown=0:0 /out/app/migrations /app/migrations
