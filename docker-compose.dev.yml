@@ -1,7 +1,7 @@
 # Local development services. Production runs on Fly.io (hosting decision: private rocky-cloud repo).
 services:
   postgres:
-    image: pgvector/pgvector:0.8.7-pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+    image: pgvector/pgvector:0.8.7-pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
     environment:
       POSTGRES_USER: rocky
       POSTGRES_PASSWORD: rocky-dev-only
